@@ -635,6 +635,14 @@ async def apply_reconciliation_fix(
 
     now = datetime.now(timezone.utc)
 
+    # Правим ТОЛЬКО Remnawave premium entity (`tg_{telegram_id}_premium`).
+    # Bot-DB `subscriptions.expires_at` НЕ трогаем: это лежит на совести
+    # штатного grant_access / auto_renewal и может быть частью
+    # bypass-only-дизайна. Наша задача — прикрыть реальный VPN-доступ,
+    # который в 100% случаев управляется expireAt в Remnawave.
+    panel_updated = False
+    is_bypass_only = False
+
     async with pool.acquire() as conn:
         async with conn.transaction():
             sub_row = await conn.fetchrow(
@@ -646,25 +654,32 @@ async def apply_reconciliation_fix(
                 telegram_id,
             )
             if not sub_row:
-                return {"success": False, "error": "no_subscription"}
-            if sub_row["is_bypass_only"]:
-                return {
-                    "success": False,
-                    "error": "bypass_only_subscription_skipped",
-                }
+                # Orphan panel entity (no bot-DB row) — we still want to
+                # neutralise the premium entity in Remnawave. Fabricate a
+                # minimal "empty" state so the calculation clamps to NOW+1d.
+                is_bypass_only = False
+                old_expires_at = None
+                activated_at = None
+                admin_grant_days = 0
+                payment_rows = []
+            else:
+                old_expires_at = _from_db_utc(sub_row["expires_at"])
+                activated_at = (
+                    _from_db_utc(sub_row["activated_at"])
+                    if sub_row["activated_at"] else None
+                )
+                admin_grant_days = sub_row["admin_grant_days"] or 0
+                is_bypass_only = bool(sub_row["is_bypass_only"])
 
-            old_expires_at = _from_db_utc(sub_row["expires_at"])
-            activated_at = _from_db_utc(sub_row["activated_at"]) if sub_row["activated_at"] else None
-            admin_grant_days = sub_row["admin_grant_days"] or 0
-
-            payment_rows = await conn.fetch(
-                """SELECT id, tariff, COALESCE(paid_at, created_at) AS effective_at
-                   FROM payments
-                   WHERE telegram_id = $1
-                     AND status = 'approved'
-                   ORDER BY COALESCE(paid_at, created_at) ASC""",
-                telegram_id,
-            )
+            if sub_row:
+                payment_rows = await conn.fetch(
+                    """SELECT id, tariff, COALESCE(paid_at, created_at) AS effective_at
+                       FROM payments
+                       WHERE telegram_id = $1
+                         AND status = 'approved'
+                       ORDER BY COALESCE(paid_at, created_at) ASC""",
+                    telegram_id,
+                )
 
             proof_ids: List[int] = []
             counted_for_sim: List[Dict[str, Any]] = []
@@ -712,13 +727,10 @@ async def apply_reconciliation_fix(
                 if old_expires_at else 0
             )
 
-            await conn.execute(
-                """UPDATE subscriptions
-                   SET expires_at = $1
-                   WHERE telegram_id = $2""",
-                _to_db_utc(new_expires_at),
-                telegram_id,
-            )
+            # bot-DB expires_at здесь НЕ обновляем — это забота штатного
+            # grant_access / auto_renewal. Наш «Исправить» подрезает
+            # только реальный VPN-доступ через panel (см. блок ниже,
+            # после DB-транзакции).
 
             log_reason = reason
             if fallback_applied == "past_date":
@@ -735,6 +747,7 @@ async def apply_reconciliation_fix(
                     " [fallback: no counted payments and no admin_grant, "
                     "clamped to NOW+1d]"
                 )
+            log_reason += " [panel-only fix — bot-DB untouched by design]"
 
             log_id = await conn.fetchval(
                 """INSERT INTO subscription_reconciliation_log (
@@ -758,9 +771,29 @@ async def apply_reconciliation_fix(
                 admin_telegram_id,
             )
 
+    # ── Remnawave panel: PATCH expireAt on the premium entity ────────
+    # Делается ПОСЛЕ commit'а DB-транзакции: если панель упадёт, у нас
+    # хотя бы bot-DB подрезан (и мы это увидим по panel_updated=False
+    # в возвращаемом словаре и на UI). Ретрай встроен в
+    # remnawave_premium.renew_premium_user (3 попытки с backoff).
+    panel_error: Optional[str] = None
+    try:
+        from app.services import remnawave_premium
+        panel_updated = await remnawave_premium.renew_premium_user(
+            telegram_id, new_expires_at,
+        )
+        if not panel_updated:
+            panel_error = "renew_premium_user returned False"
+    except Exception as e:
+        panel_error = f"{type(e).__name__}: {e}"
+        logger.exception(
+            "RECONCILIATION_PANEL_UPDATE_FAIL user=%s: %s", telegram_id, e,
+        )
+
     logger.info(
         "RECONCILIATION_FIX_APPLIED user=%s old=%s new=%s removed_days=%s "
-        "total_paid_days=%s admin_grant_days=%s proof_ids=%s log_id=%s",
+        "total_paid_days=%s admin_grant_days=%s proof_ids=%s log_id=%s "
+        "panel_updated=%s fallback=%s",
         telegram_id,
         old_expires_at.isoformat() if old_expires_at else None,
         new_expires_at.isoformat(),
@@ -769,10 +802,15 @@ async def apply_reconciliation_fix(
         admin_grant_days,
         proof_ids,
         log_id,
+        panel_updated,
+        fallback_applied,
     )
 
+    # Успех фикса = панель обновилась. Если панель упала — success=False:
+    # реальный VPN-доступ у юзера остаётся с 10-летним expireAt, ничего
+    # мы не «поправили». UI покажет ошибку и админ повторит.
     return {
-        "success": True,
+        "success": panel_updated,
         "log_id": log_id,
         "old_expires_at": old_expires_at.isoformat() if old_expires_at else None,
         "new_expires_at": new_expires_at.isoformat(),
@@ -781,6 +819,9 @@ async def apply_reconciliation_fix(
         "admin_grant_days_kept": int(admin_grant_days or 0),
         "proof_payment_ids": proof_ids,
         "fallback_applied": fallback_applied,
+        "panel_updated": panel_updated,
+        "panel_error": panel_error,
+        "is_bypass_only": is_bypass_only,
     }
 
 

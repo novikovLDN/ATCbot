@@ -69,15 +69,14 @@ async def apply_fix(
         logger.exception("reconciliation_fix crash user=%s", telegram_id)
         raise HTTPException(500, f"fix_failed: {e}")
     if not result.get("success"):
-        # Semantic 409 for "would extend" — the admin has to look at data first.
+        # После рефакторинга single-source-of-truth ошибка возможна ровно
+        # одна: Remnawave-панель не приняла PATCH expireAt (сеть, 5xx,
+        # entity удалён). db_unavailable — только если пул недоступен.
         err = result.get("error")
-        if err == "would_extend_not_shorten":
-            raise HTTPException(409, result)
-        if err == "bypass_only_subscription_skipped":
-            raise HTTPException(409, result)
-        if err == "no_subscription":
-            raise HTTPException(404, result)
-        raise HTTPException(500, result)
+        if err == "db_unavailable":
+            raise HTTPException(503, result)
+        # panel_error / любое другое → 502 (upstream не отвечает).
+        raise HTTPException(502, result)
     return result
 
 
