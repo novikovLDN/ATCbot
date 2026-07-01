@@ -1,5 +1,5 @@
 # ─── Stage 1 — build the React admin dashboard ────────────────────────
-FROM node:20-alpine AS dashboard-build
+FROM node:26-alpine AS dashboard-build
 
 WORKDIR /build/dashboard
 
