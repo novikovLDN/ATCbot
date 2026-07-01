@@ -619,19 +619,18 @@ async def apply_reconciliation_fix(
             total_days = total_paid_days + int(admin_grant_days or 0)
             new_expires_at = base_start + timedelta(days=total_days)
 
-            # Safety guards:
-            #  – never move expires_at further into the future than it was.
-            #  – if the calculated new_expires_at is in the past (e.g. user paid
-            #    for basic_30 four years ago and never renewed), we still write
-            #    it — the standard expiry cleanup worker will pick it up next
-            #    cycle and either mark expired or transition to bypass-only.
-            if old_expires_at and new_expires_at > old_expires_at:
-                return {
-                    "success": False,
-                    "error": "would_extend_not_shorten",
-                    "old_expires_at": old_expires_at.isoformat(),
-                    "new_expires_at": new_expires_at.isoformat(),
-                }
+            # Clamp: если расчёт даёт дату в прошлом ИЛИ длиннее текущего
+            # expires_at — ставим NOW + 1 день. Так и Remnawave не паникует
+            # от отрицательного expireAt, и стандартный expiry-cleanup через
+            # ~24ч штатно переведёт юзера в bypass-only / expired.
+            fallback_applied: Optional[str] = None
+            min_new = now + timedelta(days=1)
+            if new_expires_at < now:
+                new_expires_at = min_new
+                fallback_applied = "past_date"
+            elif old_expires_at and new_expires_at > old_expires_at:
+                new_expires_at = min_new
+                fallback_applied = "would_extend"
 
             days_removed = (
                 (old_expires_at - new_expires_at).days
@@ -645,6 +644,17 @@ async def apply_reconciliation_fix(
                 _to_db_utc(new_expires_at),
                 telegram_id,
             )
+
+            log_reason = reason
+            if fallback_applied == "past_date":
+                log_reason += (
+                    " [fallback: past-date computed, clamped to NOW+1d]"
+                )
+            elif fallback_applied == "would_extend":
+                log_reason += (
+                    " [fallback: recomputed date longer than current, "
+                    "clamped to NOW+1d]"
+                )
 
             log_id = await conn.fetchval(
                 """INSERT INTO subscription_reconciliation_log (
@@ -661,7 +671,7 @@ async def apply_reconciliation_fix(
                 (old_expires_at - now).days if old_expires_at else 0,
                 (new_expires_at - now).days,
                 days_removed,
-                reason,
+                log_reason,
                 proof_ids,
                 total_paid_days,
                 int(admin_grant_days or 0),
@@ -690,6 +700,7 @@ async def apply_reconciliation_fix(
         "total_paid_days": total_paid_days,
         "admin_grant_days_kept": int(admin_grant_days or 0),
         "proof_payment_ids": proof_ids,
+        "fallback_applied": fallback_applied,
     }
 
 
