@@ -326,11 +326,11 @@ async def process_auto_renewals(bot: Bot):
                                 "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
                                 telegram_id, tariff_str, round(amount_rubles * 100)
                             )
-
+                            
                             if not payment_id:
                                 logger.error(f"Failed to create payment record for auto-renewal: user={telegram_id}")
                                 continue
-
+                            
                             notification_already_sent = await notification_service.check_notification_idempotency(
                                 payment_id, conn=conn
                             )
@@ -342,10 +342,7 @@ async def process_auto_renewals(bot: Bot):
 
                             expires_str = expires_at.strftime("%d.%m.%Y")
                             duration_days = duration.days
-                            # Собираем payload для Phase B (после commit) — без Telegram и без вложенного acquire.
-                            # is_combo читаем из subscription row (s.is_combo, мигрировано в 036) —
-                            # auto-renewal комбо-юзеров иначе получает только базовые 10 ГБ через
-                            # renew_remnawave_user_bg вместо комбо-объёма (75/200/400/800).
+                            # Собираем payload для Phase B (после commit) — без Telegram и без вложенного acquire
                             xray_sync_info = result.get("renewal_xray_sync_after_commit")
                             notifications_to_send.append({
                                 "telegram_id": telegram_id,
@@ -357,7 +354,6 @@ async def process_auto_renewals(bot: Bot):
                                 "amount_rubles": amount_rubles,
                                 "tariff_type": tariff_type,
                                 "period_days": period_days,
-                                "is_combo": bool(subscription.get("is_combo")),
                                 "xray_sync": xray_sync_info,
                             })
                             logger.info(f"Auto-renewal successful: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={amount_rubles} RUB, expires_at={expires_str}")
@@ -394,68 +390,13 @@ async def process_auto_renewals(bot: Bot):
                         logger.error(
                             f"AUTO_RENEWAL_XRAY_SYNC_FAILED user={item['telegram_id']} error={e}"
                         )
-                # Fire-and-forget: renew Remnawave bypass user.
-                # renew_remnawave_user_bg добавляет ТОЛЬКО базовый объём
-                # тарифа (TRAFFIC_LIMITS[basic|plus][period] = 10 ГБ).
-                # Для комбо этого мало — нужно ещё доложить combo GB
-                # (75/200/400/800) поверх. Делаем это отдельным
-                # add_bypass_traffic вызовом после renew_remnawave_user_bg.
-                # Без этого комбо-юзер на auto-renew получает только 10 ГБ
-                # вместо ожидаемого combo-объёма.
+                # Fire-and-forget: renew Remnawave bypass user
                 try:
-                    from app.services.remnawave_service import (
-                        renew_remnawave_user_bg, add_bypass_traffic,
-                    )
+                    from app.services.remnawave_service import renew_remnawave_user_bg
                     _ar_tariff = item.get("tariff_type", "basic")
                     _ar_expires = item.get("expires_at")
-                    _ar_period = item.get("period_days", 30)
-                    _ar_is_combo = bool(item.get("is_combo"))
                     if _ar_tariff in ("basic", "plus") and _ar_expires:
-                        renew_remnawave_user_bg(
-                            item["telegram_id"], _ar_tariff, _ar_expires,
-                            period_days=_ar_period,
-                        )
-                        # Комбо-доплата: ищем combo_<tariff> в COMBO_TARIFFS
-                        # по period_days и докидываем ГБ в bypass-аккаунт.
-                        if _ar_is_combo:
-                            combo_key = f"combo_{_ar_tariff}"
-                            combo_info = (
-                                (config.COMBO_TARIFFS or {})
-                                .get(combo_key, {})
-                                .get(_ar_period)
-                            )
-                            combo_gb = (
-                                int(combo_info["gb"]) if combo_info and combo_info.get("gb") else 0
-                            )
-                            if combo_gb > 0:
-                                combo_bytes = combo_gb * 1024**3
-                                try:
-                                    rmn_ok = await add_bypass_traffic(
-                                        item["telegram_id"], combo_bytes,
-                                        subscription_type=_ar_tariff,
-                                        subscription_end=_ar_expires,
-                                        period_days=_ar_period,
-                                    )
-                                    if rmn_ok:
-                                        logger.info(
-                                            "AUTORENEW_COMBO_BYPASS_ADDED user=%s gb=%s combo_key=%s",
-                                            item["telegram_id"], combo_gb, combo_key,
-                                        )
-                                    else:
-                                        logger.warning(
-                                            "AUTORENEW_COMBO_BYPASS_FAIL user=%s gb=%s combo_key=%s",
-                                            item["telegram_id"], combo_gb, combo_key,
-                                        )
-                                except Exception as combo_err:
-                                    logger.warning(
-                                        "AUTORENEW_COMBO_BYPASS_ERROR user=%s combo_key=%s: %s",
-                                        item["telegram_id"], combo_key, combo_err,
-                                    )
-                            else:
-                                logger.error(
-                                    "AUTORENEW_COMBO_CONFIG_MISSING user=%s combo_key=%s period=%s — комбо-ГБ НЕ ДОЛОЖЕНЫ",
-                                    item["telegram_id"], combo_key, _ar_period,
-                                )
+                        renew_remnawave_user_bg(item["telegram_id"], _ar_tariff, _ar_expires, period_days=item.get("period_days", 30))
                 except Exception as rmn_err:
                     logger.warning("REMNAWAVE_AUTORENEW_FAIL: tg=%s %s", item["telegram_id"], rmn_err)
 
