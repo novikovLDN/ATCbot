@@ -488,6 +488,8 @@ export const endpoints = {
         admin_grant_days: number | null;
         is_bypass_only: boolean;
         expires_at: string | null;
+        panel_expires_at: string | null;
+        panel_available: boolean;
         activated_at: string | null;
         days_from_now: number;
         years_from_now: number;
@@ -505,6 +507,12 @@ export const endpoints = {
         status: string | null;
         is_bypass_only: boolean;
         admin_grant_days: number;
+      };
+      panel: {
+        expires_at: string | null;
+        days_from_now: number | null;
+        available: boolean;
+        matches_db: boolean;
       };
       payments: Array<{
         id: number;

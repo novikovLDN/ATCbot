@@ -25,6 +25,7 @@ Over-issuance events are written by `record_over_issuance()` — called by
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -39,17 +40,122 @@ logger = logging.getLogger(__name__)
 # Threshold — anything above this from NOW is considered suspicious.
 _EIGHT_YEARS = timedelta(days=365 * 8)
 
+# Max parallel Remnawave API calls when cross-checking candidate panel dates.
+_PANEL_FETCH_CONCURRENCY = 8
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  Remnawave premium entity — source of truth for actual expireAt
+# ──────────────────────────────────────────────────────────────────────
+
+async def _fetch_panel_expires_at(
+    telegram_id: int,
+    remnawave_premium_uuid: Optional[str],
+) -> Optional[datetime]:
+    """Fetch the Remnawave premium entity's `expireAt` — this is the
+    authoritative expiration for VPN access. The bot's `subscriptions.expires_at`
+    can go stale (leftover from bypass-only transitions, migration back-fills,
+    admin scripts, …); the panel value is what actually controls the user.
+
+    Lookup order:
+      1. by cached `remnawave_premium_uuid` (fast — direct GET /api/users/{uuid})
+      2. by username `tg_{telegram_id}_premium` (fallback for rows where the
+         uuid was never cached).
+
+    Returns None on any failure — the caller then falls back to the DB value
+    (i.e. keeps the row as a candidate so it is not silently dropped)."""
+    try:
+        from app.services import remnawave_api
+        from app.services.remnawave_premium import build_premium_username
+    except Exception as e:
+        logger.warning("reconciliation: remnawave_api import failed: %s", e)
+        return None
+
+    payload = None
+    if remnawave_premium_uuid:
+        try:
+            payload = await remnawave_api.get_user(remnawave_premium_uuid)
+        except Exception as e:
+            logger.debug(
+                "reconciliation: get_user(uuid=%s) failed for tg=%s: %s",
+                remnawave_premium_uuid[:8], telegram_id, e,
+            )
+
+    if not payload:
+        try:
+            payload = await remnawave_api.find_user_by_username(
+                build_premium_username(telegram_id)
+            )
+        except Exception as e:
+            logger.debug(
+                "reconciliation: find_user_by_username failed for tg=%s: %s",
+                telegram_id, e,
+            )
+            return None
+
+    if not payload:
+        return None
+
+    raw = payload.get("expireAt") or payload.get("expire_at")
+    if not raw:
+        return None
+    try:
+        # Remnawave returns ISO-8601 (usually with trailing 'Z').
+        if isinstance(raw, str) and raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+async def _bulk_fetch_panel_expires_at(
+    entries: List[Dict[str, Any]],
+) -> Dict[int, Optional[datetime]]:
+    """Fetch Remnawave `expireAt` for many candidates in parallel with a
+    concurrency cap so we don't hammer the panel. Returns a dict
+    `telegram_id → datetime | None`."""
+    if not entries:
+        return {}
+
+    sem = asyncio.Semaphore(_PANEL_FETCH_CONCURRENCY)
+
+    async def _one(row: Dict[str, Any]):
+        tg = row["telegram_id"]
+        uuid = row.get("remnawave_premium_uuid")
+        async with sem:
+            dt = await _fetch_panel_expires_at(tg, uuid)
+        return tg, dt
+
+    results = await asyncio.gather(*[_one(r) for r in entries], return_exceptions=True)
+    out: Dict[int, Optional[datetime]] = {}
+    for res in results:
+        if isinstance(res, Exception):
+            continue
+        tg, dt = res
+        out[tg] = dt
+    return out
+
 
 # ──────────────────────────────────────────────────────────────────────
 #  1. Candidates (list)
 # ──────────────────────────────────────────────────────────────────────
 
 async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]]:
-    """List premium subscriptions with expires_at > NOW + 8 years.
+    """List premium subscriptions with expires_at > NOW + 8 years — AND whose
+    Remnawave premium entity (`tg_{telegram_id}_premium`) also shows > 8 years
+    in the panel. The panel is authoritative for real VPN access; if the panel
+    says 30 days but the bot DB says 10 years, the bot DB is just stale — not
+    a genuine over-issuance, so we filter it out.
 
-    Filters out bypass-only rows (they intentionally sit at NOW + 10 years —
-    see ensure_bypass_only_subscription). Returns most-suspicious first
-    (largest expires_at → longest anomaly).
+    Ordering: most-suspicious first (largest PANEL expires_at). Rows whose
+    panel value we couldn't fetch fall back to the DB expires_at so they're
+    still surfaced instead of silently disappearing.
+
+    Bypass-only rows (is_bypass_only=TRUE / source='bypass_only') are excluded
+    at SQL — those legitimately sit at NOW + 10 years.
     """
     pool = await get_pool()
     if pool is None:
@@ -68,6 +174,7 @@ async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]
                        s.source,
                        s.status,
                        s.admin_grant_days,
+                       s.remnawave_premium_uuid,
                        COALESCE(s.is_bypass_only, FALSE) AS is_bypass_only,
                        COALESCE(u.username, '') AS username
                    FROM subscriptions s
@@ -84,19 +191,43 @@ async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]
             logger.warning("find_over_issuance_candidates: schema mismatch: %s", e)
             return []
 
+    # Batch-fetch panel expireAt for cross-check. Uses semaphore-limited
+    # concurrency; None on any fetch failure → keep the row (safer than
+    # silently dropping — admin sees it and can decide).
+    raw_rows = [dict(r) for r in rows]
+    panel_map = await _bulk_fetch_panel_expires_at(raw_rows)
+
     out: List[Dict[str, Any]] = []
-    for r in rows:
-        expires_at = _from_db_utc(r["expires_at"])
-        days_from_now = (expires_at - now).days if expires_at else 0
+    for r in raw_rows:
+        tg = r["telegram_id"]
+        db_expires_at = _from_db_utc(r["expires_at"])
+        panel_expires_at = panel_map.get(tg)
+
+        # Cross-check: if panel shows ≤ 8 years, real premium is fine — the
+        # bot DB is just stale/misleading. Skip so admin isn't shown a false
+        # positive. If panel couldn't be fetched → keep the row (fail-open).
+        if panel_expires_at is not None and panel_expires_at <= cutoff:
+            continue
+
+        # Use panel value for the "actual" days_from_now if we have it.
+        effective_expires_at = panel_expires_at or db_expires_at
+        days_from_now = (
+            (effective_expires_at - now).days if effective_expires_at else 0
+        )
+
         out.append({
-            "telegram_id": r["telegram_id"],
+            "telegram_id": tg,
             "username": r["username"] or None,
             "subscription_type": r["subscription_type"],
             "source": r["source"],
             "status": r["status"],
             "admin_grant_days": r["admin_grant_days"],
             "is_bypass_only": r["is_bypass_only"],
-            "expires_at": expires_at.isoformat() if expires_at else None,
+            "expires_at": db_expires_at.isoformat() if db_expires_at else None,
+            "panel_expires_at": (
+                panel_expires_at.isoformat() if panel_expires_at else None
+            ),
+            "panel_available": panel_expires_at is not None,
             "activated_at": (
                 _from_db_utc(r["activated_at"]).isoformat()
                 if r["activated_at"] else None
@@ -104,6 +235,9 @@ async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]
             "days_from_now": days_from_now,
             "years_from_now": round(days_from_now / 365.0, 2),
         })
+
+    # Re-sort by effective days_from_now DESC after the panel cross-check.
+    out.sort(key=lambda x: x["days_from_now"], reverse=True)
     return out
 
 
@@ -146,7 +280,7 @@ async def get_reconciliation_detail(telegram_id: int) -> Dict[str, Any]:
     async with pool.acquire() as conn:
         sub_row = await conn.fetchrow(
             """SELECT telegram_id, expires_at, activated_at, subscription_type,
-                      source, status, admin_grant_days,
+                      source, status, admin_grant_days, remnawave_premium_uuid,
                       COALESCE(is_bypass_only, FALSE) AS is_bypass_only
                FROM subscriptions
                WHERE telegram_id = $1""",
@@ -249,6 +383,21 @@ async def get_reconciliation_detail(telegram_id: int) -> Dict[str, Any]:
             "caller_context": e["caller_context"],
         })
 
+    # Cross-check with the Remnawave premium entity — real source of truth
+    # for VPN access. Falls back to None on any panel API failure.
+    panel_expires_at = await _fetch_panel_expires_at(
+        telegram_id, sub_row["remnawave_premium_uuid"],
+    )
+    panel_days_from_now = (
+        (panel_expires_at - now).days if panel_expires_at else None
+    )
+    # If panel disagrees with DB by more than a day, the DB is likely stale.
+    panel_matches_db = (
+        panel_expires_at is not None
+        and expires_at is not None
+        and abs((panel_expires_at - expires_at).total_seconds()) < 86400
+    )
+
     return {
         "telegram_id": telegram_id,
         "found": True,
@@ -260,6 +409,12 @@ async def get_reconciliation_detail(telegram_id: int) -> Dict[str, Any]:
             "status": sub_row["status"],
             "is_bypass_only": sub_row["is_bypass_only"],
             "admin_grant_days": admin_grant_days,
+        },
+        "panel": {
+            "expires_at": panel_expires_at.isoformat() if panel_expires_at else None,
+            "days_from_now": panel_days_from_now,
+            "available": panel_expires_at is not None,
+            "matches_db": panel_matches_db,
         },
         "payments": proof_payments,
         "total_paid_days": total_paid_days,
