@@ -188,10 +188,21 @@ async def process_confirmed_payment(
             sub = await database.get_subscription(telegram_id)
             sub_expires = sub.get("expires_at") if sub else None
             sub_tariff = sub.get("subscription_type") if sub else None
+            # ВАЖНО: bypass-only строки НЕ ресинкать через provision_subscription.
+            # У них subscription_type='basic' и expires_at=NOW+10y по дизайну
+            # ensure_bypass_only_subscription, но реальной премиум-подписки
+            # нет — ретрай webhook'а на traffic-pack раньше создавал
+            # фантомный `tg_<id>_premium` в панели с expireAt=+10y. Юзер,
+            # купивший только 15 ГБ трафика, получал безлимитный premium-
+            # доступ на 10 лет. Bypass-энтити создаётся отдельно в
+            # _handle_traffic_pack_confirmation — второй webhook просто
+            # ничего не делать не должен.
+            is_bypass_only = bool(sub.get("is_bypass_only")) if sub else False
             still_active = bool(
                 sub_expires
                 and sub_tariff
                 and sub_expires > datetime.now(timezone.utc)
+                and not is_bypass_only
             )
             if still_active:
                 _pd = (pending.get("period_days") if pending else None) or 30
@@ -205,6 +216,13 @@ async def process_confirmed_payment(
                 logger.info(
                     f"WEBHOOK_REPLAY_RESYNCED: provider={provider}, user={telegram_id}, "
                     f"purchase_id={purchase_id}"
+                )
+            elif is_bypass_only:
+                logger.info(
+                    "WEBHOOK_REPLAY_SKIPPED_BYPASS_ONLY: provider=%s, user=%s, "
+                    "purchase_id=%s — bypass-only row, no premium resync needed "
+                    "(traffic-pack handler already added the GB to Remnawave)",
+                    provider, telegram_id, purchase_id,
                 )
         except Exception as resync_err:
             logger.error(
