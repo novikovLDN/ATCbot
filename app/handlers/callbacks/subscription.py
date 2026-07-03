@@ -220,6 +220,23 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
             f"uuid={uuid[:8]}..."
         )
 
+        # Через 5 минут после активации — «Обход подключён» + кнопка на
+        # экран установки Happ/Incy. Запускаем таском, чтобы вернуть
+        # управление пользователю сразу. Дублирует scheduler'ный fallback
+        # в trial_notifications.py — если бот перезапустится до срабатывания
+        # sleep, scheduler подхватит по флагу на следующем тике.
+        try:
+            from app.services.trials.bypass_activation_delay import (
+                schedule_bypass_activated_notification,
+            )
+            schedule_bypass_activated_notification(callback.bot, telegram_id)
+        except Exception as e:
+            logger.warning(
+                "trial_activated: failed to schedule bypass_activated notif "
+                "for user=%s: %s (scheduler will still pick it up)",
+                telegram_id, e,
+            )
+
         expires_str = subscription_end.strftime("%d.%m.%Y")
         from html import escape as html_escape
         from app.services.user_subscription_links import get_user_primary_subscription_url
