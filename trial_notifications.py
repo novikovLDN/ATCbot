@@ -188,38 +188,25 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
     hours_since_activation = timing["hours_since_activation"]
 
     # ─── Bypass-activated (~5 минут после активации) ────────────────────
-    # Отправляем один раз, когда прошло минимум 5 минут с активации триала,
-    # но ещё осталось больше часа до истечения (мало ли, юзер уже почти
-    # выработал 500 МБ). Кнопка ведёт на экран установки Happ/Incy.
-    # Работает через существующий 5-минутный тик scheduler'а — на первом
-    # или втором тике после активации `hours_since_activation` уже
-    # достигнет 5/60 = 0.083.
+    # Основной путь — фаст-таск из callback_activate_trial (см.
+    # app/services/trials/bypass_activation_delay.py). Здесь — backup:
+    # ловит юзеров, у которых бот перезапустился между активацией и
+    # 5-минутным sleep. try_send_bypass_activated идемпотентен через
+    # UPDATE ... WHERE flag=FALSE RETURNING id.
     if (
         hours_since_activation >= 5 / 60
         and hours_until_expiry > 1
         and not row.get("trial_notif_bypass_activated_sent", False)
     ):
-        language = await resolve_user_language(telegram_id)
-        text = i18n.get_text(language, "trial.bypass_activated")
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n.get_text(language, "trial.bypass_activated_btn_setup"),
-                callback_data="bypass_setup_open",
-            )],
-            [InlineKeyboardButton(
-                text=i18n.get_text(language, "trial.bypass_activated_btn_help"),
-                callback_data="menu_help",
-            )],
-        ])
-        sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
-        if sent is not None:
-            await asyncio.sleep(0.05)
-            flag_query = _get_trial_flag_query("trial_notif_bypass_activated_sent")
-            async with pool.acquire() as conn:
-                await conn.execute(flag_query, telegram_id)
-            logger.info(
-                f"trial_bypass_activated_sent: user={telegram_id}, "
-                f"hours_since_activation={hours_since_activation:.2f}h"
+        try:
+            from app.services.trials.bypass_activation_delay import (
+                try_send_bypass_activated,
+            )
+            await try_send_bypass_activated(bot, telegram_id)
+        except Exception as e:
+            logger.warning(
+                "scheduler bypass_activated fallback failed user=%s: %s",
+                telegram_id, e,
             )
         return
 
