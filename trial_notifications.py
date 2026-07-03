@@ -53,6 +53,12 @@ _TRIAL_FLAG_UPDATE_QUERIES = {
         "UPDATE subscriptions SET trial_notif_3h_sent = TRUE "
         "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'"
     ),
+    # Уведомление «🛡 Обход белых списков подключён» через ~5 минут
+    # после активации триала. См. migration 062.
+    "trial_notif_bypass_activated_sent": (
+        "UPDATE subscriptions SET trial_notif_bypass_activated_sent = TRUE "
+        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'"
+    ),
 }
 
 
@@ -179,6 +185,43 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
     # === NEW TRIAL NOTIFICATION SCHEDULE (24h and 3h before expiry) ===
     timing = trial_service.calculate_trial_timing(trial_expires_at, now)
     hours_until_expiry = timing["hours_until_expiry"]
+    hours_since_activation = timing["hours_since_activation"]
+
+    # ─── Bypass-activated (~5 минут после активации) ────────────────────
+    # Отправляем один раз, когда прошло минимум 5 минут с активации триала,
+    # но ещё осталось больше часа до истечения (мало ли, юзер уже почти
+    # выработал 500 МБ). Кнопка ведёт на экран установки Happ/Incy.
+    # Работает через существующий 5-минутный тик scheduler'а — на первом
+    # или втором тике после активации `hours_since_activation` уже
+    # достигнет 5/60 = 0.083.
+    if (
+        hours_since_activation >= 5 / 60
+        and hours_until_expiry > 1
+        and not row.get("trial_notif_bypass_activated_sent", False)
+    ):
+        language = await resolve_user_language(telegram_id)
+        text = i18n.get_text(language, "trial.bypass_activated")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n.get_text(language, "trial.bypass_activated_btn_setup"),
+                callback_data="bypass_setup_open",
+            )],
+            [InlineKeyboardButton(
+                text=i18n.get_text(language, "trial.bypass_activated_btn_help"),
+                callback_data="menu_help",
+            )],
+        ])
+        sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
+        if sent is not None:
+            await asyncio.sleep(0.05)
+            flag_query = _get_trial_flag_query("trial_notif_bypass_activated_sent")
+            async with pool.acquire() as conn:
+                await conn.execute(flag_query, telegram_id)
+            logger.info(
+                f"trial_bypass_activated_sent: user={telegram_id}, "
+                f"hours_since_activation={hours_since_activation:.2f}h"
+            )
+        return
 
     # Trial 24h reminder (between 24h and 23h before expiry)
     if 23 <= hours_until_expiry <= 25:
@@ -381,6 +424,7 @@ async def process_trial_notifications(bot: Bot):
                        s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
                        COALESCE(s.trial_notif_24h_sent, FALSE) as trial_notif_24h_sent,
                        COALESCE(s.trial_notif_3h_sent, FALSE) as trial_notif_3h_sent,
+                       COALESCE(s.trial_notif_bypass_activated_sent, FALSE) as trial_notif_bypass_activated_sent,
                        paid_s.expires_at as paid_subscription_expires_at
                 FROM users u
                 INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
@@ -406,6 +450,7 @@ async def process_trial_notifications(bot: Bot):
                        s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
                        COALESCE(s.trial_notif_24h_sent, FALSE) as trial_notif_24h_sent,
                        COALESCE(s.trial_notif_3h_sent, FALSE) as trial_notif_3h_sent,
+                       COALESCE(s.trial_notif_bypass_activated_sent, FALSE) as trial_notif_bypass_activated_sent,
                        paid_s.expires_at as paid_subscription_expires_at
                 FROM users u
                 INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id

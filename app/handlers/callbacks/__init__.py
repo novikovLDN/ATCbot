@@ -5,6 +5,7 @@ from .language import language_router
 from .subscription import subscription_router
 from .payments_callbacks import payments_router
 from .gift import gift_router
+from .bypass_setup import bypass_setup_router
 from app.handlers.traffic import traffic_router
 from app.handlers.proxy import proxy_router
 
@@ -14,5 +15,6 @@ router.include_router(language_router)
 router.include_router(subscription_router)
 router.include_router(payments_router)
 router.include_router(gift_router)
+router.include_router(bypass_setup_router)
 router.include_router(traffic_router)
 router.include_router(proxy_router)

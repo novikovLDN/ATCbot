@@ -302,11 +302,15 @@ async def should_send_final_reminder(
     timing = calculate_trial_timing(trial_expires_at, now)
     hours_until_expiry = timing["hours_until_expiry"]
     
-    # Final reminder: 6 hours before expiry (between 6h and 5h remaining)
-    if hours_until_expiry > 6:
+    # Final reminder — «последний час»: window (0.5, 1] час до истечения.
+    # Worker тикает каждые 5 минут → в 30-минутном окне гарантированно
+    # словит слот. Нижняя граница 0.5 нужна, чтобы `expire_trial_subscriptions`
+    # на том же тике не проглотил уведомление, если триал уже помечен как
+    # истёкший.
+    if hours_until_expiry > 1:
         return (False, "too_early")
-    
-    if hours_until_expiry <= 5:
+
+    if hours_until_expiry <= 0.5:
         return (False, "too_late")
     
     return (True, None)
@@ -426,26 +430,28 @@ def get_notification_schedule() -> List[Dict[str, Any]]:
         - has_button: Whether to show button
         - db_flag: Database flag name (optional)
     """
+    # На +48ч раньше висело дублирующее уведомление notification_60h с
+    # текстом «12 часов пробного доступа» — оно летело в тот же слот,
+    # что и inline-блок reminder_24h («заканчивается завтра») из
+    # trial_notifications.py:184-195. Юзер получал два сообщения об
+    # одном и том же в течение 5 минут. Убрано.
     return [
         {"hours": 6, "key": "trial.notification_6h", "has_button": False},
-        {"hours": 48, "key": "trial.notification_60h", "has_button": True, "db_flag": "trial_notif_60h_sent"},
     ]
 
 
 def get_final_reminder_config() -> Dict[str, Any]:
     """
-    Get final reminder configuration (6h before expiry).
-    
-    Returns:
-        {
-            "hours_before_expiry": 6,
-            "notification_key": str,
-            "has_button": bool,
-            "db_flag": str
-        }
+    Get final reminder configuration — «последний час».
+
+    Раньше стояло `hours_before_expiry=6` — уведомление летело за
+    6 часов до истечения, но текст `trial.notification_71h` говорил
+    «🚨 Последний час пробного доступа». Юзеров это путало.
+    Тайминг сдвинут на 1 час до истечения (реальный «последний час»);
+    should_send_final_reminder тоже обновлён, чтоб window ловил слот.
     """
     return {
-        "hours_before_expiry": 6,
+        "hours_before_expiry": 1,
         "notification_key": "trial.notification_71h",
         "has_button": True,
         "db_flag": "trial_notif_71h_sent"
