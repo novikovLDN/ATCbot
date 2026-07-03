@@ -49,6 +49,17 @@ async def _check_user_traffic(bot: Bot, telegram_id: int, rmn_uuid: str) -> None
             return
 
         for threshold_bytes, flag_key in config.TRAFFIC_NOTIFY_THRESHOLDS:
+            # Порог должен быть строго меньше лимита юзера — иначе он
+            # триггерится СРАЗУ после активации: у trial'а лимит 500 МБ,
+            # но пороги 8/5/3/1 ГБ все ≥ 500 МБ, поэтому за первые
+            # 30 минут летели 6 уведомлений подряд с текстом «купите
+            # дополнительный трафик». Строгое неравенство также
+            # гарантирует что порог 500 МБ не сработает для юзера
+            # с лимитом ровно 500 МБ на моменте активации.
+            # Особый случай: порог 0 ГБ (закончился трафик) — всегда
+            # актуален, любой юзер должен узнать что доступ отключился.
+            if threshold_bytes > 0 and threshold_bytes >= limit:
+                continue
             if remaining <= threshold_bytes and not flags.get(flag_key, False):
                 await _send_traffic_notification(bot, telegram_id, remaining, flag_key)
                 await database.set_traffic_notification_flag(telegram_id, flag_key)
