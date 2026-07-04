@@ -464,13 +464,10 @@ TRAFFIC_LIMITS_GB = {
     "plus":  {30: 10, 90: 10, 180: 10, 365: 10},
 }
 
-# Device limits per tariff.
-# Значения передаются в Remnawave как deviceLimit при create/update
-# юзера — контролируют РЕАЛЬНОЕ количество одновременных подключений
-# в панели, не только текст в маркетинге.
+# Device limits per tariff
 DEVICE_LIMITS = {
-    "basic": 10,
-    "plus":  14,
+    "basic": 5,
+    "plus":  7,
 }
 
 # Traffic packs for purchase (gb -> {price, bytes, discount})
