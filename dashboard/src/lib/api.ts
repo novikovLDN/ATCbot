@@ -295,6 +295,7 @@ export const endpoints = {
     discount_percent?: number | null;
     discount_hours?: number | null;
     discount_label?: string | null;
+    gift_reveal_percent?: number | null;
   }) =>
     api.post<{ ok: boolean; broadcast_id: number; audience: number }>(
       "/broadcasts",
@@ -309,6 +310,7 @@ export const endpoints = {
     discount_percent?: number | null;
     discount_hours?: number | null;
     discount_label?: string | null;
+    gift_reveal_percent?: number | null;
   }) =>
     api.post<{
       ok: boolean;
