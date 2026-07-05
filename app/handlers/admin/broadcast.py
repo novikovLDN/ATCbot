@@ -1034,15 +1034,29 @@ async def callback_broadcast_gift_reveal(callback: CallbackQuery, state: FSMCont
 
     # Определяем процент из БД. broadcast_id — второй элемент callback_data.
     percent = _GIFT_REVEAL_PERCENT_DEFAULT
+    broadcast_id = None
     try:
         broadcast_id = int(callback.data.split(":", 1)[1])
         discount_row = await database.get_broadcast_discount(broadcast_id)
-        if discount_row and discount_row.get("gift_reveal_percent"):
-            percent = int(discount_row["gift_reveal_percent"])
+        gr_pct = (discount_row or {}).get("gift_reveal_percent")
+        if gr_pct:
+            percent = int(gr_pct)
+            logger.info(
+                "GIFT_REVEAL_CLICK broadcast_id=%s user=%s pct=%s (from DB)",
+                broadcast_id, telegram_id, percent,
+            )
+        else:
+            logger.warning(
+                "GIFT_REVEAL_CLICK broadcast_id=%s user=%s pct=%s (FALLBACK — "
+                "discount_row=%s, gift_reveal_percent=%s). Возможно: миграция 063 "
+                "ещё не накатана / save упал при create /рассылка создана до фичи.",
+                broadcast_id, telegram_id, percent,
+                discount_row is not None, gr_pct,
+            )
     except Exception as e:
         logger.warning(
-            "GIFT_REVEAL_LOOKUP_FAIL callback=%s err=%s — using default %s%%",
-            callback.data, e, _GIFT_REVEAL_PERCENT_DEFAULT,
+            "GIFT_REVEAL_LOOKUP_FAIL broadcast_id=%s callback=%s err=%s — using default %s%%",
+            broadcast_id, callback.data, e, _GIFT_REVEAL_PERCENT_DEFAULT,
         )
 
     try:

@@ -324,24 +324,67 @@ async def save_broadcast_gift_reveal_percent(broadcast_id: int, gift_reveal_perc
 
     Идемпотентно: если строка broadcast_discounts уже есть (например от
     promo_buy), просто апдейтим колонку; если нет — вставляем с
-    placeholder-нулём в discount_percent (мы её всё равно не читаем
-    для gift_reveal).
+    placeholder-нулём в discount_percent.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # На случай если миграция 063 ещё не накатана
+        # На случай если миграция 063 ещё не накатана — гарантируем колонку.
+        # Отдельная tx на ALTER, чтоб исключение не убило основную транзакцию.
         try:
             await conn.execute(
                 "ALTER TABLE broadcast_discounts ADD COLUMN IF NOT EXISTS gift_reveal_percent INTEGER"
             )
-        except Exception:
-            pass
-        await conn.execute(
-            """INSERT INTO broadcast_discounts (broadcast_id, discount_percent, gift_reveal_percent)
-               VALUES ($1, 0, $2)
-               ON CONFLICT (broadcast_id) DO UPDATE SET gift_reveal_percent = $2""",
-            broadcast_id, gift_reveal_percent,
-        )
+        except Exception as alter_err:
+            logger.warning(
+                "SAVE_GIFT_REVEAL: ALTER TABLE failed (может уже есть): %s",
+                alter_err,
+            )
+        # discount_hours / discount_label были добавлены в save_broadcast_discount'e
+        # через ALTER IF NOT EXISTS — если строка ещё не создана и эти колонки
+        # NOT NULL с DEFAULT'ами, INSERT должен пройти. Но на всякий случай
+        # явно даём значения — чтоб не зависеть от порядка миграций.
+        try:
+            await conn.execute(
+                """INSERT INTO broadcast_discounts (
+                       broadcast_id, discount_percent, gift_reveal_percent,
+                       discount_hours, discount_label
+                   )
+                   VALUES ($1, 0, $2, 48, '48 часов')
+                   ON CONFLICT (broadcast_id) DO UPDATE
+                   SET gift_reveal_percent = EXCLUDED.gift_reveal_percent""",
+                broadcast_id, gift_reveal_percent,
+            )
+            logger.info(
+                "SAVE_GIFT_REVEAL_OK broadcast_id=%s percent=%s",
+                broadcast_id, gift_reveal_percent,
+            )
+        except Exception as ins_err:
+            # Fallback: сначала попробуем чистый UPDATE (если строка уже есть).
+            # Затем — INSERT без gift_reveal_percent-колонки (для DB, где ALTER
+            # не прошёл) — записываем в discount_percent как последний рубеж,
+            # чтобы juzер получил хоть какую-то скидку.
+            logger.warning(
+                "SAVE_GIFT_REVEAL: INSERT failed broadcast_id=%s err=%s "
+                "— пробую UPDATE-only",
+                broadcast_id, ins_err,
+            )
+            try:
+                await conn.execute(
+                    """UPDATE broadcast_discounts
+                       SET gift_reveal_percent = $2
+                       WHERE broadcast_id = $1""",
+                    broadcast_id, gift_reveal_percent,
+                )
+                logger.info(
+                    "SAVE_GIFT_REVEAL_UPDATE_OK broadcast_id=%s percent=%s",
+                    broadcast_id, gift_reveal_percent,
+                )
+            except Exception as upd_err:
+                logger.error(
+                    "SAVE_GIFT_REVEAL_TOTAL_FAIL broadcast_id=%s: %s",
+                    broadcast_id, upd_err,
+                )
+                raise
 
 
 async def get_broadcast_discount(broadcast_id: int) -> Optional[Dict[str, Any]]:
