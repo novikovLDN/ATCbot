@@ -197,6 +197,9 @@ _BUTTON_TYPES = {
 }
 
 
+_GIFT_REVEAL_PERCENT_CHOICES = (20, 25, 30, 35, 40)
+
+
 class BroadcastCreateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     message: str = Field(..., min_length=1, max_length=4000)
@@ -206,6 +209,9 @@ class BroadcastCreateRequest(BaseModel):
     discount_percent: Optional[int] = Field(None, ge=1, le=100)
     discount_hours: Optional[int] = Field(None, gt=0, le=8760)
     discount_label: Optional[str] = Field(None, max_length=60)
+    # Процент для кнопки «👀 Посмотреть подарок». Пресеты 20/25/30/35/40.
+    # Действует 48ч после клика (продолжительность зашита в коде callback'а).
+    gift_reveal_percent: Optional[int] = Field(None, ge=20, le=40)
 
     @field_validator("buttons")
     @classmethod
@@ -215,6 +221,18 @@ class BroadcastCreateRequest(BaseModel):
         for b in v:
             if b not in _BUTTON_TYPES:
                 raise ValueError(f"unknown button type: {b}")
+        return v
+
+    @field_validator("gift_reveal_percent")
+    @classmethod
+    def _valid_gift_reveal_percent(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        if v not in _GIFT_REVEAL_PERCENT_CHOICES:
+            raise ValueError(
+                f"gift_reveal_percent must be one of "
+                f"{_GIFT_REVEAL_PERCENT_CHOICES}, got {v}"
+            )
         return v
 
 
@@ -394,6 +412,21 @@ async def broadcast_create(
             )
         except Exception as e:
             logger.warning("DISCOUNT_SAVE_FAIL broadcast_id=%s err=%s", broadcast_id, e)
+
+    # gift_reveal-скидка (админ выбрал 20/25/30/35/40 в дашборд-визарде).
+    # Отдельная колонка broadcast_discounts.gift_reveal_percent — не
+    # конфликтует с promo_buy-скидкой выше. Fallback 20% если админ
+    # не выбрал (то же поведение, что было до фичи).
+    if "gift_reveal" in body.buttons:
+        _gr_pct = body.gift_reveal_percent or 20
+        try:
+            await database.save_broadcast_gift_reveal_percent(broadcast_id, _gr_pct)
+        except Exception as e:
+            logger.warning(
+                "GIFT_REVEAL_PERSIST_FAIL broadcast_id=%s err=%s "
+                "(fallback to 20%% at click-time)",
+                broadcast_id, e,
+            )
 
     reply_markup = _build_reply_markup(
         body.buttons, broadcast_id, body.discount_percent,

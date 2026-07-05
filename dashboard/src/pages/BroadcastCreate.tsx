@@ -22,10 +22,10 @@ const BUTTON_OPTIONS = [
   { key: "buy", label: "🛒 Купить" },
   { key: "promo_buy", label: "🎁 Купить со скидкой (нужен %)" },
   { key: "promo_traffic", label: "📊 Купить ГБ со скидкой (нужен %)" },
-  // gift_reveal — фиксированный 20%/48ч-подарок с reveal-сценкой
-  // (эмодзи 👀 → 2с → 🎁 → экран тарифов со скидкой). % из формы
-  // не используется, поэтому не требует discount_percent.
-  { key: "gift_reveal", label: "👀 Посмотреть подарок (−20% / 48ч)" },
+  // gift_reveal — reveal-сценка (👀 → 2с → 🎁 → экран тарифов со
+  // скидкой). Процент админ выбирает в отдельном пикере ниже (20/25/
+  // 30/35/40), продолжительность 48ч зашита в коде callback'а.
+  { key: "gift_reveal", label: "👀 Посмотреть подарок (48ч, % ниже)" },
   // Открывает 2-шаговый flow (тариф → период). Скидка ТОЛЬКО на 365
   // дней, остальные периоды по прайсу. Скидка одноразовая через FSM
   // (не пишется в user_discounts) — реализация симметрична gift_3m.
@@ -58,6 +58,11 @@ export function BroadcastCreate() {
   const [buttons, setButtons] = useState<string[]>([]);
   const [discountPercent, setDiscountPercent] = useState<number | "">("");
   const [discountHours, setDiscountHours] = useState<number | "">(24);
+  // Пресеты для «Посмотреть подарок». Согласованы с backend
+  // (broadcasts.py:_GIFT_REVEAL_PERCENT_CHOICES). Дефолт 20% — если
+  // админ не выбрал явно, летит текущее значение.
+  const GIFT_REVEAL_PERCENT_CHOICES = [20, 25, 30, 35, 40] as const;
+  const [giftRevealPercent, setGiftRevealPercent] = useState<number>(20);
 
   const segments = useQuery({
     queryKey: ["broadcasts", "segments"],
@@ -75,6 +80,9 @@ export function BroadcastCreate() {
         discount_percent:
           typeof discountPercent === "number" ? discountPercent : null,
         discount_hours: typeof discountHours === "number" ? discountHours : null,
+        gift_reveal_percent: buttons.includes("gift_reveal")
+          ? giftRevealPercent
+          : null,
       }),
     onSuccess: (data) => {
       toast.success(
@@ -100,6 +108,9 @@ export function BroadcastCreate() {
         discount_percent:
           typeof discountPercent === "number" ? discountPercent : null,
         discount_hours: typeof discountHours === "number" ? discountHours : null,
+        gift_reveal_percent: buttons.includes("gift_reveal")
+          ? giftRevealPercent
+          : null,
       }),
     onSuccess: (data) => {
       if (data.split) {
@@ -376,6 +387,39 @@ export function BroadcastCreate() {
                     placeholder="24"
                   />
                 </label>
+              </div>
+            </div>
+          )}
+
+          {/* Percent picker для «👀 Посмотреть подарок». Показывается
+              только если админ выбрал эту кнопку в списке выше.
+              Продолжительность 48ч зашита в коде callback'а. */}
+          {buttons.includes("gift_reveal") && (
+            <div className="rounded-xl border border-accent/40 bg-accent/10 p-4">
+              <div className="text-xs font-medium uppercase tracking-wider text-accent">
+                👀 Посмотреть подарок — скидка после reveal
+              </div>
+              <div className="mt-2 text-xs text-fg-muted">
+                Действует <b>48 часов</b> после клика. Выбери процент:
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {GIFT_REVEAL_PERCENT_CHOICES.map((p) => {
+                  const active = giftRevealPercent === p;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setGiftRevealPercent(p)}
+                      className={
+                        active
+                          ? "rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-bg shadow-glow-sm"
+                          : "rounded-full border border-border bg-bg-card px-4 py-1.5 text-sm text-fg-muted hover:border-accent/40 hover:text-fg"
+                      }
+                    >
+                      {p} %
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
