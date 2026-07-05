@@ -955,25 +955,95 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
 # работает на все основные тарифы (basic / plus / combo_basic /
 # combo_plus) автоматически на экране тарифов через `get_user_discount`.
 
-_GIFT_REVEAL_PERCENT = 20
+_GIFT_REVEAL_PERCENT_DEFAULT = 20  # fallback для рассылок без gift_reveal_percent в DB
 _GIFT_REVEAL_HOURS = 48
+_GIFT_REVEAL_PERCENT_CHOICES = (20, 25, 30, 35, 40)
 _GIFT_REVEAL_EMOJI = '<tg-emoji emoji-id="5210956306952758910">👀</tg-emoji>'
 _GIFT_REVEAL_PRESENT = '<tg-emoji emoji-id="5449800250032143374">🎁</tg-emoji>'
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("gift_reveal_pct:"))
+async def callback_gift_reveal_percent_select(callback: CallbackQuery, state: FSMContext):
+    """Admin выбрал процент для «🎁 Посмотреть подарок» в визарде рассылки."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    language = await resolve_user_language(callback.from_user.id)
+    parts = callback.data.split(":")
+    if len(parts) != 2:
+        return
+    val = parts[1]
+
+    data = await state.get_data()
+    buttons = data.get("broadcast_buttons", [])
+
+    if val == "cancel":
+        # Возврат к выбору кнопок, gift_reveal НЕ добавляется.
+        selected_label = ", ".join(_btn_label(b) for b in buttons) if buttons else "нет"
+        await callback.message.edit_text(
+            f"Выбранные кнопки: {selected_label}\n\n"
+            "Выберите ещё кнопки или нажмите «Готово»:",
+            reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons),
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        percent = int(val)
+    except ValueError:
+        return
+    if percent not in _GIFT_REVEAL_PERCENT_CHOICES:
+        return
+
+    if "gift_reveal" not in buttons:
+        buttons.append("gift_reveal")
+    await state.update_data(
+        broadcast_buttons=buttons,
+        gift_reveal_percent=percent,
+    )
+
+    selected_label = ", ".join(_btn_label(b) for b in buttons)
+    await callback.message.edit_text(
+        f"Выбранные кнопки: {selected_label}\n\n"
+        f"🎁 <b>«Посмотреть подарок»</b> → скидка <b>{percent}%</b> на 48 часов после клика.\n\n"
+        "Выберите ещё кнопки или нажмите «Готово»:",
+        reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons),
+        parse_mode="HTML",
+    )
 
 
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast_gift_reveal:"))
 async def callback_broadcast_gift_reveal(callback: CallbackQuery, state: FSMContext):
     """Кликнули «Посмотреть подарок» в рассылке — играем reveal-сценку
-    и применяем 20%-скидку на 48ч, открываем экран тарифов.
+    и применяем скидку на 48ч, открываем экран тарифов.
 
-    Тематически: интрига 2s, потом раскрытие. Скидка зашита,
-    параметры broadcast_id не нужны (но принимаем, чтобы дёшево
-    аудитить какая рассылка сгенерировала клик).
+    Процент скидки берётся из `broadcast_discounts.gift_reveal_percent`
+    (админ выбрал в визарде: 20/25/30/35/40). Если по какой-то причине
+    там пусто (старая рассылка до миграции 063, DB-ошибка) — fallback
+    на legacy 20%, чтобы не оставлять юзера ни с чем.
     """
     await callback.answer()
 
     telegram_id = callback.from_user.id
     chat_id = callback.message.chat.id if callback.message else telegram_id
+
+    # Определяем процент из БД. broadcast_id — второй элемент callback_data.
+    percent = _GIFT_REVEAL_PERCENT_DEFAULT
+    try:
+        broadcast_id = int(callback.data.split(":", 1)[1])
+        discount_row = await database.get_broadcast_discount(broadcast_id)
+        if discount_row and discount_row.get("gift_reveal_percent"):
+            percent = int(discount_row["gift_reveal_percent"])
+    except Exception as e:
+        logger.warning(
+            "GIFT_REVEAL_LOOKUP_FAIL callback=%s err=%s — using default %s%%",
+            callback.data, e, _GIFT_REVEAL_PERCENT_DEFAULT,
+        )
 
     try:
         # 1) эмодзи 👀 — интрига. Сохраняем message_id, чтобы удалить
@@ -995,18 +1065,18 @@ async def callback_broadcast_gift_reveal(callback: CallbackQuery, state: FSMCont
         except Exception:
             pass
 
-        # 4) raveal-сообщение с подарком — жирным
+        # 4) reveal-сообщение с динамическим процентом
         await callback.bot.send_message(
             chat_id,
-            f"<b>Для тебя подарок 20% скидка на любую подписку!</b> {_GIFT_REVEAL_PRESENT}",
+            f"<b>Для тебя подарок {percent}% скидка на любую подписку!</b> {_GIFT_REVEAL_PRESENT}",
             parse_mode="HTML",
         )
 
-        # 4) применяем скидку 20% / 48ч
+        # 5) применяем скидку %/48ч
         expires_at = datetime.now(timezone.utc) + timedelta(hours=_GIFT_REVEAL_HOURS)
         await database.create_user_discount(
             telegram_id=telegram_id,
-            discount_percent=_GIFT_REVEAL_PERCENT,
+            discount_percent=percent,
             expires_at=expires_at,
             created_by=config.ADMIN_TELEGRAM_ID,
         )
@@ -1467,6 +1537,47 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
             reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons),
             parse_mode="HTML",
         )
+    elif btn_type == "gift_reveal":
+        # «🎁 Посмотреть подарок» — админ выбирает процент 20/25/30/35/40
+        # (48ч фиксировано в коде callback'а).
+        data = await state.get_data()
+        buttons = data.get("broadcast_buttons", [])
+        if btn_type in buttons:
+            # Убираем — сбрасываем и процент
+            buttons.remove(btn_type)
+            await state.update_data(
+                broadcast_buttons=buttons, gift_reveal_percent=None,
+            )
+            selected_label = ", ".join(_btn_label(b) for b in buttons) if buttons else "нет"
+            await callback.message.edit_text(
+                f"Выбранные кнопки: {selected_label}\n\n"
+                "Выберите ещё кнопки или нажмите «Готово»:",
+                reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons),
+                parse_mode="HTML",
+            )
+        else:
+            # Показать пикер процентов
+            percent_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="20 %", callback_data="gift_reveal_pct:20"),
+                    InlineKeyboardButton(text="25 %", callback_data="gift_reveal_pct:25"),
+                    InlineKeyboardButton(text="30 %", callback_data="gift_reveal_pct:30"),
+                ],
+                [
+                    InlineKeyboardButton(text="35 %", callback_data="gift_reveal_pct:35"),
+                    InlineKeyboardButton(text="40 %", callback_data="gift_reveal_pct:40"),
+                ],
+                [
+                    InlineKeyboardButton(text="↩️ Отмена", callback_data="gift_reveal_pct:cancel"),
+                ],
+            ])
+            await callback.message.edit_text(
+                "🎁 <b>«Посмотреть подарок»</b>\n\n"
+                "Какую скидку показывать пользователю после reveal-анимации?\n"
+                "<i>Действует 48 часов после клика.</i>",
+                reply_markup=percent_kb,
+                parse_mode="HTML",
+            )
     elif btn_type == "done":
         # Finished selecting buttons, move to segment
         await state.set_state(BroadcastCreate.waiting_for_segment)
@@ -1727,6 +1838,20 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             _disc_hours = data_for_save.get("broadcast_discount_hours", 168)
             _disc_label = data_for_save.get("broadcast_discount_label", "7 дней")
             await database.save_broadcast_discount(broadcast_id, broadcast_discount, _disc_hours, _disc_label)
+
+        # Save gift_reveal-скидка (админ выбрал 20/25/30/35/40 в визарде).
+        # Отдельная колонка → не конфликтует с promo_buy-скидкой выше.
+        if "gift_reveal" in broadcast_buttons:
+            data_for_save = await state.get_data()
+            _gr_percent = data_for_save.get("gift_reveal_percent") or _GIFT_REVEAL_PERCENT_DEFAULT
+            try:
+                await database.save_broadcast_gift_reveal_percent(broadcast_id, int(_gr_percent))
+            except Exception as e:
+                logger.warning(
+                    "GIFT_REVEAL_PERSIST_FAIL broadcast_id=%s err=%s "
+                    "(fallback to default %s%% at click-time)",
+                    broadcast_id, e, _GIFT_REVEAL_PERCENT_DEFAULT,
+                )
 
         prefix = f"{emoji} " if emoji else ""
         if is_ab_test:
