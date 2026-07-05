@@ -169,6 +169,11 @@ def _build_broadcast_reply_markup(
                 text="🎁 Скидка 30% на 3 месяца",
                 callback_data="broadcast_gift_3m",
             )])
+        elif btn == "gift_1y_40":
+            rows.append([InlineKeyboardButton(
+                text="🎁 1 год со скидкой 40%",
+                callback_data="broadcast_gift_1y_40",
+            )])
         elif btn == "bypass":
             rows.append([InlineKeyboardButton(text="🌐 Включить обход", callback_data="traffic_info")])
         elif btn == "channel":
@@ -387,26 +392,26 @@ def _gift3m_info_text_and_keyboard() -> tuple[str, InlineKeyboardMarkup]:
         f"🌟 <b>Basic — {basic_disc} ₽</b>\n"
         "<blockquote>🚀 Канал до 25 Гбит/с — YouTube 4K без тормозов\n"
         "🌐 10 ГБ обхода белых списков в подарок\n"
-        "👨‍👩‍👧‍👦 До 5 устройств одновременно\n"
+        "👨‍👩‍👧‍👦 До 10 устройств одновременно\n"
         "➕ Подключение в одно нажатие</blockquote>\n\n"
 
         f"⚡ <b>Plus — {plus_disc} ₽</b>\n"
         "<blockquote>⚡️ Канал до 75 Гбит/с — стримы и игры без лагов\n"
         "🔄 Резервные каналы — соединение работает всегда\n"
         "🌐 10 ГБ обхода белых списков в подарок\n"
-        "👨‍👩‍👧‍👦 До 7 устройств одновременно</blockquote>\n\n"
+        "👨‍👩‍👧‍👦 До 14 устройств одновременно</blockquote>\n\n"
 
         f"🚀 <b>Combo Basic — {cbasic_disc} ₽</b>\n"
         "<blockquote>🌐 Безлимит на основных серверах · до 25 Гбит/с\n"
         f"📊 <b>{combo_basic_gb} ГБ</b> обхода белых списков (LTE) в пакете\n"
-        "👨‍👩‍👧‍👦 До 5 устройств одновременно\n"
+        "👨‍👩‍👧‍👦 До 10 устройств одновременно\n"
         "<i>Пакет ГБ не сгорает — тратится только на LTE-серверах</i></blockquote>\n\n"
 
         f"🚀 <b>Combo Plus — {cplus_disc} ₽</b>\n"
         "<blockquote>🌐 Безлимит на приоритетных серверах · до 75 Гбит/с\n"
         "🔄 Резервные каналы — всегда онлайн\n"
         f"📊 <b>{combo_plus_gb} ГБ</b> обхода белых списков (LTE) в пакете\n"
-        "👨‍👩‍👧‍👦 До 7 устройств одновременно\n"
+        "👨‍👩‍👧‍👦 До 14 устройств одновременно\n"
         "<i>Пакет ГБ не сгорает — тратится только на LTE-серверах</i></blockquote>"
     )
 
@@ -530,6 +535,316 @@ async def callback_broadcast_gift_3m_buy(callback: CallbackQuery, state: FSMCont
     await show_payment_method_selection(callback, base_tariff, _GIFT3M_PERIOD_DAYS, price_kopecks)
 
 
+# ──────────────────────────────────────────────────────────────────────
+#  Gift 1 год −40% — скидка ТОЛЬКО на 365-дневный план
+#
+#  UX: рассылка → «🎁 1 год со скидкой 40%» → экран выбора тарифа
+#  (Basic / Plus / Combo Basic / Combo Plus) → экран выбора периода
+#  (30/90/180/365, где ТОЛЬКО 365 идёт со скидкой) → payment-method.
+#
+#  Скидка реализована как final_price_kopecks-override в FSM (одноразово,
+#  как gift_3m). Никаких записей в user_discounts — если юзер закрыл
+#  экран не купив, скидка «сгорает».
+# ──────────────────────────────────────────────────────────────────────
+
+_GIFT1Y40_DISCOUNT_PERCENT = 40
+_GIFT1Y40_PERIOD_DAYS_DISCOUNTED = 365
+_GIFT1Y40_PERIODS = (30, 90, 180, 365)
+_GIFT1Y40_PERIOD_LABELS = {
+    30: "1 месяц",
+    90: "3 месяца",
+    180: "6 месяцев",
+    365: "1 год",
+}
+_GIFT1Y40_TARIFFS = (
+    ("basic", "🌟 Basic"),
+    ("plus", "⚡ Plus"),
+    ("combo_basic", "🚀 Combo Basic"),
+    ("combo_plus", "🚀 Combo Plus"),
+)
+
+
+def _gift1y40_base_price(tariff: str, period_days: int) -> int | None:
+    if tariff in ("basic", "plus"):
+        return config.TARIFFS.get(tariff, {}).get(period_days, {}).get("price")
+    if tariff in ("combo_basic", "combo_plus"):
+        return config.COMBO_TARIFFS.get(tariff, {}).get(period_days, {}).get("price")
+    return None
+
+
+def _gift1y40_final_price(tariff: str, period_days: int) -> int | None:
+    """Финальная цена с учётом акции: 40% скидка ТОЛЬКО на 365 дней,
+    остальные периоды по обычному прайсу."""
+    base = _gift1y40_base_price(tariff, period_days)
+    if base is None:
+        return None
+    if period_days == _GIFT1Y40_PERIOD_DAYS_DISCOUNTED:
+        return round(base * (100 - _GIFT1Y40_DISCOUNT_PERCENT) / 100)
+    return base
+
+
+def _gift1y40_tariff_menu() -> tuple[str, InlineKeyboardMarkup]:
+    """Первый экран: выбор тарифа."""
+    lines = [
+        f"🎁 <b>Скидка {_GIFT1Y40_DISCOUNT_PERCENT}% на 1 год</b>",
+        "",
+        "Годовой план — сразу с учётом скидки.",
+        "Другие периоды доступны по обычной цене.",
+        "",
+        "<b>Выбери тариф ↓</b>",
+    ]
+    rows = []
+    for tariff, label in _GIFT1Y40_TARIFFS:
+        # Проверяем что тариф вообще существует в конфиге (защита от
+        # рассинхрона config vs UI).
+        if _gift1y40_base_price(tariff, _GIFT1Y40_PERIOD_DAYS_DISCOUNTED) is None:
+            continue
+        rows.append([InlineKeyboardButton(
+            text=label,
+            callback_data=f"bcg1y40:tariff:{tariff}",
+        )])
+    rows.append([InlineKeyboardButton(
+        text="ℹ️ О тарифах",
+        callback_data="bcg1y40:info",
+    )])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _gift1y40_period_menu(tariff: str) -> tuple[str, InlineKeyboardMarkup] | None:
+    """Второй экран: выбор периода для конкретного тарифа."""
+    tariff_label = next(
+        (label for t, label in _GIFT1Y40_TARIFFS if t == tariff),
+        tariff.capitalize(),
+    )
+    lines = [
+        f"{tariff_label}",
+        "",
+        "Выбери срок ↓",
+        "",
+    ]
+    rows = []
+    have_any = False
+    for period_days in _GIFT1Y40_PERIODS:
+        base = _gift1y40_base_price(tariff, period_days)
+        final = _gift1y40_final_price(tariff, period_days)
+        if base is None or final is None:
+            continue
+        have_any = True
+        period_label = _GIFT1Y40_PERIOD_LABELS[period_days]
+        if period_days == _GIFT1Y40_PERIOD_DAYS_DISCOUNTED:
+            # 365 → с плашкой и зачёркнутой ценой
+            lines.append(
+                f"🎁 <b>{period_label}</b> — было <s>{base} ₽</s>, "
+                f"стало <b>{final} ₽</b>  <i>−{_GIFT1Y40_DISCOUNT_PERCENT}%</i>"
+            )
+            btn_text = f"🎁 {period_label} · {final} ₽"
+        else:
+            lines.append(f"• {period_label} — {base} ₽")
+            btn_text = f"{period_label} · {base} ₽"
+        rows.append([InlineKeyboardButton(
+            text=btn_text,
+            callback_data=f"bcg1y40:buy:{tariff}:{period_days}",
+        )])
+    if not have_any:
+        return None
+    rows.append([InlineKeyboardButton(
+        text="← Назад к тарифам",
+        callback_data="bcg1y40:menu",
+    )])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _gift1y40_info_text_and_keyboard() -> tuple[str, InlineKeyboardMarkup]:
+    combo_basic_gb = config.COMBO_TARIFFS.get("combo_basic", {}).get(
+        _GIFT1Y40_PERIOD_DAYS_DISCOUNTED, {}).get("gb", 0)
+    combo_plus_gb = config.COMBO_TARIFFS.get("combo_plus", {}).get(
+        _GIFT1Y40_PERIOD_DAYS_DISCOUNTED, {}).get("gb", 0)
+
+    basic_final = _gift1y40_final_price("basic", _GIFT1Y40_PERIOD_DAYS_DISCOUNTED)
+    plus_final = _gift1y40_final_price("plus", _GIFT1Y40_PERIOD_DAYS_DISCOUNTED)
+    cbasic_final = _gift1y40_final_price("combo_basic", _GIFT1Y40_PERIOD_DAYS_DISCOUNTED)
+    cplus_final = _gift1y40_final_price("combo_plus", _GIFT1Y40_PERIOD_DAYS_DISCOUNTED)
+
+    text = (
+        "📦 <b>О тарифах · 1 год со скидкой 40%</b>\n\n"
+
+        f"🌟 <b>Basic — {basic_final} ₽</b>\n"
+        "<blockquote>🚀 Канал до 25 Гбит/с — YouTube 4K без тормозов\n"
+        "🌐 10 ГБ обхода белых списков в подарок\n"
+        "👨‍👩‍👧‍👦 До 10 устройств одновременно\n"
+        "➕ Подключение в одно нажатие</blockquote>\n\n"
+
+        f"⚡ <b>Plus — {plus_final} ₽</b>\n"
+        "<blockquote>⚡️ Канал до 75 Гбит/с — стримы и игры без лагов\n"
+        "🔄 Резервные каналы — соединение работает всегда\n"
+        "🌐 10 ГБ обхода белых списков в подарок\n"
+        "👨‍👩‍👧‍👦 До 14 устройств одновременно</blockquote>\n\n"
+
+        f"🚀 <b>Combo Basic — {cbasic_final} ₽</b>\n"
+        "<blockquote>🌐 Безлимит на основных серверах · до 25 Гбит/с\n"
+        f"📊 <b>{combo_basic_gb} ГБ</b> обхода белых списков (LTE) в пакете\n"
+        "👨‍👩‍👧‍👦 До 10 устройств одновременно\n"
+        "<i>Пакет ГБ не сгорает — тратится только на LTE-серверах</i></blockquote>\n\n"
+
+        f"🚀 <b>Combo Plus — {cplus_final} ₽</b>\n"
+        "<blockquote>🌐 Безлимит на приоритетных серверах · до 75 Гбит/с\n"
+        "🔄 Резервные каналы — всегда онлайн\n"
+        f"📊 <b>{combo_plus_gb} ГБ</b> обхода белых списков (LTE) в пакете\n"
+        "👨‍👩‍👧‍👦 До 14 устройств одновременно\n"
+        "<i>Пакет ГБ не сгорает — тратится только на LTE-серверах</i></blockquote>"
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="← Назад к скидке", callback_data="bcg1y40:menu")],
+    ])
+    return text, keyboard
+
+
+@admin_broadcast_router.callback_query(F.data == "broadcast_gift_1y_40")
+async def callback_broadcast_gift_1y_40(callback: CallbackQuery, state: FSMContext):
+    """User clicked «🎁 1 год со скидкой 40%» in a broadcast → tariff menu.
+
+    Скидка одноразовая (FSM-override), не пишется в user_discounts.
+    Реализация зеркальная callback_broadcast_gift_3m — тот же
+    компактный, безопасный паттерн.
+    """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    text, keyboard = _gift1y40_tariff_menu()
+    chat_id = callback.message.chat.id if callback.message and callback.message.chat else callback.from_user.id
+    try:
+        await callback.bot.send_message(chat_id, text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("BROADCAST_GIFT1Y40_RENDER_FAIL user=%s err=%s", callback.from_user.id, e)
+
+    logger.info("BROADCAST_GIFT1Y40_SHOWN user=%s", callback.from_user.id)
+
+
+@admin_broadcast_router.callback_query(F.data == "bcg1y40:menu")
+async def callback_broadcast_gift_1y_40_menu(callback: CallbackQuery, state: FSMContext):
+    """Re-render меню тарифов (used as «back» from info / period screens)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    text, keyboard = _gift1y40_tariff_menu()
+    try:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+    except Exception as e:
+        logger.warning("BROADCAST_GIFT1Y40_MENU_FAIL user=%s err=%s", callback.from_user.id, e)
+
+
+@admin_broadcast_router.callback_query(F.data == "bcg1y40:info")
+async def callback_broadcast_gift_1y_40_info(callback: CallbackQuery, state: FSMContext):
+    """Full descriptions всех четырёх годовых тарифов со скидкой."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    text, keyboard = _gift1y40_info_text_and_keyboard()
+    try:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+    except Exception as e:
+        logger.warning("BROADCAST_GIFT1Y40_INFO_FAIL user=%s err=%s", callback.from_user.id, e)
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("bcg1y40:tariff:"))
+async def callback_broadcast_gift_1y_40_tariff(callback: CallbackQuery, state: FSMContext):
+    """Выбран тариф — показываем экран периодов (30/90/180/365)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    try:
+        tariff = callback.data.split(":", 2)[2]
+    except IndexError:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+    menu = _gift1y40_period_menu(tariff)
+    if menu is None:
+        await callback.answer("Тариф недоступен", show_alert=True)
+        return
+    text, keyboard = menu
+    try:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+    except Exception as e:
+        logger.warning("BROADCAST_GIFT1Y40_TARIFF_FAIL user=%s err=%s", callback.from_user.id, e)
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("bcg1y40:buy:"))
+async def callback_broadcast_gift_1y_40_buy(callback: CallbackQuery, state: FSMContext):
+    """User picked tariff + period — jump to payment-method selection.
+
+    Скидка (40% на 365) закладывается в FSM `final_price_kopecks`.
+    Остальные периоды летят по обычной цене. Никаких мутаций
+    user_discounts.
+    """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    telegram_id = callback.from_user.id
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+    _, _, tariff, period_str = parts
+    try:
+        period_days = int(period_str)
+    except ValueError:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+    if period_days not in _GIFT1Y40_PERIODS:
+        await callback.answer("Неверный период", show_alert=True)
+        return
+
+    price_rubles = _gift1y40_final_price(tariff, period_days)
+    if price_rubles is None:
+        await callback.answer("Тариф недоступен", show_alert=True)
+        return
+    price_kopecks = price_rubles * 100
+
+    if tariff in ("combo_basic", "combo_plus"):
+        combo_info = config.COMBO_TARIFFS.get(tariff, {}).get(period_days, {})
+        base_tariff = combo_info.get("base_tariff")
+        gb = combo_info.get("gb", 0)
+    else:
+        base_tariff = tariff
+        gb = 0
+
+    if base_tariff not in config.TARIFFS:
+        await callback.answer("Тариф недоступен", show_alert=True)
+        return
+
+    from app.handlers.common.states import PurchaseState
+    fsm_update = dict(
+        tariff_type=base_tariff,
+        period_days=period_days,
+        final_price_kopecks=price_kopecks,
+        combo_bypass_gb=gb,
+    )
+    # discount_percent пишем только для 365 — на других периодах цена
+    # обычная, discount-показ в чекауте не нужен.
+    if period_days == _GIFT1Y40_PERIOD_DAYS_DISCOUNTED:
+        fsm_update["discount_percent"] = _GIFT1Y40_DISCOUNT_PERCENT
+    await state.update_data(**fsm_update)
+    await state.set_state(PurchaseState.choose_payment_method)
+
+    logger.info(
+        "BROADCAST_GIFT1Y40_BUY user=%s tariff=%s base=%s period=%s "
+        "combo_gb=%s price_kopecks=%s discounted=%s",
+        telegram_id, tariff, base_tariff, period_days, gb, price_kopecks,
+        period_days == _GIFT1Y40_PERIOD_DAYS_DISCOUNTED,
+    )
+
+    from handlers import show_payment_method_selection
+    await show_payment_method_selection(callback, base_tariff, period_days, price_kopecks)
+
+
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast_promo_traffic:"))
 async def callback_broadcast_promo_traffic(callback: CallbackQuery):
     """User clicked 'Купить трафик промо' in broadcast — apply 1-day traffic discount."""
@@ -640,25 +955,95 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
 # работает на все основные тарифы (basic / plus / combo_basic /
 # combo_plus) автоматически на экране тарифов через `get_user_discount`.
 
-_GIFT_REVEAL_PERCENT = 20
+_GIFT_REVEAL_PERCENT_DEFAULT = 20  # fallback для рассылок без gift_reveal_percent в DB
 _GIFT_REVEAL_HOURS = 48
+_GIFT_REVEAL_PERCENT_CHOICES = (20, 25, 30, 35, 40)
 _GIFT_REVEAL_EMOJI = '<tg-emoji emoji-id="5210956306952758910">👀</tg-emoji>'
 _GIFT_REVEAL_PRESENT = '<tg-emoji emoji-id="5449800250032143374">🎁</tg-emoji>'
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("gift_reveal_pct:"))
+async def callback_gift_reveal_percent_select(callback: CallbackQuery, state: FSMContext):
+    """Admin выбрал процент для «🎁 Посмотреть подарок» в визарде рассылки."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    language = await resolve_user_language(callback.from_user.id)
+    parts = callback.data.split(":")
+    if len(parts) != 2:
+        return
+    val = parts[1]
+
+    data = await state.get_data()
+    buttons = data.get("broadcast_buttons", [])
+
+    if val == "cancel":
+        # Возврат к выбору кнопок, gift_reveal НЕ добавляется.
+        selected_label = ", ".join(_btn_label(b) for b in buttons) if buttons else "нет"
+        await callback.message.edit_text(
+            f"Выбранные кнопки: {selected_label}\n\n"
+            "Выберите ещё кнопки или нажмите «Готово»:",
+            reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons),
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        percent = int(val)
+    except ValueError:
+        return
+    if percent not in _GIFT_REVEAL_PERCENT_CHOICES:
+        return
+
+    if "gift_reveal" not in buttons:
+        buttons.append("gift_reveal")
+    await state.update_data(
+        broadcast_buttons=buttons,
+        gift_reveal_percent=percent,
+    )
+
+    selected_label = ", ".join(_btn_label(b) for b in buttons)
+    await callback.message.edit_text(
+        f"Выбранные кнопки: {selected_label}\n\n"
+        f"🎁 <b>«Посмотреть подарок»</b> → скидка <b>{percent}%</b> на 48 часов после клика.\n\n"
+        "Выберите ещё кнопки или нажмите «Готово»:",
+        reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons),
+        parse_mode="HTML",
+    )
 
 
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast_gift_reveal:"))
 async def callback_broadcast_gift_reveal(callback: CallbackQuery, state: FSMContext):
     """Кликнули «Посмотреть подарок» в рассылке — играем reveal-сценку
-    и применяем 20%-скидку на 48ч, открываем экран тарифов.
+    и применяем скидку на 48ч, открываем экран тарифов.
 
-    Тематически: интрига 2s, потом раскрытие. Скидка зашита,
-    параметры broadcast_id не нужны (но принимаем, чтобы дёшево
-    аудитить какая рассылка сгенерировала клик).
+    Процент скидки берётся из `broadcast_discounts.gift_reveal_percent`
+    (админ выбрал в визарде: 20/25/30/35/40). Если по какой-то причине
+    там пусто (старая рассылка до миграции 063, DB-ошибка) — fallback
+    на legacy 20%, чтобы не оставлять юзера ни с чем.
     """
     await callback.answer()
 
     telegram_id = callback.from_user.id
     chat_id = callback.message.chat.id if callback.message else telegram_id
+
+    # Определяем процент из БД. broadcast_id — второй элемент callback_data.
+    percent = _GIFT_REVEAL_PERCENT_DEFAULT
+    try:
+        broadcast_id = int(callback.data.split(":", 1)[1])
+        discount_row = await database.get_broadcast_discount(broadcast_id)
+        if discount_row and discount_row.get("gift_reveal_percent"):
+            percent = int(discount_row["gift_reveal_percent"])
+    except Exception as e:
+        logger.warning(
+            "GIFT_REVEAL_LOOKUP_FAIL callback=%s err=%s — using default %s%%",
+            callback.data, e, _GIFT_REVEAL_PERCENT_DEFAULT,
+        )
 
     try:
         # 1) эмодзи 👀 — интрига. Сохраняем message_id, чтобы удалить
@@ -680,18 +1065,18 @@ async def callback_broadcast_gift_reveal(callback: CallbackQuery, state: FSMCont
         except Exception:
             pass
 
-        # 4) raveal-сообщение с подарком — жирным
+        # 4) reveal-сообщение с динамическим процентом
         await callback.bot.send_message(
             chat_id,
-            f"<b>Для тебя подарок 20% скидка на любую подписку!</b> {_GIFT_REVEAL_PRESENT}",
+            f"<b>Для тебя подарок {percent}% скидка на любую подписку!</b> {_GIFT_REVEAL_PRESENT}",
             parse_mode="HTML",
         )
 
-        # 4) применяем скидку 20% / 48ч
+        # 5) применяем скидку %/48ч
         expires_at = datetime.now(timezone.utc) + timedelta(hours=_GIFT_REVEAL_HOURS)
         await database.create_user_discount(
             telegram_id=telegram_id,
-            discount_percent=_GIFT_REVEAL_PERCENT,
+            discount_percent=percent,
             expires_at=expires_at,
             created_by=config.ADMIN_TELEGRAM_ID,
         )
@@ -1136,8 +1521,9 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
                 "Введите процент скидки для акции (число от 1 до 99):",
                 parse_mode="HTML",
             )
-    elif btn_type == "gift_3m":
-        # Preset: fixed 20% / 24h.  No extra input needed — just toggle in the list.
+    elif btn_type in ("gift_3m", "gift_1y_40"):
+        # Preset: скидка зашита в коде (30%/3мес или 40%/1год) — extra
+        # ввод не нужен, просто toggle в списке.
         data = await state.get_data()
         buttons = data.get("broadcast_buttons", [])
         if btn_type in buttons:
@@ -1151,6 +1537,47 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
             reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons),
             parse_mode="HTML",
         )
+    elif btn_type == "gift_reveal":
+        # «🎁 Посмотреть подарок» — админ выбирает процент 20/25/30/35/40
+        # (48ч фиксировано в коде callback'а).
+        data = await state.get_data()
+        buttons = data.get("broadcast_buttons", [])
+        if btn_type in buttons:
+            # Убираем — сбрасываем и процент
+            buttons.remove(btn_type)
+            await state.update_data(
+                broadcast_buttons=buttons, gift_reveal_percent=None,
+            )
+            selected_label = ", ".join(_btn_label(b) for b in buttons) if buttons else "нет"
+            await callback.message.edit_text(
+                f"Выбранные кнопки: {selected_label}\n\n"
+                "Выберите ещё кнопки или нажмите «Готово»:",
+                reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons),
+                parse_mode="HTML",
+            )
+        else:
+            # Показать пикер процентов
+            percent_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="20 %", callback_data="gift_reveal_pct:20"),
+                    InlineKeyboardButton(text="25 %", callback_data="gift_reveal_pct:25"),
+                    InlineKeyboardButton(text="30 %", callback_data="gift_reveal_pct:30"),
+                ],
+                [
+                    InlineKeyboardButton(text="35 %", callback_data="gift_reveal_pct:35"),
+                    InlineKeyboardButton(text="40 %", callback_data="gift_reveal_pct:40"),
+                ],
+                [
+                    InlineKeyboardButton(text="↩️ Отмена", callback_data="gift_reveal_pct:cancel"),
+                ],
+            ])
+            await callback.message.edit_text(
+                "🎁 <b>«Посмотреть подарок»</b>\n\n"
+                "Какую скидку показывать пользователю после reveal-анимации?\n"
+                "<i>Действует 48 часов после клика.</i>",
+                reply_markup=percent_kb,
+                parse_mode="HTML",
+            )
     elif btn_type == "done":
         # Finished selecting buttons, move to segment
         await state.set_state(BroadcastCreate.waiting_for_segment)
@@ -1184,6 +1611,7 @@ def _btn_label(btn_type: str) -> str:
         "promo_buy": "🎁 Купить со скидкой",
         "promo_traffic": "📊 Купить трафик промо",
         "gift_3m": "🎁 Скидка 30% на 3 месяца",
+        "gift_1y_40": "🎁 1 год со скидкой 40%",
         "bypass": "🌐 Включить обход",
         "channel": "📢 Наш канал",
         "support": "💬 Поддержка",
@@ -1410,6 +1838,20 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             _disc_hours = data_for_save.get("broadcast_discount_hours", 168)
             _disc_label = data_for_save.get("broadcast_discount_label", "7 дней")
             await database.save_broadcast_discount(broadcast_id, broadcast_discount, _disc_hours, _disc_label)
+
+        # Save gift_reveal-скидка (админ выбрал 20/25/30/35/40 в визарде).
+        # Отдельная колонка → не конфликтует с promo_buy-скидкой выше.
+        if "gift_reveal" in broadcast_buttons:
+            data_for_save = await state.get_data()
+            _gr_percent = data_for_save.get("gift_reveal_percent") or _GIFT_REVEAL_PERCENT_DEFAULT
+            try:
+                await database.save_broadcast_gift_reveal_percent(broadcast_id, int(_gr_percent))
+            except Exception as e:
+                logger.warning(
+                    "GIFT_REVEAL_PERSIST_FAIL broadcast_id=%s err=%s "
+                    "(fallback to default %s%% at click-time)",
+                    broadcast_id, e, _GIFT_REVEAL_PERCENT_DEFAULT,
+                )
 
         prefix = f"{emoji} " if emoji else ""
         if is_ab_test:

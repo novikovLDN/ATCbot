@@ -314,6 +314,36 @@ async def save_broadcast_discount(broadcast_id: int, discount_percent: int, disc
         )
 
 
+async def save_broadcast_gift_reveal_percent(broadcast_id: int, gift_reveal_percent: int) -> None:
+    """Save the gift_reveal-скидка (%) chosen by the admin for this broadcast.
+
+    Отдельная колонка от promo_buy/promo_traffic-скидки — в одной рассылке
+    можно спокойно комбинировать «🎁 Посмотреть подарок» с другими скидочными
+    кнопками, они не будут перезаписывать друг друга. Duration зашита в 48ч
+    в коде callback'а, не варьируется.
+
+    Идемпотентно: если строка broadcast_discounts уже есть (например от
+    promo_buy), просто апдейтим колонку; если нет — вставляем с
+    placeholder-нулём в discount_percent (мы её всё равно не читаем
+    для gift_reveal).
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # На случай если миграция 063 ещё не накатана
+        try:
+            await conn.execute(
+                "ALTER TABLE broadcast_discounts ADD COLUMN IF NOT EXISTS gift_reveal_percent INTEGER"
+            )
+        except Exception:
+            pass
+        await conn.execute(
+            """INSERT INTO broadcast_discounts (broadcast_id, discount_percent, gift_reveal_percent)
+               VALUES ($1, 0, $2)
+               ON CONFLICT (broadcast_id) DO UPDATE SET gift_reveal_percent = $2""",
+            broadcast_id, gift_reveal_percent,
+        )
+
+
 async def get_broadcast_discount(broadcast_id: int) -> Optional[Dict[str, Any]]:
     """Get discount info for a broadcast promo button."""
     pool = await get_pool()

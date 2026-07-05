@@ -184,6 +184,7 @@ _BUTTON_TYPES = {
     "promo_buy",
     "promo_traffic",
     "gift_reveal",
+    "gift_1y_40",
     "support",
     "channel",
     "referral",
@@ -509,6 +510,15 @@ def _build_reply_markup(
             )])
         elif btn == "buy_combo":
             rows.append([InlineKeyboardButton(text="🏆 Купить Комбо", callback_data="buy_combo")])
+        elif btn == "gift_1y_40":
+            # «🎁 1 год со скидкой 40%». Открывает 2-шаговый flow: тариф →
+            # период. Скидка применяется ТОЛЬКО к 365-дневному плану,
+            # остальные периоды по обычной цене. Реализация в
+            # app/handlers/admin/broadcast.py:callback_broadcast_gift_1y_40.
+            rows.append([InlineKeyboardButton(
+                text="🎁 1 год со скидкой 40%",
+                callback_data="broadcast_gift_1y_40",
+            )])
         elif btn == "share_discount":
             # Callback share_discount_open рендерится в referrals.py:
             # экран «Подари другу скидку 30%» + кнопка share с личной
