@@ -66,6 +66,18 @@ export default {
         success: "#86EFAC",              // мятный — +% и положительные дельты
         danger: "#FF6B6B",               // мягкий красный, не выжигает на dark
         warning: "#FFD66B",              // тёплый янтарь
+        // Сдержанные технологичные акценты. Используем ТОЧЕЧНО для
+        // семантической навигации по цвету:
+        //   info    — real-time индикаторы, ссылки, hi-tech chip'ы
+        //   special — VIP-статусы, «эксклюзивно» / premium-подписки
+        info: {
+          DEFAULT: "#7DD3FC",             // sky-300, чуть охлаждённый
+          soft: "#38BDF8",
+        },
+        special: {
+          DEFAULT: "#C4B5FD",             // violet-300, приглушённый
+          soft: "#A78BFA",
+        },
         // Category tag tints — desaturated так, чтобы не конкурировать
         // с лаймовым акцентом, но различимы между собой.
         tagpurple: "#B794F4",
@@ -117,6 +129,19 @@ export default {
         "blob-slow":   "blob-slow   16s ease-in-out infinite",
         "blob-slow-2": "blob-slow-2 19s ease-in-out infinite",
         "blob-slow-3": "blob-slow-3 22s ease-in-out infinite",
+        // Живой pulse-live для «real-time» точки: коротко и мягко.
+        "pulse-live":  "pulse-live 1.8s ease-in-out infinite",
+        // Rotating conic для tech-border-anim — держит edge card'а в живом
+        // состоянии. Медленно, ~14 сек — не отвлекает.
+        "spin-slow":   "spin-slow 14s linear infinite",
+        // Sweep-shine — блик по card'у при hover.
+        "sweep":       "sweep 1.2s cubic-bezier(0.16, 1, 0.3, 1)",
+        // Route-transition wrapper: soft-slide-fade.
+        "route-in":    "route-in 0.45s cubic-bezier(0.16, 1, 0.3, 1)",
+        // Number tick — маленький bump при обновлении счётчика.
+        "num-tick":    "num-tick 0.35s cubic-bezier(0.34, 1.56, 0.64, 1)",
+        // Ticker-marquee для лента-виджета.
+        "ticker":      "ticker 32s linear infinite",
       },
       keyframes: {
         "pulse-glow": {
@@ -186,6 +211,37 @@ export default {
         "blob-slow-3": {
           "0%, 100%": { transform: "translate(0, 0) scale(1)" },
           "50%":      { transform: "translate(35px, -25px) scale(1.08)" },
+        },
+        "pulse-live": {
+          "0%, 100%": {
+            opacity: "1",
+            boxShadow: "0 0 0 0 rgba(125,211,252,0.55)",
+          },
+          "50%": {
+            opacity: "0.7",
+            boxShadow: "0 0 0 8px rgba(125,211,252,0)",
+          },
+        },
+        "spin-slow": {
+          "0%":   { transform: "rotate(0deg)" },
+          "100%": { transform: "rotate(360deg)" },
+        },
+        "sweep": {
+          from: { transform: "translateX(-120%)" },
+          to:   { transform: "translateX(120%)" },
+        },
+        "route-in": {
+          from: { opacity: "0", transform: "translateY(8px) scale(0.99)" },
+          to:   { opacity: "1", transform: "translateY(0) scale(1)" },
+        },
+        "num-tick": {
+          "0%":   { transform: "translateY(0)",  opacity: "1" },
+          "40%":  { transform: "translateY(-4px)", opacity: "0.85" },
+          "100%": { transform: "translateY(0)",  opacity: "1" },
+        },
+        "ticker": {
+          from: { transform: "translateX(0%)" },
+          to:   { transform: "translateX(-50%)" },
         },
       },
     },

@@ -1,8 +1,8 @@
-import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { MobileNav } from "./MobileNav";
 import { LiveIndicator } from "./LiveIndicator";
 import { InstallHint } from "./InstallHint";
+import { RouteTransition } from "./RouteTransition";
 
 export function Layout() {
   return (
@@ -17,7 +17,7 @@ export function Layout() {
             paddingRight: "max(1rem, env(safe-area-inset-right))",
           }}
         >
-          <Outlet />
+          <RouteTransition />
         </div>
       </main>
       <MobileNav />

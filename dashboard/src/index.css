@@ -12,18 +12,37 @@
   body {
     font-feature-settings: "ss01", "ss02", "cv11";
     /* Матовый премиальный канвас: субтильный белый halo сверху-справа,
-       тонкая сетка hi-tech dots на всей поверхности. Никаких насыщенных
-       цветов — только чёрный, off-white и грей.
-       Dot-grid — 24px, opacity 0.035 (виден, но не мешает). */
+       тонкая сетка hi-tech dots + мельчайший cyan-подглоу справа снизу
+       (сдержанный технологичный акцент). Никаких насыщенных цветов —
+       только чёрный, off-white и грей + ювелирные проценты cyan/violet. */
     background:
       radial-gradient(ellipse 70% 40% at 90% -10%, rgba(255, 255, 255, 0.045), transparent 65%),
-      radial-gradient(ellipse 50% 45% at 5% 105%, rgba(255, 255, 255, 0.028), transparent 60%),
+      radial-gradient(ellipse 50% 45% at 5% 105%, rgba(125, 211, 252, 0.030), transparent 60%),
+      radial-gradient(ellipse 40% 30% at 100% 100%, rgba(196, 181, 253, 0.022), transparent 60%),
       radial-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
       #0A0A0A;
-    background-size: auto, auto, 24px 24px, auto;
+    background-size: auto, auto, auto, 24px 24px, auto;
     min-height: 100vh;
     letter-spacing: -0.01em;
     color: #FCFCFC;
+    position: relative;
+  }
+  /* Едва различимая zern-текстура поверх канваса — матовый эффект,
+     ощущение «плёнки». SVG turbulence data-uri, opacity ~0.02.
+     Отключаем pointer-events, поверх всего идёт контент. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.020;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.85'/></svg>");
+    mix-blend-mode: overlay;
+  }
+  #root {
+    position: relative;
+    z-index: 1;
   }
 
   ::selection {
@@ -247,6 +266,103 @@
            hover:-translate-y-0.5
            hover:shadow-[0_10px_28px_-14px_rgba(0,0,0,0.7)]
            hover:border-accent/35;
+  }
+
+  /* Glass panel — матовая полупрозрачная поверхность с backdrop-blur.
+     Использовать для «плавающих» слоёв (модалки, popover, sticky top-bar).
+     Слегка вложенный inset-block сверху даёт «стеклянный» рельеф. */
+  .glass-panel {
+    @apply rounded-2xl border border-white/[0.06] bg-bg-card/70
+           backdrop-blur-xl shadow-matte;
+  }
+
+  /* Tech-card — карточка с медленно вращающимся conic-gradient
+     под тонким border'ом. Даёт живой tech-look для VIP/hero-виджетов.
+     Внутри — стандартный .card content; wrapper даёт animated ring.
+     Требует p-[1px] и вложенного div для контента. */
+  .tech-border-wrap {
+    @apply relative rounded-2xl p-[1px] overflow-hidden;
+  }
+  .tech-border-wrap::before {
+    content: "";
+    position: absolute;
+    inset: -60%;
+    background:
+      conic-gradient(from 0deg, transparent 0deg, rgba(245,245,245,0.55) 60deg, transparent 120deg, transparent 180deg, rgba(125,211,252,0.35) 240deg, transparent 300deg);
+    animation: spin-slow 14s linear infinite;
+    z-index: 0;
+    filter: blur(0.5px);
+  }
+  .tech-border-wrap > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Pulse-live — 8×8 dot для real-time индикатора (info-cyan цвет).
+     Используется рядом с заголовками виджетов, у которых есть SSE. */
+  .pulse-live {
+    @apply inline-block h-2 w-2 rounded-full bg-info animate-pulse-live;
+  }
+  .pulse-live-danger {
+    @apply inline-block h-2 w-2 rounded-full bg-danger;
+    animation: pulse-live 1.8s ease-in-out infinite;
+    box-shadow: 0 0 0 0 rgba(255,107,107,0.55);
+  }
+
+  /* Stat-shine — hover-эффект «блика по card'у». Работает через
+     absolute-child, у которого animation-play-state paused по умолчанию,
+     а на hover — running. Плюс parent должен быть overflow-hidden. */
+  .stat-shine {
+    @apply relative overflow-hidden;
+  }
+  .stat-shine::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 40%;
+    background: linear-gradient(
+      100deg,
+      transparent 0%,
+      rgba(255,255,255,0.06) 45%,
+      rgba(255,255,255,0.10) 50%,
+      rgba(255,255,255,0.06) 55%,
+      transparent 100%
+    );
+    transform: translateX(-120%);
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+  }
+  .stat-shine:hover::after {
+    opacity: 1;
+    animation: sweep 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* Info / Special tinted badges — дополняем набор badge'ей
+     сдержанными cyan / violet цветами. */
+  .badge-live {
+    @apply badge bg-info/12 text-info ring-1 ring-info/25;
+  }
+  .badge-special {
+    @apply badge bg-special/12 text-special ring-1 ring-special/25;
+  }
+
+  /* Route-transition — обёртка страницы с fade+slide-in.
+     Компонент RouteTransition применяет этот класс на mount. */
+  .route-in {
+    animation: route-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  /* Subtle noise-overlay для body — очень слабая zern-текстура,
+     чтобы «плоский dark» ощущался матовым, не пластиковым.
+     Применяем как ::before на body в base-слое. */
+
+  /* Num-tick — анимация обновления числового счётчика. Задаётся
+     компонентом CountUp через inline animation. */
+  .num-tick {
+    animation: num-tick 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
 
   /* Staggered fade-up для children — секций главной. backwards
