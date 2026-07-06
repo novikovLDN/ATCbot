@@ -98,6 +98,7 @@ export interface UserDetail {
   subscription: Record<string, unknown> | null;
   trial: Record<string, unknown> | null;
   discount: Record<string, unknown> | null;
+  traffic_discount: Record<string, unknown> | null;
   is_vip: boolean;
 }
 
@@ -254,6 +255,16 @@ export const endpoints = {
     body: { percent: number; expires_in_hours: number | null },
   ) => api.post<{ ok: boolean }>(`/users/${tg}/discount`, body),
   userDiscountDelete: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}/discount`),
+  userTrafficDiscountCreate: (
+    tg: number,
+    body: { percent: number; expires_in_hours: number | null },
+  ) =>
+    api.post<{ ok: boolean; percent: number; expires_at: string | null }>(
+      `/users/${tg}/traffic-discount`,
+      body,
+    ),
+  userTrafficDiscountDelete: (tg: number) =>
+    api.del<{ ok: boolean }>(`/users/${tg}/traffic-discount`),
   userVipGrant: (tg: number) => api.post<{ ok: boolean }>(`/users/${tg}/vip`),
   userVipRevoke: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}/vip`),
   userBalanceChange: (
