@@ -105,7 +105,7 @@ export function Login({ onDone }: { onDone: () => void }) {
           className="pointer-events-none absolute -inset-10 -z-10 opacity-50 animate-glow-rotate"
           style={{
             background:
-              "conic-gradient(from 0deg, rgba(215,255,103,0.30), rgba(166,255,179,0.20), rgba(215,255,103,0.08), rgba(215,255,103,0.30))",
+              "conic-gradient(from 0deg, rgba(245,245,245,0.22), rgba(220,220,220,0.16), rgba(245,245,245,0.06), rgba(245,245,245,0.22))",
             filter: "blur(80px)",
           }}
         />
@@ -117,7 +117,7 @@ export function Login({ onDone }: { onDone: () => void }) {
             className="pointer-events-none absolute inset-x-12 top-0 h-px"
             style={{
               background:
-                "linear-gradient(90deg, transparent, rgba(215,255,103,0.7), rgba(215,255,103,0.3), transparent)",
+                "linear-gradient(90deg, transparent, rgba(245,245,245,0.7), rgba(245,245,245,0.3), transparent)",
             }}
           />
 
@@ -138,7 +138,7 @@ export function Login({ onDone }: { onDone: () => void }) {
               </div>
               <div className="mt-0.5 inline-flex items-center gap-1.5 text-sm font-semibold text-fg">
                 Founder Console
-                <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-accent shadow-[0_0_8px_rgba(215,255,103,0.7)]" />
+                <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-accent shadow-[0_0_8px_rgba(245,245,245,0.6)]" />
               </div>
             </div>
           </div>
@@ -226,7 +226,7 @@ export function Login({ onDone }: { onDone: () => void }) {
             <button
               type="submit"
               disabled={!canSubmit}
-              className="group relative mt-2 inline-flex w-full items-center justify-center gap-2 overflow-hidden rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-bg shadow-glow transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 hover:bg-accent-hover hover:shadow-[0_18px_40px_-12px_rgba(215,255,103,0.55)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+              className="group relative mt-2 inline-flex w-full items-center justify-center gap-2 overflow-hidden rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-bg shadow-glow transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 hover:bg-accent-hover hover:shadow-[0_18px_40px_-12px_rgba(245,245,245,0.45)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
             >
               <span
                 aria-hidden
@@ -279,7 +279,7 @@ function AuroraDarkBackground() {
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse 80% 60% at 50% 0%, rgba(215,255,103,0.16), transparent 60%), radial-gradient(ellipse 70% 50% at 50% 100%, rgba(166,255,179,0.10), transparent 60%), #0A0A0A",
+            "radial-gradient(ellipse 80% 60% at 50% 0%, rgba(245,245,245,0.10), transparent 60%), radial-gradient(ellipse 70% 50% at 50% 100%, rgba(200,200,200,0.06), transparent 60%), #0A0A0A",
         }}
       />
       <svg className="absolute inset-0 h-full w-full opacity-[0.25]" xmlns="http://www.w3.org/2000/svg">
@@ -299,15 +299,15 @@ function AuroraDarkBackground() {
       </svg>
       <div
         className="absolute left-[8%] top-[12%] h-72 w-72 rounded-full blur-3xl opacity-40 animate-blob-slow"
-        style={{ background: "radial-gradient(circle, rgba(215,255,103,0.45), transparent 60%)" }}
+        style={{ background: "radial-gradient(circle, rgba(245,245,245,0.30), transparent 60%)" }}
       />
       <div
         className="absolute right-[12%] top-[40%] h-80 w-80 rounded-full blur-3xl opacity-35 animate-blob-slow-2"
-        style={{ background: "radial-gradient(circle, rgba(166,255,179,0.35), transparent 60%)" }}
+        style={{ background: "radial-gradient(circle, rgba(220,220,220,0.24), transparent 60%)" }}
       />
       <div
         className="absolute left-[30%] bottom-[8%] h-72 w-72 rounded-full blur-3xl opacity-25 animate-blob-slow-3"
-        style={{ background: "radial-gradient(circle, rgba(215,255,103,0.30), transparent 60%)" }}
+        style={{ background: "radial-gradient(circle, rgba(245,245,245,0.20), transparent 60%)" }}
       />
     </div>
   );
@@ -319,7 +319,7 @@ function SuccessOverlay({ name }: { name: string }) {
       <div className="flex flex-col items-center gap-5">
         <div className="relative grid h-24 w-24 place-items-center">
           <span className="absolute inset-0 rounded-full ring-2 ring-accent/50 animate-ring-pulse" />
-          <span className="relative grid h-16 w-16 place-items-center rounded-full bg-accent text-bg shadow-[0_0_30px_-2px_rgba(215,255,103,0.55)]">
+          <span className="relative grid h-16 w-16 place-items-center rounded-full bg-accent text-bg shadow-[0_0_30px_-2px_rgba(245,245,245,0.45)]">
             <svg viewBox="0 0 24 24" className="h-7 w-7" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
               <path
                 d="M5 12l4.5 4.5L19 7"

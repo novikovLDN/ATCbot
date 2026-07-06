@@ -52,7 +52,7 @@ export function Broadcasts() {
   const list = useQuery({
     queryKey: ["broadcasts", "recent"],
     queryFn: () => endpoints.broadcastsRecent(50) as Promise<BroadcastRow[]>,
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
   });
 
   const [selected, setSelected] = useState<number | null>(null);

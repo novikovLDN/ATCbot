@@ -55,7 +55,7 @@ export function Analytics() {
   const period = useQuery({
     queryKey: ["payments", "revenue", hours],
     queryFn: () => endpoints.paymentsRevenue(hours),
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,
   });
 
   const revenue = useQuery({

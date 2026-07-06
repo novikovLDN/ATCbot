@@ -34,7 +34,7 @@ export function PromoCodes() {
   const list = useQuery({
     queryKey: ["promo", "list"],
     queryFn: () => endpoints.promoList() as Promise<PromoRow[]>,
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
   });
 
   return (
