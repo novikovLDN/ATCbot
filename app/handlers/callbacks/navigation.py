@@ -830,7 +830,7 @@ _SETUP_PHOTOS = {
 }
 
 _IOS_HAPP_LINKS = {
-    "ru": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
+    "ru": "https://apps.apple.com/ru/app/happ-proxy-utility/id6783623643?l=en-GB",
     "global": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215",
 }
 
