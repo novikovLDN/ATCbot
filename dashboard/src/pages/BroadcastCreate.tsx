@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -47,6 +47,9 @@ const BUTTON_OPTIONS = [
 
 export function BroadcastCreate() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const cloneParam = searchParams.get("clone");
+  const cloneId = cloneParam && /^\d+$/.test(cloneParam) ? Number(cloneParam) : null;
   const [step, setStep] = useState<Step>(1);
 
   // Form state
@@ -68,6 +71,40 @@ export function BroadcastCreate() {
     queryKey: ["broadcasts", "segments"],
     queryFn: endpoints.broadcastSegments,
   });
+
+  // Clone flow: если пришли с ?clone=N, подтягиваем прошлую рассылку и
+  // предзаполняем всю форму (title/message/photo/buttons/скидки).
+  // Сегмент НЕ подтягиваем — админ выбирает сам, чтобы не разослать
+  // клон на ту же аудиторию по ошибке. clonedOnceRef защищает от
+  // повторной установки при hot-reload / изменениях query.
+  const clonedOnceRef = useRef(false);
+  const cloneSrc = useQuery({
+    queryKey: ["broadcasts", "detail", cloneId],
+    queryFn: () => endpoints.broadcastDetail(cloneId as number),
+    enabled: cloneId != null,
+  });
+  useEffect(() => {
+    if (!cloneSrc.data || clonedOnceRef.current) return;
+    const src = cloneSrc.data as Record<string, unknown>;
+    const asStr = (v: unknown, fallback = "") =>
+      typeof v === "string" ? v : fallback;
+    const asNum = (v: unknown): number | null =>
+      typeof v === "number" ? v : typeof v === "string" && v ? Number(v) : null;
+    setTitle(asStr(src.title));
+    setMessage(asStr(src.message));
+    setPhotoFileId(asStr(src.photo_file_id) || null);
+    if (Array.isArray(src.buttons)) {
+      setButtons((src.buttons as unknown[]).map((x) => String(x)));
+    }
+    const dp = asNum(src.discount_percent);
+    if (dp !== null && dp > 0) setDiscountPercent(dp);
+    const dh = asNum(src.discount_hours);
+    if (dh !== null && dh > 0) setDiscountHours(dh);
+    const gr = asNum(src.gift_reveal_percent);
+    if (gr !== null && gr > 0) setGiftRevealPercent(gr);
+    clonedOnceRef.current = true;
+    toast.info(`Клон рассылки #${cloneId} — измени и отправь`);
+  }, [cloneSrc.data, cloneId]);
 
   const create = useMutation({
     mutationFn: () =>
@@ -279,34 +316,58 @@ export function BroadcastCreate() {
               Не удалось загрузить сегменты.
             </div>
           ) : (
-            <ul className="space-y-1.5">
-              {(segments.data ?? []).map((s) => (
-                <li key={s.key}>
-                  <label
-                    className={
-                      segment === s.key
-                        ? "flex cursor-pointer items-center justify-between rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm transition"
-                        : "flex cursor-pointer items-center justify-between rounded-xl border border-border bg-bg-card px-4 py-3 text-sm transition hover:border-fg-subtle hover:bg-bg-elevated/60"
-                    }
-                  >
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="radio"
-                        name="segment"
-                        value={s.key}
-                        checked={segment === s.key}
-                        onChange={() => setSegment(s.key)}
-                        className="accent-accent"
-                      />
-                      <span className="font-medium text-fg">{s.label}</span>
+            <div className="space-y-4">
+              {(() => {
+                const groups = new Map<string, typeof segments.data>();
+                for (const s of segments.data ?? []) {
+                  const g = s.group || "Прочее";
+                  if (!groups.has(g)) groups.set(g, []);
+                  (groups.get(g) as NonNullable<typeof segments.data>).push(s);
+                }
+                return Array.from(groups.entries()).map(([groupName, items]) => (
+                  <section key={groupName}>
+                    <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-fg-subtle">
+                      {groupName}
                     </div>
-                    <span className="badge-muted">
-                      <UsersIcon className="h-3 w-3" /> {fmtNum(s.count)}
-                    </span>
-                  </label>
-                </li>
-              ))}
-            </ul>
+                    <ul className="space-y-1.5">
+                      {(items ?? []).map((s) => (
+                        <li key={s.key}>
+                          <label
+                            className={
+                              segment === s.key
+                                ? "flex cursor-pointer items-start justify-between gap-3 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm transition"
+                                : "flex cursor-pointer items-start justify-between gap-3 rounded-xl border border-border bg-bg-card px-4 py-3 text-sm transition hover:border-fg-subtle hover:bg-bg-elevated/60"
+                            }
+                          >
+                            <div className="flex items-start gap-3">
+                              <input
+                                type="radio"
+                                name="segment"
+                                value={s.key}
+                                checked={segment === s.key}
+                                onChange={() => setSegment(s.key)}
+                                className="mt-1 accent-accent"
+                              />
+                              <div className="min-w-0">
+                                <div className="font-medium text-fg">{s.label}</div>
+                                {s.description && (
+                                  <div className="mt-0.5 text-xs leading-snug text-fg-muted">
+                                    {s.description}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <span className="badge-muted shrink-0">
+                              <UsersIcon className="h-3 w-3" /> {fmtNum(s.count)}
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ));
+              })()}
+            </div>
           )}
           <Nav
             onBack={() => setStep(1)}

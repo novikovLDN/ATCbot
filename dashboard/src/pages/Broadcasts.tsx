@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Megaphone,
   RefreshCcw,
@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
+  Copy,
   Plus,
   Trash2,
   Users as UsersIcon,
@@ -356,6 +357,7 @@ function BroadcastDetail({
 
   const b = det.data as BroadcastRow;
   const s = (stats.data ?? {}) as BroadcastRow;
+  const navigate = useNavigate();
 
   return (
     <div className="card p-5 animate-fade-in">
@@ -375,7 +377,17 @@ function BroadcastDetail({
             Рассылка #{id}
           </div>
         </div>
-        <DeleteFromUsersControl broadcastId={id} />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => navigate(`/broadcasts/new?clone=${id}`)}
+            className="btn-secondary"
+            title="Открыть визард с текстом, фото и кнопками этой рассылки — только сегмент выбираешь заново"
+          >
+            <Copy className="h-3.5 w-3.5" /> Отправить снова
+          </button>
+          <DeleteFromUsersControl broadcastId={id} />
+        </div>
       </div>
       <h3 className="text-lg font-semibold text-fg">
         {truncate(String(b.title ?? "Без названия"), 80)}

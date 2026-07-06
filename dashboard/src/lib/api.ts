@@ -288,9 +288,15 @@ export const endpoints = {
   broadcastStats: (id: number) =>
     api.get<Record<string, unknown>>(`/broadcasts/${id}/stats`),
   broadcastSegments: () =>
-    api.get<Array<{ key: string; label: string; count: number }>>(
-      "/broadcasts/segments",
-    ),
+    api.get<
+      Array<{
+        key: string;
+        label: string;
+        description?: string;
+        group?: string;
+        count: number;
+      }>
+    >("/broadcasts/segments"),
   broadcastDeleteFromUsers: (id: number) =>
     api.post<{ ok: boolean; broadcast_id: number; total_messages: number }>(
       `/broadcasts/${id}/delete-from-users`,
