@@ -550,6 +550,11 @@ async def callback_broadcast_gift_3m_buy(callback: CallbackQuery, state: FSMCont
 _GIFT1Y40_DISCOUNT_PERCENT = 40
 _GIFT1Y40_PERIOD_DAYS_DISCOUNTED = 365
 _GIFT1Y40_PERIODS = (30, 90, 180, 365)
+# Reveal-эмодзи (трофей) как у «Посмотреть подарок» — интригующая пауза
+# перед экраном выбора тарифа. Кастомный emoji id принадлежит нашему
+# premium-паку; клиенты без Telegram Premium увидят обычный 🏆.
+_GIFT1Y40_REVEAL_EMOJI = '<tg-emoji emoji-id="5413566144986503832">🏆</tg-emoji>'
+_GIFT1Y40_REVEAL_PAUSE_SECONDS = 2.0
 _GIFT1Y40_PERIOD_LABELS = {
     30: "1 месяц",
     90: "3 месяца",
@@ -707,14 +712,36 @@ async def callback_broadcast_gift_1y_40(callback: CallbackQuery, state: FSMConte
     Скидка одноразовая (FSM-override), не пишется в user_discounts.
     Реализация зеркальная callback_broadcast_gift_3m — тот же
     компактный, безопасный паттерн.
+
+    Перед экраном тарифов проигрываем ту же reveal-сценку, что и у
+    «Посмотреть подарок»: 🏆 → 2 сек → удалить → экран выбора тарифа.
     """
     try:
         await callback.answer()
     except Exception:
         pass
 
-    text, keyboard = _gift1y40_tariff_menu()
     chat_id = callback.message.chat.id if callback.message and callback.message.chat else callback.from_user.id
+
+    reveal_msg = None
+    try:
+        reveal_msg = await callback.bot.send_message(
+            chat_id,
+            _GIFT1Y40_REVEAL_EMOJI,
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning("BROADCAST_GIFT1Y40_REVEAL_SEND_FAIL user=%s err=%s", callback.from_user.id, e)
+
+    if reveal_msg is not None:
+        await asyncio.sleep(_GIFT1Y40_REVEAL_PAUSE_SECONDS)
+        try:
+            await callback.bot.delete_message(chat_id, reveal_msg.message_id)
+        except Exception:
+            # Юзер сам удалил / Telegram отказал — не критично, идём дальше.
+            pass
+
+    text, keyboard = _gift1y40_tariff_menu()
     try:
         await callback.bot.send_message(chat_id, text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
