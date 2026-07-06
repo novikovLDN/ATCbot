@@ -21,6 +21,7 @@ import {
 
 import { endpoints } from "@/lib/api";
 import { useEventStream, type BusEvent } from "@/lib/ws";
+import { LivePaymentTicker } from "@/components/LivePaymentTicker";
 import {
   fmtNum,
   fmtRub,
@@ -321,6 +322,9 @@ export function Dashboard() {
             Новая рассылка
           </Link>
         </header>
+
+        {/* LIVE ticker — real-time платежи бегущей строкой. */}
+        <LivePaymentTicker />
 
         {/* Hero — revenue + active + paying */}
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
