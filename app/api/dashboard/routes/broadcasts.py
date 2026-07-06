@@ -312,6 +312,8 @@ _BUTTON_TYPES = {
     "promo_buy",
     "promo_traffic",
     "gift_reveal",
+    "gift_1m",
+    "gift_3m",
     "gift_1y_40",
     "support",
     "channel",
@@ -673,6 +675,16 @@ def _build_reply_markup(
             )])
         elif btn == "buy_combo":
             rows.append([InlineKeyboardButton(text="🏆 Купить Комбо", callback_data="buy_combo")])
+        elif btn == "gift_1m":
+            rows.append([InlineKeyboardButton(
+                text="🎁 −30% на 1 месяц",
+                callback_data="broadcast_gift_1m",
+            )])
+        elif btn == "gift_3m":
+            rows.append([InlineKeyboardButton(
+                text="🎁 Скидка 30% на 3 месяца",
+                callback_data="broadcast_gift_3m",
+            )])
         elif btn == "gift_1y_40":
             # «🎁 1 год со скидкой 40%». Открывает 2-шаговый flow: тариф →
             # период. Скидка применяется ТОЛЬКО к 365-дневному плану,

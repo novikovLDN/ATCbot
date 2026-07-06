@@ -118,35 +118,104 @@ async def get_subscription_history(telegram_id: int, limit: int = 5) -> list:
 
 
 async def get_user_extended_stats(telegram_id: int) -> Dict[str, Any]:
-    """Получить расширенную статистику пользователя
-    
-    Args:
-        telegram_id: Telegram ID пользователя
-    
+    """Full financial + referral profile of a user for the admin card.
+
     Returns:
-        Словарь со статистикой:
-        - renewals_count: количество продлений подписки
-        - reissues_count: количество перевыпусков ключа
+        renewals_count            — продлений подписки (subscription_history)
+        reissues_count            — перевыпусков ключа
+        total_spent_rubles        — сумма ВСЕХ approved-платежей в ₽
+        total_payments_count      — общее число approved-платежей
+        first_paid_at / last_paid_at — граничные даты платежей
+        referrer_telegram_id      — кто пригласил (или NULL)
+        referrer_username         — username пригласившего (для UI)
+        referrals_invited_count   — сколько пригласил сам
+        referrals_rewarded_count  — из них сколько «сработали» (bonus paid)
+        traffic_gb_purchased_total — суммарно ГБ купил (bypass-паки)
+        traffic_purchases_count   — количество GB-покупок
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Подсчитываем продления (action_type = 'renewal')
+        # Продления
         renewals_count = await conn.fetchval(
-            """SELECT COUNT(*) FROM subscription_history 
+            """SELECT COUNT(*) FROM subscription_history
                WHERE telegram_id = $1 AND action_type = 'renewal'""",
-            telegram_id
+            telegram_id,
         )
-        
-        # Подсчитываем перевыпуски ключа (action_type IN ('reissue', 'manual_reissue'))
+        # Перевыпуски
         reissues_count = await conn.fetchval(
-            """SELECT COUNT(*) FROM subscription_history 
-               WHERE telegram_id = $1 AND action_type IN ('reissue', 'manual_reissue')""",
-            telegram_id
+            """SELECT COUNT(*) FROM subscription_history
+               WHERE telegram_id = $1
+                 AND action_type IN ('reissue','manual_reissue')""",
+            telegram_id,
         )
-        
+        # Финансы — approved-платежи по всем типам (подписки/трафик/etc).
+        # amount_kopecks * 0.01 = рубли; NULLs исключаем.
+        pay_row = await conn.fetchrow(
+            """SELECT
+                   COUNT(*) AS n,
+                   COALESCE(SUM(amount_kopecks), 0)::BIGINT AS total_kopecks,
+                   MIN(paid_at) AS first_paid_at,
+                   MAX(paid_at) AS last_paid_at
+               FROM pending_purchases
+               WHERE telegram_id = $1
+                 AND status = 'paid'""",
+            telegram_id,
+        )
+        total_payments = int(pay_row["n"] or 0) if pay_row else 0
+        total_kopecks = int(pay_row["total_kopecks"] or 0) if pay_row else 0
+        first_paid_at = pay_row["first_paid_at"] if pay_row else None
+        last_paid_at = pay_row["last_paid_at"] if pay_row else None
+
+        # Пригласивший
+        ref_row = await conn.fetchrow(
+            """SELECT u.referrer_id, ru.username AS referrer_username
+               FROM users u
+               LEFT JOIN users ru ON ru.telegram_id = u.referrer_id
+               WHERE u.telegram_id = $1""",
+            telegram_id,
+        )
+        referrer_id = ref_row["referrer_id"] if ref_row else None
+        referrer_username = ref_row["referrer_username"] if ref_row else None
+
+        # Сколько сам пригласил
+        inv_row = await conn.fetchrow(
+            """SELECT COUNT(*) AS n,
+                      COUNT(*) FILTER (WHERE is_rewarded) AS rewarded
+               FROM referrals
+               WHERE referrer_user_id = $1""",
+            telegram_id,
+        )
+        invited = int(inv_row["n"] or 0) if inv_row else 0
+        rewarded = int(inv_row["rewarded"] or 0) if inv_row else 0
+
+        # Купил ГБ (bypass). Столбец gb_purchased.gb_amount, count и sum.
+        gb_row = None
+        try:
+            gb_row = await conn.fetchrow(
+                """SELECT COUNT(*) AS n,
+                          COALESCE(SUM(gb_amount), 0)::INTEGER AS gb_total
+                   FROM gb_purchased
+                   WHERE telegram_id = $1""",
+                telegram_id,
+            )
+        except Exception as e:
+            logger.debug("gb_purchased query failed (табл. может отсутствовать): %s", e)
+        gb_total = int(gb_row["gb_total"] or 0) if gb_row else 0
+        gb_count = int(gb_row["n"] or 0) if gb_row else 0
+
         return {
             "renewals_count": renewals_count or 0,
-            "reissues_count": reissues_count or 0
+            "reissues_count": reissues_count or 0,
+            "total_spent_rubles": total_kopecks / 100.0,
+            "total_payments_count": total_payments,
+            "first_paid_at": first_paid_at.isoformat() if first_paid_at else None,
+            "last_paid_at": last_paid_at.isoformat() if last_paid_at else None,
+            "referrer_telegram_id": referrer_id,
+            "referrer_username": referrer_username,
+            "referrals_invited_count": invited,
+            "referrals_rewarded_count": rewarded,
+            "traffic_gb_purchased_total": gb_total,
+            "traffic_purchases_count": gb_count,
         }
 
 
