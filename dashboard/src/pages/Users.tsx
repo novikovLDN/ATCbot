@@ -365,6 +365,11 @@ function UserCard({
           detail={d}
           onChange={invalidate}
         />
+        <TrafficDiscountCard
+          telegramId={telegramId}
+          detail={d}
+          onChange={invalidate}
+        />
       </div>
 
       <div className="lg:col-span-3">
@@ -448,6 +453,97 @@ function DiscountCard({
     <div className="card p-4">
       <div className="flex items-center justify-between">
         <div className="text-xs uppercase tracking-wider text-fg-subtle">Персональная скидка</div>
+        {existing && (
+          <button
+            type="button"
+            onClick={() => del.mutate()}
+            className="btn-ghost text-danger hover:text-danger"
+            disabled={del.isPending}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {existing && (
+        <div className="mt-2 rounded-lg bg-bg-elevated px-3 py-2 text-sm text-fg">
+          <b>{String(existing.discount_percent ?? "—")}%</b> до{" "}
+          {fmtDate(existing.expires_at as string) || "бессрочно"}
+        </div>
+      )}
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <input
+          className="input"
+          type="number"
+          min={1}
+          max={100}
+          value={percent}
+          onChange={(e) => setPercent(Number(e.target.value) || 0)}
+          placeholder="%"
+        />
+        <input
+          className="input"
+          type="number"
+          min={1}
+          value={hours}
+          onChange={(e) =>
+            setHours(e.target.value === "" ? "" : Number(e.target.value))
+          }
+          placeholder="часов"
+        />
+      </div>
+      <button
+        type="button"
+        onClick={() => create.mutate()}
+        className="btn-primary mt-2 w-full"
+        disabled={create.isPending || percent < 1 || percent > 100}
+      >
+        {create.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
+        Применить
+      </button>
+    </div>
+  );
+}
+
+function TrafficDiscountCard({
+  telegramId,
+  detail,
+  onChange,
+}: {
+  telegramId: number;
+  detail: UserDetail;
+  onChange: () => void;
+}) {
+  const [percent, setPercent] = useState(30);
+  const [hours, setHours] = useState<number | "">(24);
+  const create = useMutation({
+    mutationFn: () =>
+      endpoints.userTrafficDiscountCreate(telegramId, {
+        percent,
+        expires_in_hours: typeof hours === "number" ? hours : null,
+      }),
+    onSuccess: () => {
+      toast.success("Скидка на GB создана");
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+  const del = useMutation({
+    mutationFn: () => endpoints.userTrafficDiscountDelete(telegramId),
+    onSuccess: () => {
+      toast.success("Скидка на GB удалена");
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+
+  const existing = detail.traffic_discount as Record<string, unknown> | null;
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-xs uppercase tracking-wider text-fg-subtle">
+          Скидка на GB (Обход)
+        </div>
         {existing && (
           <button
             type="button"

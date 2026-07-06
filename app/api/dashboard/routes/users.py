@@ -71,6 +71,7 @@ async def user_detail(telegram_id: int = Path(..., gt=0)):
         subscription = await database.get_subscription(telegram_id)
         trial = await database.get_trial_info(telegram_id)
         discount = await database.get_user_discount(telegram_id)
+        traffic_discount = await database.get_user_traffic_discount(telegram_id)
         is_vip = await database.is_vip_user(telegram_id)
         return {
             "user": user,
@@ -78,6 +79,7 @@ async def user_detail(telegram_id: int = Path(..., gt=0)):
             "subscription": subscription,
             "trial": trial,
             "discount": discount,
+            "traffic_discount": traffic_discount,
             "is_vip": is_vip,
         }
     except HTTPException:
@@ -307,6 +309,65 @@ async def user_discount_delete(
         raise HTTPException(500, f"discount_delete_failed: {e}")
     bus.publish({
         "type": "admin:discount_delete",
+        "telegram_id": telegram_id,
+        "by": admin.get("sub"),
+    })
+    return {"ok": bool(ok)}
+
+
+class TrafficDiscountRequest(BaseModel):
+    """Скидка на пакеты GB для «Обхода» (bypass traffic packs).
+    Хранится в отдельной таблице user_traffic_discounts (не путать с
+    личной скидкой на подписку). Применяется в чекауте GB паков.
+    """
+    percent: int = Field(..., ge=1, le=100)
+    expires_in_hours: Optional[int] = Field(None, gt=0, le=8760)  # ≤ 1 year
+
+
+@router.post("/{telegram_id}/traffic-discount")
+async def user_traffic_discount_create(
+    telegram_id: int = Path(..., gt=0),
+    body: TrafficDiscountRequest = ...,
+    admin: dict = Depends(require_admin),
+):
+    expires_at = None
+    if body.expires_in_hours is not None:
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=body.expires_in_hours)
+    try:
+        ok = await database.create_user_traffic_discount(
+            telegram_id=telegram_id,
+            discount_percent=body.percent,
+            expires_at=expires_at,
+            created_by=int(admin["sub"]),
+        )
+    except Exception as e:
+        raise HTTPException(500, f"traffic_discount_create_failed: {e}")
+    if not ok:
+        raise HTTPException(500, "traffic_discount_create_failed")
+    bus.publish({
+        "type": "admin:traffic_discount_create",
+        "telegram_id": telegram_id,
+        "percent": body.percent,
+        "by": admin.get("sub"),
+    })
+    return {
+        "ok": True,
+        "percent": body.percent,
+        "expires_at": expires_at.isoformat() if expires_at else None,
+    }
+
+
+@router.delete("/{telegram_id}/traffic-discount")
+async def user_traffic_discount_delete(
+    telegram_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+):
+    try:
+        ok = await database.delete_user_traffic_discount(telegram_id)
+    except Exception as e:
+        raise HTTPException(500, f"traffic_discount_delete_failed: {e}")
+    bus.publish({
+        "type": "admin:traffic_discount_delete",
         "telegram_id": telegram_id,
         "by": admin.get("sub"),
     })
