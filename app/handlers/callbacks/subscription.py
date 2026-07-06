@@ -252,11 +252,21 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         trial_keyboard = get_payment_success_keyboard(language, subscription_type="basic")
         await callback.message.answer(success_text, parse_mode="HTML", reply_markup=trial_keyboard)
 
-        # Обновляем главное меню (кнопка trial должна исчезнуть)
-        text = i18n_get_text(language, "main.welcome")
-        text = await format_text_with_incident(text, language)
-        keyboard = await get_main_menu_keyboard(language, telegram_id)
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+        # Убираем предыдущее сообщение (где висела кнопка «Пробный
+        # период») — теперь оно неактуально, триал уже активирован.
+        # Раньше здесь стоял edit на main.welcome, из-за чего юзер
+        # видел ДВА сообщения подряд: «Доступ активирован» +
+        # промо-welcome «💎 Atlas Secure … Интернет без блокировок».
+        # Второе визуально дублировало главное меню, которое юзеру
+        # прямо сейчас не нужно — он идёт устанавливать. При следующем
+        # /start или menu-клике меню перерисуется без trial-кнопки
+        # автоматически.
+        try:
+            await callback.message.delete()
+        except Exception:
+            # Не критично: если Telegram отказал (сообщение старше 48ч,
+            # флуд-лимит, юзер сам удалил) — просто идём дальше.
+            pass
 
     except Exception as e:
         logger.exception(f"Error activating trial for user {telegram_id}: {e}")
