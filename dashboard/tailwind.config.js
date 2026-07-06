@@ -50,19 +50,20 @@ export default {
           muted: "#A1A1AA",              // zinc-400 для secondary
           subtle: "#71717A",             // zinc-500 для labels / подсказок
         },
-        // Primary accent — lime #D7FF67. Используется ТОЧЕЧНО:
-        // active state, CTA, прогресс-бары, выделенные карточки.
-        // Тёмный текст на акцентном фоне (bg.card) — высокий контраст.
+        // Primary accent — матовый platinum-белый. Дашборд специально
+        // монохромный: премиальный, технологичный, без лишних цветов.
+        // Бот-фронт (Telegram-приложение) сохраняет лаймовую айдентику.
+        // На тёмном фоне #F5F5F5 читается как «hi-tech tool».
         accent: {
-          DEFAULT: "#D7FF67",
-          hover: "#C6F255",
-          dark: "#A6CC3F",
+          DEFAULT: "#F5F5F5",
+          hover: "#FFFFFF",
+          dark: "#D4D4D8",
         },
         secondary: {
-          DEFAULT: "#A6FFB3",            // soft-mint accent для «income» / +%
-          hover: "#8AE39E",
+          DEFAULT: "#9CA3AF",            // cool platinum-grey для secondary
+          hover: "#D1D5DB",
         },
-        success: "#A6FFB3",              // мятный — +% и положительные дельты
+        success: "#86EFAC",              // мятный — +% и положительные дельты
         danger: "#FF6B6B",               // мягкий красный, не выжигает на dark
         warning: "#FFD66B",              // тёплый янтарь
         // Category tag tints — desaturated так, чтобы не конкурировать
@@ -80,16 +81,18 @@ export default {
         "35": "0.35",
       },
       boxShadow: {
-        // Тёмная тема: тени почти не работают как глубина, поэтому
-        // glow становится лаймовым свечением вокруг активных
-        // элементов (CTA, выделенный bar в графике, чекбоксы).
-        glow: "0 8px 28px -8px rgba(215,255,103,0.45)",
-        "glow-sm": "0 4px 14px -4px rgba(215,255,103,0.30)",
-        // .card — внутренний тонкий «inset»-блик сверху для подъёма
-        // от канваса, тёмный drop под низ.
-        card: "0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px -16px rgba(0,0,0,0.5)",
-        // CTA shadow на dark canvas — слабее, чем на light, и теплее.
-        cta: "0 8px 20px -8px rgba(0,0,0,0.6), 0 0 0 1px rgba(215,255,103,0.18) inset",
+        // Дашборд-glow: мягкое белое свечение вокруг активных элементов.
+        // Матовое, не насыщенное — просто «premium wow moment».
+        glow: "0 8px 28px -8px rgba(245,245,245,0.35)",
+        "glow-sm": "0 4px 14px -4px rgba(245,245,245,0.22)",
+        // .card — внутренний тонкий inset сверху + тёплый deep drop
+        // снизу. Тонкая работа с уровнем поверхностей — за счёт этого
+        // карточка ощущается «поднятой».
+        card: "0 1px 0 rgba(255,255,255,0.05) inset, 0 12px 32px -18px rgba(0,0,0,0.6)",
+        // CTA shadow на dark canvas — глубже, матово-белый inset.
+        cta: "0 10px 24px -10px rgba(0,0,0,0.7), 0 0 0 1px rgba(245,245,245,0.14) inset",
+        // Matte-glass: subtle ring для стеклянных панелей.
+        matte: "0 1px 0 rgba(255,255,255,0.06) inset, 0 0 0 1px rgba(255,255,255,0.02)",
       },
       animation: {
         "pulse-glow": "pulse-glow 2.5s ease-in-out infinite",

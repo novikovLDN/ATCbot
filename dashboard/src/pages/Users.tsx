@@ -370,6 +370,7 @@ function UserCard({
           detail={d}
           onChange={invalidate}
         />
+        <ExtendedProfileCard telegramId={telegramId} />
       </div>
 
       <div className="lg:col-span-3">
@@ -591,6 +592,80 @@ function TrafficDiscountCard({
         {create.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
         Применить
       </button>
+    </div>
+  );
+}
+
+function ExtendedProfileCard({ telegramId }: { telegramId: number }) {
+  const q = useQuery({
+    queryKey: ["users", "extended", telegramId],
+    queryFn: () => endpoints.userExtended(telegramId),
+    staleTime: 30_000,
+  });
+  if (q.isLoading) {
+    return (
+      <div className="card p-4">
+        <div className="text-xs uppercase tracking-wider text-fg-subtle">Профиль</div>
+        <div className="mt-2 flex items-center gap-2 text-sm text-fg-muted">
+          <Spinner /> Загружаю статистику...
+        </div>
+      </div>
+    );
+  }
+  if (q.isError || !q.data) return null;
+  const s = q.data as Record<string, unknown>;
+  const num = (v: unknown): number =>
+    typeof v === "number" ? v : typeof v === "string" ? Number(v) || 0 : 0;
+  const str = (v: unknown): string | null =>
+    typeof v === "string" && v ? v : null;
+  const totalSpent = num(s.total_spent_rubles);
+  const totalPayments = num(s.total_payments_count);
+  const firstPaid = str(s.first_paid_at);
+  const lastPaid = str(s.last_paid_at);
+  const renewals = num(s.renewals_count);
+  const reissues = num(s.reissues_count);
+  const referrerId = str(s.referrer_telegram_id) ?? (s.referrer_telegram_id as number | null | undefined);
+  const referrerUsername = str(s.referrer_username);
+  const invited = num(s.referrals_invited_count);
+  const rewarded = num(s.referrals_rewarded_count);
+  const gbTotal = num(s.traffic_gb_purchased_total);
+  const gbCount = num(s.traffic_purchases_count);
+
+  return (
+    <div className="card p-4">
+      <div className="text-xs uppercase tracking-wider text-fg-subtle">Профиль</div>
+      <div className="mt-3 space-y-1.5 text-sm">
+        <Row label="Всего оплачено" value={fmtRub(totalSpent)} />
+        <Row label="Платежей" value={fmtNum(totalPayments)} />
+        {firstPaid && <Row label="Первая покупка" value={fmtDate(firstPaid)} />}
+        {lastPaid && <Row label="Последняя покупка" value={fmtDate(lastPaid)} />}
+        <Row label="Продлений подписки" value={fmtNum(renewals)} />
+        {reissues > 0 && <Row label="Перевыпусков ключа" value={fmtNum(reissues)} />}
+      </div>
+      <div className="mt-3 border-t border-border pt-3 space-y-1.5 text-sm">
+        <div className="text-[11px] uppercase tracking-wider text-fg-subtle">Обход · GB</div>
+        <Row label="GB куплено всего" value={fmtNum(gbTotal)} />
+        <Row label="Покупок GB-паков" value={fmtNum(gbCount)} />
+      </div>
+      <div className="mt-3 border-t border-border pt-3 space-y-1.5 text-sm">
+        <div className="text-[11px] uppercase tracking-wider text-fg-subtle">Реферальная связка</div>
+        {referrerId ? (
+          <Row
+            label="Пригласил"
+            value={
+              referrerUsername
+                ? `@${referrerUsername} · ${String(referrerId)}`
+                : String(referrerId)
+            }
+          />
+        ) : (
+          <Row label="Пригласил" value="— (органика)" />
+        )}
+        <Row label="Сам пригласил" value={fmtNum(invited)} />
+        {invited > 0 && (
+          <Row label="Из них с наградой" value={fmtNum(rewarded)} />
+        )}
+      </div>
     </div>
   );
 }

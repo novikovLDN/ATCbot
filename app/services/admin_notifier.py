@@ -5,9 +5,9 @@ Sends DMs to ADMIN_TELEGRAM_ID on:
   - payment:error           — throttled (≤ 1 msg/min per stage+provider)
   - broadcast:done          — every completion
   - revenue milestone hits  — when today's gross crosses 5/10/15/20/
-                              25/30/35k RUB. Each milestone fires
-                              once per UTC day, with a randomised
-                              short congrat phrase.
+                              25/30/35/40k RUB. Каждый milestone
+                              стреляет один раз за MSK-сутки, с
+                              рандомной короткой поздравительной фразой.
 
 Runs as a long-lived asyncio task started from main.py. Subscribes
 to the bus and forwards events to the bot. Survives bus stalls and
@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from aiogram import Bot
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 # ── Revenue milestones — ascending order, in rubles ────────────────
-MILESTONES = [5_000, 10_000, 15_000, 20_000, 25_000, 30_000, 35_000]
+MILESTONES = [5_000, 10_000, 15_000, 20_000, 25_000, 30_000, 35_000, 40_000]
 
 # Short congrat phrases per milestone. Multiple variants per level so
 # the day feels alive when the same threshold gets crossed across
@@ -71,12 +71,27 @@ PHRASES: dict[int, list[str]] = {
         "35k+ — это пушка 🔥",
         "Чувак, ты на огне 🔥🔥🔥",
     ],
+    40_000: [
+        "Сорокет — это космос 🚀🌌",
+        "40k за день — рекорд-темп 🏆",
+        "Ты сегодня в форме бога 🔥🦾",
+    ],
 }
 
 
+# MSK — часовой пояс, в котором админ живёт и в котором «сегодня»
+# должен считаться. Milestone-накопитель раньше жил в UTC — в 03:00 МСК
+# счётчик сбрасывался, что путало.
+MSK_TZ = timezone(timedelta(hours=3))
+
+
 def _today_key() -> str:
-    """UTC date key for milestone bookkeeping."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    """MSK date key for milestone bookkeeping (admin lives in MSK).
+
+    Раньше был UTC, из-за чего в 03:00 МСК счётчик сбрасывался и админ
+    видел «40k за день» на самом деле только за неполные 3 часа.
+    """
+    return datetime.now(MSK_TZ).strftime("%Y-%m-%d")
 
 
 def _fmt_provider(p: str | None) -> str:
@@ -215,13 +230,12 @@ async def _on_payment_approved(bot: Bot, _e: dict[str, Any]) -> None:
         return
     try:
         import database
-        # 24h trailing != today; we want today-since-midnight-UTC.
-        # The /payments/revenue endpoint uses trailing-N-hours, so we
-        # use the same get_revenue_for_period but with hours computed
-        # from how far we are into the current UTC day.
-        now = datetime.now(timezone.utc)
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        seconds_into_day = max(1, (now - midnight).total_seconds())
+        # 24h trailing != today; хотим «с полуночи МСК».
+        # /payments/revenue берёт trailing-N-hours; считаем сколько часов
+        # прошло с MSK-полуночи и передаём. min 1 час, чтобы не поймать 0.
+        now_msk = datetime.now(MSK_TZ)
+        msk_midnight = now_msk.replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds_into_day = max(1, (now_msk - msk_midnight).total_seconds())
         hours_since_midnight = max(1, int(round(seconds_into_day / 3600)))
         data = await database.get_revenue_for_period(hours_since_midnight)
         revenue_today = float(data.get("revenue_rubles") or 0)

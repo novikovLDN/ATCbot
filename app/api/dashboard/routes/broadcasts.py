@@ -60,51 +60,179 @@ async def broadcasts_recent(limit: int = Query(20, gt=0, le=200)):
 
 @router.get("/segments")
 async def segments_list():
-    """Available segments with current member counts. Counts are
-    computed eagerly so the wizard can show an audience size before
-    the admin commits."""
+    """Available segments with current member counts + tooltip descriptions.
+
+    Counts are computed eagerly so the wizard can show an audience size
+    before the admin commits. `group` группирует сегменты в UI, чтобы
+    админу было проще ориентироваться среди 25+ ключей.
+    """
+    # (key, label, description, group) — description показывается в
+    # tooltip рядом с каждым сегментом в дашборде.
     segments = [
-        ("all_users", "Все юзеры"),
-        ("active_subscriptions", "Активные подписки"),
-        ("no_subscription", "Без подписки"),
-        ("no_remnawave", "Без Remnawave"),
-        ("started_7d_cold", "Холодные за 7 дней (нажали /start, без ключей)"),
-        # Любая подписка (триал ∪ платная), окно по полным суткам:
-        ("expired_1d", "Истекли вчера (любая)"),
-        ("expired_2d", "Истекли 2 дня назад (любая)"),
-        ("expired_3d", "Истекли 3 дня назад (любая)"),
-        # Триальная воронка — окна по users.trial_expires_at:
-        ("trial_ends_in_1d", "Триал — заканчивается через 24ч"),
-        ("trial_expired_6h", "Триал — истёк 6ч назад"),
-        ("trial_expired_1d", "Триал — истёк 1 день назад"),
-        ("trial_expired_2d", "Триал — истёк 2 дня назад"),
-        ("trial_expired_3d", "Триал — истёк 3 дня назад"),
-        # Платная подписка отдельно — отдельная реактивационная когорта:
-        ("paid_expired_1d", "Платная — истекла 1 день назад"),
-        ("paid_expired_30d", "Платная — истекла за последние 30 дней"),
-        ("paid_lapsed_any", "Платная — когда-либо платил, сейчас не активен"),
+        # ── Базовые ──────────────────────────────────────────────────
+        ("all_users", "Все юзеры",
+         "Все записи в таблице users — включая тех, кто нажал /start и ушёл.",
+         "Базовые"),
+        ("active_subscriptions", "Активные подписки",
+         "У пользователя есть подписка с expires_at > NOW (любого типа: триал, платная, gift, admin_grant).",
+         "Базовые"),
+        ("no_subscription", "Без активной подписки",
+         "Нет строки в subscriptions с expires_at > NOW. Включает и тех, кто никогда не подписывался, и тех, у кого истекла.",
+         "Базовые"),
+        ("no_remnawave", "Без Remnawave",
+         "Никогда не было entity в панели Remnawave — ни premium, ни bypass. То есть не завёл ни одного ключа.",
+         "Базовые"),
+
+        # ── Cold-start (новые молчуны) ───────────────────────────────
+        ("started_1d_cold", "Cold — старт за 24ч, ничего",
+         "Нажал /start за последние 24 часа И до сих пор не активировал триал, не купил, не завёл ключ. Свежий молчун, самое время догреть.",
+         "Cold-start"),
+        ("started_3d_cold", "Cold — старт за 3 дня, ничего",
+         "Нажал /start за последние 3 дня И до сих пор ничего. Ещё помнит про бот.",
+         "Cold-start"),
+        ("started_7d_cold", "Cold — старт за 7 дней, ничего",
+         "Нажал /start за последние 7 дней И до сих пор ничего.",
+         "Cold-start"),
+        ("started_14d_cold", "Cold — старт за 14 дней, ничего",
+         "Нажал /start за последние 14 дней И до сих пор ничего. Уже подзабыл, нужен сильный оффер.",
+         "Cold-start"),
+        ("started_30d_cold", "Cold — старт за 30 дней, ничего",
+         "Нажал /start за последние 30 дней И до сих пор ничего. Крайний край — «уходящий».",
+         "Cold-start"),
+
+        # ── Триальная воронка (кто активировал триал) ────────────────
+        ("trial_ends_in_1d", "Триал — заканчивается через 24ч",
+         "Триал ещё идёт, но истечёт в ближайшие 24 часа. Ключевой момент конверсии — «оформи, чтобы не потерять».",
+         "Триал"),
+        ("trial_expired_6h", "Триал — истёк 6ч назад",
+         "Триал закончился ~6 часов назад, платной подписки не оформлено. Свежий «упавший» триал.",
+         "Триал"),
+        ("trial_expired_1d", "Триал — истёк 1 день назад",
+         "Триал закончился ~1 день назад, платной нет. Первое напоминание после разрыва.",
+         "Триал"),
+        ("trial_expired_2d", "Триал — истёк 2 дня назад",
+         "Триал закончился ~2 дня назад, платной нет.",
+         "Триал"),
+        ("trial_expired_3d", "Триал — истёк 3 дня назад",
+         "Триал закончился ~3 дня назад, платной нет.",
+         "Триал"),
+        ("trial_expired_7d", "Триал — истёк 7 дней назад (не купил)",
+         "Триал закончился ~7 дней назад И НИКОГДА не покупал подписку. Холодная реактивация недельной давности.",
+         "Триал"),
+        ("trial_expired_14d", "Триал — истёк 14 дней назад (не купил)",
+         "Триал закончился ~14 дней назад И никогда не покупал. Двухнедельная реактивация.",
+         "Триал"),
+        ("trial_expired_30d", "Триал — истёк 30 дней назад (не купил)",
+         "Триал закончился ~30 дней назад И никогда не покупал. Месячная реактивация.",
+         "Триал"),
+        ("trial_expired_90d", "Триал — истёк 3 мес назад (не купил)",
+         "Триал закончился ~90 дней назад И никогда не покупал. «Последний шанс» — сильный оффер обязателен.",
+         "Триал"),
+
+        # ── Платные churn / реактивация ──────────────────────────────
+        ("expires_in_3d", "Платная — заканчивается за 3 дня",
+         "Платная подписка ещё активна, истечёт в ближайшие 72ч. Точка «продли/переоформи» пока пользователь внутри.",
+         "Платная"),
+        ("paid_expired_1d", "Платная — истекла 1 день назад",
+         "Платная истекла ~1 день назад, сейчас платной нет. Свежий churn — первое напоминание.",
+         "Платная"),
+        ("paid_expired_7d", "Платная — истекла 7 дней назад",
+         "Платная истекла ~7 дней назад, сейчас платной нет. Недельная реактивация.",
+         "Платная"),
+        ("paid_expired_14d", "Платная — истекла 14 дней назад",
+         "Платная истекла ~14 дней назад, сейчас нет.",
+         "Платная"),
+        ("paid_expired_30d", "Платная — истекла за последние 30 дней",
+         "По истории подписок последняя платная закончилась в окне 1–30 дней назад и сейчас неактивна.",
+         "Платная"),
+        ("paid_expired_60d", "Платная — истекла 60 дней назад",
+         "Платная истекла ~60 дней назад. Двухмесячный churn.",
+         "Платная"),
+        ("paid_expired_90d", "Платная — истекла 90 дней назад",
+         "Платная истекла ~90 дней назад. Крайний край реактивации.",
+         "Платная"),
+        ("paid_lapsed_any", "Платная — когда-либо платил, сейчас не активен",
+         "Когда-либо оплачивал (purchase / renewal / auto_renew) и сейчас без активной подписки. Максимальная реактивационная аудитория — всех «ушедших».",
+         "Платная"),
+
+        # ── Любая (комбинированные) ──────────────────────────────────
+        ("expired_1d", "Истекла (любая) 1 день назад",
+         "Любая подписка (триал ∪ платная) истекла ~1 день назад.",
+         "Истёкшие (любые)"),
+        ("expired_2d", "Истекла (любая) 2 дня назад",
+         "Любая подписка истекла ~2 дня назад.",
+         "Истёкшие (любые)"),
+        ("expired_3d", "Истекла (любая) 3 дня назад",
+         "Любая подписка истекла ~3 дня назад.",
+         "Истёкшие (любые)"),
+
+        # ── Апселл / VIP / балансовый ────────────────────────────────
+        ("vip_active", "VIP-пользователи",
+         "users.is_vip = TRUE. Для эксклюзивных приглашений, ранних доступов, фидбека.",
+         "Апселл / особые"),
+        ("basic_active", "Активные Basic",
+         "Сейчас активна подписка Basic. Целевая для upsell на Plus / Combo.",
+         "Апселл / особые"),
+        ("plus_active", "Активные Plus",
+         "Сейчас активна подписка Plus. Целевая для upsell на Combo или продление на 1 год.",
+         "Апселл / особые"),
+        ("combo_active", "Активные Combo",
+         "Сейчас активная подписка типа Combo (Basic/Plus). Целевая для апселла на большие GB-паки обхода / доп. устройств.",
+         "Апселл / особые"),
+        ("discount_active", "Активная персональная скидка",
+         "У пользователя действует скидка в user_discounts (не broadcast). Напомнить: «у тебя действует скидка N% — воспользуйся».",
+         "Апселл / особые"),
+        ("has_balance_50plus", "Баланс ≥ 50₽",
+         "На балансе не меньше 50₽. Напоминание использовать балансовый чекаут.",
+         "Апселл / особые"),
     ]
     out = []
-    for key, label in segments:
+    for key, label, description, group in segments:
         try:
             ids = await database.get_users_by_segment(key)
             count = len(ids)
         except Exception as e:
             logger.warning("SEGMENT_COUNT_FAIL key=%s err=%s", key, e)
             count = -1
-        out.append({"key": key, "label": label, "count": count})
+        out.append({
+            "key": key,
+            "label": label,
+            "description": description,
+            "group": group,
+            "count": count,
+        })
     return out
 
 
 @router.get("/{broadcast_id}")
 async def broadcast_detail(broadcast_id: int = Path(..., gt=0)):
+    """Full broadcast row + discount/gift_reveal — используется UI-ом
+    «Отправить снова», чтоб предзаполнить визард всеми полями."""
     try:
         row = await database.get_broadcast(broadcast_id)
     except Exception as e:
         raise HTTPException(500, f"broadcast_detail_failed: {e}")
     if not row:
         raise HTTPException(404, "Broadcast not found")
-    return _serialize(row)
+    out = _serialize(row)
+    # Присоединяем скидочные поля — они хранятся в broadcast_discounts,
+    # а не в broadcasts. Fail-safe: если строки нет — пустые значения.
+    try:
+        disc = await database.get_broadcast_discount(broadcast_id)
+    except Exception as e:
+        logger.warning("BROADCAST_DETAIL_DISC_FAIL id=%s err=%s", broadcast_id, e)
+        disc = None
+    if disc:
+        out["discount_percent"] = disc.get("discount_percent")
+        out["discount_hours"] = disc.get("discount_hours")
+        out["discount_label"] = disc.get("discount_label")
+        out["gift_reveal_percent"] = disc.get("gift_reveal_percent")
+    else:
+        out["discount_percent"] = None
+        out["discount_hours"] = None
+        out["discount_label"] = None
+        out["gift_reveal_percent"] = None
+    return out
 
 
 @router.get("/{broadcast_id}/stats")
@@ -184,6 +312,8 @@ _BUTTON_TYPES = {
     "promo_buy",
     "promo_traffic",
     "gift_reveal",
+    "gift_1m",
+    "gift_3m",
     "gift_1y_40",
     "support",
     "channel",
@@ -394,6 +524,8 @@ async def broadcast_create(
             broadcast_type="custom",
             segment=body.segment,
             sent_by=int(admin["sub"]),
+            photo_file_id=body.photo_file_id,
+            buttons=list(body.buttons) if body.buttons else None,
         )
     except Exception as e:
         raise HTTPException(500, f"create_broadcast_failed: {e}")
@@ -543,6 +675,16 @@ def _build_reply_markup(
             )])
         elif btn == "buy_combo":
             rows.append([InlineKeyboardButton(text="🏆 Купить Комбо", callback_data="buy_combo")])
+        elif btn == "gift_1m":
+            rows.append([InlineKeyboardButton(
+                text="🎁 −30% на 1 месяц",
+                callback_data="broadcast_gift_1m",
+            )])
+        elif btn == "gift_3m":
+            rows.append([InlineKeyboardButton(
+                text="🎁 Скидка 30% на 3 месяца",
+                callback_data="broadcast_gift_3m",
+            )])
         elif btn == "gift_1y_40":
             # «🎁 1 год со скидкой 40%». Открывает 2-шаговый flow: тариф →
             # период. Скидка применяется ТОЛЬКО к 365-дневному плану,

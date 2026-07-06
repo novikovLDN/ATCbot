@@ -53,8 +53,8 @@ const PROVIDER_LABELS: Record<string, string> = {
 // с глобальным accent дашборда, ложится на крупный сегмент. Остальные
 // — общая палитра tailwind для cовместимости с другими страницами.
 const CHART_COLORS = [
-  "#D7FF67", // sky
-  "#A6FFB3", // violet
+  "#F5F5F5", // sky
+  "#D4D4D8", // violet
   "#EC4899", // pink
   "#10B981", // emerald
   "#F59E0B", // amber
@@ -68,17 +68,17 @@ export function Payments() {
   const revenue = useQuery({
     queryKey: ["payments", "revenue", hours],
     queryFn: () => endpoints.paymentsRevenue(hours),
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
   });
   const byProvider = useQuery({
     queryKey: ["payments", "by-provider", hours],
     queryFn: () => endpoints.paymentsByProvider(hours),
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,
   });
   const traffic = useQuery({
     queryKey: ["payments", "traffic", hours],
     queryFn: () => endpoints.paymentsTraffic(hours),
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,
   });
 
   return (
@@ -189,7 +189,7 @@ function PaymentErrors({ hours }: { hours: number }) {
   const summary = useQuery({
     queryKey: ["payments", "errors", "summary", hours],
     queryFn: () => endpoints.paymentsErrorsSummary(hours),
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
   });
   const [expanded, setExpanded] = useState(false);
   const rows = useQuery({
@@ -529,8 +529,8 @@ function TypeBar({
           iconType="circle"
           wrapperStyle={{ fontSize: 11, color: "#64748B" }}
         />
-        <Bar dataKey="revenue" name="Доход" fill="#D7FF67" radius={[4, 4, 0, 0]} />
-        <Bar dataKey="count" name="Штук" fill="#A6FFB3" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="revenue" name="Доход" fill="#F5F5F5" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="count" name="Штук" fill="#D4D4D8" radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -565,7 +565,7 @@ function PaymentsFeed({ hours }: { hours: number }) {
         hours,
         status: status || undefined,
       }) as Promise<PaymentRow[]>,
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
   });
 
   return (

@@ -11,20 +11,23 @@
 
   body {
     font-feature-settings: "ss01", "ss02", "cv11";
-    /* Тёмный канвас с лаймовым halo сверху-слева и тёплым контр-glow
-       внизу-справа — eye-candy из brand-deck. Низкая прозрачность,
-       чтобы не отвлекать от контента. */
+    /* Матовый премиальный канвас: субтильный белый halo сверху-справа,
+       тонкая сетка hi-tech dots на всей поверхности. Никаких насыщенных
+       цветов — только чёрный, off-white и грей.
+       Dot-grid — 24px, opacity 0.035 (виден, но не мешает). */
     background:
-      radial-gradient(ellipse 70% 45% at 12% -10%, rgba(215, 255, 103, 0.06), transparent 60%),
-      radial-gradient(ellipse 55% 50% at 95% 105%, rgba(215, 255, 103, 0.04), transparent 55%),
+      radial-gradient(ellipse 70% 40% at 90% -10%, rgba(255, 255, 255, 0.045), transparent 65%),
+      radial-gradient(ellipse 50% 45% at 5% 105%, rgba(255, 255, 255, 0.028), transparent 60%),
+      radial-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
       #0A0A0A;
+    background-size: auto, auto, 24px 24px, auto;
     min-height: 100vh;
     letter-spacing: -0.01em;
     color: #FCFCFC;
   }
 
   ::selection {
-    background-color: rgba(215, 255, 103, 0.35);
+    background-color: rgba(245, 245, 245, 0.28);
     color: #0A0A0A;
   }
 

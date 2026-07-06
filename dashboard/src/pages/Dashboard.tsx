@@ -62,7 +62,7 @@ const METRICS: readonly MetricDef[] = [
     key: "revenue_rubles",
     label: "Доход",
     short: "Доход",
-    color: "#D7FF67",
+    color: "#F5F5F5",
     fillId: "metric-revenue",
     valueFmt: (v) => fmtRub(v),
     axisFmt: fmtCompactRub,
@@ -71,7 +71,7 @@ const METRICS: readonly MetricDef[] = [
     key: "new_users",
     label: "Новые юзеры",
     short: "Юзеры",
-    color: "#A6FFB3",
+    color: "#D4D4D8",
     fillId: "metric-users",
     valueFmt: (v) => fmtNum(v),
     axisFmt: fmtCompactInt,
@@ -134,12 +134,12 @@ export function Dashboard() {
   const overview = useQuery({
     queryKey: ["stats", "overview"],
     queryFn: endpoints.statsOverview,
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,
   });
   const revenue = useQuery({
     queryKey: ["stats", "revenue"],
     queryFn: endpoints.statsRevenue,
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,
   });
   // "Сегодня (МСК)" — calendar day from 00:00 to 23:59 Europe/Moscow.
   // Resets daily at MSK midnight via queryKey rotation.
@@ -155,12 +155,12 @@ export function Dashboard() {
   const today = useQuery({
     queryKey: ["stats", "period", "msk-today", todayKey],
     queryFn: () => endpoints.statsPeriodSince(todaySince),
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,
   });
   const today24Revenue = useQuery({
     queryKey: ["payments", "revenue", "msk-today", todayKey],
     queryFn: () => endpoints.paymentsRevenueSince(todaySince),
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,
   });
   // Daily chart controls. Range — горизонт по дням (7/30/90/180).
   // Metric — какую серию рисовать (доход, юзеры, платежи, подписки).
@@ -171,14 +171,14 @@ export function Dashboard() {
   const daily = useQuery({
     queryKey: ["stats", "daily", days],
     queryFn: () => endpoints.statsDaily(days),
-    refetchInterval: 5 * 60_000,
+    refetchInterval: 90_000,
     staleTime: 60_000,
   });
   // Segments — same queryKey as BroadcastCreate, кеш общий.
   const segments = useQuery({
     queryKey: ["broadcasts", "segments"],
     queryFn: endpoints.broadcastSegments,
-    refetchInterval: 5 * 60_000,
+    refetchInterval: 90_000,
     staleTime: 60_000,
   });
 
@@ -186,7 +186,7 @@ export function Dashboard() {
   const referrals = useQuery({
     queryKey: ["referrals", "overall"],
     queryFn: endpoints.referralsOverall,
-    refetchInterval: 5 * 60_000,
+    refetchInterval: 90_000,
     staleTime: 60_000,
   });
   const topReferrers = useQuery({
@@ -198,13 +198,13 @@ export function Dashboard() {
         limit: 5,
         offset: 0,
       }),
-    refetchInterval: 5 * 60_000,
+    refetchInterval: 90_000,
     staleTime: 60_000,
   });
   const breakdown = useQuery({
     queryKey: ["stats", "breakdown"],
     queryFn: endpoints.statsBreakdown,
-    refetchInterval: 5 * 60_000,
+    refetchInterval: 90_000,
     staleTime: 60_000,
   });
   // Провайдеры платежей: переключатель окна 24h / 7d / 30d (8760h max).
@@ -212,7 +212,7 @@ export function Dashboard() {
   const providers = useQuery({
     queryKey: ["payments", "by-provider", providerHours],
     queryFn: () => endpoints.paymentsByProvider(providerHours),
-    refetchInterval: 5 * 60_000,
+    refetchInterval: 90_000,
     staleTime: 60_000,
   });
   // Hourly breakdown: окно 1д / 7д / 30д, тот же metric switcher.
@@ -221,7 +221,7 @@ export function Dashboard() {
   const hourly = useQuery({
     queryKey: ["stats", "hourly", hourlyDays],
     queryFn: () => endpoints.statsHourly(hourlyDays),
-    refetchInterval: 5 * 60_000,
+    refetchInterval: 90_000,
     staleTime: 60_000,
   });
 
@@ -315,7 +315,7 @@ export function Dashboard() {
           </div>
           <Link
             to="/broadcasts/new"
-            className="group inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-bg shadow-glow transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 hover:bg-accent-hover hover:shadow-[0_14px_28px_-10px_rgba(215,255,103,0.45)] active:translate-y-0"
+            className="group inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-bg shadow-glow transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 hover:bg-accent-hover hover:shadow-[0_14px_28px_-10px_rgba(245,245,245,0.35)] active:translate-y-0"
           >
             <Megaphone className="h-3.5 w-3.5 transition-transform duration-300 group-hover:rotate-[-8deg]" />
             Новая рассылка
@@ -765,7 +765,7 @@ function HeroCard({
         className="pointer-events-none absolute -right-32 -top-32 h-72 w-72 opacity-50 animate-glow-rotate"
         style={{
           background:
-            "conic-gradient(from 0deg, rgba(215,255,103,0.15), rgba(166,255,179,0.12), rgba(255,214,107,0.10), rgba(215,255,103,0.15))",
+            "conic-gradient(from 0deg, rgba(245,245,245,0.12), rgba(215,215,215,0.10), rgba(180,180,180,0.08), rgba(245,245,245,0.12))",
           filter: "blur(40px)",
         }}
       />
@@ -1190,15 +1190,15 @@ function RevenueChart({
       <AreaChart data={data} margin={{ top: 6, right: 4, left: 4, bottom: 4 }}>
         <defs>
           <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#D7FF67" stopOpacity={0.28} />
-            <stop offset="100%" stopColor="#D7FF67" stopOpacity={0} />
+            <stop offset="0%" stopColor="#F5F5F5" stopOpacity={0.28} />
+            <stop offset="100%" stopColor="#F5F5F5" stopOpacity={0} />
           </linearGradient>
         </defs>
         <Tooltip content={<ChartTooltip valueFmt={fmtRub} label="Доход" />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "3 3" }} />
         <Area
           type="monotone"
           dataKey="revenue_rubles"
-          stroke="#D7FF67"
+          stroke="#F5F5F5"
           strokeWidth={1.75}
           fill="url(#revGrad)"
           isAnimationActive={false}
@@ -1343,10 +1343,10 @@ function HourlyChart({
                 style={{
                   height: `${Math.max(2, pct)}%`,
                   background: isPeak
-                    ? "linear-gradient(180deg, #E2FF85 0%, #D7FF67 70%, #A6CC3F 100%)"
+                    ? "linear-gradient(180deg, #FFFFFF 0%, #F5F5F5 70%, #A1A1AA 100%)"
                     : "#262626",
                   boxShadow: isPeak
-                    ? "0 8px 22px -10px rgba(215,255,103,0.55)"
+                    ? "0 8px 22px -10px rgba(245,245,245,0.40)"
                     : undefined,
                 }}
               />
@@ -1432,7 +1432,7 @@ function ChartTooltip({ active, payload, label, valueFmt }: ChartTooltipProps) {
         <div key={i} className="mt-1 flex items-center gap-2 text-sm">
           <span
             className="h-2 w-2 rounded-full"
-            style={{ background: p.color ?? "#D7FF67" }}
+            style={{ background: p.color ?? "#F5F5F5" }}
           />
           <span className="text-fg-muted">{labelForKey(p.dataKey, p.name)}</span>
           <span className="font-semibold tabular-nums text-fg">
@@ -1688,8 +1688,8 @@ function TopReferrersList({
 }
 
 const TARIFF_DEFS = [
-  { key: "basic", label: "Basic", color: "#D7FF67" },
-  { key: "plus", label: "Plus", color: "#A6FFB3" },
+  { key: "basic", label: "Basic", color: "#F5F5F5" },
+  { key: "plus", label: "Plus", color: "#D4D4D8" },
   { key: "basic_combo", label: "Basic + Combo", color: "#FFD66B" },
   { key: "plus_combo", label: "Plus + Combo", color: "#EC4899" },
   { key: "proxy", label: "Прокси", color: "#F59E0B" },
@@ -1770,9 +1770,9 @@ const PROVIDER_LABELS: Record<string, string> = {
   unknown: "Прочее",
 };
 const PROVIDER_COLORS: Record<string, string> = {
-  platega: "#D7FF67",
+  platega: "#F5F5F5",
   cryptobot: "#F59E0B",
-  telegram_stars: "#A6FFB3",
+  telegram_stars: "#D4D4D8",
   lava: "#10B981",
   balance: "#64748B",
   unknown: "#94A3B8",

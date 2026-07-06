@@ -44,7 +44,7 @@ export function Audit() {
   const q = useQuery({
     queryKey: ["audit", limit],
     queryFn: () => endpoints.auditRecent(limit) as Promise<AuditEntry[]>,
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
   });
 
   useEventStream(() => {

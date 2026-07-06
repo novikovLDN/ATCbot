@@ -118,35 +118,104 @@ async def get_subscription_history(telegram_id: int, limit: int = 5) -> list:
 
 
 async def get_user_extended_stats(telegram_id: int) -> Dict[str, Any]:
-    """Получить расширенную статистику пользователя
-    
-    Args:
-        telegram_id: Telegram ID пользователя
-    
+    """Full financial + referral profile of a user for the admin card.
+
     Returns:
-        Словарь со статистикой:
-        - renewals_count: количество продлений подписки
-        - reissues_count: количество перевыпусков ключа
+        renewals_count            — продлений подписки (subscription_history)
+        reissues_count            — перевыпусков ключа
+        total_spent_rubles        — сумма ВСЕХ approved-платежей в ₽
+        total_payments_count      — общее число approved-платежей
+        first_paid_at / last_paid_at — граничные даты платежей
+        referrer_telegram_id      — кто пригласил (или NULL)
+        referrer_username         — username пригласившего (для UI)
+        referrals_invited_count   — сколько пригласил сам
+        referrals_rewarded_count  — из них сколько «сработали» (bonus paid)
+        traffic_gb_purchased_total — суммарно ГБ купил (bypass-паки)
+        traffic_purchases_count   — количество GB-покупок
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Подсчитываем продления (action_type = 'renewal')
+        # Продления
         renewals_count = await conn.fetchval(
-            """SELECT COUNT(*) FROM subscription_history 
+            """SELECT COUNT(*) FROM subscription_history
                WHERE telegram_id = $1 AND action_type = 'renewal'""",
-            telegram_id
+            telegram_id,
         )
-        
-        # Подсчитываем перевыпуски ключа (action_type IN ('reissue', 'manual_reissue'))
+        # Перевыпуски
         reissues_count = await conn.fetchval(
-            """SELECT COUNT(*) FROM subscription_history 
-               WHERE telegram_id = $1 AND action_type IN ('reissue', 'manual_reissue')""",
-            telegram_id
+            """SELECT COUNT(*) FROM subscription_history
+               WHERE telegram_id = $1
+                 AND action_type IN ('reissue','manual_reissue')""",
+            telegram_id,
         )
-        
+        # Финансы — approved-платежи по всем типам (подписки/трафик/etc).
+        # amount_kopecks * 0.01 = рубли; NULLs исключаем.
+        pay_row = await conn.fetchrow(
+            """SELECT
+                   COUNT(*) AS n,
+                   COALESCE(SUM(amount_kopecks), 0)::BIGINT AS total_kopecks,
+                   MIN(paid_at) AS first_paid_at,
+                   MAX(paid_at) AS last_paid_at
+               FROM pending_purchases
+               WHERE telegram_id = $1
+                 AND status = 'paid'""",
+            telegram_id,
+        )
+        total_payments = int(pay_row["n"] or 0) if pay_row else 0
+        total_kopecks = int(pay_row["total_kopecks"] or 0) if pay_row else 0
+        first_paid_at = pay_row["first_paid_at"] if pay_row else None
+        last_paid_at = pay_row["last_paid_at"] if pay_row else None
+
+        # Пригласивший
+        ref_row = await conn.fetchrow(
+            """SELECT u.referrer_id, ru.username AS referrer_username
+               FROM users u
+               LEFT JOIN users ru ON ru.telegram_id = u.referrer_id
+               WHERE u.telegram_id = $1""",
+            telegram_id,
+        )
+        referrer_id = ref_row["referrer_id"] if ref_row else None
+        referrer_username = ref_row["referrer_username"] if ref_row else None
+
+        # Сколько сам пригласил
+        inv_row = await conn.fetchrow(
+            """SELECT COUNT(*) AS n,
+                      COUNT(*) FILTER (WHERE is_rewarded) AS rewarded
+               FROM referrals
+               WHERE referrer_user_id = $1""",
+            telegram_id,
+        )
+        invited = int(inv_row["n"] or 0) if inv_row else 0
+        rewarded = int(inv_row["rewarded"] or 0) if inv_row else 0
+
+        # Купил ГБ (bypass). Столбец gb_purchased.gb_amount, count и sum.
+        gb_row = None
+        try:
+            gb_row = await conn.fetchrow(
+                """SELECT COUNT(*) AS n,
+                          COALESCE(SUM(gb_amount), 0)::INTEGER AS gb_total
+                   FROM gb_purchased
+                   WHERE telegram_id = $1""",
+                telegram_id,
+            )
+        except Exception as e:
+            logger.debug("gb_purchased query failed (табл. может отсутствовать): %s", e)
+        gb_total = int(gb_row["gb_total"] or 0) if gb_row else 0
+        gb_count = int(gb_row["n"] or 0) if gb_row else 0
+
         return {
             "renewals_count": renewals_count or 0,
-            "reissues_count": reissues_count or 0
+            "reissues_count": reissues_count or 0,
+            "total_spent_rubles": total_kopecks / 100.0,
+            "total_payments_count": total_payments,
+            "first_paid_at": first_paid_at.isoformat() if first_paid_at else None,
+            "last_paid_at": last_paid_at.isoformat() if last_paid_at else None,
+            "referrer_telegram_id": referrer_id,
+            "referrer_username": referrer_username,
+            "referrals_invited_count": invited,
+            "referrals_rewarded_count": rewarded,
+            "traffic_gb_purchased_total": gb_total,
+            "traffic_purchases_count": gb_count,
         }
 
 
@@ -251,9 +320,20 @@ async def get_last_audit_logs(limit: int = 10) -> list:
         return []
 
 
-async def create_broadcast(title: str, message: str, broadcast_type: str, segment: str, sent_by: int, is_ab_test: bool = False, message_a: str = None, message_b: str = None) -> int:
-    """Создать новое уведомление
-    
+async def create_broadcast(
+    title: str,
+    message: str,
+    broadcast_type: str,
+    segment: str,
+    sent_by: int,
+    is_ab_test: bool = False,
+    message_a: str = None,
+    message_b: str = None,
+    photo_file_id: Optional[str] = None,
+    buttons: Optional[list] = None,
+) -> int:
+    """Создать новое уведомление.
+
     Args:
         title: Заголовок уведомления
         message: Текст уведомления (для обычных уведомлений)
@@ -263,7 +343,9 @@ async def create_broadcast(title: str, message: str, broadcast_type: str, segmen
         is_ab_test: Является ли уведомление A/B тестом
         message_a: Текст варианта A (для A/B тестов)
         message_b: Текст варианта B (для A/B тестов)
-    
+        photo_file_id: Telegram file_id прикреплённого фото (для clone/re-send)
+        buttons: список ключей кнопок из _BUTTON_TYPES (для clone/re-send)
+
     Returns:
         ID созданного уведомления
     """
@@ -271,17 +353,23 @@ async def create_broadcast(title: str, message: str, broadcast_type: str, segmen
     async with pool.acquire() as conn:
         if is_ab_test:
             row = await conn.fetchrow(
-                """INSERT INTO broadcasts (title, message_a, message_b, is_ab_test, type, segment, sent_by)
-                   VALUES ($1, $2, $3, TRUE, $4, $5, $6)
+                """INSERT INTO broadcasts
+                       (title, message_a, message_b, is_ab_test, type,
+                        segment, sent_by, photo_file_id, buttons)
+                   VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8)
                    RETURNING id""",
-                title, message_a, message_b, broadcast_type, segment, sent_by
+                title, message_a, message_b, broadcast_type, segment, sent_by,
+                photo_file_id, buttons,
             )
         else:
             row = await conn.fetchrow(
-                """INSERT INTO broadcasts (title, message, is_ab_test, type, segment, sent_by)
-                   VALUES ($1, $2, FALSE, $3, $4, $5)
+                """INSERT INTO broadcasts
+                       (title, message, is_ab_test, type, segment,
+                        sent_by, photo_file_id, buttons)
+                   VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7)
                    RETURNING id""",
-                title, message, broadcast_type, segment, sent_by
+                title, message, broadcast_type, segment, sent_by,
+                photo_file_id, buttons,
             )
         return row["id"]
 
@@ -1405,6 +1493,150 @@ async def get_users_by_segment(segment: str) -> list:
                          WHERE s.telegram_id = p.telegram_id
                            AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
                      )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment in ("trial_expired_7d", "trial_expired_14d",
+                         "trial_expired_30d", "trial_expired_90d"):
+            # Триал истёк N дней назад — И пользователь никогда не покупал
+            # (нет ни одной строки в subscriptions с source='payment').
+            # Это чистая «холодная реактивация» — прошло много времени,
+            # человек не сконвертился, шлём ему повторный оффер.
+            # Бакеты 24-часовые, окно вокруг ровно N-дневной точки:
+            #   trial_expired_7d  → (NOW-8d,  NOW-7d]
+            #   trial_expired_14d → (NOW-15d, NOW-14d]
+            #   trial_expired_30d → (NOW-31d, NOW-30d]
+            #   trial_expired_90d → (NOW-91d, NOW-90d]
+            # См. коммент про tz в trial_ends_in_1d.
+            days = int(segment.split("_")[-1].rstrip("d"))
+            rows = await conn.fetch(
+                f"""SELECT u.telegram_id FROM users u
+                    WHERE u.trial_used_at IS NOT NULL
+                      AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                            <= (NOW() AT TIME ZONE 'UTC') - INTERVAL '{days} days'
+                      AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                            >  (NOW() AT TIME ZONE 'UTC') - INTERVAL '{days + 1} days'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM subscriptions s
+                          WHERE s.telegram_id = u.telegram_id
+                            AND s.source = 'payment'
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM subscriptions s
+                          WHERE s.telegram_id = u.telegram_id
+                            AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                      )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment in ("started_1d_cold", "started_3d_cold",
+                         "started_14d_cold", "started_30d_cold"):
+            # Холодные лиды — старт был не позднее N суток назад,
+            # и до сих пор ноль активности (нет подписки, нет ключей,
+            # нет триала). Cumulative-окно: включает всех, кто нажал
+            # /start в диапазоне [NOW-N days, NOW]. Смысл — «свежие
+            # молчуны» для прогрева. started_1d_cold = сегодняшние.
+            days = int(segment.split("_")[1].rstrip("d"))
+            rows = await conn.fetch(
+                f"""SELECT u.telegram_id FROM users u
+                    WHERE u.created_at >= NOW() - INTERVAL '{days} days'
+                      AND u.trial_used_at IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM subscriptions s
+                          WHERE s.telegram_id = u.telegram_id
+                            AND (
+                                s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                                OR s.remnawave_uuid IS NOT NULL
+                                OR s.remnawave_premium_uuid IS NOT NULL
+                            )
+                      )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment in ("paid_expired_7d", "paid_expired_14d",
+                         "paid_expired_60d", "paid_expired_90d"):
+            # Платная (source='payment') истекла ровно N суток назад
+            # (24-час бакет [NOW-(N+1)d, NOW-Nd)) — сейчас нет активной
+            # ПЛАТНОЙ. Классическая точка реактивации, аналог paid_expired_1d
+            # для более далёких окон.
+            # См. tz-коммент в trial_ends_in_1d.
+            days = int(segment.split("_")[-1].rstrip("d"))
+            rows = await conn.fetch(
+                f"""SELECT u.telegram_id FROM users u
+                    WHERE EXISTS (
+                        SELECT 1 FROM subscriptions s
+                        WHERE s.telegram_id = u.telegram_id
+                          AND s.source = 'payment'
+                          AND s.expires_at <= (NOW() AT TIME ZONE 'UTC') - INTERVAL '{days} days'
+                          AND s.expires_at >  (NOW() AT TIME ZONE 'UTC') - INTERVAL '{days + 1} days'
+                    )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM subscriptions s2
+                        WHERE s2.telegram_id = u.telegram_id
+                          AND s2.source = 'payment'
+                          AND s2.expires_at > (NOW() AT TIME ZONE 'UTC')
+                    )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "vip_active":
+            # VIP-пользователи (users.is_vip=TRUE) — для эксклюзивных
+            # приглашений/апселлов/фидбека.
+            rows = await conn.fetch(
+                """SELECT telegram_id FROM users
+                   WHERE is_vip = TRUE"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "combo_active":
+            # Активные подписки типа combo_basic / combo_plus — целевая
+            # для апселла на большие GB-паки обхода / доп. устройств.
+            rows = await conn.fetch(
+                """SELECT DISTINCT s.telegram_id
+                   FROM subscriptions s
+                   WHERE s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                     AND s.subscription_type IN ('combo_basic','combo_plus')"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "basic_active":
+            # Активные Basic — целевая для апселла на Plus/Combo.
+            rows = await conn.fetch(
+                """SELECT DISTINCT s.telegram_id
+                   FROM subscriptions s
+                   WHERE s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                     AND s.subscription_type = 'basic'"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "plus_active":
+            # Активные Plus — целевая для upsell на Combo или продление на 1 год.
+            rows = await conn.fetch(
+                """SELECT DISTINCT s.telegram_id
+                   FROM subscriptions s
+                   WHERE s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                     AND s.subscription_type = 'plus'"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "discount_active":
+            # У пользователя действует персональная скидка
+            # (user_discounts) — стоит напомнить использовать её.
+            rows = await conn.fetch(
+                """SELECT DISTINCT ud.telegram_id
+                   FROM user_discounts ud
+                   WHERE (ud.expires_at IS NULL
+                          OR ud.expires_at > (NOW() AT TIME ZONE 'UTC'))"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "has_balance_50plus":
+            # На балансе > 50₽. Напомнить использовать балансовый чекаут.
+            rows = await conn.fetch(
+                """SELECT telegram_id FROM users
+                   WHERE COALESCE(balance_kopecks, 0) >= 5000"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "expires_in_3d":
+            # Активная подписка (любого типа) закончится в ближайшие
+            # 72 часа — точка «продли/переоформи». Мощная реактивационная
+            # аудитория, пока люди ещё внутри.
+            rows = await conn.fetch(
+                """SELECT DISTINCT s.telegram_id FROM subscriptions s
+                   WHERE s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                     AND s.expires_at <= (NOW() AT TIME ZONE 'UTC') + INTERVAL '3 days'
+                     AND s.source = 'payment'"""
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("expired_1d", "expired_2d", "expired_3d"):
