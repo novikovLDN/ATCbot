@@ -28,7 +28,6 @@ caller (see database/subscriptions.py:grant_access).
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid as uuid_lib
 from datetime import datetime, timezone
@@ -146,122 +145,101 @@ async def provision_subscription(
 
     requested_uuid = legacy_uuid or str(uuid_lib.uuid4())
 
-    # ── Premium + Bypass entities: параллельная провизия ─────────────
-    #
-    # Раньше эти два блока шли ПОСЛЕДОВАТЕЛЬНО — 2 sequential HTTP-
-    # запроса к Remnawave (~0.5–1с каждый) на активацию триала /
-    # покупки. Обе операции работают с независимыми сущностями (два
-    # разных user'а на панели), поэтому дёргаем их через
-    # asyncio.gather — итоговое время активации ≈ max(premium, bypass)
-    # вместо sum. На новом юзере это режет ~1с из общего 2с.
+    # ── Premium entity ───────────────────────────────────────────────
+    existing_premium_uuid = await database.get_remnawave_premium_uuid(telegram_id)
+    premium_sub_url: Optional[str] = None
+    premium_panel_uuid: Optional[str] = existing_premium_uuid
 
+    if existing_premium_uuid:
+        # Renewal: PATCH expireAt.  Bypass entity is handled below independently.
+        renewed = await remnawave_premium.renew_premium_user(telegram_id, subscription_end)
+        if not renewed:
+            logger.warning(
+                "PURCHASE_FLOW: premium renew returned False — falling back to create-flow tg=%s",
+                telegram_id,
+            )
+            existing_premium_uuid = None
+        else:
+            premium_sub_url = await _premium_url_for_existing(telegram_id)
+
+    if not existing_premium_uuid:
+        result = await remnawave_premium.create_premium_user_entity(
+            telegram_id,
+            requested_uuid=requested_uuid,
+            expire_at=subscription_end,
+            description=f"Premium via bot ({tariff})",
+        )
+        if not result.ok:
+            raise RuntimeError(f"premium provision failed: status={result.status} error={result.error}")
+        premium_panel_uuid = result.panel_uuid
+        premium_sub_url = result.subscription_url
+        try:
+            await database.set_remnawave_premium_uuid_and_url(
+                telegram_id,
+                result.panel_uuid or "",
+                result.subscription_url,
+                short_uuid=result.short_uuid,
+            )
+        except Exception as e:
+            logger.error(
+                "PURCHASE_FLOW: failed to persist premium mapping tg=%s err=%s",
+                telegram_id, e,
+            )
+            raise
+
+    if not premium_sub_url:
+        # Cache miss after a renewal — back-fill from panel one time.
+        try:
+            from app.services import remnawave_api
+            entity = await remnawave_api.get_user(premium_panel_uuid or "")
+            premium_sub_url = (entity or {}).get("subscriptionUrl") or ""
+            if premium_sub_url:
+                await database.set_remnawave_premium_sub_url(telegram_id, premium_sub_url)
+        except Exception as e:
+            logger.warning("PURCHASE_FLOW: premium url back-fill failed tg=%s %s", telegram_id, e)
+
+    # ── Bypass entity ────────────────────────────────────────────────
     bypass_bytes = _bypass_bytes_for(tariff, period_days, is_trial)
+    bypass_sub_url: Optional[str] = None
 
-    async def _do_premium() -> dict:
-        existing_premium_uuid = await database.get_remnawave_premium_uuid(telegram_id)
-        premium_sub_url: Optional[str] = None
-        premium_panel_uuid: Optional[str] = existing_premium_uuid
-
-        if existing_premium_uuid:
-            renewed = await remnawave_premium.renew_premium_user(telegram_id, subscription_end)
-            if not renewed:
-                logger.warning(
-                    "PURCHASE_FLOW: premium renew returned False — falling back to create-flow tg=%s",
-                    telegram_id,
-                )
-                existing_premium_uuid = None
-            else:
-                premium_sub_url = await _premium_url_for_existing(telegram_id)
-
-        if not existing_premium_uuid:
-            result = await remnawave_premium.create_premium_user_entity(
+    existing_bypass_uuid = await database.get_remnawave_uuid(telegram_id)
+    if existing_bypass_uuid:
+        # Top-up: ACCUMULATE — never reset, per customer requirement.
+        added = await remnawave_bypass.add_bypass_traffic(telegram_id, extra_bytes=bypass_bytes)
+        if not added:
+            logger.warning(
+                "PURCHASE_FLOW: bypass top-up returned False — falling back to create-flow tg=%s",
                 telegram_id,
-                requested_uuid=requested_uuid,
-                expire_at=subscription_end,
-                description=f"Premium via bot ({tariff})",
             )
-            if not result.ok:
-                raise RuntimeError(
-                    f"premium provision failed: status={result.status} error={result.error}"
-                )
-            premium_panel_uuid = result.panel_uuid
-            premium_sub_url = result.subscription_url
-            try:
-                await database.set_remnawave_premium_uuid_and_url(
-                    telegram_id,
-                    result.panel_uuid or "",
-                    result.subscription_url,
-                    short_uuid=result.short_uuid,
-                )
-            except Exception as e:
-                logger.error(
-                    "PURCHASE_FLOW: failed to persist premium mapping tg=%s err=%s",
-                    telegram_id, e,
-                )
-                raise
+            existing_bypass_uuid = None
+        else:
+            cache = await database.get_remnawave_bypass_cache(telegram_id)
+            bypass_sub_url = (cache or {}).get("remnawave_bypass_sub_url") or None
 
-        if not premium_sub_url:
-            # Cache miss after a renewal — back-fill from panel one time.
-            try:
-                from app.services import remnawave_api
-                entity = await remnawave_api.get_user(premium_panel_uuid or "")
-                premium_sub_url = (entity or {}).get("subscriptionUrl") or ""
-                if premium_sub_url:
-                    await database.set_remnawave_premium_sub_url(telegram_id, premium_sub_url)
-            except Exception as e:
-                logger.warning("PURCHASE_FLOW: premium url back-fill failed tg=%s %s", telegram_id, e)
-
-        return {"panel_uuid": premium_panel_uuid, "sub_url": premium_sub_url}
-
-    async def _do_bypass() -> dict:
-        existing_bypass_uuid = await database.get_remnawave_uuid(telegram_id)
-        bypass_sub_url: Optional[str] = None
-
-        if existing_bypass_uuid:
-            added = await remnawave_bypass.add_bypass_traffic(
-                telegram_id, extra_bytes=bypass_bytes,
+    if not existing_bypass_uuid:
+        bresult = await remnawave_bypass.create_bypass_user_entity(
+            telegram_id,
+            traffic_limit_bytes=bypass_bytes,
+            description=f"Bypass via bot ({tariff})",
+        )
+        if not bresult.ok:
+            raise RuntimeError(
+                f"bypass provision failed: tg={telegram_id} "
+                f"status={bresult.status} error={bresult.error}"
             )
-            if not added:
-                logger.warning(
-                    "PURCHASE_FLOW: bypass top-up returned False — falling back to create-flow tg=%s",
-                    telegram_id,
-                )
-                existing_bypass_uuid = None
-            else:
-                cache = await database.get_remnawave_bypass_cache(telegram_id)
-                bypass_sub_url = (cache or {}).get("remnawave_bypass_sub_url") or None
-
-        if not existing_bypass_uuid:
-            bresult = await remnawave_bypass.create_bypass_user_entity(
+        bypass_sub_url = bresult.subscription_url
+        try:
+            await database.set_remnawave_bypass_cache(
                 telegram_id,
-                traffic_limit_bytes=bypass_bytes,
-                description=f"Bypass via bot ({tariff})",
+                bresult.panel_uuid,
+                bresult.subscription_url,
+                bresult.short_uuid,
             )
-            if not bresult.ok:
-                raise RuntimeError(
-                    f"bypass provision failed: tg={telegram_id} "
-                    f"status={bresult.status} error={bresult.error}"
-                )
-            bypass_sub_url = bresult.subscription_url
-            try:
-                await database.set_remnawave_bypass_cache(
-                    telegram_id,
-                    bresult.panel_uuid,
-                    bresult.subscription_url,
-                    bresult.short_uuid,
-                )
-            except Exception as e:
-                logger.warning(
-                    "PURCHASE_FLOW: failed to persist bypass cache tg=%s %s",
-                    telegram_id, e,
-                )
-
-        return {"sub_url": bypass_sub_url}
-
-    premium_res, bypass_res = await asyncio.gather(_do_premium(), _do_bypass())
-    premium_panel_uuid = premium_res["panel_uuid"]
-    premium_sub_url = premium_res["sub_url"]
-    bypass_sub_url = bypass_res["sub_url"]
+        except Exception as e:
+            logger.warning(
+                "PURCHASE_FLOW: failed to persist bypass cache tg=%s %s",
+                telegram_id, e,
+            )
 
     logger.info(
         "PURCHASE_FLOW_DONE: tg=%s tariff=%s premium_uuid=%s bypass_uuid=%s "
