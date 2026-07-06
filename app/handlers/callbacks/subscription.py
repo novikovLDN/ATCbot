@@ -42,6 +42,64 @@ subscription_router = Router()
 logger = logging.getLogger(__name__)
 
 
+async def _activate_referral_and_notify(bot, telegram_id: int) -> None:
+    """Referral activation + notification рефереру.
+
+    Вынесено из callback_activate_trial в отдельный background task,
+    чтобы юзер не ждал: (а) activate_referral запроса, (б) выборки
+    статистики реферера, (в) send_message к рефереру. Всё это не
+    блокирует основной flow активации триала.
+
+    Ошибки логируем внутри, наверх не пробрасываем — task fire&forget.
+    """
+    try:
+        activation_result = await activate_referral(
+            telegram_id, activation_type="trial",
+        )
+        if not activation_result.get("success"):
+            return
+        if not activation_result.get("was_activated"):
+            return
+
+        referrer_id = activation_result.get("referrer_id")
+        logger.info(
+            f"REFERRAL_ACTIVATED [referrer={referrer_id}, "
+            f"referred={telegram_id}, type=trial, state=ACTIVATED]"
+        )
+        if not referrer_id:
+            return
+
+        try:
+            import database as _db
+            ref_stats = await _db.get_referral_statistics(referrer_id)
+            ref_percent = int(ref_stats.get("cashback_percent", 10))
+            from app.services.notifications.loyalty_pushes import pick_trial_push
+            notification_text = pick_trial_push(ref_percent)
+            await bot.send_message(
+                chat_id=referrer_id,
+                text=notification_text,
+                parse_mode="HTML",
+            )
+            logger.info(
+                f"REFERRAL_NOTIFICATION_SENT [type=trial_activation, "
+                f"referrer={referrer_id}, referred={telegram_id}]"
+            )
+        except Exception as e:
+            logger.warning(
+                "NOTIFICATION_FAILED",
+                extra={
+                    "type": "trial_activation",
+                    "referrer": referrer_id,
+                    "referred": telegram_id,
+                    "error": str(e),
+                },
+            )
+    except Exception as e:
+        logger.warning(
+            f"Failed to activate referral for trial: user={telegram_id}, error={e}"
+        )
+
+
 @subscription_router.callback_query(F.data.startswith("toggle_auto_renew:"))
 async def callback_toggle_auto_renew(callback: CallbackQuery):
     """Включить/выключить автопродление"""
@@ -139,6 +197,20 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer()
 
+    # Мгновенный отклик до тяжёлых вызовов — юзер видит «⏳ Активирую…»
+    # уже через миллисекунду, а не смотрит на «печатает…» пока
+    # Remnawave отвечает на grant_access (1–3 сек). Placeholder-сообщение
+    # потом edit'нем в финальный success. Если answer() упадёт — не
+    # блокирует flow, просто идём дальше без placeholder'а.
+    placeholder_msg = None
+    try:
+        placeholder_text = i18n_get_text(language, "trial.activating")
+        placeholder_msg = await callback.message.answer(
+            placeholder_text, parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
     try:
         duration = timedelta(days=3)
         now = datetime.now(timezone.utc)
@@ -172,47 +244,13 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                 f"subscription active but trial_used_at not set"
             )
 
-        # 2. REFERRAL LIFECYCLE: Activate referral (REGISTERED → ACTIVATED)
-        try:
-            activation_result = await activate_referral(telegram_id, activation_type="trial")
-            if activation_result.get("success") and activation_result.get("was_activated"):
-                logger.info(
-                    f"REFERRAL_ACTIVATED [referrer={activation_result.get('referrer_id')}, "
-                    f"referred={telegram_id}, type=trial, state=ACTIVATED]"
-                )
-
-                referrer_id = activation_result.get("referrer_id")
-                if referrer_id:
-                    try:
-                        # Текущий тир-процент реферрера — динамическая подстановка.
-                        import database as _db
-                        ref_stats = await _db.get_referral_statistics(referrer_id)
-                        ref_percent = int(ref_stats.get("cashback_percent", 10))
-                        from app.services.notifications.loyalty_pushes import pick_trial_push
-                        notification_text = pick_trial_push(ref_percent)
-
-                        await callback.bot.send_message(
-                            chat_id=referrer_id,
-                            text=notification_text,
-                            parse_mode="HTML",
-                        )
-
-                        logger.info(
-                            f"REFERRAL_NOTIFICATION_SENT [type=trial_activation, referrer={referrer_id}, "
-                            f"referred={telegram_id}]"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "NOTIFICATION_FAILED",
-                            extra={
-                                "type": "trial_activation",
-                                "referrer": referrer_id,
-                                "referred": telegram_id,
-                                "error": str(e)
-                            }
-                        )
-        except Exception as e:
-            logger.warning(f"Failed to activate referral for trial: user={telegram_id}, error={e}")
+        # REFERRAL LIFECYCLE: активация + пуш рефереру. Выносим в
+        # background task — юзер видит success мгновенно, не ждёт
+        # ни выборку статистики реферера, ни send_message ему.
+        # Исключения логируем внутри task'а, наверх не пробрасываем.
+        asyncio.create_task(_activate_referral_and_notify(
+            callback.bot, telegram_id,
+        ))
 
         logger.info(
             f"trial_activated: user={telegram_id}, trial_used_at={now.isoformat()}, "
@@ -250,7 +288,25 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
 
         from app.handlers.common.keyboards import get_payment_success_keyboard
         trial_keyboard = get_payment_success_keyboard(language, subscription_type="basic")
-        await callback.message.answer(success_text, parse_mode="HTML", reply_markup=trial_keyboard)
+
+        # Финализация: если placeholder «⏳ Активирую…» отправился —
+        # edit'им ЕГО в success_text (быстрее, чем answer + delete);
+        # если не отправился — fallback на обычный answer.
+        finalized = False
+        if placeholder_msg is not None:
+            try:
+                await placeholder_msg.edit_text(
+                    success_text, parse_mode="HTML", reply_markup=trial_keyboard,
+                )
+                finalized = True
+            except Exception as e:
+                logger.debug(
+                    "trial placeholder edit failed, fallback to answer: %s", e,
+                )
+        if not finalized:
+            await callback.message.answer(
+                success_text, parse_mode="HTML", reply_markup=trial_keyboard,
+            )
 
         # Убираем предыдущее сообщение (где висела кнопка «Пробный
         # период») — теперь оно неактуально, триал уже активирован.

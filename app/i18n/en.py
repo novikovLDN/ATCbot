@@ -632,6 +632,7 @@ LANG = {
     'withdraw.too_many_attempts': "Too many failed attempts. Please try again.",
     'withdraw.invalid_requisites': "Enter card number (16 digits) or phone number (+7...).",
     'trial.button': "🎁 3-Day Trial Period",
+    'trial.activating': "⏳ <b>Activating trial…</b>\n\nCreating your access. This usually takes 2–3 seconds.",
     'trial.activated': "✅ <b>Trial access activated</b>\n\n📦 Plan: Basic · 3 days\n📅 Until: {expires_date}\n\nTo get started — tap <b>📲 Set up device</b> and follow the simple step-by-step guide.",
     'trial.activated_btn_connect': "🚀 Connect",
     'trial.activated_btn_profile': "👤 My Profile",

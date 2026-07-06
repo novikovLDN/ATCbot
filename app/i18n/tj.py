@@ -612,6 +612,7 @@ LANG = {
     'subscription.renew': '🔁 Дастрасиро возсод кунед',
     'support.write_button': '💬 Write to support',
     'trial.button': '🎁 Давраи триал 3 рӯза',
+    'trial.activating': "⏳ <b>Санҷиш фаол мешавад…</b>\n\nДастрасии шумо сохта мешавад. Одатан 2–3 сония.",
     'trial.activated': "✅ <b>Дастрасии санҷишӣ фаол карда шуд</b>\n\n📦 Тариф: Basic · 3 рӯз\n📅 То: {expires_date}\n\nБарои оғоз — <b>📲 Танзими дастгоҳ</b>-ро пахш кунед ва дастурҳои қадам ба қадамро иҷро кунед.",
     'trial.activated_btn_connect': "🚀 Пайваст шудан",
     'trial.activated_btn_profile': "👤 Профили ман",

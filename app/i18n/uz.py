@@ -612,6 +612,7 @@ LANG = {
     'subscription.renew': '🔁 Kirishni uzaytirish',
     'support.write_button': "💬 Qo'llab-quvvatlashga yozing",
     'trial.button': '🎁 3 kunlik sinov muddati',
+    'trial.activating': "⏳ <b>Sinov faollashtirilmoqda…</b>\n\nKirish yaratilmoqda. Odatda 2–3 soniya.",
     'trial.activated': "✅ <b>Sinov kirishi faollashtirildi</b>\n\n📦 Tarif: Basic · 3 kun\n📅 Gacha: {expires_date}\n\nBoshlash uchun — <b>📲 Qurilmani sozlash</b> tugmasini bosing va oddiy bosqichma-bosqich ko'rsatmani bajaring.",
     'trial.activated_btn_connect': "🚀 Ulanish",
     'trial.activated_btn_profile': "👤 Mening profilim",
