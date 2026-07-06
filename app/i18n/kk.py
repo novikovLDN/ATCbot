@@ -612,6 +612,7 @@ LANG = {
     'subscription.renew': '🔁 Қатысуды жаңарту',
     'support.write_button': '💬 Write to support',
     'trial.button': '🎁 3 күндік тrial мерзімі',
+    'trial.activating': "⏳ <b>Сынақ белсендірілуде…</b>\n\nКіру құрылуда. Әдетте 2–3 секунд алады.",
     'trial.activated': "✅ <b>Сынақ қатысу белсендірілді</b>\n\n📦 Тариф: Basic · 3 күн\n📅 Дейін: {expires_date}\n\nБастау үшін — <b>📲 Құрылғыны баптау</b> батырмасын басып, қарапайым нұсқауды орындаңыз.",
     'trial.activated_btn_connect': "🚀 Қосылу",
     'trial.activated_btn_profile': "👤 Менің профилім",

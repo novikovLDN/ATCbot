@@ -612,6 +612,7 @@ LANG = {
     'subscription.renew': '🔁 Zugang verlängern',
     'support.write_button': '💬 An Kundenservice schreiben',
     'trial.button': '🎁 3-Tage-Testphase',
+    'trial.activating': "⏳ <b>Aktiviere Testzugang…</b>\n\nErstellen Ihres Zugangs. Dauert normalerweise 2–3 Sekunden.",
     'trial.activated': "✅ <b>Testzugang aktiviert</b>\n\n📦 Tarif: Basic · 3 Tage\n📅 Bis: {expires_date}\n\nUm loszulegen — tippen Sie auf <b>📲 Gerät einrichten</b> und folgen Sie der einfachen Schritt-für-Schritt-Anleitung.",
     'trial.activated_btn_connect': "🚀 Verbinden",
     'trial.activated_btn_profile': "👤 Mein Profil",

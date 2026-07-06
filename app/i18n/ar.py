@@ -612,6 +612,7 @@ LANG = {
     'subscription.renew': '🔁 تجديد الوصول',
     'support.write_button': '💬 الكتابة إلى الدعم',
     'trial.button': '🎁 فترة تجريبية 3 أيام',
+    'trial.activating': "⏳ <b>جاري تفعيل التجربة…</b>\n\nنقوم بإنشاء وصولك. يستغرق عادةً 2-3 ثوانٍ.",
     'trial.activated': "✅ <b>تم تفعيل الوصول التجريبي</b>\n\n📦 الخطة: Basic · 3 أيام\n📅 حتى: {expires_date}\n\nللبدء — اضغط على <b>📲 إعداد الجهاز</b> واتبع التعليمات خطوة بخطوة.",
     'trial.activated_btn_connect': "🚀 اتصال",
     'trial.activated_btn_profile': "👤 ملفي الشخصي",
