@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   Share2,
   Gift,
+  Link as LinkIcon,
   Tag,
   Wrench,
   Stethoscope,
@@ -46,6 +47,7 @@ const sections: Section[] = [
     items: [
       { to: "/broadcasts", label: "Рассылки", icon: Megaphone },
       { to: "/promo", label: "Промокоды", icon: Tag },
+      { to: "/links", label: "Ссылки", icon: LinkIcon },
       { to: "/referrals", label: "Рефералы", icon: Share2 },
       { to: "/bgift", label: "Гифт-ГБ", icon: Gift },
     ],

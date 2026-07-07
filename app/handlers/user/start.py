@@ -356,6 +356,34 @@ async def cmd_start(message: Message, state: FSMContext):
                     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                     return
 
+    # STATS LINK: /start s-<slug> — attribution + click log.
+    # НЕ прерывает основной flow — просто пишет клик и (для новых юзеров)
+    # проставляет acquired_via_stat_link_id. Дальше юзер идёт по обычному
+    # пути (выбор языка / главное меню). Prefix `s-` короткий,
+    # непохожий на refd_/ref_.
+    if message.text:
+        _sp = message.text.strip().split(maxsplit=1)
+        if len(_sp) > 1 and _sp[1].startswith("s-"):
+            _slug = _sp[1][2:]
+            try:
+                await _handle_stats_link_click(telegram_id, _slug, is_new_user)
+            except Exception as e:
+                logger.warning("STATS_LINK_CLICK_FAIL user=%s slug=%s err=%s",
+                               telegram_id, _slug[:12], e)
+
+    # PROMO LINK: /start p-<slug> — выдача награды (подписка / скидка /
+    # ГБ). Рендерит финальный экран сам и возвращает True; если что-то
+    # пошло не так (лимиты, expired) — тоже рендерит понятную ошибку.
+    if message.text:
+        _sp = message.text.strip().split(maxsplit=1)
+        if len(_sp) > 1 and _sp[1].startswith("p-"):
+            _slug = _sp[1][2:]
+            handled = await _handle_promo_link_start(
+                message, telegram_id, _slug, is_new_user,
+            )
+            if handled:
+                return
+
     # SHARE-DISCOUNT LINK: /start refd_<code> — recipient gets 30%/24h
     # discount on basic/plus/combo. Lifetime-once per telegram_id (claim
     # tracked in `referral_share_discount_claims`). For new users we ALSO
@@ -643,3 +671,245 @@ async def callback_stage_gate_dev(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     await callback.bot.send_message(telegram_id, text, reply_markup=keyboard, parse_mode="HTML")
+
+
+# ────────────────────────────────────────────────────────────────────
+#  Marketing links: STATS + PROMO
+# ────────────────────────────────────────────────────────────────────
+
+async def _handle_stats_link_click(
+    telegram_id: int,
+    slug: str,
+    is_new_user: bool,
+) -> None:
+    """Записать клик по stat-ссылке. Не рендерит ничего — юзер идёт
+    дальше по обычному flow. Ошибки логируются, наверх не пробрасываются."""
+    if not slug or len(slug) > 32 or not slug.replace("-", "").isalnum():
+        return
+    try:
+        link = await database.get_stats_link_by_slug(slug)
+    except Exception as e:
+        logger.warning("STATS_LINK_LOOKUP_FAIL slug=%s err=%s", slug[:16], e)
+        return
+    if not link or not link.get("is_active"):
+        return
+    try:
+        await database.record_stats_link_click(
+            link_id=link["id"],
+            telegram_id=telegram_id,
+            is_new_user=is_new_user,
+        )
+        logger.info(
+            "STATS_LINK_CLICK slug=%s user=%s new=%s",
+            slug[:16], telegram_id, is_new_user,
+        )
+    except Exception as e:
+        logger.warning("STATS_LINK_CLICK_RECORD_FAIL slug=%s err=%s", slug[:16], e)
+
+
+async def _handle_promo_link_start(
+    message: Message,
+    telegram_id: int,
+    slug: str,
+    is_new_user: bool,
+) -> bool:
+    """Обработать /start p-<slug>. Возвращает True если рендер прошёл
+    и внешний handler НЕ должен продолжать обычный flow.
+
+    Fail-safe: если что-то падает — возвращаем False, юзер получит
+    обычное меню, ошибок в чат не бросаем.
+    """
+    if not slug or len(slug) > 32 or not slug.replace("-", "").isalnum():
+        return False
+
+    language = await resolve_user_language(telegram_id)
+    try:
+        link = await database.get_promo_link_by_slug(slug)
+    except Exception as e:
+        logger.warning("PROMO_LINK_LOOKUP_FAIL slug=%s err=%s", slug[:16], e)
+        return False
+
+    async def _reply(text: str, keyboard=None):
+        kb = keyboard
+        if kb is None:
+            if is_new_user:
+                kb = get_language_keyboard(language)
+            else:
+                kb = await get_main_menu_keyboard(language, telegram_id)
+        try:
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("PROMO_LINK_REPLY_FAIL: %s", e)
+
+    if not link:
+        await _reply(
+            "⚠️ <b>Ссылка не найдена</b>\n\nВозможно, она удалена или "
+            "адрес введён неправильно.",
+        )
+        return True
+
+    try:
+        result = await database.try_redeem_promo_link(
+            link_id=link["id"],
+            telegram_id=telegram_id,
+        )
+    except Exception as e:
+        logger.exception("PROMO_LINK_REDEEM_FAIL slug=%s err=%s", slug[:16], e)
+        await _reply("⚠️ <b>Не получилось активировать ссылку</b>\n\nПопробуй ещё раз чуть позже.")
+        return True
+
+    if not result.get("ok"):
+        reason = result.get("reason", "unknown")
+        errors = {
+            "inactive": "🚫 <b>Ссылка выключена</b>\n\nАдмин её деактивировал.",
+            "expired": "⏳ <b>Срок действия ссылки истёк</b>",
+            "exhausted": "🚫 <b>Ссылка полностью использована</b>\n\nЛимит активаций исчерпан.",
+            "already_redeemed_by_user": "ℹ️ <b>Ты уже использовал эту ссылку</b>\n\nОдна активация на пользователя.",
+            "not_found": "⚠️ <b>Ссылка не найдена</b>",
+            "db_not_ready": "⚠️ <b>Сервис перезапускается</b>\n\nПопробуй через минуту.",
+        }
+        await _reply(errors.get(reason, "⚠️ <b>Активация не прошла</b>"))
+        return True
+
+    # Всё ок — награда зарезервирована, применяем её.
+    reward_type = result["reward_type"]
+    reward_value = int(result["reward_value"])
+    reward_meta = result.get("reward_meta") or {}
+
+    try:
+        applied_ok, applied_text = await _apply_promo_reward(
+            telegram_id, reward_type, reward_value, reward_meta,
+        )
+    except Exception as e:
+        logger.exception(
+            "PROMO_LINK_APPLY_FAIL user=%s slug=%s type=%s err=%s",
+            telegram_id, slug[:16], reward_type, e,
+        )
+        applied_ok = False
+        applied_text = ""
+
+    if not applied_ok:
+        await _reply(
+            "⚠️ <b>Награда зарезервирована, но применить не получилось</b>\n\n"
+            "Напиши в поддержку — там разберёмся и всё выдадим.",
+        )
+        return True
+
+    keyboard = None
+    if is_new_user:
+        keyboard = get_language_keyboard(language)
+    else:
+        keyboard = await get_main_menu_keyboard(language, telegram_id)
+    header = "🎉 <b>Награда активирована!</b>\n\n"
+    await _reply(header + applied_text, keyboard=keyboard)
+    logger.info(
+        "PROMO_LINK_ACTIVATED user=%s slug=%s type=%s value=%s",
+        telegram_id, slug[:16], reward_type, reward_value,
+    )
+    return True
+
+
+async def _apply_promo_reward(
+    telegram_id: int,
+    reward_type: str,
+    reward_value: int,
+    reward_meta: dict,
+) -> tuple[bool, str]:
+    """Применить награду. Возвращает (ok, user_facing_text).
+
+    Реализовано через существующие database helper'ы: grant_access,
+    create_user_discount, create_user_traffic_discount, add_bypass_traffic.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    if reward_type == "subscription_days":
+        days = int(reward_value)
+        tariff = str(reward_meta.get("tariff") or "basic").lower()
+        if tariff not in ("basic", "plus"):
+            tariff = "basic"
+        try:
+            res = await database.grant_access(
+                telegram_id=telegram_id,
+                duration=timedelta(days=days),
+                source="promo_link",
+                admin_telegram_id=None,
+                tariff=tariff,
+            )
+        except Exception as e:
+            logger.exception("PROMO_APPLY_SUBSCRIPTION_FAIL: %s", e)
+            return False, ""
+        end = res.get("subscription_end")
+        end_str = end.strftime("%d.%m.%Y") if end else "—"
+        return True, (
+            f"📦 <b>Подписка</b> · {tariff.capitalize()}\n"
+            f"⏳ <b>{days} дн.</b>\n"
+            f"📅 До: <b>{end_str}</b>"
+        )
+
+    if reward_type == "tariff_discount":
+        hours = int(reward_meta.get("hours") or 24)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=hours)
+        try:
+            await database.create_user_discount(
+                telegram_id=telegram_id,
+                discount_percent=int(reward_value),
+                expires_at=expires_at,
+                created_by=None,
+            )
+        except Exception as e:
+            logger.exception("PROMO_APPLY_TARIFF_DISC_FAIL: %s", e)
+            return False, ""
+        return True, (
+            f"🎁 <b>Скидка {reward_value}% на подписку</b>\n"
+            f"⏳ Действует <b>{hours} ч.</b>\n\n"
+            "Открой «Купить подписку» — скидка применится автоматически."
+        )
+
+    if reward_type == "bypass_discount":
+        hours = int(reward_meta.get("hours") or 24)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=hours)
+        try:
+            await database.create_user_traffic_discount(
+                telegram_id=telegram_id,
+                discount_percent=int(reward_value),
+                expires_at=expires_at,
+                created_by=0,
+            )
+        except Exception as e:
+            logger.exception("PROMO_APPLY_BYPASS_DISC_FAIL: %s", e)
+            return False, ""
+        return True, (
+            f"🌐 <b>Скидка {reward_value}% на GB обхода</b>\n"
+            f"⏳ Действует <b>{hours} ч.</b>\n\n"
+            "Открой «Купить ГБ обхода» — скидка применится автоматически."
+        )
+
+    if reward_type == "bypass_gb":
+        gb = int(reward_value)
+        extra_bytes = gb * 1024 * 1024 * 1024
+        try:
+            existing = await database.get_subscription(telegram_id)
+            if not existing:
+                try:
+                    await database.ensure_bypass_only_subscription(telegram_id)
+                except Exception as e:
+                    logger.warning("PROMO_ENSURE_BYPASS_ONLY_FAIL: %s", e)
+            from app.services.remnawave_service import add_bypass_traffic
+            granted = await add_bypass_traffic(
+                telegram_id=telegram_id,
+                extra_bytes=extra_bytes,
+                subscription_type="basic",
+                subscription_end=None,
+                period_days=30,
+            )
+        except Exception as e:
+            logger.exception("PROMO_APPLY_BYPASS_GB_FAIL: %s", e)
+            return False, ""
+        if not granted:
+            return False, ""
+        return True, (
+            f"📊 <b>+{gb} ГБ</b> обхода начислено\n\n"
+            "Пакет ГБ не сгорает — тратится только при работе на LTE-серверах."
+        )
+
+    return False, ""

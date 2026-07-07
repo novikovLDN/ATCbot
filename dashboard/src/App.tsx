@@ -20,6 +20,7 @@ import { PromoCodes } from "@/pages/PromoCodes";
 import { Service } from "@/pages/Service";
 import { Payments } from "@/pages/Payments";
 import { Settings } from "@/pages/Settings";
+import { MarketingLinks } from "@/pages/MarketingLinks";
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -108,6 +109,7 @@ export default function App() {
               <Route path="bypass-audit" element={<BypassAudit />} />
               <Route path="audit" element={<Audit />} />
               <Route path="promo" element={<PromoCodes />} />
+              <Route path="links" element={<MarketingLinks />} />
               <Route path="service" element={<Service />} />
               <Route path="settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/" replace />} />
