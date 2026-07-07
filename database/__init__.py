@@ -228,6 +228,7 @@ from database.marketing_links import (  # noqa: F401
     set_promo_link_active,
     delete_promo_link,
     try_redeem_promo_link,
+    rollback_promo_link_redemption,
     get_promo_link_summary,
 )
 

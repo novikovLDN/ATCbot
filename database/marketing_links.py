@@ -453,6 +453,38 @@ async def try_redeem_promo_link(
             }
 
 
+async def rollback_promo_link_redemption(link_id: int, telegram_id: int) -> bool:
+    """Откатить редемпцию: удалить запись + декрементнуть used_count.
+
+    Вызывается когда `try_redeem_promo_link` прошёл (награда
+    зарезервирована), но применение награды упало — юзер должен иметь
+    возможность попробовать ещё раз, а не терять слот навсегда.
+
+    Идемпотентна: если записи уже нет, просто возвращает False.
+    """
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            deleted = await conn.execute(
+                """DELETE FROM promo_link_redemptions
+                   WHERE link_id = $1 AND telegram_id = $2""",
+                link_id, telegram_id,
+            )
+            if deleted == "DELETE 0":
+                return False
+            await conn.execute(
+                """UPDATE promo_links
+                   SET used_count = GREATEST(0, used_count - 1)
+                   WHERE id = $1""",
+                link_id,
+            )
+            return True
+
+
 async def get_promo_link_summary(link_id: int) -> Optional[Dict[str, Any]]:
     """Сводка по промо-ссылке — количество использований + список
     последних 20 редемпций."""
