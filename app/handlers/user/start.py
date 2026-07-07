@@ -379,7 +379,7 @@ async def cmd_start(message: Message, state: FSMContext):
         if len(_sp) > 1 and _sp[1].startswith("p-"):
             _slug = _sp[1][2:]
             handled = await _handle_promo_link_start(
-                message, telegram_id, _slug, is_new_user,
+                message, state, telegram_id, _slug, is_new_user,
             )
             if handled:
                 return
@@ -709,6 +709,7 @@ async def _handle_stats_link_click(
 
 async def _handle_promo_link_start(
     message: Message,
+    state: FSMContext,
     telegram_id: int,
     slug: str,
     is_new_user: bool,
@@ -807,17 +808,52 @@ async def _handle_promo_link_start(
         )
         return True
 
-    keyboard = None
-    if is_new_user:
-        keyboard = get_language_keyboard(language)
-    else:
-        keyboard = await get_main_menu_keyboard(language, telegram_id)
-    header = "🎉 <b>Награда активирована!</b>\n\n"
-    await _reply(header + applied_text, keyboard=keyboard)
+    # Финализация. Для скидочных наград сразу открываем экран выбора
+    # тарифа (там уже применена скидка автоматически). Для остальных
+    # (subscription_days, bypass_gb) — просто главное меню, у юзера
+    # уже есть подписка/ГБ, ему нужен доступ к «Подключиться».
     logger.info(
         "PROMO_LINK_ACTIVATED user=%s slug=%s type=%s value=%s",
         telegram_id, slug[:16], reward_type, reward_value,
     )
+
+    goes_to_tariffs = reward_type in ("tariff_discount", "bypass_discount")
+
+    if goes_to_tariffs:
+        # Success-сообщение без клавиатуры — сразу под ним появится
+        # экран выбора тарифа с уже применённой скидкой.
+        try:
+            await message.answer(applied_text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("PROMO_LINK_SUCCESS_MSG_FAIL: %s", e)
+        try:
+            # from_broadcast=True: чтобы «Назад» с экрана периода вела
+            # обратно на экран тарифов, а не на «Управление подпиской».
+            # Тот же паттерн, что и в gift_reveal-handler'е.
+            await state.update_data(from_broadcast=True)
+            from app.handlers.common.screens import show_tariffs_main_screen
+            await show_tariffs_main_screen(message, state, force_new_message=True)
+        except Exception as e:
+            logger.exception("PROMO_LINK_OPEN_TARIFFS_FAIL: %s", e)
+            # Fallback — покажем главное меню, чтоб юзер не остался
+            # с висящим успехом без CTA.
+            fallback_kb = (
+                get_language_keyboard(language) if is_new_user
+                else await get_main_menu_keyboard(language, telegram_id)
+            )
+            await _reply(
+                "Открой «Купить подписку» — скидка применится автоматически.",
+                keyboard=fallback_kb,
+            )
+        return True
+
+    # Остальные типы (subscription_days, bypass_gb) — обычное меню.
+    keyboard = (
+        get_language_keyboard(language) if is_new_user
+        else await get_main_menu_keyboard(language, telegram_id)
+    )
+    header = "🎉 <b>Награда активирована!</b>\n\n"
+    await _reply(header + applied_text, keyboard=keyboard)
     return True
 
 
@@ -884,9 +920,10 @@ async def _apply_promo_reward(
         if not ok:
             return False, ""
         return True, (
-            f"🎁 <b>Скидка {reward_value}% на подписку</b>\n"
-            f"⏳ Действует <b>{hours} ч.</b>\n\n"
-            "Открой «Купить подписку» — скидка применится автоматически."
+            "🎁 <b>Твой подарок активирован</b>\n\n"
+            f"<blockquote>— Скидка <b>{reward_value}%</b> на любой тариф\n"
+            f"— Действует ещё <b>{hours} часов</b></blockquote>\n\n"
+            "Выбери подходящий тариф ниже ↓"
         )
 
     if reward_type == "bypass_discount":
@@ -903,9 +940,10 @@ async def _apply_promo_reward(
             logger.exception("PROMO_APPLY_BYPASS_DISC_FAIL: %s", e)
             return False, ""
         return True, (
-            f"🌐 <b>Скидка {reward_value}% на GB обхода</b>\n"
-            f"⏳ Действует <b>{hours} ч.</b>\n\n"
-            "Открой «Купить ГБ обхода» — скидка применится автоматически."
+            "🎁 <b>Твой подарок активирован</b>\n\n"
+            f"<blockquote>— Скидка <b>{reward_value}%</b> на пакеты ГБ обхода\n"
+            f"— Действует ещё <b>{hours} часов</b></blockquote>\n\n"
+            "Выбери подходящий тариф ниже ↓"
         )
 
     if reward_type == "bypass_gb":
