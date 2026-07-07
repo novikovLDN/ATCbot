@@ -641,7 +641,7 @@ function PromoLinks() {
                       исп.
                     </span>
                     <span>· создана {fmtDate(String(l.created_at || ""))}</span>
-                    {!active && l.deactivated_at && (
+                    {!active && Boolean(l.deactivated_at) && (
                       <span>
                         · деактивирована {fmtDate(String(l.deactivated_at))}
                       </span>
