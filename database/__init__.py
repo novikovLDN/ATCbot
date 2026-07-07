@@ -208,6 +208,29 @@ from database.traffic import (  # noqa: F401
     delete_user_traffic_discount,
 )
 
+# Marketing links: stats-attribution + promo-redemption
+from database.marketing_links import (  # noqa: F401
+    VALID_PROMO_REWARD_TYPES,
+    VALID_SUB_DAYS,
+    VALID_DISCOUNT_PCTS,
+    create_stats_link,
+    list_stats_links,
+    get_stats_link,
+    get_stats_link_by_slug,
+    set_stats_link_active,
+    delete_stats_link,
+    record_stats_link_click,
+    get_stats_link_summary,
+    create_promo_link,
+    list_promo_links,
+    get_promo_link,
+    get_promo_link_by_slug,
+    set_promo_link_active,
+    delete_promo_link,
+    try_redeem_promo_link,
+    get_promo_link_summary,
+)
+
 # Bypass gift links (admin-created GB redemption links)
 from database.bypass_gift_links import (  # noqa: F401
     generate_bypass_gift_code,

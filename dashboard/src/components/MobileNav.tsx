@@ -11,6 +11,7 @@ import {
   Share2,
   Gift,
   Tag,
+  Link as LinkIcon,
   ScrollText,
   Wrench,
   Settings as SettingsIcon,
@@ -36,6 +37,7 @@ const PRIMARY: Item[] = [
 const MORE: Item[] = [
   { to: "/analytics", label: "Аналитика", icon: TrendingUp },
   { to: "/promo", label: "Промокоды", icon: Tag },
+  { to: "/links", label: "Ссылки", icon: LinkIcon },
   { to: "/referrals", label: "Рефералы", icon: Share2 },
   { to: "/bgift", label: "Гифт-ГБ", icon: Gift },
   { to: "/audit", label: "Аудит", icon: ScrollText },

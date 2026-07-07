@@ -387,6 +387,41 @@ export const endpoints = {
 
   userDelete: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}`),
 
+  // ── Marketing links: stats + promo ─────────────────────────────────
+  statsLinksList: () =>
+    api.get<Array<Record<string, unknown>>>("/links/stats"),
+  statsLinkCreate: (body: { name: string }) =>
+    api.post<Record<string, unknown>>("/links/stats", body),
+  statsLinkDetail: (id: number) =>
+    api.get<Record<string, unknown>>(`/links/stats/${id}`),
+  statsLinkDeactivate: (id: number) =>
+    api.post<{ ok: boolean }>(`/links/stats/${id}/deactivate`),
+  statsLinkReactivate: (id: number) =>
+    api.post<{ ok: boolean }>(`/links/stats/${id}/reactivate`),
+  statsLinkDelete: (id: number) =>
+    api.del<{ ok: boolean }>(`/links/stats/${id}`),
+
+  promoLinksList: () =>
+    api.get<Array<Record<string, unknown>>>("/links/promo"),
+  promoLinkCreate: (body: {
+    name: string;
+    reward_type: "subscription_days" | "tariff_discount" | "bypass_discount" | "bypass_gb";
+    reward_value: number;
+    max_uses_total?: number | null;
+    max_uses_per_user?: number;
+    reward_meta?: Record<string, unknown>;
+    expires_in_hours?: number | null;
+  }) =>
+    api.post<Record<string, unknown>>("/links/promo", body),
+  promoLinkDetail: (id: number) =>
+    api.get<Record<string, unknown>>(`/links/promo/${id}`),
+  promoLinkDeactivate: (id: number) =>
+    api.post<{ ok: boolean }>(`/links/promo/${id}/deactivate`),
+  promoLinkReactivate: (id: number) =>
+    api.post<{ ok: boolean }>(`/links/promo/${id}/reactivate`),
+  promoLinkDelete: (id: number) =>
+    api.del<{ ok: boolean }>(`/links/promo/${id}`),
+
   incidentGet: () =>
     api.get<{ is_active: boolean; incident_text: string | null }>("/incident"),
   incidentSet: (body: { is_active: boolean; incident_text?: string | null }) =>
