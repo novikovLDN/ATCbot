@@ -717,16 +717,17 @@ async def callback_setup_step2(callback: CallbackQuery):
     buttons = []
 
     # === Auto-setup deeplinks ===
-    # Layout по запросу:
-    #   [VPN (Happ)]      [Incy VPN]       — primary | success
-    #   [Обход (Happ)]    [Incy Обход]     — primary | success
-    #   [Готово]                            — danger
-    #   [Установить вручную]                — primary
+    # Layout:
+    #   [Happ VPN]       [Incy VPN]       — primary | success
+    #   [Happ Обход]     [Incy Обход]     — primary | success
+    #   [Готово]                           — danger
+    #   [Установить вручную]               — primary
     #   [Нужна помощь]
     #   [Назад]
-    # Incy-кнопки только на iOS. Без bypass_url вторая строка
-    # отсутствует. Без sub_url — обе строки отсутствуют (вообще
-    # не должно случаться, но safeguard).
+    # Incy-кнопки — на iOS/Android/macOS. Windows не показываем: у Incy
+    # нет Windows-клиента, deeplink incy://crypt1/... там не откроется.
+    # Без bypass_url вторая строка отсутствует. Без sub_url — обе строки
+    # отсутствуют (вообще не должно случаться, но safeguard).
     if sub_url:
         from urllib.parse import quote, urlparse
         if config.PUBLIC_BASE_URL:
@@ -735,15 +736,15 @@ async def callback_setup_step2(callback: CallbackQuery):
             parsed = urlparse(config.WEBHOOK_URL)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        is_ios = (platform == "ios")
+        show_incy = platform in ("ios", "android", "macos")
 
         # Ряд 1: VPN-ключ (Happ + Incy)
         row_vpn = [InlineKeyboardButton(
-            text="Добавить VPN (Happ)",
+            text="Happ VPN",
             url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
             style="primary",
         )]
-        if is_ios:
+        if show_incy:
             row_vpn.append(InlineKeyboardButton(
                 text="Incy VPN",
                 url=f"{base_url}/open/incy?url={quote(sub_url, safe='')}",
@@ -754,11 +755,11 @@ async def callback_setup_step2(callback: CallbackQuery):
         # Ряд 2: Обход (Happ + Incy) — только если есть bypass_url
         if bypass_url:
             row_bypass = [InlineKeyboardButton(
-                text="Добавить Обход (Happ)",
+                text="Happ Обход",
                 url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
                 style="primary",
             )]
-            if is_ios:
+            if show_incy:
                 row_bypass.append(InlineKeyboardButton(
                     text="Incy Обход",
                     url=f"{base_url}/open/incy?url={quote(bypass_url, safe='')}",
@@ -1083,7 +1084,9 @@ async def callback_setup_manual(callback: CallbackQuery):
 
     # Build keys section.
     # — Happ-ключи (sealed crypt4) для всех платформ;
-    # — Incy-ключи (crypt1) только iOS (Incy iOS-only).
+    # — Incy-ключи (crypt1) для iOS/Android/macOS. Windows не показываем:
+    #   Incy-клиента под Windows нет, incy://crypt1/... deep-link
+    #   там некому обрабатывать.
     # Все ключи в свёрнутой цитате (blockquote expandable) — экран
     # компактный по умолчанию, юзер раскрывает только нужный ключ.
     from app.services import happ_crypto, incy_crypto
@@ -1110,7 +1113,7 @@ async def callback_setup_manual(callback: CallbackQuery):
         keys_section += _happ_key_block("setup.key_vpn_label", sub_url)
     if bypass_url:
         keys_section += _happ_key_block("setup.key_bypass_label", bypass_url)
-    if platform == "ios":
+    if platform in ("ios", "android", "macos"):
         if sub_url:
             keys_section += await _incy_key_block("setup.key_vpn_incy_label", sub_url)
         if bypass_url:

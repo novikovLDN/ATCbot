@@ -326,6 +326,13 @@ function BroadcastDetail({
   progress?: SendProgress;
   onBack?: () => void;
 }) {
+  // ВСЕ hooks — до любых ранних return'ов (Rules of Hooks). До фикса
+  // useNavigate() стоял после `if (det.isLoading) return` — при первом
+  // рендере компонент возвращал spinner И не вызывал useNavigate, при
+  // следующем — вызывал. React крашил компонент («Rendered more hooks
+  // than previous render»), из-за чего в дашборде рассылки при клике
+  // по рассылке появлялся чёрный экран.
+  const navigate = useNavigate();
   const det = useQuery({
     queryKey: ["broadcasts", "detail", id],
     queryFn: () => endpoints.broadcastDetail(id),
@@ -357,7 +364,6 @@ function BroadcastDetail({
 
   const b = det.data as BroadcastRow;
   const s = (stats.data ?? {}) as BroadcastRow;
-  const navigate = useNavigate();
 
   return (
     <div className="card p-5 animate-fade-in">
