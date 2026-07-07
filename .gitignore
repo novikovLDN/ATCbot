@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# TypeScript incremental build cache (генерится `tsc -b`, локально)
+*.tsbuildinfo
+
 # Python
 __pycache__/
 *.py[cod]
