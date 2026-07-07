@@ -611,14 +611,15 @@ async def callback_setup_step1(callback: CallbackQuery):
     buttons = []
 
     if platform in ("ios", "macos"):
-        # Incy — на первом месте (по запросу), только для iOS.
-        if platform == "ios":
-            incy_url = _DOWNLOAD_LINKS.get("ios", {}).get("incy")
-            if incy_url:
-                buttons.append([InlineKeyboardButton(
-                    text="📲 Скачать Incy",
-                    url=incy_url,
-                )])
+        # Incy — на первом месте (по запросу). Для iOS и macOS одна и
+        # та же App Store ссылка (Apple Silicon Mac умеет ставить iOS-
+        # приложения).
+        incy_url = _DOWNLOAD_LINKS.get(platform, {}).get("incy")
+        if incy_url:
+            buttons.append([InlineKeyboardButton(
+                text="📲 Скачать Incy",
+                url=incy_url,
+            )])
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "setup.install_happ_ru"),
             url=_IOS_HAPP_LINKS["ru"],
@@ -633,6 +634,13 @@ async def callback_setup_step1(callback: CallbackQuery):
             buttons.append([InlineKeyboardButton(
                 text="📲 Установить Happ",
                 url=links["happ"],
+            )])
+        # Incy для Android — Play Market ссылка
+        incy_url = links.get("incy")
+        if incy_url:
+            buttons.append([InlineKeyboardButton(
+                text="📲 Скачать Incy",
+                url=incy_url,
             )])
     elif platform == "windows":
         buttons.append([InlineKeyboardButton(
@@ -835,21 +843,26 @@ _IOS_HAPP_LINKS = {
     "global": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215",
 }
 
+_INCY_IOS_URL = "https://apps.apple.com/ru/app/incy/id6756943388?l=en-GB"
+_INCY_ANDROID_URL = "https://play.google.com/store/apps/details?id=llc.itdev.incy&hl=en_IE"
+
 _DOWNLOAD_LINKS = {
     # 2026-06-08: V2RayTun снят со всех платформ, Hiddify тоже снят.
-    # Везде остался только Happ; на iOS дополнительно предлагаем Incy
-    # как альтернативу с другим crypt-протоколом (incy://crypt1/...).
-    # Incy сейчас только на iOS — версии для других платформ либо нет,
-    # либо не рекомендуется.
+    # 2026-07-07: Incy добавлен для Android и macOS — раньше был
+    # только iOS. macOS использует ту же App Store ссылку что и iOS
+    # (Mac с Apple Silicon умеет ставить iOS-приложения из App Store).
     "ios": {
         "happ": _IOS_HAPP_LINKS["ru"],
-        "incy": "https://apps.apple.com/ru/app/incy/id6756943388?l=en-GB",
+        "incy": _INCY_IOS_URL,
     },
     "android": {
         "happ": "https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
+        "incy": _INCY_ANDROID_URL,
     },
     "macos": {
+        # macOS ставит iOS-приложение Incy через App Store — та же ссылка.
         "happ": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
+        "incy": _INCY_IOS_URL,
     },
     "windows": {
         "happ": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
@@ -858,9 +871,13 @@ _DOWNLOAD_LINKS = {
 
 # Допускаем override через env — чтобы не пересобирать образ ради смены
 # App Store ссылки.
-_incy_url_env = os.getenv("INCY_IOS_APP_URL")
-if _incy_url_env:
-    _DOWNLOAD_LINKS["ios"]["incy"] = _incy_url_env
+_incy_ios_env = os.getenv("INCY_IOS_APP_URL")
+if _incy_ios_env:
+    _DOWNLOAD_LINKS["ios"]["incy"] = _incy_ios_env
+    _DOWNLOAD_LINKS["macos"]["incy"] = _incy_ios_env
+_incy_android_env = os.getenv("INCY_ANDROID_APP_URL")
+if _incy_android_env:
+    _DOWNLOAD_LINKS["android"]["incy"] = _incy_android_env
 
 
 @router.callback_query(F.data == "setup_device")
@@ -945,7 +962,7 @@ async def callback_setup_platform(callback: CallbackQuery):
                 text=i18n_get_text(language, "setup.download_happ"),
                 url=links["happ"],
             )])
-        # Incy — отдельной строкой, только iOS
+        # Incy — отдельной строкой (iOS / Android / macOS).
         if "incy" in links:
             buttons.append([InlineKeyboardButton(
                 text="📲 Скачать Incy",
