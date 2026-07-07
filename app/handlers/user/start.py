@@ -789,9 +789,21 @@ async def _handle_promo_link_start(
         applied_text = ""
 
     if not applied_ok:
+        # Откатываем редемпцию, чтобы юзер не потерял слот навсегда:
+        # снимаем запись из promo_link_redemptions + декрементим
+        # used_count. Игнорируем ошибку rollback'а — если сюда упало,
+        # хуже уже не будет.
+        try:
+            await database.rollback_promo_link_redemption(link["id"], telegram_id)
+        except Exception as e:
+            logger.warning(
+                "PROMO_LINK_ROLLBACK_FAIL slug=%s user=%s err=%s",
+                slug[:16], telegram_id, e,
+            )
         await _reply(
-            "⚠️ <b>Награда зарезервирована, но применить не получилось</b>\n\n"
-            "Напиши в поддержку — там разберёмся и всё выдадим.",
+            "⚠️ <b>Награда пока не применилась</b>\n\n"
+            "Попробуй ещё раз через минуту или напиши в поддержку — "
+            "мы всё выдадим.",
         )
         return True
 
@@ -828,11 +840,15 @@ async def _apply_promo_reward(
         if tariff not in ("basic", "plus"):
             tariff = "basic"
         try:
+            # source="admin" — валидное значение, весь branch-код в
+            # grant_access его знает (avoiding нестандартный "promo_link",
+            # который мог бы пойти по неожиданной ветке в renewal-логике).
             res = await database.grant_access(
                 telegram_id=telegram_id,
                 duration=timedelta(days=days),
-                source="promo_link",
+                source="admin",
                 admin_telegram_id=None,
+                admin_grant_days=days,
                 tariff=tariff,
             )
         except Exception as e:
@@ -850,14 +866,22 @@ async def _apply_promo_reward(
         hours = int(reward_meta.get("hours") or 24)
         expires_at = datetime.now(timezone.utc) + timedelta(hours=hours)
         try:
-            await database.create_user_discount(
+            # created_by = 0 — маркер «promo-link / system», как для
+            # bypass ниже. Раньше стоял None → TypeError из int-annotation,
+            # скидка не создавалась, юзер видел «награда зарезервирована,
+            # но применить не получилось», при этом redemption уже
+            # инкрементилась (роллбэк добавлен в try_redeem_promo_link
+            # ниже).
+            ok = await database.create_user_discount(
                 telegram_id=telegram_id,
                 discount_percent=int(reward_value),
                 expires_at=expires_at,
-                created_by=None,
+                created_by=0,
             )
         except Exception as e:
             logger.exception("PROMO_APPLY_TARIFF_DISC_FAIL: %s", e)
+            return False, ""
+        if not ok:
             return False, ""
         return True, (
             f"🎁 <b>Скидка {reward_value}% на подписку</b>\n"
