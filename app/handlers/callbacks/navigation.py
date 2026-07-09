@@ -1822,7 +1822,7 @@ async def callback_faq(callback: CallbackQuery):
     text = i18n_get_text(language, "help.faq_title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, f"help.faq_q{n}"), callback_data=f"faq:{n}")]
-        for n in range(1, 9)
+        for n in range(1, 10)
     ] + [
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_help")],
     ])
@@ -1838,7 +1838,7 @@ async def callback_faq_answer(callback: CallbackQuery):
         pass
     try:
         n = int(callback.data.split(":", 1)[1])
-        if n < 1 or n > 8:
+        if n < 1 or n > 9:
             return
     except (ValueError, IndexError):
         return
