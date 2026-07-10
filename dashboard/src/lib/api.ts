@@ -268,10 +268,12 @@ export const endpoints = {
   userTrafficDiscountDelete: (tg: number) =>
     api.del<{ ok: boolean }>(`/users/${tg}/traffic-discount`),
   userCashbackFixSet: (tg: number, body: { percent: number }) =>
-    api.post<{ ok: boolean; percent: number; effective_percent: number }>(
-      `/users/${tg}/cashback-fix`,
-      body,
-    ),
+    api.post<{
+      ok: boolean;
+      percent: number;
+      effective_percent: number;
+      notify_sent: boolean;
+    }>(`/users/${tg}/cashback-fix`, body),
   userCashbackFixClear: (tg: number) =>
     api.del<{ ok: boolean; effective_percent: number }>(
       `/users/${tg}/cashback-fix`,

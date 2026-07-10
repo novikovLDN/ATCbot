@@ -406,23 +406,34 @@ async def user_cashback_fix_set(
         "percent": body.percent,
         "by": admin.get("sub"),
     })
-    # Уведомление партнёру — fire-and-forget, не блокирует ответ API.
+    # Уведомление партнёру. НЕ используем create_task без сохранения
+    # ссылки — GC может убить task до запуска. Await'им inline: ~200мс
+    # добавляется к ответу API, но admin action всё равно редкое и не
+    # чувствительное к латентности. Флаг notify_sent показывает в ответе,
+    # получилось ли отправить (для UI диагностики).
     # На отзыве фикса ничего не шлём (по требованию).
-    import asyncio
-    asyncio.create_task(_send_partner_congrats(telegram_id, body.percent))
+    notify_sent = await _send_partner_congrats(telegram_id, body.percent)
     effective = await database.get_effective_cashback_percent(telegram_id)
-    return {"ok": True, "percent": body.percent, "effective_percent": effective}
+    return {
+        "ok": True,
+        "percent": body.percent,
+        "effective_percent": effective,
+        "notify_sent": notify_sent,
+    }
 
 
-async def _send_partner_congrats(telegram_id: int, percent: int) -> None:
+async def _send_partner_congrats(telegram_id: int, percent: int) -> bool:
     """Поздравительное уведомление партнёру при активации fix-статуса.
 
     Содержит: приветствие, назначенный %, реферальную ссылку в цитате
-    (long-tap → copy) и inline-кнопку «Поделиться», которая открывает
-    штатный t.me/share/url? UI Telegram и подставляет ссылку.
+    (тап → copy в буфер Telegram) и inline-кнопку «Поделиться», которая
+    открывает штатный t.me/share/url? UI Telegram и подставляет ссылку.
 
-    Fire-and-forget: любые ошибки логируем, наверх не пробрасываем —
-    сама fix-настройка уже успешно применена в БД."""
+    Все ошибки логируем с полным трейсом (logger.exception), возвращаем
+    False. Сама fix-настройка уже в БД — если Telegram отказал (403 =
+    юзер заблокировал бота / никогда не писал; 400 = невалидный HTML),
+    admin видит это в ответе endpoint'а по флагу notify_sent.
+    """
     import logging
     logger = logging.getLogger(__name__)
     try:
@@ -431,15 +442,17 @@ async def _send_partner_congrats(telegram_id: int, percent: int) -> None:
         from app.api import telegram_webhook
         bot = getattr(telegram_webhook, "_bot", None)
         if bot is None:
-            logger.warning("cashback_fix_notify: bot not ready, skip tg=%s", telegram_id)
-            return
+            logger.warning(
+                "CASHBACK_FIX_CONGRATS_NO_BOT tg=%s (bot not initialized yet)",
+                telegram_id,
+            )
+            return False
         bot_info = await bot.get_me()
         bot_username = bot_info.username
         from app.utils.referral_link import build_referral_link
         referral_link = await build_referral_link(telegram_id, bot_username)
         text = (
-            "<tg-emoji emoji-id=\"5210919455406387194\">🎉</tg-emoji> "
-            "<b>Поздравляем — ты теперь партнёр!</b>\n\n"
+            "🎉 <b>Поздравляем — ты теперь партнёр!</b>\n\n"
             "Группа компаний <b>Atlas Secure &amp; QoDev</b> подтверждает "
             f"твой статус партнёра с фиксированной ставкой "
             f"<b>{percent}%</b> с каждой продажи по твоей рекомендации.\n\n"
@@ -465,13 +478,17 @@ async def _send_partner_congrats(telegram_id: int, percent: int) -> None:
             disable_web_page_preview=True,
         )
         logger.info(
-            "CASHBACK_FIX_CONGRATS_SENT user=%s percent=%s",
-            telegram_id, percent,
+            "CASHBACK_FIX_CONGRATS_SENT user=%s percent=%s link=%s",
+            telegram_id, percent, referral_link,
         )
+        return True
     except Exception as e:
-        logger.warning(
+        # exception() пишет полный traceback — иначе диагностировать
+        # невозможно (раньше только .warning без trace, ловили пустоту).
+        logger.exception(
             "CASHBACK_FIX_CONGRATS_FAIL user=%s err=%s", telegram_id, e,
         )
+        return False
 
 
 @router.delete("/{telegram_id}/cashback-fix")
