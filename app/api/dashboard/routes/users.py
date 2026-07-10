@@ -406,8 +406,72 @@ async def user_cashback_fix_set(
         "percent": body.percent,
         "by": admin.get("sub"),
     })
+    # Уведомление партнёру — fire-and-forget, не блокирует ответ API.
+    # На отзыве фикса ничего не шлём (по требованию).
+    import asyncio
+    asyncio.create_task(_send_partner_congrats(telegram_id, body.percent))
     effective = await database.get_effective_cashback_percent(telegram_id)
     return {"ok": True, "percent": body.percent, "effective_percent": effective}
+
+
+async def _send_partner_congrats(telegram_id: int, percent: int) -> None:
+    """Поздравительное уведомление партнёру при активации fix-статуса.
+
+    Содержит: приветствие, назначенный %, реферальную ссылку в цитате
+    (long-tap → copy) и inline-кнопку «Поделиться», которая открывает
+    штатный t.me/share/url? UI Telegram и подставляет ссылку.
+
+    Fire-and-forget: любые ошибки логируем, наверх не пробрасываем —
+    сама fix-настройка уже успешно применена в БД."""
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from urllib.parse import quote
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+        from app.api import telegram_webhook
+        bot = getattr(telegram_webhook, "_bot", None)
+        if bot is None:
+            logger.warning("cashback_fix_notify: bot not ready, skip tg=%s", telegram_id)
+            return
+        bot_info = await bot.get_me()
+        bot_username = bot_info.username
+        from app.utils.referral_link import build_referral_link
+        referral_link = await build_referral_link(telegram_id, bot_username)
+        text = (
+            "<tg-emoji emoji-id=\"5210919455406387194\">🎉</tg-emoji> "
+            "<b>Поздравляем — ты теперь партнёр!</b>\n\n"
+            "Группа компаний <b>Atlas Secure &amp; QoDev</b> подтверждает "
+            f"твой статус партнёра с фиксированной ставкой "
+            f"<b>{percent}%</b> с каждой продажи по твоей рекомендации.\n\n"
+            "<blockquote expandable>"
+            f"💰 За каждую покупку по твоей ссылке — <b>{percent}% на баланс</b>.\n"
+            "📈 Процент зафиксирован и не зависит от количества приглашённых — "
+            "это отдельный VIP-статус."
+            "</blockquote>\n\n"
+            "<b>🔗 Твоя партнёрская ссылка</b>\n"
+            f"<blockquote expandable><code>{referral_link}</code></blockquote>\n"
+            "<i>Нажми и удерживай ссылку — Telegram скопирует её в буфер обмена. "
+            "Или воспользуйся кнопкой «Поделиться» ниже.</i>"
+        )
+        share_url = f"https://t.me/share/url?url={quote(referral_link, safe='')}"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Поделиться ссылкой", url=share_url)],
+        ])
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        logger.info(
+            "CASHBACK_FIX_CONGRATS_SENT user=%s percent=%s",
+            telegram_id, percent,
+        )
+    except Exception as e:
+        logger.warning(
+            "CASHBACK_FIX_CONGRATS_FAIL user=%s err=%s", telegram_id, e,
+        )
 
 
 @router.delete("/{telegram_id}/cashback-fix")
