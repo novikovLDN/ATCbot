@@ -450,7 +450,7 @@ async def _send_partner_congrats(telegram_id: int, percent: int) -> None:
             "</blockquote>\n\n"
             "<b>🔗 Твоя партнёрская ссылка</b>\n"
             f"<blockquote expandable><code>{referral_link}</code></blockquote>\n"
-            "<i>Нажми и удерживай ссылку — Telegram скопирует её в буфер обмена. "
+            "<i>Тапни на ссылку — она скопируется в буфер обмена. "
             "Или воспользуйся кнопкой «Поделиться» ниже.</i>"
         )
         share_url = f"https://t.me/share/url?url={quote(referral_link, safe='')}"
