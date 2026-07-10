@@ -621,8 +621,14 @@ function CashbackFixCard({
       endpoints.userCashbackFixSet(telegramId, {
         percent: typeof percent === "number" ? percent : 0,
       }),
-    onSuccess: () => {
-      toast.success("Фиксированный % кешбэка установлен");
+    onSuccess: (data) => {
+      if (data.notify_sent) {
+        toast.success("Фикс установлен, уведомление отправлено");
+      } else {
+        toast.info(
+          "Фикс установлен. Уведомление не доставлено — юзер, возможно, заблокировал бота (см. логи).",
+        );
+      }
       onChange();
     },
     onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
