@@ -100,6 +100,8 @@ export interface UserDetail {
   discount: Record<string, unknown> | null;
   traffic_discount: Record<string, unknown> | null;
   is_vip: boolean;
+  cashback_fixed_percent: number | null;
+  cashback_effective_percent: number;
 }
 
 export const endpoints = {
@@ -265,6 +267,15 @@ export const endpoints = {
     ),
   userTrafficDiscountDelete: (tg: number) =>
     api.del<{ ok: boolean }>(`/users/${tg}/traffic-discount`),
+  userCashbackFixSet: (tg: number, body: { percent: number }) =>
+    api.post<{ ok: boolean; percent: number; effective_percent: number }>(
+      `/users/${tg}/cashback-fix`,
+      body,
+    ),
+  userCashbackFixClear: (tg: number) =>
+    api.del<{ ok: boolean; effective_percent: number }>(
+      `/users/${tg}/cashback-fix`,
+    ),
   userVipGrant: (tg: number) => api.post<{ ok: boolean }>(`/users/${tg}/vip`),
   userVipRevoke: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}/vip`),
   userBalanceChange: (

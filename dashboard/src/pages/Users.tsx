@@ -370,6 +370,11 @@ function UserCard({
           detail={d}
           onChange={invalidate}
         />
+        <CashbackFixCard
+          telegramId={telegramId}
+          detail={d}
+          onChange={invalidate}
+        />
         <ExtendedProfileCard telegramId={telegramId} />
       </div>
 
@@ -591,6 +596,107 @@ function TrafficDiscountCard({
       >
         {create.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
         Применить
+      </button>
+    </div>
+  );
+}
+
+function CashbackFixCard({
+  telegramId,
+  detail,
+  onChange,
+}: {
+  telegramId: number;
+  detail: UserDetail;
+  onChange: () => void;
+}) {
+  const current = detail.cashback_fixed_percent;
+  const effective = detail.cashback_effective_percent;
+  const [percent, setPercent] = useState<number | "">(
+    typeof current === "number" ? current : 10,
+  );
+
+  const setMut = useMutation({
+    mutationFn: () =>
+      endpoints.userCashbackFixSet(telegramId, {
+        percent: typeof percent === "number" ? percent : 0,
+      }),
+    onSuccess: () => {
+      toast.success("Фиксированный % кешбэка установлен");
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+  const clearMut = useMutation({
+    mutationFn: () => endpoints.userCashbackFixClear(telegramId),
+    onSuccess: () => {
+      toast.success("Фикс выключен — вернулась обычная логика");
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+
+  const isFixed = typeof current === "number";
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-xs uppercase tracking-wider text-fg-subtle">
+          Кешбэк · фикс %
+        </div>
+        {isFixed && (
+          <button
+            type="button"
+            onClick={() => clearMut.mutate()}
+            className="btn-ghost text-danger hover:text-danger"
+            disabled={clearMut.isPending}
+            title="Выключить фикс — вернётся тир + floor"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      <div className="mt-2 rounded-lg bg-bg-elevated px-3 py-2 text-sm text-fg">
+        <div className="flex items-center justify-between">
+          <span className="text-fg-muted">Сейчас применяется</span>
+          <b className={isFixed ? "text-special" : "text-fg"}>{effective}%</b>
+        </div>
+        <div className="mt-0.5 text-[11px] text-fg-subtle">
+          {isFixed ? (
+            <>
+              Зафиксировано админом. Не суммируется с тиром / floor.
+            </>
+          ) : (
+            <>По тиру + grandfather-floor.</>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-2">
+        <input
+          className="input"
+          type="number"
+          min={0}
+          max={100}
+          value={percent}
+          onChange={(e) => setPercent(Number(e.target.value) || 0)}
+          placeholder="% (0–100)"
+        />
+      </div>
+      <button
+        type="button"
+        onClick={() => setMut.mutate()}
+        className="btn-primary mt-2 w-full"
+        disabled={
+          setMut.isPending ||
+          typeof percent !== "number" ||
+          percent < 0 ||
+          percent > 100
+        }
+      >
+        {setMut.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
+        {isFixed ? "Обновить фикс" : "Зафиксировать"}
       </button>
     </div>
   );
