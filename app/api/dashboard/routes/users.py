@@ -73,6 +73,8 @@ async def user_detail(telegram_id: int = Path(..., gt=0)):
         discount = await database.get_user_discount(telegram_id)
         traffic_discount = await database.get_user_traffic_discount(telegram_id)
         is_vip = await database.is_vip_user(telegram_id)
+        cashback_fixed = await database.get_cashback_fixed_percent(telegram_id)
+        cashback_effective = await database.get_effective_cashback_percent(telegram_id)
         return {
             "user": user,
             "balance_rubles": balance,
@@ -81,6 +83,8 @@ async def user_detail(telegram_id: int = Path(..., gt=0)):
             "discount": discount,
             "traffic_discount": traffic_discount,
             "is_vip": is_vip,
+            "cashback_fixed_percent": cashback_fixed,
+            "cashback_effective_percent": cashback_effective,
         }
     except HTTPException:
         raise
@@ -372,6 +376,58 @@ async def user_traffic_discount_delete(
         "by": admin.get("sub"),
     })
     return {"ok": bool(ok)}
+
+
+# ── Cashback fixed % (admin-managed override) ─────────────────────────
+class CashbackFixRequest(BaseModel):
+    """Фиксирует конкретный % кешбэка для пользователя. Жёстко перекрывает
+    и тир, и floor. При выключении (DELETE) — юзер возвращается к
+    обычной логике (тир + floor)."""
+    percent: int = Field(..., ge=0, le=100)
+
+
+@router.post("/{telegram_id}/cashback-fix")
+async def user_cashback_fix_set(
+    telegram_id: int = Path(..., gt=0),
+    body: CashbackFixRequest = ...,
+    admin: dict = Depends(require_admin),
+):
+    try:
+        ok = await database.set_cashback_fixed_percent(telegram_id, body.percent)
+    except ValueError as ve:
+        raise HTTPException(400, str(ve))
+    except Exception as e:
+        raise HTTPException(500, f"cashback_fix_set_failed: {e}")
+    if not ok:
+        raise HTTPException(404, "user_not_found")
+    bus.publish({
+        "type": "admin:cashback_fix_set",
+        "telegram_id": telegram_id,
+        "percent": body.percent,
+        "by": admin.get("sub"),
+    })
+    effective = await database.get_effective_cashback_percent(telegram_id)
+    return {"ok": True, "percent": body.percent, "effective_percent": effective}
+
+
+@router.delete("/{telegram_id}/cashback-fix")
+async def user_cashback_fix_clear(
+    telegram_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+):
+    try:
+        ok = await database.clear_cashback_fixed_percent(telegram_id)
+    except Exception as e:
+        raise HTTPException(500, f"cashback_fix_clear_failed: {e}")
+    if not ok:
+        raise HTTPException(404, "user_not_found")
+    bus.publish({
+        "type": "admin:cashback_fix_clear",
+        "telegram_id": telegram_id,
+        "by": admin.get("sub"),
+    })
+    effective = await database.get_effective_cashback_percent(telegram_id)
+    return {"ok": True, "effective_percent": effective}
 
 
 @router.post("/{telegram_id}/vip")

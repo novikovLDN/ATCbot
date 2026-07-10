@@ -1083,6 +1083,96 @@ async def get_referral_cashback_percent(partner_id: int) -> int:
         return 10
 
 
+async def get_cashback_fixed_percent(telegram_id: int) -> Optional[int]:
+    """Прочитать admin-managed fixed %.
+
+    Возвращает int 0..100 если фикс установлен, None если выключен
+    (обычная логика тир + floor).
+    """
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT cashback_fixed_percent FROM users WHERE telegram_id = $1",
+            telegram_id,
+        )
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return None
+
+
+async def set_cashback_fixed_percent(telegram_id: int, percent: int) -> bool:
+    """Установить/обновить admin-managed fixed %. 0..100."""
+    if not _core.DB_READY:
+        return False
+    if not (0 <= percent <= 100):
+        raise ValueError(f"percent must be in [0, 100], got {percent}")
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        res = await conn.execute(
+            "UPDATE users SET cashback_fixed_percent = $1 WHERE telegram_id = $2",
+            percent, telegram_id,
+        )
+        return res.startswith("UPDATE ") and res != "UPDATE 0"
+
+
+async def clear_cashback_fixed_percent(telegram_id: int) -> bool:
+    """Выключить фикс. После этого юзер возвращается к обычной
+    логике (тир + grandfather-floor)."""
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        res = await conn.execute(
+            "UPDATE users SET cashback_fixed_percent = NULL WHERE telegram_id = $1",
+            telegram_id,
+        )
+        return res.startswith("UPDATE ") and res != "UPDATE 0"
+
+
+async def get_effective_cashback_percent(telegram_id: int) -> int:
+    """ЭФФЕКТИВНЫЙ процент кешбэка — то, что реально применяется.
+
+    Приоритет:
+      1. cashback_fixed_percent (admin-managed override) — если NOT NULL,
+         жёстко замещает всё: и тир, и floor.
+      2. Иначе — max(тир по оплатившим рефералам, cashback_floor_percent).
+         Тир вычисляется через get_referral_cashback_percent.
+
+    Используется везде, где принимается решение о размере кешбэка
+    (начисление, отображение юзеру, ответы API).
+    """
+    fixed = await get_cashback_fixed_percent(telegram_id)
+    if fixed is not None:
+        return fixed
+    # Обычная логика: тир по оплатившим + floor
+    tier = await get_referral_cashback_percent(telegram_id)
+    pool = await get_pool()
+    if pool is None:
+        return tier
+    try:
+        async with pool.acquire() as conn:
+            floor = await conn.fetchval(
+                "SELECT cashback_floor_percent FROM users WHERE telegram_id = $1",
+                telegram_id,
+            )
+        if floor is not None and int(floor) > tier:
+            return int(floor)
+    except Exception as e:
+        logger.warning("get_effective_cashback_percent floor lookup failed: %s", e)
+    return tier
+
+
 def calculate_referral_percent(invited_count: int) -> int:
     """
     Рассчитать процент кешбэка на основе количества приглашённых рефералов
@@ -1476,6 +1566,26 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
                         "remaining_connections": 0,
                     }
 
+            # ADMIN OVERRIDE: cashback_fixed_percent жёстко замещает всё
+            # (и тир, и floor). Если admin поставил fix, показываем этот %
+            # с пометкой (флаг is_fixed=True). Юзер видит именно этот
+            # процент — тот же, что реально начисляется в
+            # process_referral_reward. Название уровня не меняем — оно
+            # отражает реальный прогресс по рефералам.
+            fixed_pct = await conn.fetchval(
+                "SELECT cashback_fixed_percent FROM users WHERE telegram_id = $1",
+                partner_id,
+            )
+            is_fixed = False
+            if fixed_pct is not None:
+                level_info = {
+                    "current_level_name": level_info["current_level_name"],
+                    "cashback_percent": int(fixed_pct),
+                    "next_level_name": None,
+                    "remaining_connections": 0,
+                }
+                is_fixed = True
+
             # Debug логирование
             logger.info(
                 f"REF_STATS user={partner_id} "
@@ -1494,7 +1604,8 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
                 "current_level_name": level_info["current_level_name"],
                 "cashback_percent": level_info["cashback_percent"],
                 "next_level_name": level_info["next_level_name"],
-                "remaining_connections": level_info["remaining_connections"]
+                "remaining_connections": level_info["remaining_connections"],
+                "is_fixed_percent": is_fixed,
             }
     except Exception as e:
         logger.exception(f"Error getting referral statistics for partner_id={partner_id}: {e}")
@@ -1506,7 +1617,8 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             "current_level_name": "Проводник",
             "cashback_percent": 10,
             "next_level_name": "Хранитель",
-            "remaining_connections": 5
+            "remaining_connections": 5,
+            "is_fixed_percent": False,
         }
 
 
@@ -1667,6 +1779,20 @@ async def process_referral_reward(
         )
         if floor is not None and floor > percent:
             percent = floor
+
+        # 5a-fix. ADMIN OVERRIDE: cashback_fixed_percent жёстко замещает
+        # результат тира + floor. Не суммируется. Работает и в меньшую
+        # сторону (напр. штраф 5%) и в большую (напр. VIP 40%).
+        fixed = await conn.fetchval(
+            "SELECT cashback_fixed_percent FROM users WHERE telegram_id = $1",
+            referrer_id,
+        )
+        if fixed is not None:
+            percent = int(fixed)
+            logger.info(
+                f"REFERRAL_CASHBACK_FIXED_OVERRIDE referrer={referrer_id} "
+                f"tier_percent_would_be_after_floor=(overridden) fixed={percent}"
+            )
 
         # Вычисляем сколько осталось до следующего уровня
         if paid_referrals_count < 25:
