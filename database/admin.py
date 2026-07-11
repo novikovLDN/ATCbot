@@ -1495,6 +1495,39 @@ async def get_users_by_segment(segment: str) -> list:
                      )"""
             )
             return [row["telegram_id"] for row in rows]
+        elif segment == "trial_expired_within_6m":
+            # КУМУЛЯТИВНОЕ окно: юзер активировал триал, тот истёк В ЛЮБОЙ
+            # момент последних 180 дней (не exact-day bucket, а всё окно),
+            # и с тех пор так и не купил → сейчас нет активной подписки.
+            #
+            # Смысл: покрывает всех «отвалившихся после триала за полгода».
+            # Обычные trial_expired_Nd таргетируют точечно (N-ый день),
+            # а этот — «все, кто когда-либо за полгода не сконвертился».
+            #
+            # Условия:
+            #   trial_used_at IS NOT NULL
+            #   AND trial_expires_at ∈ [NOW-180d, NOW]  (истёк за полгода)
+            #   AND нет ни одной s.source='payment' (никогда не покупал)
+            #   AND нет ни одной активной подписки
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE u.trial_used_at IS NOT NULL
+                     AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                           <= (NOW() AT TIME ZONE 'UTC')
+                     AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                           >  (NOW() AT TIME ZONE 'UTC') - INTERVAL '180 days'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM subscriptions s
+                         WHERE s.telegram_id = u.telegram_id
+                           AND s.source = 'payment'
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM subscriptions s
+                         WHERE s.telegram_id = u.telegram_id
+                           AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                     )"""
+            )
+            return [row["telegram_id"] for row in rows]
         elif segment in ("trial_expired_7d", "trial_expired_14d",
                          "trial_expired_30d", "trial_expired_90d"):
             # Триал истёк N дней назад — И пользователь никогда не покупал
