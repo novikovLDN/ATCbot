@@ -39,7 +39,7 @@ const BUTTON_OPTIONS = [
   { key: "support", label: "💬 Поддержка" },
   { key: "channel", label: "📢 Канал" },
   { key: "referral", label: "👥 Пригласить друга" },
-  { key: "bypass", label: "🌐 Включить обход" },
+  { key: "bypass", label: "🌐 Включить Pro" },
   { key: "buy_combo", label: "🏆 Купить Комбо" },
   { key: "happ_ios", label: "📲 Happ iOS" },
   { key: "happ_android", label: "📲 Happ Android" },
