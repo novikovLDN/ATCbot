@@ -645,7 +645,7 @@ async def _open_buy_screen(
             callback_data="tariff:plus"
         )],
         [InlineKeyboardButton(
-            text="🚀 Комбо (VPN + обход)",
+            text="🚀 Комбо (VPN + Pro)",
             callback_data="buy_combo"
         )],
         [InlineKeyboardButton(

@@ -178,7 +178,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
         buttons.append([InlineKeyboardButton(
-            text="🌐 Только обход блокировок",
+            text="🌐 Только Pro-доступ",
             callback_data="buy_bypass_only"
         )])
         buttons.append([proxy_button])
@@ -196,7 +196,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             # Bypass-only: кнопки докупить трафик и купить подписку
             buttons.append([
                 InlineKeyboardButton(
-                    text="Купить ГБ обхода",
+                    text="Купить Pro-трафик",
                     callback_data="buy_traffic",
                     icon_custom_emoji_id="5199785165735367039",  # ⚡️
                 ),

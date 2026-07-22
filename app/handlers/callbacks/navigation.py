@@ -763,13 +763,13 @@ async def callback_setup_step2(callback: CallbackQuery):
         # Ряд 2: Обход (Happ + Incy) — только если есть bypass_url
         if bypass_url:
             row_bypass = [InlineKeyboardButton(
-                text="Happ Обход",
+                text="Happ Pro",
                 url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
                 style="primary",
             )]
             if show_incy:
                 row_bypass.append(InlineKeyboardButton(
-                    text="Incy Обход",
+                    text="Incy Pro",
                     url=f"{base_url}/open/incy?url={quote(bypass_url, safe='')}",
                     style="success",
                 ))
