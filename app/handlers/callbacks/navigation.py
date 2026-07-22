@@ -1751,9 +1751,12 @@ async def callback_mini_shop(callback: CallbackQuery):
         pass
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "shop.title")
+    # Telegram Stars временно скрыт (по запросу). Callback stars_buy и
+    # обвязка i18n оставлены на месте — вернуть кнопку = раскомментировать
+    # строку ниже.
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡️ Telegram Premium", callback_data="premium_buy")],
-        [InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="stars_buy")],
+        # [InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="stars_buy")],
         [InlineKeyboardButton(text="🍎 Пополнить Apple ID", callback_data="apple_region")],
         [InlineKeyboardButton(text="🎮 Пополнить Steam", callback_data="steam:disclaimer")],
         [InlineKeyboardButton(text="🧠 Claude Pro/Max (скоро)", callback_data="claude_coming_soon")],
