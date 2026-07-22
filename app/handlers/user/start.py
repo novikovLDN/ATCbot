@@ -941,7 +941,7 @@ async def _apply_promo_reward(
             return False, ""
         return True, (
             "🎁 <b>Твой подарок активирован</b>\n\n"
-            f"<blockquote>— Скидка <b>{reward_value}%</b> на пакеты ГБ обхода\n"
+            f"<blockquote>— Скидка <b>{reward_value}%</b> на Pro-трафик\n"
             f"— Действует ещё <b>{hours} часов</b></blockquote>\n\n"
             "Выбери подходящий тариф ниже ↓"
         )
@@ -970,8 +970,8 @@ async def _apply_promo_reward(
         if not granted:
             return False, ""
         return True, (
-            f"📊 <b>+{gb} ГБ</b> обхода начислено\n\n"
-            "Пакет ГБ не сгорает — тратится только при работе на LTE-серверах."
+            f"📊 <b>+{gb} ГБ</b> Pro-трафика начислено\n\n"
+            "Пакет ГБ не сгорает — тратится только при работе на Pro-серверах."
         )
 
     return False, ""
