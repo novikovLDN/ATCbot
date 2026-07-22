@@ -2,18 +2,13 @@
 Selective per-pattern `style` + automatic `icon_custom_emoji_id`
 injection for every InlineKeyboardButton in the bot — Bot API 9.4 button color.
 
-Palette policy (post-redesign 2026-06-12; swap 2026-07-08):
+Palette policy (post-redesign 2026-06-12):
     Color = signal, not decoration. Default for most buttons is the
     Telegram neutral grey (style not set). Three opt-in lists raise
     a button to a colored state when its text matches:
 
-      ✅ STYLE_SUCCESS_PATTERNS — green: **резервные** способы оплаты
-                                  (Карта резерв, СБП резерв 3%,
-                                  Международные платежи). Основные
-                                  «Банковская карта» / «СБП» намеренно
-                                  оставлены нейтральными — при отказе
-                                  провайдера юзер сразу видит зелёные
-                                  резервы как рекомендуемую альтернативу.
+      ✅ STYLE_SUCCESS_PATTERNS — green: recommended payment methods
+                                  (Банковская карта, СБП, Международные)
       🔵 STYLE_PRIMARY_PATTERNS — blue: main CTA buttons (купить
                                   подписку, продлить подписку,
                                   купить со скидкой)
@@ -140,21 +135,19 @@ TEXT_EMOJI_PATTERNS: list[tuple[re.Pattern, str]] = [
 
 
 # ── Per-button style overrides ───────────────────────────────────
-# Зелёный (`style="success"`) — способы оплаты РЕЗЕРВНЫЕ + Международные.
-# По просьбе product owner (2026-07-08) swap: раньше зелёными были
-# основные «Банковская карта» и «СБП», а «Карта резерв» / «СБП резерв 3%»
-# — нейтральные. Теперь наоборот — основные нейтральные, резервы зелёные:
-# юзер, который не смог оплатить основным методом, сразу видит зелёные
-# резервы как «предложенную альтернативу, работает точно».
-# Pattern checked AFTER the leading-emoji strip, exactly like TEXT_EMOJI_MAP
-# — «🏦 СБП резерв 3%» тоже попадает на success.
+# Texts whose buttons should render `style="success"` (green) instead
+# of the default `"danger"` (red). Per product owner: «Банковская
+# карта», «СБП», «Международные платежи» — основные платёжные методы
+# выделены зелёным, всё остальное (резервы, Stars, CryptoBot, баланс)
+# — красным. Pattern checked AFTER the leading-emoji strip, exactly
+# like TEXT_EMOJI_MAP — so «🏦 СБП» / «📱 СБП (1234 ₽)» оба
+# попадают на success.
 STYLE_SUCCESS_PATTERNS: list[re.Pattern] = [
-    # «Карта резерв» — резервный карточный шлюз (Lava/Robocassa).
-    re.compile(r"^Карта резерв$"),
-    re.compile(r"^Card \((?:Lava|Robocassa)\)$"),
-    # «СБП резерв», «СБП резерв 3%» — резервный СБП с комиссией.
-    re.compile(r"^СБП резерв(?:\s+\d+\s*%)?$"),
-    # Международные платежи — отдельный резервный шлюз для не-РФ юзеров.
+    re.compile(r"^Банковская карта$"),
+    re.compile(r"^Bank Card$"),
+    # «СБП», «СБП (1234 ₽)» — но НЕ «СБП резерв ...»
+    re.compile(r"^СБП(?:\s*\(.+\))?$"),
+    re.compile(r"^SBP(?:\s*[\(\+].+)?$"),
     re.compile(r"^Международные платежи$"),
     re.compile(r"^International payments$"),
 ]
