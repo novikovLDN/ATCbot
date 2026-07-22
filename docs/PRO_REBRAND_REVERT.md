@@ -16,6 +16,7 @@
 
 ```bash
 git checkout claude/pricing-strategy-update-X0FhT   # ветка с правками
+git revert 20e17e5 --no-edit    # экран ⚡️ Подключитесь + этот файл docs/
 git revert e9a9cbf --no-edit    # user-facing cleanup (Профиль/Комбо/промо/traffic)
 git revert cb4c88a --no-edit    # подчистка тарифных описаний в 5 локалях + ru
 git revert 59f4026 --no-edit    # основная замена в ru.py + все локали
@@ -24,7 +25,7 @@ git push
 
 Одной строкой (если удобнее):
 ```bash
-git revert --no-edit e9a9cbf cb4c88a 59f4026 && git push
+git revert --no-edit 20e17e5 e9a9cbf cb4c88a 59f4026 && git push
 ```
 
 После этого все тексты вернутся ровно к состоянию **до** «Pro-rebrand».
