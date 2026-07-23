@@ -129,3 +129,29 @@ async def cmd_main(message: Message):
         parse_mode="HTML",
         reply_markup=keyboard,
     )
+
+
+@user_router.message(Command("docs"))
+async def cmd_docs(message: Message):
+    """Политика конфиденциальности + Пользовательское соглашение.
+
+    Отдаёт тот же экран, что и кнопка callback_data="about_privacy"
+    (см. callback_privacy в app/handlers/callbacks/navigation.py:288).
+    Клавиатура — get_about_keyboard: назад/на главный + ссылки на
+    telegra.ph уже вшиты в сам текст (main.privacy_policy_text).
+    """
+    if message.chat.type != "private":
+        return
+
+    telegram_id = message.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    from app.handlers.common.keyboards import get_about_keyboard
+    text = i18n_get_text(language, "main.privacy_policy_text", "privacy_policy_text")
+
+    await message.answer(
+        text,
+        reply_markup=get_about_keyboard(language),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
