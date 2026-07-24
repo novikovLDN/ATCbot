@@ -180,7 +180,7 @@ async def segments_list():
          "Сейчас активна подписка Plus. Целевая для upsell на Combo или продление на 1 год.",
          "Апселл / особые"),
         ("combo_active", "Активные Combo",
-         "Сейчас активная подписка типа Combo (Basic/Plus). Целевая для апселла на большие Pro-паки / доп. устройств.",
+         "Сейчас активная подписка типа Combo (Basic/Plus). Целевая для апселла на большие GB-паки обхода / доп. устройств.",
          "Апселл / особые"),
         ("discount_active", "Активная персональная скидка",
          "У пользователя действует скидка в user_discounts (не broadcast). Напомнить: «у тебя действует скидка N% — воспользуйся».",
@@ -660,7 +660,7 @@ def _build_reply_markup(
             )])
         elif btn == "bypass":
             rows.append([InlineKeyboardButton(
-                text="🌐 Включить Pro", callback_data="traffic_info",
+                text="🌐 Включить обход", callback_data="traffic_info",
             )])
         elif btn == "happ_ios":
             rows.append([InlineKeyboardButton(
