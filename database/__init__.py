@@ -352,6 +352,18 @@ from database.admin import (  # noqa: F401
     get_active_trial_telegram_ids,
 )
 
+# Scheduled + recurring broadcasts (migration 067)
+from database.scheduled_broadcasts import (  # noqa: F401
+    VALID_RECURRENCES,
+    create_scheduled_broadcast,
+    list_scheduled_broadcasts,
+    get_scheduled_broadcast,
+    cancel_scheduled_broadcast,
+    mark_ran_and_reschedule,
+    fetch_due_scheduled,
+)
+
+
 # Subscription reconciliation & over-issuance watchdog
 from database.reconciliation import (  # noqa: F401
     find_over_issuance_candidates,

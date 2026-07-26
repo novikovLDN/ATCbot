@@ -316,6 +316,30 @@ export const endpoints = {
     ),
   broadcastDeleteCancel: (id: number) =>
     api.post<{ ok: boolean }>(`/broadcasts/${id}/delete-from-users/cancel`),
+
+  // ── Scheduled + recurring broadcasts (migration 067) ─────────────────
+  broadcastScheduleCreate: (body: {
+    source_broadcast_id: number;
+    scheduled_at_msk: string; // "YYYY-MM-DD HH:MM"
+    recurrence: "once" | "daily" | "weekdays" | "weekly";
+    recurrence_end_at_msk?: string | null;
+    segment?: string | null;
+  }) =>
+    api.post<{
+      ok: boolean;
+      sched_id: number;
+      scheduled_at_utc: string;
+      scheduled_at_msk: string;
+      recurrence: string;
+    }>(`/broadcasts/schedule`, body),
+  broadcastScheduleList: (activeOnly = true, limit = 200) =>
+    api.get<Array<Record<string, unknown>>>(
+      `/broadcasts/scheduled?active_only=${activeOnly}&limit=${limit}`,
+    ),
+  broadcastScheduleGet: (id: number) =>
+    api.get<Record<string, unknown>>(`/broadcasts/scheduled/${id}`),
+  broadcastScheduleCancel: (id: number) =>
+    api.del<{ ok: boolean }>(`/broadcasts/scheduled/${id}`),
   broadcastCreate: (body: {
     title: string;
     message: string;

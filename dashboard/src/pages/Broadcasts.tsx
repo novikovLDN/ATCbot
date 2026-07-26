@@ -8,12 +8,15 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
+  Calendar as CalendarIcon,
   Copy,
   Plus,
+  Repeat,
   Trash2,
   Users as UsersIcon,
   ArrowLeft,
   Send,
+  X,
 } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
 import { useEventStream, type BusEvent } from "@/lib/ws";
@@ -51,7 +54,7 @@ export function Broadcasts() {
   const qc = useQueryClient();
   const list = useQuery({
     queryKey: ["broadcasts", "recent"],
-    queryFn: () => endpoints.broadcastsRecent(50) as Promise<BroadcastRow[]>,
+    queryFn: () => endpoints.broadcastsRecent(500) as Promise<BroadcastRow[]>,
     refetchInterval: 15_000,
   });
 
@@ -170,7 +173,7 @@ export function Broadcasts() {
         <div className="card p-5">
           <div className="mb-4 flex items-center justify-between">
             <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Последние 50
+              Последние 500
             </div>
             {list.isFetching && <Spinner />}
           </div>
@@ -262,7 +265,7 @@ export function Broadcasts() {
           )}
         </div>
 
-        <div ref={detailRef}>
+        <div ref={detailRef} className="space-y-4">
           {selected !== null ? (
             <BroadcastDetail
               id={selected}
@@ -278,6 +281,7 @@ export function Broadcasts() {
               />
             </div>
           )}
+          <ScheduledBroadcastsSection />
         </div>
       </div>
     </div>
@@ -364,6 +368,7 @@ function BroadcastDetail({
 
   const b = det.data as BroadcastRow;
   const s = (stats.data ?? {}) as BroadcastRow;
+  const [showSchedule, setShowSchedule] = useState(false);
 
   return (
     <div className="card p-5 animate-fade-in">
@@ -383,7 +388,7 @@ function BroadcastDetail({
             Рассылка #{id}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => navigate(`/broadcasts/new?clone=${id}`)}
@@ -392,9 +397,24 @@ function BroadcastDetail({
           >
             <Copy className="h-3.5 w-3.5" /> Отправить снова
           </button>
+          <button
+            type="button"
+            onClick={() => setShowSchedule(true)}
+            className="btn-secondary"
+            title="Запланировать эту рассылку на конкретную дату+время (МСК) или сделать повторяющейся"
+          >
+            <CalendarIcon className="h-3.5 w-3.5" /> Запланировать
+          </button>
           <DeleteFromUsersControl broadcastId={id} />
         </div>
       </div>
+
+      {showSchedule && (
+        <ScheduleBroadcastModal
+          broadcastId={id}
+          onClose={() => setShowSchedule(false)}
+        />
+      )}
       <h3 className="text-lg font-semibold text-fg">
         {truncate(String(b.title ?? "Без названия"), 80)}
       </h3>
@@ -730,6 +750,350 @@ function DeleteFromUsersControl({ broadcastId }: { broadcastId: number }) {
       >
         <Trash2 className="h-3.5 w-3.5" /> Да, удалить
       </button>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+// SCHEDULED BROADCASTS
+// ═══════════════════════════════════════════════════════════════════
+//
+// Время планировщика — Europe/Moscow (UTC+3). Админ вводит дату+время
+// в MSK, бэкенд конвертирует в UTC для хранения. Максимум +4 недели
+// вперёд. Recurrence:
+//   once     — один запуск в указанное время
+//   daily    — каждый день в это же время
+//   weekdays — пн-пт
+//   weekly   — раз в неделю в тот же день недели
+
+const RECURRENCE_LABELS: Record<string, string> = {
+  once: "Разовая (один запуск)",
+  daily: "Каждый день",
+  weekdays: "Только по будням (пн–пт)",
+  weekly: "Раз в неделю",
+};
+
+/** MSK-время сейчас в формате `YYYY-MM-DDTHH:MM` (для <input type=datetime-local>). */
+function _nowPlusMinInMSK(minutesAhead: number): string {
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60_000;
+  const msk = new Date(utcMs + 3 * 60 * 60_000 + minutesAhead * 60_000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${msk.getUTCFullYear()}-${pad(msk.getUTCMonth() + 1)}-${pad(
+    msk.getUTCDate(),
+  )}T${pad(msk.getUTCHours())}:${pad(msk.getUTCMinutes())}`;
+}
+
+/** Convert `YYYY-MM-DDTHH:MM` (datetime-local) → API-format `YYYY-MM-DD HH:MM`. */
+function _toApiFmt(local: string): string {
+  return local.replace("T", " ");
+}
+
+function ScheduleBroadcastModal({
+  broadcastId,
+  onClose,
+}: {
+  broadcastId: number;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [scheduledAt, setScheduledAt] = useState(() => _nowPlusMinInMSK(60)); // +1ч по умолчанию
+  const [recurrence, setRecurrence] = useState<"once" | "daily" | "weekdays" | "weekly">("once");
+  const [endEnabled, setEndEnabled] = useState(false);
+  const [endAt, setEndAt] = useState(() => _nowPlusMinInMSK(60 * 24 * 7)); // +1 неделя
+
+  const create = useMutation({
+    mutationFn: () =>
+      endpoints.broadcastScheduleCreate({
+        source_broadcast_id: broadcastId,
+        scheduled_at_msk: _toApiFmt(scheduledAt),
+        recurrence,
+        recurrence_end_at_msk:
+          recurrence !== "once" && endEnabled ? _toApiFmt(endAt) : null,
+      }),
+    onSuccess: (data) => {
+      toast.success(
+        `Запланировано на ${data.scheduled_at_msk.slice(0, 16).replace("T", " ")} МСК`,
+      );
+      qc.invalidateQueries({ queryKey: ["broadcasts", "scheduled"] });
+      onClose();
+    },
+    onError: (e: unknown) =>
+      toast.error((e as ApiError)?.detail ?? "Не удалось запланировать"),
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
+      <div className="card w-full max-w-md p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CalendarIcon className="h-4 w-4 text-fg-muted" />
+            <h3 className="text-base font-semibold">
+              Запланировать рассылку #{broadcastId}
+            </h3>
+          </div>
+          <button type="button" onClick={onClose} className="btn-ghost">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mb-3 rounded-lg border border-info/20 bg-info/[0.06] p-3 text-xs text-fg-muted">
+          <b className="text-info">Как работает:</b>
+          <ul className="ml-3 mt-1 list-disc space-y-0.5">
+            <li>Клон исходной рассылки: тот же текст, фото, кнопки, скидка</li>
+            <li>Сегмент вычисляется в момент отправки (не сейчас)</li>
+            <li>Время — <b>Europe/Moscow (UTC+3)</b></li>
+            <li>Максимум +4 недели вперёд от текущего момента</li>
+            <li>Для повторяющихся можно указать дату окончания</li>
+          </ul>
+        </div>
+
+        <label className="mb-3 block">
+          <div className="mb-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
+            Дата и время (МСК)
+          </div>
+          <input
+            type="datetime-local"
+            value={scheduledAt}
+            min={_nowPlusMinInMSK(1)}
+            max={_nowPlusMinInMSK(60 * 24 * 28)}
+            onChange={(e) => setScheduledAt(e.target.value)}
+            className="input"
+          />
+          <div className="mt-1 text-[11px] text-fg-subtle">
+            Мин. +1 мин, макс. +28 дней
+          </div>
+        </label>
+
+        <div className="mb-3">
+          <div className="mb-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
+            Повторение
+          </div>
+          <div className="space-y-1">
+            {(["once", "daily", "weekdays", "weekly"] as const).map((r) => (
+              <label
+                key={r}
+                className={
+                  recurrence === r
+                    ? "flex cursor-pointer items-center gap-3 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-sm"
+                    : "flex cursor-pointer items-center gap-3 rounded-xl border border-border bg-bg-card px-3 py-2 text-sm hover:border-fg-subtle"
+                }
+              >
+                <input
+                  type="radio"
+                  name="recurrence"
+                  value={r}
+                  checked={recurrence === r}
+                  onChange={() => setRecurrence(r)}
+                  className="accent-accent"
+                />
+                <Repeat className="h-3 w-3 text-fg-muted" />
+                {RECURRENCE_LABELS[r]}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {recurrence !== "once" && (
+          <div className="mb-3 rounded-xl border border-border bg-bg-subtle/40 p-3">
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={endEnabled}
+                onChange={(e) => setEndEnabled(e.target.checked)}
+                className="accent-accent"
+              />
+              Ограничить дату окончания
+            </label>
+            {endEnabled && (
+              <>
+                <input
+                  type="datetime-local"
+                  value={endAt}
+                  onChange={(e) => setEndAt(e.target.value)}
+                  className="input mt-2"
+                />
+                <div className="mt-1 text-[11px] text-fg-subtle">
+                  После этого момента повторения прекратятся (МСК)
+                </div>
+              </>
+            )}
+            {!endEnabled && (
+              <div className="mt-1 text-[11px] text-fg-subtle">
+                Без ограничения — будет повторяться пока не отменишь вручную
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-secondary flex-1"
+            disabled={create.isPending}
+          >
+            Отмена
+          </button>
+          <button
+            type="button"
+            onClick={() => create.mutate()}
+            disabled={create.isPending || !scheduledAt}
+            className="btn-primary flex-1"
+          >
+            {create.isPending ? (
+              <Spinner />
+            ) : (
+              <CalendarIcon className="h-3.5 w-3.5" />
+            )}
+            Запланировать
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Отдельная секция — список запланированных задач, встраивается в
+ *  главную страницу Broadcasts под общим списком. */
+export function ScheduledBroadcastsSection() {
+  const qc = useQueryClient();
+  const [showInactive, setShowInactive] = useState(false);
+  const list = useQuery({
+    queryKey: ["broadcasts", "scheduled", showInactive],
+    queryFn: () => endpoints.broadcastScheduleList(!showInactive, 200),
+    refetchInterval: 30_000,
+  });
+
+  const cancel = useMutation({
+    mutationFn: (id: number) => endpoints.broadcastScheduleCancel(id),
+    onSuccess: () => {
+      toast.success("Задание отменено");
+      qc.invalidateQueries({ queryKey: ["broadcasts", "scheduled"] });
+    },
+    onError: (e: unknown) =>
+      toast.error((e as ApiError)?.detail ?? "Не удалось отменить"),
+  });
+
+  const _fmtMsk = (iso: string): string => {
+    if (!iso) return "—";
+    try {
+      const d = new Date(iso);
+      const msk = new Date(d.getTime() + (d.getTimezoneOffset() + 180) * 60_000);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${pad(msk.getDate())}.${pad(
+        msk.getMonth() + 1,
+      )} ${pad(msk.getHours())}:${pad(msk.getMinutes())}`;
+    } catch {
+      return iso;
+    }
+  };
+
+  return (
+    <div className="card p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <CalendarIcon className="h-4 w-4 text-fg-muted" />
+          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+            Запланированные (МСК)
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1 text-[11px] text-fg-muted">
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => setShowInactive(e.target.checked)}
+              className="accent-accent"
+            />
+            история
+          </label>
+          <button
+            type="button"
+            onClick={() => list.refetch()}
+            className="btn-ghost"
+          >
+            <RefreshCcw className="h-3 w-3" />
+          </button>
+        </div>
+      </div>
+
+      {list.isLoading ? (
+        <div className="flex items-center gap-2 text-sm text-fg-muted">
+          <Spinner /> Загружаю...
+        </div>
+      ) : !list.data || list.data.length === 0 ? (
+        <div className="rounded-lg border border-border/60 bg-bg-subtle/40 px-3 py-6 text-center text-sm text-fg-muted">
+          Пока ничего не запланировано.
+          <br />
+          <span className="text-[11px] text-fg-subtle">
+            Нажми «⏰ Запланировать» на любой рассылке слева.
+          </span>
+        </div>
+      ) : (
+        <ul className="divide-y divide-border/60">
+          {list.data.map((row) => {
+            const r = row as Record<string, unknown>;
+            const id = Number(r.id ?? 0);
+            const isActive = Boolean(r.is_active);
+            const runCount = Number(r.run_count ?? 0);
+            return (
+              <li key={id} className="flex items-start gap-3 py-2.5">
+                <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
+                  {r.recurrence === "once" ? (
+                    <CalendarIcon className="h-3.5 w-3.5" />
+                  ) : (
+                    <Repeat className="h-3.5 w-3.5" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-sm font-medium text-fg">
+                      {truncate(String(r.title ?? "—"), 60)}
+                    </span>
+                    {!isActive && (
+                      <span className="badge-muted text-[10px]">
+                        неактивна
+                      </span>
+                    )}
+                    {r.recurrence !== "once" && (
+                      <span className="badge-accent text-[10px]">
+                        {RECURRENCE_LABELS[String(r.recurrence)] ?? String(r.recurrence)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-fg-subtle">
+                    <b>{_fmtMsk(String(r.scheduled_at ?? ""))} МСК</b>
+                    {r.segment && <> · сегмент {String(r.segment)}</>}
+                    {runCount > 0 && <> · запусков: {runCount}</>}
+                    {r.last_error && (
+                      <>
+                        {" "}
+                        · <span className="text-danger">ошибка</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {isActive && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm("Отменить это запланированное задание?"))
+                        cancel.mutate(id);
+                    }}
+                    className="btn-ghost shrink-0 text-danger hover:text-danger"
+                    title="Отменить"
+                    disabled={cancel.isPending}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
