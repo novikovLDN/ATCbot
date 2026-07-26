@@ -74,6 +74,18 @@ async def payments_by_provider(hours: int = Query(24, gt=0, le=8760)):
         raise HTTPException(500, f"by_provider_failed: {e}")
 
 
+@router.get("/breakdown")
+async def payments_breakdown(hours: int = Query(24, gt=0, le=8760)):
+    """Full multi-axis breakdown of paid purchases for the last N hours:
+    total / by_provider / by_type / by_tariff / by_apple_nominal.
+    Одним запросом дашборд получает всё, что нужно для «что купили за
+    сегодня/неделю/месяц»."""
+    try:
+        return _serialize(await database.get_payments_breakdown(hours))
+    except Exception as e:
+        raise HTTPException(500, f"breakdown_failed: {e}")
+
+
 @router.get("/recent")
 async def payments_recent(
     limit: int = Query(100, gt=0, le=500),

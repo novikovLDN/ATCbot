@@ -217,6 +217,15 @@ export function Dashboard() {
     refetchInterval: 90_000,
     staleTime: 60_000,
   });
+  // Payments breakdown (тип / провайдер / тариф / apple-номинал) —
+  // отдельный переключатель окна.
+  const [breakdownHours, setBreakdownHours] = useState<24 | 168 | 720>(24);
+  const paymentsBreakdown = useQuery({
+    queryKey: ["payments", "breakdown", breakdownHours],
+    queryFn: () => endpoints.paymentsBreakdown(breakdownHours),
+    refetchInterval: 120_000,
+    staleTime: 60_000,
+  });
   // Hourly breakdown: окно 1д / 7д / 30д, тот же metric switcher.
   const [hourlyDays, setHourlyDays] = useState<1 | 7 | 30>(7);
   const [hourlyMetric, setHourlyMetric] = useState<MetricKey>("payments_count");
@@ -605,6 +614,20 @@ export function Dashboard() {
             />
           </SurfaceCard>
         </section>
+        </Collapsible>
+
+        {/* Payments breakdown — что и как оплатили за последние 24ч/7д/30д. */}
+        <Collapsible
+          title="Оплаты · разбивка по продукту и провайдеру"
+          subtitle="что купили + как заплатили + Apple-номиналы"
+          remember="dash-payments-breakdown"
+        >
+          <PaymentsBreakdownCard
+            data={paymentsBreakdown.data}
+            loading={paymentsBreakdown.isLoading}
+            hours={breakdownHours}
+            onHoursChange={setBreakdownHours}
+          />
         </Collapsible>
 
         {/* Активность по часам + funnel. Collapsed по умолчанию. */}
@@ -1938,6 +1961,182 @@ const PROVIDER_COLORS: Record<string, string> = {
   balance: "#7C3AED",
   unknown: "#94A3B8",
 };
+
+// Локализуем ключи для читаемого label в PaymentsBreakdownCard.
+const _PT_LABEL: Record<string, string> = {
+  subscription: "Подписка",
+  balance_topup: "Пополнение баланса",
+  gift: "Подарок",
+  telegram_premium: "Telegram Premium",
+  telegram_stars: "Telegram Stars",
+  traffic_pack: "Пакет ГБ",
+  apple_id: "Apple ID",
+  steam: "Steam",
+  spotify: "Spotify Premium",
+  proxy: "MTProxy",
+  unknown: "Прочее",
+};
+const _APPLE_REGION_LABEL: Record<string, string> = {
+  usa: "🇺🇸 USA",
+  turkey: "🇹🇷 Turkey",
+  russia: "🇷🇺 Russia",
+  india: "🇮🇳 India",
+};
+const _APPLE_CUR: Record<string, string> = {
+  usa: "$",
+  turkey: "TL",
+  russia: "₽",
+  india: "INR",
+};
+
+function PaymentsBreakdownCard({
+  data,
+  loading,
+  hours,
+  onHoursChange,
+}: {
+  data:
+    | {
+        total: { count: number; revenue_rubles: number };
+        by_provider: Array<{ provider: string; count: number; revenue_rubles: number }>;
+        by_type: Array<{ purchase_type: string; count: number; revenue_rubles: number }>;
+        by_tariff: Array<{ tariff: string; count: number; revenue_rubles: number }>;
+        by_apple_nominal: Array<{
+          region: string;
+          nominal: number;
+          count: number;
+          revenue_rubles: number;
+        }>;
+      }
+    | undefined;
+  loading: boolean;
+  hours: 24 | 168 | 720;
+  onHoursChange: (h: 24 | 168 | 720) => void;
+}) {
+  const label = (h: number) => (h === 24 ? "24ч" : h === 168 ? "7д" : "30д");
+  return (
+    <SurfaceCard className="mt-2">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <SurfaceHeader
+          eyebrow={`Оплаты · ${label(hours)}`}
+          title="Разбивка по продукту и провайдеру"
+          sub={
+            data
+              ? `${fmtNum(data.total.count)} шт · ${fmtRub(data.total.revenue_rubles)}`
+              : undefined
+          }
+        />
+        <SegPill<24 | 168 | 720>
+          value={hours}
+          options={[24, 168, 720]}
+          onChange={onHoursChange}
+          fmt={label}
+        />
+      </div>
+      {loading ? (
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="skeleton h-32" />
+          ))}
+        </div>
+      ) : !data || data.total.count === 0 ? (
+        <div className="mt-6 text-sm text-fg-subtle">
+          За выбранный период оплат не было.
+        </div>
+      ) : (
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <BreakdownList
+            title="По продукту"
+            rows={data.by_type.map((r) => ({
+              label: _PT_LABEL[r.purchase_type] ?? r.purchase_type,
+              count: r.count,
+              revenue: r.revenue_rubles,
+            }))}
+          />
+          <BreakdownList
+            title="По провайдеру оплаты"
+            rows={data.by_provider.map((r) => ({
+              label: PROVIDER_LABELS[r.provider] ?? r.provider,
+              count: r.count,
+              revenue: r.revenue_rubles,
+              color: PROVIDER_COLORS[r.provider],
+            }))}
+          />
+          <BreakdownList
+            title="Топ-15 тарифов"
+            rows={data.by_tariff.map((r) => ({
+              label: r.tariff,
+              count: r.count,
+              revenue: r.revenue_rubles,
+            }))}
+          />
+          {data.by_apple_nominal.length > 0 && (
+            <BreakdownList
+              title="Apple ID · по номиналу"
+              rows={data.by_apple_nominal.map((r) => ({
+                label: `${_APPLE_REGION_LABEL[r.region] ?? r.region} · ${r.nominal}${_APPLE_CUR[r.region] ?? "$"}`,
+                count: r.count,
+                revenue: r.revenue_rubles,
+              }))}
+            />
+          )}
+        </div>
+      )}
+    </SurfaceCard>
+  );
+}
+
+function BreakdownList({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: Array<{ label: string; count: number; revenue: number; color?: string }>;
+}) {
+  const totalRev = rows.reduce((a, r) => a + r.revenue, 0);
+  return (
+    <div className="rounded-xl border border-border bg-bg-subtle/40 p-3">
+      <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+        {title}
+      </div>
+      <div className="space-y-1.5">
+        {rows.length === 0 && (
+          <div className="text-xs text-fg-subtle">Нет данных</div>
+        )}
+        {rows.map((r) => {
+          const pct = totalRev > 0 ? (r.revenue / totalRev) * 100 : 0;
+          return (
+            <div key={r.label} className="text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  {r.color && (
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ background: r.color }}
+                    />
+                  )}
+                  <span className="truncate text-fg-muted">{r.label}</span>
+                </div>
+                <div className="shrink-0 tabular-nums text-fg">
+                  {fmtRub(r.revenue)}
+                  <span className="ml-1.5 text-[10px] text-fg-subtle">
+                    {fmtNum(r.count)}
+                  </span>
+                </div>
+              </div>
+              <div className="mt-1 h-1 overflow-hidden rounded-full bg-bg-elevated">
+                <div
+                  className="h-full bg-accent/70 transition-[width] duration-500"
+                  style={{ width: `${Math.max(2, pct)}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function ProvidersBlock({
   data,

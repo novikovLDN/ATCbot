@@ -666,6 +666,141 @@ async def get_payments_by_provider(hours: int) -> list:
     ]
 
 
+async def get_payments_breakdown(hours: int) -> Dict[str, Any]:
+    """Полный разрез оплат за окно N часов:
+      - total: {count, revenue_rubles}
+      - by_provider:  [(provider, count, revenue_rubles), ...] сорт. по revenue
+      - by_type:      [(purchase_type, count, revenue_rubles), ...]
+      - by_tariff:    [(tariff, count, revenue_rubles), ...] топ-15
+      - by_apple_nominal: [(region, nominal, count, revenue_rubles), ...]
+
+    Используется в дашборде для «что купили сегодня/за N часов»:
+    админ видит, кто платит, чем и за что.
+    """
+    pool = await get_pool()
+    if pool is None:
+        return {}
+    since = _to_db_utc(datetime.now(timezone.utc) - timedelta(hours=hours))
+    out: Dict[str, Any] = {
+        "hours": hours,
+        "total": {"count": 0, "revenue_rubles": 0.0},
+        "by_provider": [],
+        "by_type": [],
+        "by_tariff": [],
+        "by_apple_nominal": [],
+    }
+    async with pool.acquire() as conn:
+        try:
+            total = await conn.fetchrow(
+                """SELECT COUNT(*)::BIGINT AS count,
+                          COALESCE(SUM(price_kopecks), 0)::BIGINT AS revenue_kop
+                   FROM pending_purchases
+                   WHERE status = 'paid' AND created_at >= $1""",
+                since,
+            )
+            out["total"] = {
+                "count": int(total["count"] or 0),
+                "revenue_rubles": int(total["revenue_kop"] or 0) / 100,
+            }
+        except Exception as e:
+            logger.warning("breakdown total_failed: %s", e)
+
+        # by_provider
+        try:
+            rows = await conn.fetch(
+                """SELECT COALESCE(payment_provider, 'unknown') AS k,
+                          COUNT(*)::BIGINT AS c,
+                          COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
+                   FROM pending_purchases
+                   WHERE status = 'paid' AND created_at >= $1
+                   GROUP BY k
+                   ORDER BY rev DESC""",
+                since,
+            )
+            out["by_provider"] = [
+                {"provider": r["k"], "count": int(r["c"]),
+                 "revenue_rubles": int(r["rev"]) / 100}
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning("breakdown by_provider failed: %s", e)
+
+        # by_type (subscription / apple_id / steam / spotify / ...)
+        try:
+            rows = await conn.fetch(
+                """SELECT COALESCE(purchase_type, 'unknown') AS k,
+                          COUNT(*)::BIGINT AS c,
+                          COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
+                   FROM pending_purchases
+                   WHERE status = 'paid' AND created_at >= $1
+                   GROUP BY k
+                   ORDER BY rev DESC""",
+                since,
+            )
+            out["by_type"] = [
+                {"purchase_type": r["k"], "count": int(r["c"]),
+                 "revenue_rubles": int(r["rev"]) / 100}
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning("breakdown by_type failed: %s", e)
+
+        # by_tariff (top-15 по revenue)
+        try:
+            rows = await conn.fetch(
+                """SELECT COALESCE(tariff, 'unknown') AS k,
+                          COUNT(*)::BIGINT AS c,
+                          COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
+                   FROM pending_purchases
+                   WHERE status = 'paid' AND created_at >= $1
+                   GROUP BY k
+                   ORDER BY rev DESC
+                   LIMIT 15""",
+                since,
+            )
+            out["by_tariff"] = [
+                {"tariff": r["k"], "count": int(r["c"]),
+                 "revenue_rubles": int(r["rev"]) / 100}
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning("breakdown by_tariff failed: %s", e)
+
+        # by_apple_nominal — только apple_id_ строки, распарсим tariff
+        # apple_id_{region}_{nominal} → region + nominal.
+        try:
+            rows = await conn.fetch(
+                """SELECT tariff, COUNT(*)::BIGINT AS c,
+                          COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
+                   FROM pending_purchases
+                   WHERE status = 'paid' AND created_at >= $1
+                     AND tariff LIKE 'apple_id_%'
+                   GROUP BY tariff
+                   ORDER BY rev DESC""",
+                since,
+            )
+            apple = []
+            for r in rows:
+                t = str(r["tariff"] or "")
+                parts = t.split("_")
+                region = parts[2] if len(parts) >= 3 else "?"
+                nominal_raw = parts[3] if len(parts) >= 4 else "0"
+                try:
+                    nominal = int(nominal_raw)
+                except ValueError:
+                    nominal = 0
+                apple.append({
+                    "region": region,
+                    "nominal": nominal,
+                    "count": int(r["c"]),
+                    "revenue_rubles": int(r["rev"]) / 100,
+                })
+            out["by_apple_nominal"] = apple
+        except Exception as e:
+            logger.warning("breakdown by_apple_nominal failed: %s", e)
+    return out
+
+
 async def get_recent_payments_feed(
     limit: int = 100,
     hours: Optional[int] = None,
