@@ -1777,11 +1777,18 @@ function TopReferrersList({
   return (
     <ol className="mt-4 space-y-1.5">
       {data.slice(0, 5).map((r, i) => {
-        const id = asNum(r.telegram_id) ?? 0;
+        // Backend возвращает referrer_id/total_invited_revenue/
+        // total_cashback_paid — раньше был баг: читали telegram_id/
+        // total_revenue/cashback_paid → всё показывалось как «—».
+        const id = asNum(r.referrer_id) ?? asNum(r.telegram_id) ?? 0;
         const username = (r.username as string) || "—";
         const invited = asNum(r.invited_count) ?? 0;
-        const revenue = asNum(r.total_revenue) ?? 0;
-        const cashback = asNum(r.cashback_paid) ?? 0;
+        const trials = asNum(r.trial_count) ?? 0;
+        const paid = asNum(r.paid_count) ?? 0;
+        const trialPct = asNum(r.trial_percent) ?? 0;
+        const paidPct = asNum(r.conversion_percent) ?? 0;
+        const revenue = asNum(r.total_invited_revenue) ?? asNum(r.total_revenue) ?? 0;
+        const cashback = asNum(r.total_cashback_paid) ?? asNum(r.cashback_paid) ?? 0;
         return (
           <Link
             key={String(id) + "_" + i}
@@ -1795,8 +1802,35 @@ function TopReferrersList({
               <div className="truncate text-sm font-medium text-fg">
                 {username !== "—" ? `@${username}` : `tg:${id}`}
               </div>
-              <div className="truncate text-[11px] text-fg-muted">
-                {fmtNum(invited)} приглашённых · кэшбэк {fmtRub(cashback)}
+              <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] tabular-nums">
+                <span className="rounded-md bg-fg/5 px-1.5 py-0.5 text-fg-muted">
+                  👥 {fmtNum(invited)}
+                </span>
+                <span
+                  className="rounded-md bg-info/10 px-1.5 py-0.5 text-info"
+                  title="сколько из приглашённых активировали пробный период"
+                >
+                  🎁 {fmtNum(trials)}
+                  {invited > 0 && (
+                    <span className="ml-0.5 text-info/70">
+                      · {trialPct.toFixed(0)}%
+                    </span>
+                  )}
+                </span>
+                <span
+                  className="rounded-md bg-success/10 px-1.5 py-0.5 text-success"
+                  title="сколько из приглашённых сделали хотя бы одну оплату"
+                >
+                  💳 {fmtNum(paid)}
+                  {invited > 0 && (
+                    <span className="ml-0.5 text-success/70">
+                      · {paidPct.toFixed(0)}%
+                    </span>
+                  )}
+                </span>
+                <span className="text-fg-subtle">
+                  кэшбэк {fmtRub(cashback)}
+                </span>
               </div>
             </div>
             <div className="shrink-0 text-right">
