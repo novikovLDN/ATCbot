@@ -21,6 +21,7 @@ from .promo_trial import admin_promo_trial_router
 from .bonus import admin_bonus_router
 from .stage_users import admin_stage_users_router
 from .farm_storm import admin_farm_storm_router
+from .apple_id_delivery import apple_id_delivery_router
 
 router = Router()
 
@@ -45,3 +46,4 @@ router.include_router(admin_promo_trial_router)
 router.include_router(admin_bonus_router)
 router.include_router(admin_stage_users_router)
 router.include_router(admin_farm_storm_router)
+router.include_router(apple_id_delivery_router)

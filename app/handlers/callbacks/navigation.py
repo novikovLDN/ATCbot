@@ -2049,9 +2049,8 @@ async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int
         price=price_str, date=now_str,
     )
     try:
-        admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Написать пользователю", callback_data="admin:chat")],
-        ])
+        from app.handlers.admin.apple_id_delivery import build_apple_admin_keyboard
+        admin_kb = build_apple_admin_keyboard(telegram_id, region, nominal)
         await bot.send_message(config.ADMIN_TELEGRAM_ID, admin_text, reply_markup=admin_kb, parse_mode="HTML")
     except Exception as e:
         logger.error("APPLE_ADMIN_NOTIFY_FAILED error=%s", e)
