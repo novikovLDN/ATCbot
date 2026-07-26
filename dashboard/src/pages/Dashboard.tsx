@@ -1596,6 +1596,15 @@ const SEGMENT_GROUPS: { title: string; sub: string; keys: string[] }[] = [
     ],
   },
   {
+    title: "Недавно купили платную",
+    sub: "7д / 14д / 30д — благодарности, upsell, feedback",
+    keys: [
+      "paid_bought_within_7d",
+      "paid_bought_within_14d",
+      "paid_bought_within_30d",
+    ],
+  },
+  {
     title: "Истёкла любая подписка",
     sub: "агрегированные окна (триал ∪ платная)",
     keys: ["expired_1d", "expired_2d", "expired_3d", "expires_in_3d"],

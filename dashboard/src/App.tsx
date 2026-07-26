@@ -23,6 +23,7 @@ import { Settings } from "@/pages/Settings";
 import { MarketingLinks } from "@/pages/MarketingLinks";
 import { AutomatedNotifications } from "@/pages/AutomatedNotifications";
 import { Statistics } from "@/pages/Statistics";
+import { Pricing } from "@/pages/Pricing";
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -104,6 +105,7 @@ export default function App() {
               <Route path="users" element={<Users />} />
               <Route path="analytics" element={<Analytics />} />
               <Route path="statistics" element={<Statistics />} />
+              <Route path="pricing" element={<Pricing />} />
               <Route path="payments" element={<Payments />} />
               <Route path="broadcasts" element={<Broadcasts />} />
               <Route path="broadcasts/new" element={<BroadcastCreate />} />
