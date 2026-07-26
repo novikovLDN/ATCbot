@@ -304,6 +304,16 @@ async def main():
     except Exception as e:
         logger.warning("admin_notifier failed to start: %s", e)
 
+    # Automated notifications registry sync (migration 068). Upsert-only
+    # для defaults — админ-правки не затираются. Ошибка не критична: если
+    # sync упал, bot всё равно работает по in-code REGISTRY defaults.
+    try:
+        from app.services.automated_notifications import sync_registry_to_db
+        synced = await sync_registry_to_db()
+        logger.info("Automated notifications registry synced: %d specs", synced)
+    except Exception as e:
+        logger.warning("automated_notifications sync failed: %s", e)
+
     # Scheduled + recurring broadcasts (migration 067)
     # Long-lived task: раз в минуту проверяет БД и запускает готовые рассылки.
     try:

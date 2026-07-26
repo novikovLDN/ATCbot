@@ -1,0 +1,178 @@
+"""
+Registry автоуведомлений. При старте бота upsert'ит defaults в БД,
+чтобы admin-dashboard видел все известные ключи и мог их переопределять.
+
+Регистрация:
+    register_notification(NotificationSpec(
+        key="trial.reminder_3h",
+        title="Триал: за 3 часа до истечения",
+        description="Финальный push для триала (со скидкой 15%).",
+        category="trial",
+        default_text_ru="...HTML...",
+        template_vars=["username"],
+        default_trigger={"before_expiry_hours": 3, "tolerance_hours": 1},
+    ))
+
+Использование в bot-коде:
+    text = await get_notification_text("trial.reminder_3h", telegram_id,
+                                       username=user.get("username"))
+    if text is None:
+        return  # notification disabled или без шаблона
+    await bot.send_message(telegram_id, text, parse_mode="HTML")
+    await log_notification_send("trial.reminder_3h", telegram_id, status="sent")
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, List
+
+
+VALID_CATEGORIES = {
+    "trial", "subscription", "welcome", "payment", "referral",
+    "gift", "reminder", "other",
+}
+
+
+@dataclass(frozen=True)
+class NotificationSpec:
+    """Метаданные одного notification-key."""
+    key: str
+    title: str
+    description: str
+    category: str
+    default_text_ru: str
+    template_vars: List[str] = field(default_factory=list)
+    default_trigger: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.category not in VALID_CATEGORIES:
+            raise ValueError(
+                f"invalid category {self.category!r} for {self.key} — "
+                f"must be one of {sorted(VALID_CATEGORIES)}"
+            )
+        if not self.key or "." not in self.key:
+            raise ValueError(f"key must be namespaced 'a.b': got {self.key!r}")
+
+
+# Registry — dict keyed by notification-key.
+REGISTRY: Dict[str, NotificationSpec] = {}
+
+
+def register_notification(spec: NotificationSpec) -> None:
+    """Register a notification. Idempotent — при повторной регистрации
+    того же ключа перезапишем (нужно для hot-reload)."""
+    REGISTRY[spec.key] = spec
+
+
+def all_specs() -> List[NotificationSpec]:
+    return sorted(REGISTRY.values(), key=lambda s: (s.category, s.key))
+
+
+# ── Известные уведомления ────────────────────────────────────────────
+
+# Триал — reminders. Дефолты из ru.py 783-784 — оставлены синхронно.
+register_notification(NotificationSpec(
+    key="trial.reminder_24h",
+    title="Триал: за 24 часа до истечения",
+    description=(
+        "Отправляется, когда до конца пробного периода осталось "
+        "~24 часа (±1ч допуск). Ключевой pre-churn push для триальной "
+        "воронки — «завтра доступ отключится»."
+    ),
+    category="trial",
+    default_text_ru=(
+        "⏳ <b>Пробный период заканчивается завтра</b>\n\n"
+        "Завтра доступ отключится — сайты и приложения вернутся к "
+        "блокировкам.\n\n"
+        "Оформите подписку сейчас — ключ и настройки сохранятся, "
+        "ничего не нужно переустанавливать."
+    ),
+    template_vars=[],
+    default_trigger={"before_expiry_hours": 24, "tolerance_hours": 1},
+))
+
+register_notification(NotificationSpec(
+    key="trial.reminder_3h",
+    title="Триал: за 3 часа до истечения",
+    description=(
+        "Финальный push триальной воронки — 3 часа до конца. "
+        "Обычно шлётся с оффером скидки 15%, кнопка ниже. "
+        "Один из самых конверсионных reminder'ов."
+    ),
+    category="trial",
+    default_text_ru=(
+        "🔥 <b>3 часа до отключения</b>\n\n"
+        "После этого VPN перестанет работать. Сайты, стриминг, "
+        "мессенджеры — всё вернётся к блокировкам.\n\n"
+        "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> "
+        "Успейте — <b>скидка 15%</b> действует до конца триала."
+    ),
+    template_vars=[],
+    default_trigger={"before_expiry_hours": 3, "tolerance_hours": 1},
+))
+
+# Подписки — reminders.
+register_notification(NotificationSpec(
+    key="subscription.reminder_7d",
+    title="Подписка: за 7 дней до окончания",
+    description=(
+        "Ранний pre-churn напоминающий — 7 дней до конца платной "
+        "подписки. Хорошо ложится оффер «продли заранее — "
+        "фиксируешь цену»."
+    ),
+    category="subscription",
+    default_text_ru=(
+        "📅 <b>Подписка заканчивается через 7 дней</b>\n\n"
+        "Через неделю ваш доступ Atlas Secure закончится. "
+        "Продлите заранее — не потеряете день."
+    ),
+    template_vars=[],
+    default_trigger={"before_expiry_hours": 24 * 7, "tolerance_hours": 12},
+))
+
+register_notification(NotificationSpec(
+    key="subscription.reminder_3d",
+    title="Подписка: за 3 дня до окончания",
+    description=(
+        "3 дня до конца платной подписки. Классическая точка "
+        "renewal-подсказки."
+    ),
+    category="subscription",
+    default_text_ru=(
+        "⏳ <b>Подписка заканчивается через 3 дня</b>\n\n"
+        "Через 3 дня доступ отключится. Продлите сейчас, чтобы "
+        "не прерывать использование."
+    ),
+    template_vars=[],
+    default_trigger={"before_expiry_hours": 24 * 3, "tolerance_hours": 6},
+))
+
+register_notification(NotificationSpec(
+    key="subscription.reminder_1d",
+    title="Подписка: за 1 день до окончания",
+    description="Финальный напоминающий за сутки до конца платной подписки.",
+    category="subscription",
+    default_text_ru=(
+        "🔔 <b>Подписка заканчивается завтра</b>\n\n"
+        "Продлите сегодня — ваш VPN-ключ и настройки сохранятся."
+    ),
+    template_vars=[],
+    default_trigger={"before_expiry_hours": 24, "tolerance_hours": 2},
+))
+
+register_notification(NotificationSpec(
+    key="subscription.reminder_3h",
+    title="Подписка: за 3 часа до окончания",
+    description=(
+        "3 часа до конца платной подписки. Обычно шлётся с "
+        "спец-скидкой 15% на продление."
+    ),
+    category="subscription",
+    default_text_ru=(
+        "🔥 <b>3 часа до отключения VPN</b>\n\n"
+        "Продлите со <b>скидкой 15%</b> — оффер действует до конца "
+        "текущей подписки."
+    ),
+    template_vars=[],
+    default_trigger={"before_expiry_hours": 3, "tolerance_hours": 1},
+))
