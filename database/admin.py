@@ -1630,6 +1630,21 @@ async def get_users_by_segment(segment: str) -> list:
                      )"""
             )
             return [row["telegram_id"] for row in rows]
+        elif segment in ("paid_bought_within_7d", "paid_bought_within_14d",
+                         "paid_bought_within_30d"):
+            # Юзер оформил платную подписку в течение последних N дней.
+            # Читаем историю успешных платежей (status IN 'paid','approved').
+            # Кумулятивное окно (NOT ровно-N-суток бакет) — все, кто
+            # покупал хотя бы раз за N дней. Дубли по telegram_id
+            # убираются через DISTINCT.
+            days = int(segment.split("_")[-1].rstrip("d"))
+            rows = await conn.fetch(
+                f"""SELECT DISTINCT p.telegram_id
+                    FROM payments p
+                    WHERE p.status IN ('paid', 'approved')
+                      AND p.created_at >= (NOW() AT TIME ZONE 'UTC') - INTERVAL '{days} days'"""
+            )
+            return [row["telegram_id"] for row in rows]
         elif segment == "trial_active_any":
             # Все юзеры у которых СЕЙЧАС идёт триал (не истёк, платной ещё нет).
             # Целевая аудитория для мидл-триал коммуникаций (день 2 из 3 и т.п.).
