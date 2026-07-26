@@ -49,16 +49,17 @@ const PROVIDER_LABELS: Record<string, string> = {
   unknown: "Не определено",
 };
 
-// Палитра для donut-сегментов и bar-чарта. Sky-первый — он совпадает
-// с глобальным accent дашборда, ложится на крупный сегмент. Остальные
-// — общая палитра tailwind для cовместимости с другими страницами.
+// Палитра для donut-сегментов и bar-чарта. Accent-первый (deep slate) —
+// он совпадает с глобальным accent дашборда, ложится на крупный сегмент.
+// Остальные — контрастные категорические цвета (info/success/warning/etc),
+// каждый сам по себе виден на белом фоне.
 const CHART_COLORS = [
-  "#F5F5F5", // sky
-  "#D4D4D8", // violet
+  "#0F1720", // accent — deep slate (dominant)
+  "#2563EB", // info — blue
+  "#10B981", // success — emerald
+  "#F59E0B", // warning — amber
   "#EC4899", // pink
-  "#10B981", // emerald
-  "#F59E0B", // amber
-  "#FFD66B", // cyan
+  "#7C3AED", // special — violet
   "#64748B", // slate fallback
 ];
 
@@ -509,7 +510,7 @@ function TypeBar({
           tickLine={false}
         />
         <RTooltip
-          cursor={{ fill: "#161616" }}
+          cursor={{ fill: "rgba(15,23,32,0.05)" }}
           contentStyle={{
             background: "#FFFFFF",
             border: "1px solid #E2E8F0",
@@ -529,8 +530,8 @@ function TypeBar({
           iconType="circle"
           wrapperStyle={{ fontSize: 11, color: "#64748B" }}
         />
-        <Bar dataKey="revenue" name="Доход" fill="#F5F5F5" radius={[4, 4, 0, 0]} />
-        <Bar dataKey="count" name="Штук" fill="#D4D4D8" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="revenue" name="Доход" fill="#0F1720" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="count" name="Штук" fill="#2563EB" radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );

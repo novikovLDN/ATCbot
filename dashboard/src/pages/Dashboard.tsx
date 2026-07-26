@@ -64,7 +64,7 @@ const METRICS: readonly MetricDef[] = [
     key: "revenue_rubles",
     label: "Доход",
     short: "Доход",
-    color: "#F5F5F5",
+    color: "#0F1720",
     fillId: "metric-revenue",
     valueFmt: (v) => fmtRub(v),
     axisFmt: fmtCompactRub,
@@ -73,7 +73,7 @@ const METRICS: readonly MetricDef[] = [
     key: "new_users",
     label: "Новые юзеры",
     short: "Юзеры",
-    color: "#D4D4D8",
+    color: "#2563EB",
     fillId: "metric-users",
     valueFmt: (v) => fmtNum(v),
     axisFmt: fmtCompactInt,
@@ -1236,16 +1236,16 @@ function RevenueChart({
       <AreaChart data={data} margin={{ top: 6, right: 4, left: 4, bottom: 4 }}>
         <defs>
           <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#F5F5F5" stopOpacity={0.28} />
-            <stop offset="100%" stopColor="#F5F5F5" stopOpacity={0} />
+            <stop offset="0%" stopColor="#0F1720" stopOpacity={0.22} />
+            <stop offset="100%" stopColor="#0F1720" stopOpacity={0} />
           </linearGradient>
         </defs>
         <Tooltip content={<ChartTooltip valueFmt={fmtRub} label="Доход" />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "3 3" }} />
         <Area
           type="monotone"
           dataKey="revenue_rubles"
-          stroke="#F5F5F5"
-          strokeWidth={1.75}
+          stroke="#0F1720"
+          strokeWidth={2}
           fill="url(#revGrad)"
           isAnimationActive={false}
         />
@@ -1380,19 +1380,16 @@ function HourlyChart({
               key={d.hour}
               className="group relative flex flex-1 flex-col items-center justify-end"
             >
-              {/* Бар. Peak — solid lime с верхним brighter градиентом
-                  + glow snippet. Прочие — приглушённый зинк. Так
-                  «один лаймовый» бар читается как фокус-точка
-                  (brand-deck $16,021 / Cashflow). */}
+              {/* Бар. Peak — solid accent-цвет метрики (виден на white bg),
+                  non-peak — тот же цвет но с 22% opacity (муute-tone).
+                  Так «один яркий» бар читается как фокус-точка. */}
               <div
                 className="w-full rounded-t-md transition-[height,background-color] duration-500 ease-out"
                 style={{
                   height: `${Math.max(2, pct)}%`,
-                  background: isPeak
-                    ? "linear-gradient(180deg, #FFFFFF 0%, #F5F5F5 70%, #A1A1AA 100%)"
-                    : "#262626",
+                  background: isPeak ? def.color : def.color + "33",
                   boxShadow: isPeak
-                    ? "0 8px 22px -10px rgba(245,245,245,0.40)"
+                    ? `0 8px 22px -10px ${def.color}66`
                     : undefined,
                 }}
               />
@@ -1511,11 +1508,11 @@ const SEGMENT_GROUPS: { title: string; keys: string[] }[] = [
     ],
   },
   {
-    title: "Истёкли (любая подписка)",
-    keys: ["expired_1d", "expired_2d", "expired_3d"],
+    title: "Активный триал",
+    keys: ["trial_active_any", "trial_activated_today"],
   },
   {
-    title: "Триал-воронка",
+    title: "Триал-воронка (истёк)",
     keys: [
       "trial_ends_in_1d",
       "trial_expired_6h",
@@ -1523,6 +1520,19 @@ const SEGMENT_GROUPS: { title: string; keys: string[] }[] = [
       "trial_expired_2d",
       "trial_expired_3d",
     ],
+  },
+  {
+    title: "Платные — скоро истекут",
+    keys: [
+      "paid_expires_in_1d",
+      "paid_expires_in_3d",
+      "paid_expires_in_7d",
+      "paid_expires_in_14d",
+    ],
+  },
+  {
+    title: "Истёкли (любая подписка)",
+    keys: ["expired_1d", "expired_2d", "expired_3d"],
   },
   {
     title: "Реактивация платных",
@@ -1734,9 +1744,9 @@ function TopReferrersList({
 }
 
 const TARIFF_DEFS = [
-  { key: "basic", label: "Basic", color: "#F5F5F5" },
-  { key: "plus", label: "Plus", color: "#D4D4D8" },
-  { key: "basic_combo", label: "Basic + Combo", color: "#FFD66B" },
+  { key: "basic", label: "Basic", color: "#0F1720" },
+  { key: "plus", label: "Plus", color: "#2563EB" },
+  { key: "basic_combo", label: "Basic + Combo", color: "#10B981" },
   { key: "plus_combo", label: "Plus + Combo", color: "#EC4899" },
   { key: "proxy", label: "Прокси", color: "#F59E0B" },
 ] as const;
@@ -1816,11 +1826,11 @@ const PROVIDER_LABELS: Record<string, string> = {
   unknown: "Прочее",
 };
 const PROVIDER_COLORS: Record<string, string> = {
-  platega: "#F5F5F5",
+  platega: "#0F1720",
   cryptobot: "#F59E0B",
-  telegram_stars: "#D4D4D8",
+  telegram_stars: "#2563EB",
   lava: "#10B981",
-  balance: "#64748B",
+  balance: "#7C3AED",
   unknown: "#94A3B8",
 };
 
