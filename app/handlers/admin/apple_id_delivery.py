@@ -70,6 +70,8 @@ def _build_user_text(region: str, nominal: int, key: str) -> str:
 
     <b>{флаг} {номинал}</b> идёт жирным акцентом.
     <code>{ключ}</code> — моноширинный, tap-to-copy в Telegram.
+    Под кодом — маленькая курсивная подсказка про tap-to-copy,
+    чтобы пользователь не пропустил механику копирования.
     """
     flag = _FLAG_BY_REGION.get(region, "🌐")
     nominal_str = _fmt_nominal(region, nominal)
@@ -77,8 +79,9 @@ def _build_user_text(region: str, nominal: int, key: str) -> str:
     return (
         "Здравствуйте!\n\n"
         f"Ваш код пополнения Apple ID <b>{flag} {nominal_str}</b>:\n\n"
-        f"<code>{key_escaped}</code>\n\n"
-        "<b>Инструкция использования:</b>\n"
+        f"<code>{key_escaped}</code>\n"
+        "<i>👆 нажмите на код — он скопируется в буфер обмена</i>\n\n"
+        "<b>Инструкция по активации:</b>\n"
         f"{_APPLE_INSTRUCTION_URL}"
     )
 
