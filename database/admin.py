@@ -1495,6 +1495,45 @@ async def get_users_by_segment(segment: str) -> list:
                      )"""
             )
             return [row["telegram_id"] for row in rows]
+        elif segment == "trial_active_any":
+            # Все юзеры у которых СЕЙЧАС идёт триал (не истёк, платной ещё нет).
+            # Целевая аудитория для мидл-триал коммуникаций (день 2 из 3 и т.п.).
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE u.trial_used_at IS NOT NULL
+                     AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                           > (NOW() AT TIME ZONE 'UTC')
+                     AND NOT EXISTS (
+                         SELECT 1 FROM subscriptions s
+                         WHERE s.telegram_id = u.telegram_id
+                           AND s.source = 'payment'
+                           AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                     )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "trial_activated_today":
+            # Активировали триал в течение последних 24 часов. Свежая ЦА
+            # для welcome-серии, объяснения features и т.п.
+            rows = await conn.fetch(
+                """SELECT telegram_id FROM users
+                   WHERE trial_used_at IS NOT NULL
+                     AND trial_used_at >= (NOW() AT TIME ZONE 'UTC') - INTERVAL '24 hours'"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment in ("paid_expires_in_1d", "paid_expires_in_3d",
+                         "paid_expires_in_7d", "paid_expires_in_14d"):
+            # Платная подписка сейчас активна, кончается в течение N суток.
+            # Точка renewal-подсказки — юзер ещё внутри, есть время оформить.
+            # source='payment' — исключаем trial/admin_grant/gift (у них другой
+            # renewal-flow).
+            days = int(segment.rsplit("_", 1)[-1].rstrip("d"))
+            rows = await conn.fetch(
+                f"""SELECT DISTINCT s.telegram_id FROM subscriptions s
+                    WHERE s.source = 'payment'
+                      AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                      AND s.expires_at <= (NOW() AT TIME ZONE 'UTC') + INTERVAL '{days} days'"""
+            )
+            return [row["telegram_id"] for row in rows]
         elif segment == "trial_expired_within_6m":
             # КУМУЛЯТИВНОЕ окно: юзер активировал триал, тот истёк В ЛЮБОЙ
             # момент последних 180 дней (не exact-day bucket, а всё окно),

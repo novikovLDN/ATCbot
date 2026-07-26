@@ -11,34 +11,38 @@
 
   body {
     font-feature-settings: "ss01", "ss02", "cv11";
-    /* Матовый премиальный канвас: субтильный белый halo сверху-справа,
-       тонкая сетка hi-tech dots + мельчайший cyan-подглоу справа снизу
-       (сдержанный технологичный акцент). Никаких насыщенных цветов —
-       только чёрный, off-white и грей + ювелирные проценты cyan/violet. */
+    /* WHITE THEME 2026/2027 — warm off-white канвас с тонкими colored halo
+       по углам (info/special/success по 3%). Плюс субтильная dot-grid
+       12px и SVG-turbulence noise-плёнка — даёт «paper texture» вместо
+       плоского белого, снижает нагрузку на глаз при долгом просмотре. */
     background:
-      radial-gradient(ellipse 70% 40% at 90% -10%, rgba(255, 255, 255, 0.045), transparent 65%),
-      radial-gradient(ellipse 50% 45% at 5% 105%, rgba(125, 211, 252, 0.030), transparent 60%),
-      radial-gradient(ellipse 40% 30% at 100% 100%, rgba(196, 181, 253, 0.022), transparent 60%),
-      radial-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
-      #0A0A0A;
-    background-size: auto, auto, auto, 24px 24px, auto;
+      radial-gradient(ellipse 60% 40% at 100% 0%, rgba(37, 99, 235, 0.045), transparent 65%),
+      radial-gradient(ellipse 55% 45% at 0% 100%, rgba(124, 58, 237, 0.035), transparent 60%),
+      radial-gradient(ellipse 40% 35% at 100% 100%, rgba(16, 185, 129, 0.030), transparent 60%),
+      radial-gradient(rgba(15, 23, 32, 0.055) 1px, transparent 1px),
+      #FBFBF9;
+    background-size: auto, auto, auto, 12px 12px, auto;
     min-height: 100vh;
     letter-spacing: -0.01em;
-    color: #FCFCFC;
+    color: #0F1720;
     position: relative;
+    /* Safe-area-friendly для iOS PWA (notch, home-indicator) */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    -webkit-tap-highlight-color: transparent; /* убрать серый flash на tap */
   }
-  /* Едва различимая zern-текстура поверх канваса — матовый эффект,
-     ощущение «плёнки». SVG turbulence data-uri, opacity ~0.02.
-     Отключаем pointer-events, поверх всего идёт контент. */
+  /* Ультратонкая plâter-текстура. Opacity 0.035, multiply — не серит
+     карточки (у них своё pure white), только оживляет фон.
+     iOS Safari корректно рендерит SVG data-uri. */
   body::before {
     content: "";
     position: fixed;
     inset: 0;
     pointer-events: none;
     z-index: 0;
-    opacity: 0.020;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.85'/></svg>");
-    mix-blend-mode: overlay;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.85'/></svg>");
+    mix-blend-mode: multiply;
   }
   #root {
     position: relative;
@@ -46,11 +50,11 @@
   }
 
   ::selection {
-    background-color: rgba(245, 245, 245, 0.28);
-    color: #0A0A0A;
+    background-color: rgba(37, 99, 235, 0.18);   /* info-blue tint */
+    color: #0F1720;
   }
 
-  /* Scrollbar — узкий, тёмно-серый, чтобы не выпрыгивал на dark. */
+  /* Scrollbar — тонкий slate на light canvas. */
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -59,13 +63,13 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: #2A2A2A;
+    background: rgba(15, 23, 32, 0.15);
     border-radius: 8px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #3A3A3A;
+    background: rgba(15, 23, 32, 0.25);
     background-clip: padding-box;
     border: 2px solid transparent;
   }

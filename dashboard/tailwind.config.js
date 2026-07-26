@@ -30,53 +30,52 @@ export default {
         ],
       },
       colors: {
-        // Тёмная FINPATH-палитра: глубокий канвас, дифференцированные
-        // уровни поверхностей, off-white текст, lime-акцент. Цвета и
-        // отметки HEX взяты из brand-deck (см. /docs).
-        // Все компоненты на токенах (bg / fg / border / accent)
-        // переходят в новый стиль автоматически.
+        // WHITE THEME 2026/2027 — мягкий off-white канвас, тонкие
+        // grey-разделители, deep-slate текст, colored accents для
+        // семантики. Тренд: light + noise-texture + subtle depth
+        // (без drop-shadow'ов, только hair-line borders + inset
+        // highlight). Дизайн mobile-first: все размеры комфортны
+        // для тача (min 40px), viewport-safe padding через env().
         bg: {
-          DEFAULT: "#0A0A0A",          // канвас — самый тёмный слой
-          subtle: "#101010",            // под-фон секций
-          card: "#161616",              // карточка
-          elevated: "#212121",          // приподнятая поверхность (пилюли, активные tab'ы, чипы)
+          DEFAULT: "#FBFBF9",           // канвас — тёплый off-white (не чистый белый — не бьёт по глазам на OLED)
+          subtle: "#F5F5F2",            // под-фон секций
+          card: "#FFFFFF",              // карточка — pure white для контраста
+          elevated: "#EEEEEA",          // pill'ы, активные tab'ы, чипы
         },
         border: {
-          DEFAULT: "#262626",           // основной border на dark
-          subtle: "#1C1C1C",             // тонкий разделитель
+          DEFAULT: "#E5E5E0",           // основной hair-line border
+          subtle: "#EEEEEA",            // ещё тоньше — divider между row'ами
         },
         fg: {
-          DEFAULT: "#FCFCFC",           // off-white — основной текст
-          muted: "#A1A1AA",              // zinc-400 для secondary
-          subtle: "#71717A",             // zinc-500 для labels / подсказок
+          DEFAULT: "#0F1720",           // deep-slate — основной текст (не чёрный — мягче)
+          muted: "#4B5563",             // slate-600 для secondary
+          subtle: "#6B7280",            // slate-500 для labels / подсказок
         },
-        // Primary accent — матовый platinum-белый. Дашборд специально
-        // монохромный: премиальный, технологичный, без лишних цветов.
-        // Бот-фронт (Telegram-приложение) сохраняет лаймовую айдентику.
-        // На тёмном фоне #F5F5F5 читается как «hi-tech tool».
+        // Primary accent — deep-slate (почти чёрный). Ткни «Купить» —
+        // видит контрастный CTA. В light-теме тёмный accent работает
+        // сильнее любого цвета для главного действия.
         accent: {
-          DEFAULT: "#F5F5F5",
-          hover: "#FFFFFF",
-          dark: "#D4D4D8",
+          DEFAULT: "#0F1720",           // deep-slate, contrast on white
+          hover: "#1F2937",
+          dark: "#000000",
         },
         secondary: {
-          DEFAULT: "#9CA3AF",            // cool platinum-grey для secondary
-          hover: "#D1D5DB",
+          DEFAULT: "#6B7280",
+          hover: "#4B5563",
         },
-        success: "#86EFAC",              // мятный — +% и положительные дельты
-        danger: "#FF6B6B",               // мягкий красный, не выжигает на dark
-        warning: "#FFD66B",              // тёплый янтарь
-        // Сдержанные технологичные акценты. Используем ТОЧЕЧНО для
-        // семантической навигации по цвету:
-        //   info    — real-time индикаторы, ссылки, hi-tech chip'ы
-        //   special — VIP-статусы, «эксклюзивно» / premium-подписки
+        success: "#10B981",              // emerald-500 — сочный, но не крикливый
+        danger: "#EF4444",               // red-500
+        warning: "#F59E0B",              // amber-500
+        // Точечные акценты:
+        //   info    — real-time индикаторы, ссылки на детали
+        //   special — VIP / premium статусы
         info: {
-          DEFAULT: "#7DD3FC",             // sky-300, чуть охлаждённый
-          soft: "#38BDF8",
+          DEFAULT: "#2563EB",             // blue-600
+          soft: "#3B82F6",
         },
         special: {
-          DEFAULT: "#C4B5FD",             // violet-300, приглушённый
-          soft: "#A78BFA",
+          DEFAULT: "#7C3AED",             // violet-600, для VIP
+          soft: "#8B5CF6",
         },
         // Category tag tints — desaturated так, чтобы не конкурировать
         // с лаймовым акцентом, но различимы между собой.
@@ -93,18 +92,18 @@ export default {
         "35": "0.35",
       },
       boxShadow: {
-        // Дашборд-glow: мягкое белое свечение вокруг активных элементов.
-        // Матовое, не насыщенное — просто «premium wow moment».
-        glow: "0 8px 28px -8px rgba(245,245,245,0.35)",
-        "glow-sm": "0 4px 14px -4px rgba(245,245,245,0.22)",
-        // .card — внутренний тонкий inset сверху + тёплый deep drop
-        // снизу. Тонкая работа с уровнем поверхностей — за счёт этого
-        // карточка ощущается «поднятой».
-        card: "0 1px 0 rgba(255,255,255,0.05) inset, 0 12px 32px -18px rgba(0,0,0,0.6)",
-        // CTA shadow на dark canvas — глубже, матово-белый inset.
-        cta: "0 10px 24px -10px rgba(0,0,0,0.7), 0 0 0 1px rgba(245,245,245,0.14) inset",
-        // Matte-glass: subtle ring для стеклянных панелей.
-        matte: "0 1px 0 rgba(255,255,255,0.06) inset, 0 0 0 1px rgba(255,255,255,0.02)",
+        // WHITE THEME shadows — тонкие, warm, никакого drop-shadow'а.
+        // Приоритет: hair-line ring + inset highlight. Тренд 2026:
+        // «flat with depth cues».
+        glow: "0 8px 24px -12px rgba(15,23,32,0.12)",
+        "glow-sm": "0 4px 12px -6px rgba(15,23,32,0.08)",
+        // .card на white canvas — ring + минимальный soft drop.
+        // Inset-highlight снизу даёт «air layer» между картой и фоном.
+        card: "0 0 0 1px rgba(15,23,32,0.05), 0 1px 2px rgba(15,23,32,0.03), 0 4px 12px -6px rgba(15,23,32,0.05)",
+        // CTA (dark button on white): soft-lift + inner-highlight.
+        cta: "0 4px 14px -4px rgba(15,23,32,0.35), 0 0 0 1px rgba(0,0,0,0.06) inset",
+        // Frosted-glass panel — для sticky top-bar / modals над контентом.
+        matte: "0 0 0 1px rgba(15,23,32,0.06), 0 8px 24px -12px rgba(15,23,32,0.12)",
       },
       animation: {
         "pulse-glow": "pulse-glow 2.5s ease-in-out infinite",
