@@ -464,7 +464,16 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         base_price_rubles = price_info["base_price_kopecks"] / 100.0
         final_price_rubles = price_info["final_price_kopecks"] / 100.0
         has_discount = price_info["discount_percent"] > 0
-        
+
+        # Admin-managed global-discount (migration 069): если оригинал
+        # из config выше базы после нашего override — покажем страйк
+        # от оригинала (юзеру видно «199 → 149»). Даже если у него
+        # промо-кода нет.
+        _orig_kop = price_info.get("original_config_price_kopecks")
+        if _orig_kop and int(_orig_kop) > price_info["base_price_kopecks"]:
+            base_price_rubles = int(_orig_kop) / 100.0
+            has_discount = True
+
         # КРИТИЧНО: Логируем расчет цены для диагностики
         logger.debug(
             f"Price recalculated: tariff={tariff_type}, period={period_days}, "
@@ -534,9 +543,41 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         callback_data=back_callback
     )])
 
+    # Admin-managed global-discount notice (migration 069): если
+    # активна глобальная скидка, добавим строку-подпись над кнопками.
+    try:
+        from app.services import pricing as _pricing
+        _gd = await _pricing.get_global_discount()
+        _pct = int(_gd.get("global_discount_percent") or 0)
+        if _pct > 0:
+            # Проверим что скидка не истекла
+            _until_iso = _gd.get("discount_until_at")
+            _active = True
+            if _until_iso:
+                try:
+                    from datetime import datetime, timezone as _tz
+                    _until_dt = datetime.fromisoformat(_until_iso.replace("Z", "+00:00"))
+                    if _until_dt <= datetime.now(_tz.utc):
+                        _active = False
+                except Exception:
+                    pass
+            if _active:
+                _reason = _gd.get("discount_reason") or "Спец-цены"
+                _notice = f"\n\n🎁 <b>Скидка −{_pct}%</b> · {_reason}"
+                if _until_iso:
+                    try:
+                        from datetime import datetime as _dt
+                        _until_dt2 = _dt.fromisoformat(_until_iso.replace("Z", "+00:00"))
+                        _notice += f" · до {_until_dt2.strftime('%d.%m')}"
+                    except Exception:
+                        pass
+                text = (text or "") + _notice
+    except Exception as _e:
+        logger.warning("global-discount notice render failed: %s", _e)
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
-    
+
     # КРИТИЧНО: Переходим в состояние choose_period
     await state.set_state(PurchaseState.choose_period)
 
