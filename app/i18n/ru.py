@@ -669,6 +669,8 @@ LANG = {
     'payment.success_first': "🎉 <b>Подписка успешно активирована</b>\n\n📅 <b>Срок действия:</b> до {date}\n\n🔗 <b>Ссылка подписки:</b>\n<code>{sub_url}</code>\n\nИспользуйте её в приложении VPN.",
     'payment.success_renewal': "🔄 <b>Подписка продлена</b>\n\n📅 <b>Новый срок действия:</b> до {date}\n\n🔗 <b>Ссылка подписки:</b>\n<code>{sub_url}</code>\n\nВы можете продолжить использовать текущую ссылку подключения.",
     'payment.success_renewal_compact': "✅ <b>Подписка продлена!</b>\n\n{tariff_icon} Тариф: {tariff}\n📅 До: {date}\n\nVPN продолжает работать.\n\n🤍 Atlas Secure",
+    'payment.success_welcome_basic': "🎉 <b>Добро пожаловать в Atlas Secure!</b>\n\n📦 Тариф: <b>Basic</b>\n📅 До: {date}\n\nПодписка активна — VPN готов к работе.\n\n🤍 Atlas Secure",
+    'payment.success_welcome_plus': "🎉 <b>Добро пожаловать в Atlas Secure!</b>\n\n⭐️ Тариф: <b>Plus</b>\n📅 До: {date}\n\nПодписка активна — VPN готов к работе.\n\n🤍 Atlas Secure",
     'payment.test': "Служебный режим Недоступно",
     'profile.access_key_label': "Ключ подключения:",
     'profile.auto_renew_disabled': "🔁 Автопродление: выключено",

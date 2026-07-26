@@ -757,8 +757,26 @@ export const endpoints = {
         template_vars: string[];
         updated_at: string | null;
         last_edited_by: number | null;
+        is_code_registered: boolean;
       }>
     >("/automated-notifications/"),
+  automatedNotificationCreate: (body: {
+    key: string;
+    title: string;
+    description?: string;
+    category: string;
+    default_text_ru: string;
+    template_vars?: string[];
+    trigger_config?: Record<string, unknown>;
+  }) =>
+    api.post<{ ok: boolean; key: string; created: boolean }>(
+      "/automated-notifications/",
+      body,
+    ),
+  automatedNotificationDelete: (key: string) =>
+    api.del<{ ok: boolean; key: string; deleted: boolean }>(
+      `/automated-notifications/${encodeURIComponent(key)}`,
+    ),
   automatedNotificationGet: (key: string) =>
     api.get<{
       key: string;
