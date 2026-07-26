@@ -175,6 +175,14 @@ async def patch_notification(
                     )
             except (TypeError, ValueError):
                 raise HTTPException(400, "tolerance_hours must be a number")
+        if "segment_filter" in tc:
+            seg = tc.get("segment_filter")
+            # None/'' → OK (снимает фильтр). Строка → проверяем длину.
+            if seg is not None and seg != "":
+                if not isinstance(seg, str) or len(seg) > 80:
+                    raise HTTPException(
+                        400, "segment_filter must be a short string key",
+                    )
     ok = await update_notification(
         key,
         custom_text_ru=payload.custom_text_ru,

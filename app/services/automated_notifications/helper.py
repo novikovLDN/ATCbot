@@ -186,6 +186,33 @@ async def get_trigger_config(key: str) -> Dict[str, Any]:
     return dict(spec.default_trigger) if spec else {}
 
 
+async def is_user_in_segment(telegram_id: int, segment_key: str) -> bool:
+    """Проверить, входит ли юзер в admin-сегмент (из broadcasts.segments_list).
+
+    Используется в reminder-логике для опционального segment_filter
+    (например «шлём только тем, у кого нет активной подписки»).
+    Реализация: делегируем к database.get_users_by_segment — тот
+    возвращает список ID; ищем в нём. Для реально больших сегментов
+    (100k+) стоит переделать на dedicated SQL-check, но пока
+    достаточно.
+
+    Fail-open: если сегмент неизвестен или произошла ошибка чтения,
+    возвращаем True (не блокируем отправку из-за проблем валидации).
+    """
+    if not segment_key:
+        return True
+    try:
+        import database
+        ids = await database.get_users_by_segment(segment_key)
+        return int(telegram_id) in {int(x) for x in ids}
+    except Exception as e:
+        logger.warning(
+            "is_user_in_segment failed segment=%s user=%s: %s",
+            segment_key, telegram_id, e,
+        )
+        return True
+
+
 async def log_notification_send(
     key: str, telegram_id: int, *,
     status: str = "sent", error: Optional[str] = None,

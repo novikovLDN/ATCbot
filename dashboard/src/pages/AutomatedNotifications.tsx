@@ -321,6 +321,7 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
   const trig = row.trigger_config as {
     before_expiry_hours?: number;
     tolerance_hours?: number;
+    segment_filter?: string;
   };
   const [beforeH, setBeforeH] = useState<string>(
     trig?.before_expiry_hours != null ? String(trig.before_expiry_hours) : "",
@@ -328,8 +329,19 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
   const [tolH, setTolH] = useState<string>(
     trig?.tolerance_hours != null ? String(trig.tolerance_hours) : "",
   );
+  const [segmentFilter, setSegmentFilter] = useState<string>(
+    trig?.segment_filter ?? "",
+  );
 
   const isReminderConfig = trig?.before_expiry_hours != null;
+
+  // Список всех admin-сегментов для segment_filter dropdown.
+  // Загружается лениво (только когда модалка открыта).
+  const segments = useQuery({
+    queryKey: ["broadcasts", "segments"],
+    queryFn: () => endpoints.broadcastSegments(),
+    staleTime: 60_000,
+  });
 
   const save = useMutation({
     mutationFn: () => {
@@ -350,6 +362,8 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
         body.trigger_config = {
           before_expiry_hours: b,
           tolerance_hours: Number.isFinite(t) ? t : 1,
+          // Пустая строка = снять фильтр (backend приравнивает к None).
+          segment_filter: segmentFilter,
         };
       }
       if (Object.keys(body).length === 0) {
@@ -475,6 +489,34 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
                 Планировщик проверяет юзеров раз в минуту. Меньший допуск —
                 более точное окно, но выше риск пропустить (если worker
                 опоздает). 1ч по умолчанию — надёжный баланс.
+              </div>
+
+              <div className="mt-3 border-t border-border/60 pt-3">
+                <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
+                  Дополнительный фильтр аудитории (опционально)
+                </div>
+                <select
+                  value={segmentFilter}
+                  onChange={(e) => setSegmentFilter(e.target.value)}
+                  className="input"
+                  disabled={segments.isLoading}
+                >
+                  <option value="">
+                    — Без фильтра (шлём всем кто попал в окно) —
+                  </option>
+                  {(segments.data ?? []).map((s) => (
+                    <option key={s.key} value={s.key}>
+                      {s.group ? `[${s.group}] ` : ""}
+                      {s.label} · {s.count} чел
+                    </option>
+                  ))}
+                </select>
+                <div className="mt-1 text-[10px] text-fg-subtle">
+                  Если задан — reminder уйдёт только тем, кто ЕЩЁ и
+                  входит в этот сегмент на момент срабатывания триггера.
+                  Полезно, например, для «7д до конца, но только тем, кто
+                  никогда не покупал» — узкий таргет.
+                </div>
               </div>
             </div>
           )}

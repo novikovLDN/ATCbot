@@ -221,6 +221,32 @@ async def send_smart_reminders(bot: Bot):
                         telegram_id, notif_key,
                     )
                     continue
+
+                # Опциональный segment_filter из trigger_config: если
+                # админ задал сегмент, шлём только тем, кто в него входит.
+                # Пример: reminder_7d + segment_filter='paid_expires_in_7d'
+                # → отправится только тем, у кого сейчас платная активна.
+                if notif_key:
+                    from app.services.automated_notifications import (
+                        get_trigger_config, is_user_in_segment,
+                    )
+                    _tcfg = await get_trigger_config(notif_key) or {}
+                    _seg = str(_tcfg.get("segment_filter") or "").strip()
+                    if _seg and not await is_user_in_segment(telegram_id, _seg):
+                        # Пропускаем на этом цикле — юзер может войти в сегмент
+                        # позже (изменится состояние). НЕ помечаем reminder_sent,
+                        # чтобы дать шанс сработать после апдейта.
+                        try:
+                            await log_notification_send(
+                                notif_key, telegram_id, status="skipped_disabled",
+                            )
+                        except Exception:
+                            pass
+                        logger.info(
+                            "reminder_skipped_segment: user=%s key=%s seg=%s",
+                            telegram_id, notif_key, _seg,
+                        )
+                        continue
                 
                 if text and keyboard:
                     # 3-day reminder gets a photo header on prod; everything else

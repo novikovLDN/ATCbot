@@ -14,6 +14,7 @@ from .registry import (
 from .helper import (
     get_notification_text,
     is_notification_enabled,
+    is_user_in_segment,
     log_notification_send,
     get_trigger_config,
     sync_registry_to_db,
@@ -26,6 +27,7 @@ __all__ = [
     "all_specs",
     "get_notification_text",
     "is_notification_enabled",
+    "is_user_in_segment",
     "log_notification_send",
     "get_trigger_config",
     "sync_registry_to_db",
