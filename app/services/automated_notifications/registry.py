@@ -92,6 +92,44 @@ register_notification(NotificationSpec(
 ))
 
 register_notification(NotificationSpec(
+    key="trial.reminder_6h",
+    title="Триал: за 6 часов до истечения (legacy 71h-slot)",
+    description=(
+        "Старая ветка (i18n main.trial_notification_71h) — «через 6 часов "
+        "пробный доступ завершится». Работает параллельно с новым "
+        "trial.reminder_3h. Wire-up идёт через TRIAL_NOTIFICATION_SCHEDULE "
+        "в app/services/trials — при желании можно отключить через "
+        "тумблер тут, чтобы не дублировать 3h reminder."
+    ),
+    category="trial",
+    default_text_ru=(
+        "🔔 Через 6 часов пробный доступ завершится и VPN отключится\n\n"
+        "Не теряйте защиту — подключите подписку от 199₽ и пользуйтесь "
+        "без ограничений 💎"
+    ),
+    template_vars=[],
+    default_trigger={"before_expiry_hours": 6, "tolerance_hours": 0.5},
+))
+
+register_notification(NotificationSpec(
+    key="trial.notification_71h",
+    title="Триал: «последний час» (за 1ч до истечения)",
+    description=(
+        "Финальный push триал-воронки — «Последний час пробного доступа». "
+        "Ключ говорит про 71h (для BC), реальный тайминг — 1 час до конца. "
+        "Заходит с кнопкой «Купить со скидкой»."
+    ),
+    category="trial",
+    default_text_ru=(
+        "🚨 Последний час пробного доступа\n\n"
+        "Через час VPN будет отключён.\n\n"
+        "Оформите подписку, чтобы продолжить пользоваться защитой."
+    ),
+    template_vars=[],
+    default_trigger={"before_expiry_hours": 1, "tolerance_hours": 0.5},
+))
+
+register_notification(NotificationSpec(
     key="trial.reminder_3h",
     title="Триал: за 3 часа до истечения",
     description=(
