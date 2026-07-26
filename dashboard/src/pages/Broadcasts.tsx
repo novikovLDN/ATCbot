@@ -773,6 +773,17 @@ const RECURRENCE_LABELS: Record<string, string> = {
   weekly: "Раз в неделю",
 };
 
+// JS Date.getDay(): 0=Sun..6=Sat. Наш порядок — с понедельника.
+const WEEKDAYS_MON_FIRST: { js: number; short: string; long: string }[] = [
+  { js: 1, short: "Пн", long: "понедельник" },
+  { js: 2, short: "Вт", long: "вторник" },
+  { js: 3, short: "Ср", long: "среда" },
+  { js: 4, short: "Чт", long: "четверг" },
+  { js: 5, short: "Пт", long: "пятница" },
+  { js: 6, short: "Сб", long: "суббота" },
+  { js: 0, short: "Вс", long: "воскресенье" },
+];
+
 /** MSK-время сейчас в формате `YYYY-MM-DDTHH:MM` (для <input type=datetime-local>). */
 function _nowPlusMinInMSK(minutesAhead: number): string {
   const now = new Date();
@@ -789,6 +800,28 @@ function _toApiFmt(local: string): string {
   return local.replace("T", " ");
 }
 
+/** Weekday (0=Sun..6=Sat) для `YYYY-MM-DDTHH:MM`. Wall-дата, tz-independent. */
+function _weekdayOf(local: string): number {
+  const [datePart] = local.split("T");
+  const [Y, M, D] = datePart.split("-").map(Number);
+  return new Date(Y, M - 1, D).getDay();
+}
+
+/** Сдвигает scheduled_at на ближайшее указанное weekday (0=Sun..6=Sat),
+ *  сохраняя HH:MM. Если сегодня уже нужный день — оставит сегодня
+ *  (валидация "в прошлом" — на backend). */
+function _snapToWeekday(local: string, targetWeekday: number): string {
+  const [datePart, timePart] = local.split("T");
+  const [Y, M, D] = datePart.split("-").map(Number);
+  const jsWeekday = new Date(Y, M - 1, D).getDay();
+  const daysAhead = ((targetWeekday - jsWeekday) + 7) % 7;
+  const next = new Date(Y, M - 1, D + daysAhead);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(
+    next.getDate(),
+  )}T${timePart}`;
+}
+
 function ScheduleBroadcastModal({
   broadcastId,
   onClose,
@@ -801,6 +834,20 @@ function ScheduleBroadcastModal({
   const [recurrence, setRecurrence] = useState<"once" | "daily" | "weekdays" | "weekly">("once");
   const [endEnabled, setEndEnabled] = useState(false);
   const [endAt, setEndAt] = useState(() => _nowPlusMinInMSK(60 * 24 * 7)); // +1 неделя
+  // null → отправлять по сегменту исходной рассылки; строка → override.
+  const [segmentOverride, setSegmentOverride] = useState<string | null>(null);
+
+  // Список всех сегментов + live-счётчики. Обновляется каждые 5 мин на бэкенде,
+  // на клиенте — при открытии модалки (staleTime дефолт).
+  const segments = useQuery({
+    queryKey: ["broadcasts", "segments"],
+    queryFn: () => endpoints.broadcastSegments(),
+    staleTime: 60_000,
+  });
+
+  const currentWeekday = _weekdayOf(scheduledAt);
+  const currentWeekdayLabel =
+    WEEKDAYS_MON_FIRST.find((w) => w.js === currentWeekday)?.long ?? "—";
 
   const create = useMutation({
     mutationFn: () =>
@@ -810,6 +857,7 @@ function ScheduleBroadcastModal({
         recurrence,
         recurrence_end_at_msk:
           recurrence !== "once" && endEnabled ? _toApiFmt(endAt) : null,
+        segment: segmentOverride,
       }),
     onSuccess: (data) => {
       toast.success(
@@ -861,7 +909,7 @@ function ScheduleBroadcastModal({
             className="input"
           />
           <div className="mt-1 text-[11px] text-fg-subtle">
-            Мин. +1 мин, макс. +28 дней
+            Мин. +1 мин, макс. +28 дней · {currentWeekdayLabel}
           </div>
         </label>
 
@@ -891,6 +939,65 @@ function ScheduleBroadcastModal({
                 {RECURRENCE_LABELS[r]}
               </label>
             ))}
+          </div>
+        </div>
+
+        {recurrence === "weekly" && (
+          <div className="mb-3 rounded-xl border border-border bg-bg-subtle/40 p-3">
+            <div className="mb-2 text-[11px] uppercase tracking-wider text-fg-subtle">
+              День недели повтора
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {WEEKDAYS_MON_FIRST.map((w) => (
+                <button
+                  type="button"
+                  key={w.js}
+                  onClick={() =>
+                    setScheduledAt((cur) => _snapToWeekday(cur, w.js))
+                  }
+                  className={
+                    currentWeekday === w.js
+                      ? "rounded-lg border border-accent/40 bg-accent/10 px-2.5 py-1 text-xs font-semibold text-accent"
+                      : "rounded-lg border border-border bg-bg-card px-2.5 py-1 text-xs font-medium text-fg-muted hover:border-fg-subtle hover:text-fg"
+                  }
+                  title={`Сдвинуть на ближайшую ${w.long.toLowerCase()}у`}
+                >
+                  {w.short}
+                </button>
+              ))}
+            </div>
+            <div className="mt-1.5 text-[11px] text-fg-subtle">
+              Клик по дню — сдвигает первую отправку на ближайший этот
+              день недели (время сохраняется). Дальше каждые 7 дней.
+            </div>
+          </div>
+        )}
+
+        <div className="mb-3">
+          <div className="mb-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
+            Сегмент получателей
+          </div>
+          <select
+            value={segmentOverride ?? ""}
+            onChange={(e) => setSegmentOverride(e.target.value || null)}
+            className="input"
+            disabled={segments.isLoading}
+          >
+            <option value="">
+              {segments.isLoading
+                ? "Загружаю сегменты…"
+                : "— Как в исходной рассылке —"}
+            </option>
+            {(segments.data ?? []).map((s) => (
+              <option key={s.key} value={s.key}>
+                {s.group ? `[${s.group}] ` : ""}
+                {s.label} · {s.count} чел
+              </option>
+            ))}
+          </select>
+          <div className="mt-1 text-[11px] text-fg-subtle">
+            Аудитория пересчитывается в момент отправки — показанное число
+            «на сейчас» для ориентира.
           </div>
         </div>
 
@@ -964,6 +1071,17 @@ export function ScheduledBroadcastsSection() {
     queryFn: () => endpoints.broadcastScheduleList(!showInactive, 200),
     refetchInterval: 30_000,
   });
+  // Меппинг key → {label, count} для отображения читаемого имени сегмента
+  // и live-счётчика в каждом ряду списка.
+  const segments = useQuery({
+    queryKey: ["broadcasts", "segments"],
+    queryFn: () => endpoints.broadcastSegments(),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+  const segmentMap = new Map(
+    (segments.data ?? []).map((s) => [s.key, s]),
+  );
 
   const cancel = useMutation({
     mutationFn: (id: number) => endpoints.broadcastScheduleCancel(id),
@@ -1064,7 +1182,23 @@ export function ScheduledBroadcastsSection() {
                   </div>
                   <div className="mt-0.5 text-[11px] text-fg-subtle">
                     <b>{_fmtMsk(String(r.scheduled_at ?? ""))} МСК</b>
-                    {Boolean(r.segment) && <> · сегмент {String(r.segment)}</>}
+                    {Boolean(r.segment) && (() => {
+                      const key = String(r.segment);
+                      const s = segmentMap.get(key);
+                      return (
+                        <>
+                          {" · "}
+                          <span className="text-fg-muted">
+                            {s?.label ?? key}
+                          </span>
+                          {s ? (
+                            <span className="ml-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent tabular-nums">
+                              {fmtNum(s.count)}
+                            </span>
+                          ) : null}
+                        </>
+                      );
+                    })()}
                     {runCount > 0 && <> · запусков: {runCount}</>}
                     {Boolean(r.last_error) && (
                       <>
