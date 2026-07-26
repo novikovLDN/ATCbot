@@ -1378,7 +1378,7 @@ function HourlyChart({
           return (
             <div
               key={d.hour}
-              className="group relative flex flex-1 flex-col items-center justify-end"
+              className="group relative flex h-full flex-1 flex-col items-center justify-end"
             >
               {/* Бар. Peak — solid accent-цвет метрики (виден на white bg),
                   non-peak — тот же цвет но с 22% opacity (муute-tone).
