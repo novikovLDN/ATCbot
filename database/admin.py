@@ -1520,6 +1520,30 @@ async def get_users_by_segment(segment: str) -> list:
                      AND trial_used_at >= (NOW() AT TIME ZONE 'UTC') - INTERVAL '24 hours'"""
             )
             return [row["telegram_id"] for row in rows]
+        elif segment in ("trial_active_day1", "trial_active_day2",
+                         "trial_active_day3"):
+            # Триал активен И его активировали N-1..N дней назад.
+            # Классические welcome-day2/day3 коммуникации:
+            #   day1 → [NOW-24h, NOW]                → «первый день»
+            #   day2 → [NOW-48h, NOW-24h)            → «уже 2 дня с нами»
+            #   day3 → [NOW-72h, NOW-48h)            → «завтра закончится»
+            # Ограничение trial_expires_at > NOW отсеивает истекшие триалы.
+            day = int(segment.split("_")[-1].replace("day", ""))
+            rows = await conn.fetch(
+                f"""SELECT u.telegram_id FROM users u
+                    WHERE u.trial_used_at IS NOT NULL
+                      AND u.trial_used_at <= (NOW() AT TIME ZONE 'UTC') - INTERVAL '{day - 1} hours' * 24
+                      AND u.trial_used_at >  (NOW() AT TIME ZONE 'UTC') - INTERVAL '{day} hours' * 24
+                      AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                            > (NOW() AT TIME ZONE 'UTC')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM subscriptions s
+                          WHERE s.telegram_id = u.telegram_id
+                            AND s.source = 'payment'
+                            AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                      )"""
+            )
+            return [row["telegram_id"] for row in rows]
         elif segment in ("paid_expires_in_1d", "paid_expires_in_3d",
                          "paid_expires_in_7d", "paid_expires_in_14d"):
             # Платная подписка сейчас активна, кончается в течение N суток.
@@ -1568,7 +1592,9 @@ async def get_users_by_segment(segment: str) -> list:
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("trial_expired_7d", "trial_expired_14d",
-                         "trial_expired_30d", "trial_expired_90d"):
+                         "trial_expired_30d", "trial_expired_60d",
+                         "trial_expired_90d", "trial_expired_180d",
+                         "trial_expired_365d"):
             # Триал истёк N дней назад — И пользователь никогда не покупал
             # (нет ни одной строки в subscriptions с source='payment').
             # Это чистая «холодная реактивация» — прошло много времени,
@@ -1623,7 +1649,9 @@ async def get_users_by_segment(segment: str) -> list:
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("paid_expired_7d", "paid_expired_14d",
-                         "paid_expired_60d", "paid_expired_90d"):
+                         "paid_expired_60d", "paid_expired_90d",
+                         "paid_expired_180d", "paid_expired_365d",
+                         "paid_expired_730d"):
             # Платная (source='payment') истекла ровно N суток назад
             # (24-час бакет [NOW-(N+1)d, NOW-Nd)) — сейчас нет активной
             # ПЛАТНОЙ. Классическая точка реактивации, аналог paid_expired_1d

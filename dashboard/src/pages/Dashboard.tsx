@@ -1496,33 +1496,59 @@ function labelForKey(key?: string, fallback?: string): string {
 
 // ─ Segments card (kept) ──────────────────────────────────────────────
 
-const SEGMENT_GROUPS: { title: string; keys: string[] }[] = [
+// Группы + краткое описание для plashka-header. Каждая группа
+// сворачивается отдельно (Collapsible), список плашек по вертикали.
+// Все свёрнуты по умолчанию — иначе экран сегментов растягивается
+// на 500+ px.
+const SEGMENT_GROUPS: { title: string; sub: string; keys: string[] }[] = [
   {
     title: "База",
+    sub: "все юзеры · активные · без подписки · без Remnawave · холодные",
     keys: [
       "all_users",
       "active_subscriptions",
       "no_subscription",
       "no_remnawave",
+      "started_1d_cold",
+      "started_3d_cold",
       "started_7d_cold",
+      "started_14d_cold",
+      "started_30d_cold",
     ],
   },
   {
     title: "Активный триал",
-    keys: ["trial_active_any", "trial_activated_today"],
+    sub: "сейчас идут · день 1/2/3 · активирован за 24ч",
+    keys: [
+      "trial_active_any",
+      "trial_activated_today",
+      "trial_active_day1",
+      "trial_active_day2",
+      "trial_active_day3",
+      "trial_ends_in_1d",
+    ],
   },
   {
-    title: "Триал-воронка (истёк)",
+    title: "Триал истёк · реактивация",
+    sub: "6ч / 1д / 2д / 3д / 7д / 14д / 30д / 60д / 90д / 180д / 365д",
     keys: [
-      "trial_ends_in_1d",
       "trial_expired_6h",
       "trial_expired_1d",
       "trial_expired_2d",
       "trial_expired_3d",
+      "trial_expired_7d",
+      "trial_expired_14d",
+      "trial_expired_30d",
+      "trial_expired_60d",
+      "trial_expired_90d",
+      "trial_expired_180d",
+      "trial_expired_365d",
+      "trial_expired_within_6m",
     ],
   },
   {
     title: "Платные — скоро истекут",
+    sub: "1д / 3д / 7д / 14д — pre-churn напоминания",
     keys: [
       "paid_expires_in_1d",
       "paid_expires_in_3d",
@@ -1531,12 +1557,37 @@ const SEGMENT_GROUPS: { title: string; keys: string[] }[] = [
     ],
   },
   {
-    title: "Истёкли (любая подписка)",
-    keys: ["expired_1d", "expired_2d", "expired_3d"],
+    title: "Платные истекли · реактивация",
+    sub: "1д / 7д / 14д / 30д / 60д / 90д / 180д / 365д / 2 года",
+    keys: [
+      "paid_expired_1d",
+      "paid_expired_7d",
+      "paid_expired_14d",
+      "paid_expired_30d",
+      "paid_expired_60d",
+      "paid_expired_90d",
+      "paid_expired_180d",
+      "paid_expired_365d",
+      "paid_expired_730d",
+      "paid_lapsed_any",
+    ],
   },
   {
-    title: "Реактивация платных",
-    keys: ["paid_expired_1d", "paid_expired_30d", "paid_lapsed_any"],
+    title: "Истёкла любая подписка",
+    sub: "агрегированные окна (триал ∪ платная)",
+    keys: ["expired_1d", "expired_2d", "expired_3d", "expires_in_3d"],
+  },
+  {
+    title: "Апселл · особые",
+    sub: "VIP · Basic · Plus · Combo · со скидкой · с балансом",
+    keys: [
+      "vip_active",
+      "basic_active",
+      "plus_active",
+      "combo_active",
+      "discount_active",
+      "has_balance_50plus",
+    ],
   },
 ];
 
@@ -1555,34 +1606,54 @@ function SegmentsCard({
       <SurfaceHeader
         eyebrow="Сегменты"
         title="Аудитории для рассылок"
-        sub="обновляется каждые 5 минут · клик → создать рассылку"
+        sub="обновляется каждые 5 мин · клик по строке → создать рассылку"
       />
       {error ? (
         <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
           Не удалось загрузить сегменты.
         </div>
       ) : (
-        <div className="mt-4 space-y-5">
-          {SEGMENT_GROUPS.map((group) => (
-            <div key={group.title}>
-              <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-                {group.title}
-              </div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {group.keys.map((k) => {
-                  const s = byKey.get(k);
-                  return (
-                    <SegmentRow
-                      key={k}
-                      label={s?.label ?? k}
-                      count={s?.count}
-                      loading={loading}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+        <div className="mt-4 space-y-2.5">
+          {SEGMENT_GROUPS.map((group) => {
+            // Total-count группы (сумма всех сегментов) для badge в header.
+            // count === -1 значит ошибка счётчика — пропускаем.
+            const total = group.keys.reduce((a, k) => {
+              const s = byKey.get(k);
+              return s && s.count >= 0 ? a + s.count : a;
+            }, 0);
+            const badge = loading
+              ? "…"
+              : total > 0
+              ? fmtNum(total)
+              : "0";
+            return (
+              <Collapsible
+                key={group.title}
+                title={group.title}
+                subtitle={group.sub}
+                remember={`segments-${group.title}`}
+                badge={
+                  <span className="rounded-md bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent tabular-nums">
+                    {badge}
+                  </span>
+                }
+              >
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {group.keys.map((k) => {
+                    const s = byKey.get(k);
+                    return (
+                      <SegmentRow
+                        key={k}
+                        label={s?.label ?? k}
+                        count={s?.count}
+                        loading={loading}
+                      />
+                    );
+                  })}
+                </div>
+              </Collapsible>
+            );
+          })}
         </div>
       )}
     </SurfaceCard>
