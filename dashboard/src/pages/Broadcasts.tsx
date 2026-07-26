@@ -1065,9 +1065,9 @@ export function ScheduledBroadcastsSection() {
                   </div>
                   <div className="mt-0.5 text-[11px] text-fg-subtle">
                     <b>{_fmtMsk(String(r.scheduled_at ?? ""))} МСК</b>
-                    {r.segment && <> · сегмент {String(r.segment)}</>}
+                    {Boolean(r.segment) && <> · сегмент {String(r.segment)}</>}
                     {runCount > 0 && <> · запусков: {runCount}</>}
-                    {r.last_error && (
+                    {Boolean(r.last_error) && (
                       <>
                         {" "}
                         · <span className="text-danger">ошибка</span>
