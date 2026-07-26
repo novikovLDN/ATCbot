@@ -16,6 +16,7 @@ import {
   CreditCard,
   Bell,
   BarChart3,
+  Tag as TagIcon,
   Settings as SettingsIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -50,6 +51,7 @@ const sections: Section[] = [
     items: [
       { to: "/broadcasts", label: "Рассылки", icon: Megaphone },
       { to: "/automated-notifications", label: "Автоуведомления", icon: Bell },
+      { to: "/pricing", label: "💸 Цены и скидки", icon: TagIcon },
       { to: "/promo", label: "Промокоды", icon: Tag },
       { to: "/links", label: "Ссылки", icon: LinkIcon },
       { to: "/referrals", label: "Рефералы", icon: Share2 },

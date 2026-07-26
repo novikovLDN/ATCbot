@@ -823,6 +823,50 @@ export const endpoints = {
     api.post<{ ok: boolean; sent_to: number; key: string }>(
       `/automated-notifications/${encodeURIComponent(key)}/test-send`,
     ),
+
+  // ── Pricing management (migration 069) ────────────────────────────
+  pricingTariffs: () =>
+    api.get<
+      Array<{
+        tariff: string;
+        period_days: number;
+        base_price: number;
+        config_price: number;
+        effective_price: number;
+        discount_percent: number;
+        is_overridden: boolean;
+        has_discount: boolean;
+      }>
+    >("/pricing/tariffs"),
+  pricingSetOverride: (tariff: string, periodDays: number, priceRub: number) =>
+    api.patch<{
+      ok: boolean;
+      tariff: string;
+      period_days: number;
+      price_rub: number;
+    }>(
+      `/pricing/tariffs/${encodeURIComponent(tariff)}/${periodDays}`,
+      { price_rub: priceRub },
+    ),
+  pricingClearOverride: (tariff: string, periodDays: number) =>
+    api.del<{ ok: boolean; tariff: string; period_days: number; cleared: boolean }>(
+      `/pricing/tariffs/${encodeURIComponent(tariff)}/${periodDays}`,
+    ),
+  pricingGetGlobalDiscount: () =>
+    api.get<{
+      global_discount_percent: number;
+      discount_reason: string | null;
+      discount_until_at: string | null;
+      updated_at: string | null;
+      updated_by: number | null;
+    }>("/pricing/global-discount"),
+  pricingSetGlobalDiscount: (body: {
+    percent: number;
+    reason?: string | null;
+    until_at_iso?: string | null;
+  }) => api.put<{ ok: boolean; percent: number }>("/pricing/global-discount", body),
+  pricingClearGlobalDiscount: () =>
+    api.del<{ ok: boolean; cleared: boolean }>("/pricing/global-discount"),
 };
 
 // Auth-aware CSV download via fetch + blob. Returns nothing; triggers
