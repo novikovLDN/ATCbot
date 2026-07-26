@@ -220,6 +220,102 @@ register_notification(NotificationSpec(
     default_trigger={"before_expiry_hours": 24, "tolerance_hours": 1},
 ))
 
+# ── Payment success (event-triggered, окно не применимо) ─────────────
+register_notification(NotificationSpec(
+    key="payment.success_welcome_basic",
+    title="Оплата: приветствие после первой покупки Basic",
+    description=(
+        "Отправляется юзеру сразу после успешной оплаты первой "
+        "подписки Basic (не renewal). Используется в payment webhook."
+    ),
+    category="payment",
+    default_text_ru=(
+        "🎉 <b>Добро пожаловать в Atlas Secure!</b>\n\n"
+        "📦 Тариф: <b>Basic</b>\n"
+        "📅 До: {date}\n\n"
+        "Подписка активна — VPN готов к работе.\n\n"
+        "🤍 Atlas Secure"
+    ),
+    template_vars=["date"],
+    default_trigger={},
+))
+
+register_notification(NotificationSpec(
+    key="payment.success_welcome_plus",
+    title="Оплата: приветствие после первой покупки Plus",
+    description=(
+        "Отправляется юзеру сразу после успешной оплаты первой "
+        "подписки Plus (не renewal)."
+    ),
+    category="payment",
+    default_text_ru=(
+        "🎉 <b>Добро пожаловать в Atlas Secure!</b>\n\n"
+        "⭐️ Тариф: <b>Plus</b>\n"
+        "📅 До: {date}\n\n"
+        "Подписка активна — VPN готов к работе.\n\n"
+        "🤍 Atlas Secure"
+    ),
+    template_vars=["date"],
+    default_trigger={},
+))
+
+register_notification(NotificationSpec(
+    key="payment.success_renewal_compact",
+    title="Оплата: продление (compact)",
+    description=(
+        "Отправляется при renewal — юзер продлил уже действующую "
+        "или недавно истёкшую подписку. Компактный формат."
+    ),
+    category="payment",
+    default_text_ru=(
+        "✅ <b>Подписка продлена!</b>\n\n"
+        "{tariff_icon} Тариф: {tariff}\n"
+        "📅 До: {date}\n\n"
+        "VPN продолжает работать.\n\n"
+        "🤍 Atlas Secure"
+    ),
+    template_vars=["tariff_icon", "tariff", "date"],
+    default_trigger={},
+))
+
+register_notification(NotificationSpec(
+    key="gift.activated_welcome",
+    title="Подарок: приветствие после активации gift-подписки",
+    description=(
+        "Юзер активировал подаренную подписку через promo-код. Первое "
+        "сообщение бота — приветствие + предложение выбрать язык."
+    ),
+    category="gift",
+    default_text_ru=(
+        "🎉 <b>Добро пожаловать в Atlas Secure!</b>\n\n"
+        "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> "
+        "Вам подарили подписку:\n"
+        "📦 Тариф: {tariff_name}\n"
+        "⏳ Срок: {period}\n\n"
+        "Подписка уже активна.\nВыберите язык интерфейса:"
+    ),
+    template_vars=["tariff_name", "period"],
+    default_trigger={},
+))
+
+register_notification(NotificationSpec(
+    key="referral.reward_notification",
+    title="Реферальный кэшбэк начислен",
+    description=(
+        "Отправляется юзеру-рефереру когда его приглашённый оформил "
+        "подписку и начислился кэшбэк на баланс."
+    ),
+    category="referral",
+    default_text_ru=(
+        "🔥 Вам начислен реферальный кешбэк!\n\n"
+        "Ваш друг оформил подписку.\n"
+        "💰 Начислено: {amount:.2f} ₽\n"
+        "Баланс: {balance:.2f} ₽"
+    ),
+    template_vars=["amount", "balance"],
+    default_trigger={},
+))
+
 register_notification(NotificationSpec(
     key="subscription.reminder_3h",
     title="Подписка: за 3 часа до окончания (со скидкой 15%)",

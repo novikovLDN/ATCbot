@@ -675,21 +675,46 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                 tariff_label, tariff_icon = "Комбо Basic", "🚀"
             else:
                 tariff_label, tariff_icon = "Basic", "🏆"
+            # Автоуведомления: админ может переопределить текст через
+            # дашборд. Payment success — критичный UX, никогда не
+            # пропускаем отправку: если admin выключил override,
+            # шлём i18n-дефолт как раньше. Toggle-off влияет ТОЛЬКО
+            # на кастомный текст, но факт отправки — всегда.
+            from app.services.automated_notifications import (
+                is_notification_enabled as _autonotif_enabled,
+                get_notification_text as _autonotif_text,
+                log_notification_send as _autonotif_log,
+            )
+            _key = None
+            _params: dict = {}
             if is_renewal:
-                text = i18n_get_text(
-                    language,
-                    "payment.success_renewal_compact",
-                    tariff_icon=tariff_icon,
-                    tariff=tariff_label,
-                    date=expires_str,
-                )
+                _key = "payment.success_renewal_compact"
+                _params = {
+                    "tariff_icon": tariff_icon,
+                    "tariff": tariff_label,
+                    "date": expires_str,
+                }
             else:
                 if subscription_type == "plus":
-                    text = i18n_get_text(language, "payment.success_welcome_plus", date=expires_str)
+                    _key = "payment.success_welcome_plus"
+                    _params = {"date": expires_str}
                 elif config.is_biz_tariff(subscription_type):
+                    _key = None  # business — свой сценарий, не через реестр
                     text = f"🎉 Добро пожаловать в Atlas Secure!\n🏢 Тариф: Business\n📅 До: {expires_str}"
                 else:
-                    text = i18n_get_text(language, "payment.success_welcome_basic", date=expires_str)
+                    _key = "payment.success_welcome_basic"
+                    _params = {"date": expires_str}
+            if _key is not None:
+                _use_custom = await _autonotif_enabled(_key)
+                _custom = (await _autonotif_text(_key, params=_params)) if _use_custom else None
+                text = _custom or i18n_get_text(language, _key, **_params)
+                try:
+                    await _autonotif_log(
+                        _key, telegram_id,
+                        status="sent" if _use_custom else "skipped_disabled",
+                    )
+                except Exception:
+                    pass
         # Task 2 cut-over: when PURCHASE_FLOW_REMNAWAVE is on the bot has
         # already provisioned the premium + bypass entities in Remnawave;
         # surface both subscription URLs directly in the success text so
