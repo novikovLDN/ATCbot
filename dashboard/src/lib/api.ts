@@ -801,6 +801,10 @@ export const endpoints = {
     }>(
       `/automated-notifications/${encodeURIComponent(key)}/stats?hours=${hours}`,
     ),
+  automatedNotificationTestSend: (key: string) =>
+    api.post<{ ok: boolean; sent_to: number; key: string }>(
+      `/automated-notifications/${encodeURIComponent(key)}/test-send`,
+    ),
 };
 
 // Auth-aware CSV download via fetch + blob. Returns nothing; triggers

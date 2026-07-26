@@ -209,3 +209,49 @@ async def notification_stats(
     """Sent/failed/blocked/skipped за N часов."""
     stats = await get_stats(key, hours=hours)
     return {"key": key, "hours": hours, **stats}
+
+
+@router.post("/{key}/test-send")
+async def test_send_notification(
+    key: str = Path(..., min_length=3, max_length=80),
+    admin: dict = Depends(require_admin),
+):
+    """Отправить текущий текст (custom_text_ru или default_text_ru)
+    самому админу в Telegram. Помогает проверить HTML-разметку /
+    emoji / плейсхолдеры до того как уведомление уйдёт юзерам.
+
+    Возвращает {ok, sent_to} или 404 если ключ неизвестен.
+    Не пишет в automated_notification_sends — это отдельная тестовая
+    отправка, не должна засорять статистику.
+    """
+    row = await get_row(key)
+    if row is None:
+        raise HTTPException(404, f"notification key not found: {key}")
+    text = row["text"]  # custom_text_ru или default_text_ru
+    if not text:
+        raise HTTPException(400, "notification has no text")
+
+    # Title из БД (get_row-cache без title).
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        title_row = await conn.fetchrow(
+            "SELECT title FROM automated_notifications WHERE key = $1", key,
+        )
+    title = (title_row["title"] if title_row else None) or key
+
+    admin_id = int(admin["sub"])
+    # Импорт лениво — bot instance живёт в main.py.
+    try:
+        from main import bot  # noqa: WPS433
+    except Exception as e:
+        raise HTTPException(500, f"bot instance unavailable: {e}")
+    try:
+        await bot.send_message(
+            chat_id=admin_id,
+            text=f"🧪 <b>Тест: {title}</b>\n\n———\n\n{text}",
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"send_failed: {e}")
+    return {"ok": True, "sent_to": admin_id, "key": key}

@@ -9,6 +9,7 @@ import {
   Power,
   RefreshCcw,
   RotateCcw,
+  Send,
   Timer,
   X,
 } from "lucide-react";
@@ -386,6 +387,16 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
     refetchInterval: 60_000,
   });
 
+  const testSend = useMutation({
+    mutationFn: () => endpoints.automatedNotificationTestSend(row.key),
+    onSuccess: (res) => {
+      toast.success(`✅ Отправлено в Telegram (tg:${res.sent_to})`);
+    },
+    onError: (e: unknown) => {
+      toast.error((e as ApiError)?.detail ?? "Не удалось отправить тест");
+    },
+  });
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
       <div className="card flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden p-0">
@@ -522,6 +533,16 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
         </div>
 
         <div className="flex items-center gap-2 border-t border-border p-4">
+          <button
+            type="button"
+            onClick={() => testSend.mutate()}
+            disabled={testSend.isPending}
+            className="btn-secondary"
+            title="Отправить текущий текст (в TEXTAREA) себе в Telegram — проверка HTML/emoji/переносов"
+          >
+            {testSend.isPending ? <Spinner /> : <Send className="h-3.5 w-3.5" />}
+            Тест в TG
+          </button>
           <button
             type="button"
             onClick={onClose}
