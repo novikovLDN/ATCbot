@@ -71,6 +71,12 @@ export const api = {
       body: body ? JSON.stringify(body) : undefined,
     });
   },
+  patch<T>(path: string, body?: unknown) {
+    return request<T>(path, {
+      method: "PATCH",
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  },
   del<T>(path: string) {
     return request<T>(path, { method: "DELETE" });
   },
@@ -734,6 +740,67 @@ export const endpoints = {
         created_at: string;
       }>
     >("/reconciliation/over-issuance-log"),
+
+  // ── Automated notifications (migration 068) ──────────────────────────
+  automatedNotifications: () =>
+    api.get<
+      Array<{
+        key: string;
+        title: string;
+        description: string | null;
+        category: string;
+        is_enabled: boolean;
+        has_custom_text: boolean;
+        default_text_ru: string;
+        custom_text_ru: string | null;
+        trigger_config: Record<string, unknown>;
+        template_vars: string[];
+        updated_at: string | null;
+        last_edited_by: number | null;
+      }>
+    >("/automated-notifications/"),
+  automatedNotificationGet: (key: string) =>
+    api.get<{
+      key: string;
+      title: string;
+      description: string | null;
+      category: string;
+      is_enabled: boolean;
+      has_custom_text: boolean;
+      default_text_ru: string;
+      custom_text_ru: string | null;
+      trigger_config: Record<string, unknown>;
+      template_vars: string[];
+      updated_at: string | null;
+      last_edited_by: number | null;
+    }>(`/automated-notifications/${encodeURIComponent(key)}`),
+  automatedNotificationPatch: (
+    key: string,
+    body: {
+      custom_text_ru?: string | null;
+      is_enabled?: boolean;
+      trigger_config?: Record<string, unknown>;
+    },
+  ) =>
+    api.patch<{ ok: boolean; key: string }>(
+      `/automated-notifications/${encodeURIComponent(key)}`,
+      body,
+    ),
+  automatedNotificationReset: (key: string) =>
+    api.post<{ ok: boolean; key: string; reset: boolean }>(
+      `/automated-notifications/${encodeURIComponent(key)}/reset`,
+    ),
+  automatedNotificationStats: (key: string, hours = 168) =>
+    api.get<{
+      key: string;
+      hours: number;
+      sent: number;
+      failed: number;
+      blocked: number;
+      skipped: number;
+    }>(
+      `/automated-notifications/${encodeURIComponent(key)}/stats?hours=${hours}`,
+    ),
 };
 
 // Auth-aware CSV download via fetch + blob. Returns nothing; triggers
