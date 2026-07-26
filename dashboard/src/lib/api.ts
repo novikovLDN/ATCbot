@@ -300,6 +300,22 @@ export const endpoints = {
     api.get<Record<string, unknown>>(`/broadcasts/${id}`),
   broadcastStats: (id: number) =>
     api.get<Record<string, unknown>>(`/broadcasts/${id}/stats`),
+  broadcastAnalytics: (id: number) =>
+    api.get<{
+      total_recipients: number;
+      sent: number;
+      failed: number;
+      deleted: number;
+      delivered: number;
+      converted_1d: number;
+      converted_3d: number;
+      converted_7d: number;
+      revenue_kop_1d: number;
+      revenue_kop_3d: number;
+      revenue_kop_7d: number;
+      conversion_rate_7d: number;
+      blocked_estimate: number;
+    }>(`/broadcasts/${id}/analytics`),
   broadcastSegments: () =>
     api.get<
       Array<{

@@ -293,6 +293,21 @@ async def broadcast_stats(broadcast_id: int = Path(..., gt=0)):
     return _serialize(stats or {})
 
 
+@router.get("/{broadcast_id}/analytics")
+async def broadcast_analytics(broadcast_id: int = Path(..., gt=0)):
+    """Расширенная аналитика рассылки: conversion / revenue / blocked.
+
+    Возвращает счётчики sent/failed/deleted и окна конверсии
+    (1д/3д/7д) — уникальные юзеры, купившие после отправки, и
+    их суммарный доход.
+    """
+    try:
+        data = await database.get_broadcast_analytics(broadcast_id)
+    except Exception as e:
+        raise HTTPException(500, f"broadcast_analytics_failed: {e}")
+    return _serialize(data or {})
+
+
 # ── PHOTO UPLOAD ─────────────────────────────────────────────────────
 
 

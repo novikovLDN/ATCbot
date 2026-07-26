@@ -1809,6 +1809,88 @@ async def get_broadcast_stats(broadcast_id: int) -> Dict[str, int]:
         return {"sent": sent_count or 0, "failed": failed_count or 0}
 
 
+async def get_broadcast_analytics(broadcast_id: int) -> Dict[str, Any]:
+    """Расширенная статистика по одной рассылке.
+
+    Возвращает:
+      - total_recipients   — сколько было в аудитории (sent + failed + deleted)
+      - sent               — успешно доставлено
+      - failed             — не доставлено (включая blocked)
+      - deleted            — сообщение удалено пост-фактум (bulk-delete)
+      - converted_1d/3d/7d — уникальные юзеры, купившие в течение окна
+                             от sent_at (по любой успешной оплате в payments)
+      - revenue_kop_1d/3d/7d — суммарный доход от этих оплат в копейках
+      - conversion_rate_7d — converted_7d / sent (0..1)
+      - blocked_estimate   — эвристика: доля failed от общего (0..1)
+
+    Все окна считаются от `sent_at` каждого получателя (не от одной точки
+    рассылки) — на случай ретаргетинг-рассылок, где отправка растянута.
+
+    Совместимость статусов оплаты: как 'paid', так и 'approved' (в
+    разных провайдерах прижилось по-разному).
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Suммарные счётчики по статусам broadcast_log
+        counts_row = await conn.fetchrow(
+            """SELECT
+                   COUNT(*) FILTER (WHERE status = 'sent')     AS sent,
+                   COUNT(*) FILTER (WHERE status = 'failed')   AS failed,
+                   COUNT(*) FILTER (WHERE status = 'deleted')  AS deleted,
+                   COUNT(*)                                     AS total
+               FROM broadcast_log
+               WHERE broadcast_id = $1""",
+            broadcast_id,
+        )
+        sent = int(counts_row["sent"] or 0)
+        failed = int(counts_row["failed"] or 0)
+        deleted = int(counts_row["deleted"] or 0)
+        total = int(counts_row["total"] or 0)
+        # Считаем deleted как «доставленных ранее» — они конвертились
+        # ДО удаления, факт удаления сообщения не отменяет продажу.
+        delivered = sent + deleted
+
+        async def _conv_and_rev(hours: int) -> tuple[int, int]:
+            row = await conn.fetchrow(
+                f"""SELECT
+                        COUNT(DISTINCT bl.telegram_id) AS conv,
+                        COALESCE(SUM(p.amount), 0)     AS rev
+                    FROM broadcast_log bl
+                    JOIN payments p
+                      ON p.telegram_id = bl.telegram_id
+                     AND p.status IN ('paid', 'approved')
+                     AND p.created_at BETWEEN bl.sent_at
+                                          AND bl.sent_at + INTERVAL '{hours} hours'
+                    WHERE bl.broadcast_id = $1
+                      AND bl.status IN ('sent', 'deleted')""",
+                broadcast_id,
+            )
+            return int(row["conv"] or 0), int(row["rev"] or 0)
+
+        converted_1d, rev_1d = await _conv_and_rev(24)
+        converted_3d, rev_3d = await _conv_and_rev(72)
+        converted_7d, rev_7d = await _conv_and_rev(24 * 7)
+
+        conversion_rate_7d = (converted_7d / delivered) if delivered > 0 else 0.0
+        blocked_estimate = (failed / total) if total > 0 else 0.0
+
+    return {
+        "total_recipients": total,
+        "sent": sent,
+        "failed": failed,
+        "deleted": deleted,
+        "delivered": delivered,
+        "converted_1d": converted_1d,
+        "converted_3d": converted_3d,
+        "converted_7d": converted_7d,
+        "revenue_kop_1d": rev_1d,
+        "revenue_kop_3d": rev_3d,
+        "revenue_kop_7d": rev_7d,
+        "conversion_rate_7d": round(conversion_rate_7d, 4),
+        "blocked_estimate": round(blocked_estimate, 4),
+    }
+
+
 async def get_recent_broadcasts(limit: int = 10) -> list:
     """Get recent broadcasts for admin deletion UI."""
     pool = await get_pool()
