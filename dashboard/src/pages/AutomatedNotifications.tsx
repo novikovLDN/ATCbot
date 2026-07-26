@@ -6,11 +6,13 @@ import {
   ChevronDown,
   Edit3,
   Info,
+  Plus,
   Power,
   RefreshCcw,
   RotateCcw,
   Send,
   Timer,
+  Trash2,
   X,
 } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
@@ -32,6 +34,7 @@ interface NotifRow {
   template_vars: string[];
   updated_at: string | null;
   last_edited_by: number | null;
+  is_code_registered: boolean;
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -52,6 +55,7 @@ export function AutomatedNotifications() {
     refetchInterval: 30_000,
   });
   const [editing, setEditing] = useState<NotifRow | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
 
   const grouped = useMemo(() => {
     if (!list.data) return new Map<string, NotifRow[]>();
@@ -96,15 +100,25 @@ export function AutomatedNotifications() {
             <b> без релиза</b>.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => list.refetch()}
-          className="btn-secondary"
-          disabled={list.isFetching}
-        >
-          {list.isFetching ? <Spinner /> : <RefreshCcw className="h-3.5 w-3.5" />}
-          Обновить
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowCreate(true)}
+            className="btn-primary"
+            title="Создать своё уведомление (только редактируемое, без code-триггера)"
+          >
+            <Plus className="h-3.5 w-3.5" /> Новое
+          </button>
+          <button
+            type="button"
+            onClick={() => list.refetch()}
+            className="btn-secondary"
+            disabled={list.isFetching}
+          >
+            {list.isFetching ? <Spinner /> : <RefreshCcw className="h-3.5 w-3.5" />}
+            Обновить
+          </button>
+        </div>
       </header>
 
       {/* KPI-сводка */}
@@ -184,6 +198,192 @@ export function AutomatedNotifications() {
           onClose={() => setEditing(null)}
         />
       )}
+      {showCreate && (
+        <CreateModal onClose={() => setShowCreate(false)} />
+      )}
+    </div>
+  );
+}
+
+function CreateModal({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient();
+  const [key, setKey] = useState("admin.");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("other");
+  const [text, setText] = useState("");
+
+  const create = useMutation({
+    mutationFn: () => {
+      const cleanedKey = key.trim().toLowerCase();
+      if (!/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/.test(cleanedKey)) {
+        throw new Error("key: формат 'namespace.name' (a-z, 0-9, _)");
+      }
+      if (title.trim().length < 2) throw new Error("Заголовок ≥ 2 символа");
+      if (text.trim().length < 1) throw new Error("Текст не должен быть пустым");
+      return endpoints.automatedNotificationCreate({
+        key: cleanedKey,
+        title: title.trim(),
+        description: description.trim() || undefined,
+        category,
+        default_text_ru: text,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Создано");
+      qc.invalidateQueries({ queryKey: ["automated-notifications"] });
+      onClose();
+    },
+    onError: (e: unknown) => {
+      const msg =
+        (e as ApiError)?.detail ??
+        (e instanceof Error ? e.message : "Не удалось создать");
+      toast.error(msg);
+    },
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
+      <div className="card flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden p-0">
+        <div className="flex items-start justify-between gap-3 border-b border-border p-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <Plus className="h-4 w-4 text-fg-muted" />
+              <h3 className="text-base font-semibold text-fg">
+                Новое уведомление
+              </h3>
+            </div>
+            <div className="mt-0.5 text-[11px] text-fg-subtle">
+              Создастся редактируемое admin-notification без code-триггера.
+              Отправка — только вручную через «Тест в TG».
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="btn-ghost">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-3 overflow-y-auto p-4">
+          <div className="rounded-lg border border-info/20 bg-info/[0.06] p-3 text-[12px] leading-relaxed text-fg-muted">
+            <Info className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-info" />
+            <b>Как использовать:</b> admin-notification — заготовка текста
+            для будущих кампаний или пробных отправок. Bot не шлёт их
+            автоматически (нет code-триггера), но их можно править,
+            отправлять себе тестом (кнопка «Тест в TG») и использовать
+            через API из своих скриптов.
+          </div>
+
+          <label className="block">
+            <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
+              Ключ (уникальный)
+            </div>
+            <input
+              type="text"
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              placeholder="admin.summer_sale"
+              className="input font-mono text-[13px]"
+              autoFocus
+            />
+            <div className="mt-1 text-[10px] text-fg-subtle">
+              Формат: <code>namespace.name</code> · a-z, 0-9, _ · например,{" "}
+              <code>admin.welcome_pro</code>. Namespace <code>admin.</code>{" "}
+              рекомендуется, чтобы отличать от зашитых в коде.
+            </div>
+          </label>
+
+          <label className="block">
+            <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
+              Заголовок (что видит админ)
+            </div>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Летняя акция — welcome"
+              className="input"
+            />
+          </label>
+
+          <label className="block">
+            <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
+              Описание (опционально)
+            </div>
+            <input
+              type="text"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Для когорты новых юзеров, летний оффер"
+              className="input"
+            />
+          </label>
+
+          <label className="block">
+            <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
+              Категория
+            </div>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="input"
+            >
+              {[
+                ["trial", "🎁 Триал"],
+                ["subscription", "💳 Подписка"],
+                ["welcome", "👋 Приветствие"],
+                ["payment", "💰 Платежи"],
+                ["referral", "🤝 Рефералы"],
+                ["gift", "🎉 Подарки"],
+                ["reminder", "🔔 Напоминания"],
+                ["other", "📦 Прочее"],
+              ].map(([k, l]) => (
+                <option key={k} value={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
+              Текст сообщения (HTML)
+            </div>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={8}
+              placeholder="🎁 <b>Летняя акция!</b>&#10;&#10;Скидка 20% на любой тариф до конца недели."
+              className="input font-mono text-[12px] leading-relaxed"
+            />
+            <div className="mt-1 text-[10px] text-fg-subtle">
+              Поддерживаются HTML-теги Telegram: <code>&lt;b&gt;</code>,{" "}
+              <code>&lt;i&gt;</code>, <code>&lt;code&gt;</code>,{" "}
+              <code>&lt;blockquote&gt;</code>. Эмодзи и{" "}
+              <code>&lt;tg-emoji&gt;</code> — тоже.
+            </div>
+          </label>
+        </div>
+
+        <div className="flex items-center gap-2 border-t border-border p-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-secondary flex-1"
+            disabled={create.isPending}
+          >
+            Отмена
+          </button>
+          <button
+            type="button"
+            onClick={() => create.mutate()}
+            disabled={create.isPending}
+            className="btn-primary flex-1"
+          >
+            {create.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
+            Создать
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -411,6 +611,18 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
     },
   });
 
+  const del = useMutation({
+    mutationFn: () => endpoints.automatedNotificationDelete(row.key),
+    onSuccess: () => {
+      toast.success("Удалено");
+      qc.invalidateQueries({ queryKey: ["automated-notifications"] });
+      onClose();
+    },
+    onError: (e: unknown) => {
+      toast.error((e as ApiError)?.detail ?? "Не удалось удалить");
+    },
+  });
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
       <div className="card flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden p-0">
@@ -575,6 +787,20 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
         </div>
 
         <div className="flex items-center gap-2 border-t border-border p-4">
+          {!row.is_code_registered && (
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm(`Удалить «${row.title}»? Действие необратимо.`))
+                  del.mutate();
+              }}
+              disabled={del.isPending}
+              className="btn-ghost text-danger hover:text-danger"
+              title="Удалить admin-created уведомление (код-owned нельзя)"
+            >
+              {del.isPending ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" />}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => testSend.mutate()}

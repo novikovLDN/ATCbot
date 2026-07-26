@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import re
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
@@ -20,6 +21,7 @@ from app.api.dashboard.deps import require_admin
 from app.services.automated_notifications import (
     REGISTRY, get_trigger_config, sync_registry_to_db,
 )
+from app.services.automated_notifications.registry import VALID_CATEGORIES
 from app.services.automated_notifications.helper import (
     get_row, get_stats, update_notification,
 )
@@ -91,6 +93,9 @@ async def list_notifications() -> List[Dict[str, Any]]:
             "template_vars": list(r["template_vars"] or []),
             "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
             "last_edited_by": r["last_edited_by"],
+            # Флаг для UI: admin-created ключи можно удалить,
+            # code-registered — только disable через is_enabled=false.
+            "is_code_registered": r["key"] in REGISTRY,
         })
     return out
 
@@ -207,6 +212,110 @@ async def reset_notification_text(
     if not ok:
         raise HTTPException(404, "not found")
     return {"ok": True, "key": key, "reset": True}
+
+
+_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
+
+
+class CreatePayload(BaseModel):
+    """Body для создания admin-notification.
+
+    key: строгий формат `namespace.name` (a-z, 0-9, _). Пример: 'admin.summer_sale'.
+    Namespace 'admin.' — рекомендация для отделения от кода; технически можно любой.
+    """
+    key: str = Field(..., min_length=3, max_length=80)
+    title: str = Field(..., min_length=2, max_length=200)
+    description: str | None = Field(None, max_length=1000)
+    category: str = Field("other")
+    default_text_ru: str = Field(..., min_length=1, max_length=4096)
+    template_vars: list[str] = Field(default_factory=list, max_length=20)
+    trigger_config: dict = Field(default_factory=dict)
+
+
+@router.post("/", status_code=201)
+async def create_notification(
+    payload: CreatePayload,
+    admin: dict = Depends(require_admin),
+):
+    """Создать admin-notification. Он появится в общем списке рядом
+    с зашитыми в коде.
+
+    Ограничения:
+      - key должен матчиться на `^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$`
+        (namespace.name — узнаваемо и легко искать).
+      - key не должен конфликтовать с уже существующим (409).
+      - category — из VALID_CATEGORIES.
+
+    Admin-notification не привязан к coded-event trigger'у — bot-код
+    его не отправляет автоматически. Использование: prepare templates
+    заранее и отправить их через test-send или сохранить для будущих
+    рассылок (через scheduled_broadcasts, referencing key).
+    """
+    key = payload.key.strip().lower()
+    if not _KEY_RE.match(key):
+        raise HTTPException(
+            400,
+            "key format: 'namespace.name' (a-z, 0-9, _; each part 1+ chars)",
+        )
+    if payload.category not in VALID_CATEGORIES:
+        raise HTTPException(400, f"category must be one of {sorted(VALID_CATEGORIES)}")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM automated_notifications WHERE key = $1", key,
+        )
+        if exists:
+            raise HTTPException(409, f"key already exists: {key}")
+        import json as _json
+        await conn.execute(
+            """INSERT INTO automated_notifications
+                    (key, title, description, category,
+                     default_text_ru, template_vars, trigger_config,
+                     last_edited_by)
+               VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)""",
+            key, payload.title.strip(), (payload.description or "").strip(),
+            payload.category, payload.default_text_ru,
+            list(payload.template_vars),
+            _json.dumps(payload.trigger_config, ensure_ascii=False),
+            int(admin["sub"]),
+        )
+    # Инвалидируем кэш helper'а
+    from app.services.automated_notifications.helper import touch_cache
+    touch_cache()
+    return {"ok": True, "key": key, "created": True}
+
+
+@router.delete("/{key}")
+async def delete_notification(
+    key: str = Path(..., min_length=3, max_length=80),
+    admin: dict = Depends(require_admin),  # noqa: ARG001 (admin unused but required)
+):
+    """Удалить notification. Разрешено только для admin-created
+    (не зарегистрированных в code REGISTRY) — иначе на следующем
+    старте бота они бы всё равно воскресли через sync_registry_to_db().
+
+    Возвращает 400 если key принадлежит REGISTRY. Иначе — удаляет
+    вместе со всей историей sends для этого ключа.
+    """
+    if key in REGISTRY:
+        raise HTTPException(
+            400,
+            f"'{key}' is code-registered; disable it через is_enabled=false вместо удаления",
+        )
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Сначала логи (FK нет, но чистим руками).
+        await conn.execute(
+            "DELETE FROM automated_notification_sends WHERE key = $1", key,
+        )
+        res = await conn.execute(
+            "DELETE FROM automated_notifications WHERE key = $1", key,
+        )
+    from app.services.automated_notifications.helper import touch_cache
+    touch_cache()
+    if res == "DELETE 0":
+        raise HTTPException(404, "key not found")
+    return {"ok": True, "key": key, "deleted": True}
 
 
 @router.get("/{key}/stats")
