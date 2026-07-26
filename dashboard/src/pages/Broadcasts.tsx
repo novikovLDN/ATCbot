@@ -21,7 +21,7 @@ import {
 import { ApiError, endpoints } from "@/lib/api";
 import { useEventStream, type BusEvent } from "@/lib/ws";
 import { toast } from "@/store/toast";
-import { fmtDate, fmtNum, truncate } from "@/lib/format";
+import { fmtDate, fmtNum, fmtRub, truncate } from "@/lib/format";
 import { Spinner } from "@/components/Spinner";
 import { EmptyState } from "@/components/EmptyState";
 
@@ -348,6 +348,15 @@ function BroadcastDetail({
     // the admin sees delivered/failed climb in real time. Idle: 5s.
     refetchInterval: progress?.status === "running" ? 1_000 : 5_000,
   });
+  // Расширенная аналитика: conversion в окнах 1д/3д/7д от sent_at
+  // каждого получателя + revenue от этих оплат. Обновляется реже —
+  // это тяжёлый JOIN broadcast_log × payments.
+  const analytics = useQuery({
+    queryKey: ["broadcasts", "analytics", id],
+    queryFn: () => endpoints.broadcastAnalytics(id),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
 
   if (det.isLoading) {
     return (
@@ -498,6 +507,12 @@ function BroadcastDetail({
         )}
       </div>
 
+      <BroadcastAnalyticsPanel
+        loading={analytics.isLoading}
+        error={analytics.isError}
+        data={analytics.data}
+      />
+
       {typeof b.message === "string" && b.message && (
         <div className="mt-4 rounded-xl border border-border bg-bg-subtle/60 p-3">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
@@ -509,6 +524,156 @@ function BroadcastDetail({
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function BroadcastAnalyticsPanel({
+  loading,
+  error,
+  data,
+}: {
+  loading: boolean;
+  error: boolean;
+  data?: {
+    total_recipients: number;
+    sent: number;
+    failed: number;
+    deleted: number;
+    delivered: number;
+    converted_1d: number;
+    converted_3d: number;
+    converted_7d: number;
+    revenue_kop_1d: number;
+    revenue_kop_3d: number;
+    revenue_kop_7d: number;
+    conversion_rate_7d: number;
+    blocked_estimate: number;
+  };
+}) {
+  if (loading) {
+    return (
+      <div className="mt-4 rounded-xl border border-border bg-bg-subtle/40 p-4">
+        <div className="text-[11px] uppercase tracking-wider text-fg-subtle">
+          Аналитика
+        </div>
+        <div className="mt-1.5 text-sm text-fg-muted">Считаю конверсию…</div>
+      </div>
+    );
+  }
+  if (error || !data) {
+    return null;
+  }
+  const convRate = data.conversion_rate_7d;
+  const blockedPct = data.blocked_estimate;
+  return (
+    <div className="mt-4 rounded-xl border border-border bg-gradient-to-br from-accent/5 to-white p-4">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
+          🎯 Конверсия и доход
+        </div>
+        <div className="text-[11px] text-fg-subtle">
+          7д CR:{" "}
+          <span
+            className={
+              convRate >= 0.05
+                ? "font-semibold text-success"
+                : convRate >= 0.01
+                ? "font-semibold text-warning"
+                : "font-semibold text-fg-muted"
+            }
+          >
+            {(convRate * 100).toFixed(2)}%
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <ConvTile
+          window="24ч"
+          count={data.converted_1d}
+          revenueKop={data.revenue_kop_1d}
+        />
+        <ConvTile
+          window="72ч"
+          count={data.converted_3d}
+          revenueKop={data.revenue_kop_3d}
+        />
+        <ConvTile
+          window="7д"
+          count={data.converted_7d}
+          revenueKop={data.revenue_kop_7d}
+          highlight
+        />
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-fg-muted sm:grid-cols-4">
+        <MiniStat label="Доставлено" value={fmtNum(data.delivered)} />
+        <MiniStat label="Ошибок" value={fmtNum(data.failed)} tone="danger" />
+        <MiniStat
+          label="Заблокировавших ≈"
+          value={`${(blockedPct * 100).toFixed(1)}%`}
+          tone={blockedPct > 0.1 ? "danger" : undefined}
+        />
+        <MiniStat label="Удалено" value={fmtNum(data.deleted)} />
+      </div>
+    </div>
+  );
+}
+
+function ConvTile({
+  window,
+  count,
+  revenueKop,
+  highlight,
+}: {
+  window: string;
+  count: number;
+  revenueKop: number;
+  highlight?: boolean;
+}) {
+  return (
+    <div
+      className={
+        highlight
+          ? "rounded-xl border border-accent/30 bg-accent/10 p-3"
+          : "rounded-xl border border-border bg-bg-card p-3"
+      }
+    >
+      <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
+        Купили за {window}
+      </div>
+      <div className="mt-0.5 text-xl font-semibold tabular-nums text-fg">
+        {fmtNum(count)}
+      </div>
+      <div className="mt-0.5 text-[11px] tabular-nums text-fg-muted">
+        {fmtRub(revenueKop / 100)}
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "danger";
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-1">
+      <span className="truncate text-fg-subtle">{label}</span>
+      <span
+        className={
+          tone === "danger"
+            ? "font-semibold tabular-nums text-danger"
+            : "font-semibold tabular-nums text-fg"
+        }
+      >
+        {value}
+      </span>
     </div>
   );
 }

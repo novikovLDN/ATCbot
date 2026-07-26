@@ -3443,11 +3443,12 @@ async def get_admin_referral_stats(
             # Базовый запрос для агрегированной статистики
             # Используем подзапросы для корректной агрегации
             base_query = """
-            SELECT 
+            SELECT
                 u.telegram_id AS referrer_id,
                 u.username,
                 COALESCE(ref_stats.invited_count, 0) AS invited_count,
                 COALESCE(paid_stats.paid_count, 0) AS paid_count,
+                COALESCE(trial_stats.trial_count, 0) AS trial_count,
                 COALESCE(MIN(r.created_at), NULL) AS first_referral_date,
                 COALESCE(revenue_stats.total_revenue_kopecks, 0) AS total_invited_revenue_kopecks,
                 COALESCE(cashback_stats.total_cashback_kopecks, 0) AS total_cashback_paid_kopecks
@@ -3464,6 +3465,16 @@ async def get_admin_referral_stats(
                 INNER JOIN payments p ON r.referred_user_id = p.telegram_id AND p.status = 'approved'
                 GROUP BY r.referrer_user_id
             ) paid_stats ON u.telegram_id = paid_stats.referrer_user_id
+            LEFT JOIN (
+                -- Скольким из приглашённых он же (реферер) активировал триал.
+                -- Триал считаем активированным если users.trial_used_at IS NOT NULL
+                -- (значение проставляется в момент /trial даже если сам триал уже истёк).
+                SELECT r.referrer_user_id, COUNT(DISTINCT r.referred_user_id) AS trial_count
+                FROM referrals r
+                INNER JOIN users u2 ON r.referred_user_id = u2.telegram_id
+                WHERE u2.trial_used_at IS NOT NULL
+                GROUP BY r.referrer_user_id
+            ) trial_stats ON u.telegram_id = trial_stats.referrer_user_id
             LEFT JOIN (
                 SELECT r.referrer_user_id, SUM(p.amount) AS total_revenue_kopecks
                 FROM referrals r
@@ -3500,7 +3511,7 @@ async def get_admin_referral_stats(
             where_clauses.append(f"ref_stats.invited_count > 0 OR EXISTS (SELECT 1 FROM referrals r2 WHERE r2.referrer_user_id = u.telegram_id)")
             
             # Группировка по рефереру
-            group_by = "GROUP BY u.telegram_id, u.username, ref_stats.invited_count, paid_stats.paid_count, revenue_stats.total_revenue_kopecks, cashback_stats.total_cashback_kopecks"
+            group_by = "GROUP BY u.telegram_id, u.username, ref_stats.invited_count, paid_stats.paid_count, trial_stats.trial_count, revenue_stats.total_revenue_kopecks, cashback_stats.total_cashback_kopecks"
             
             # Сортировка
             sort_column_map = {
@@ -3543,9 +3554,11 @@ async def get_admin_referral_stats(
                 # Безопасное извлечение значений с обработкой NULL
                 invited_count = safe_int(row_data.get("invited_count"))
                 paid_count = safe_int(row_data.get("paid_count"))
-                
+                trial_count = safe_int(row_data.get("trial_count"))
+
                 # Вычисляем процент конверсии (защита от деления на 0)
                 conversion_percent = (paid_count / invited_count * 100) if invited_count > 0 else 0.0
+                trial_percent = (trial_count / invited_count * 100) if invited_count > 0 else 0.0
                 
                 # Конвертируем из копеек в рубли с безопасной обработкой NULL
                 total_invited_revenue_kopecks = safe_int(row_data.get("total_invited_revenue_kopecks"))
@@ -3566,6 +3579,8 @@ async def get_admin_referral_stats(
                     "referrer_id": referrer_id,
                     "username": row_data.get("username") or f"ID{referrer_id}",
                     "invited_count": invited_count,
+                    "trial_count": trial_count,
+                    "trial_percent": round(trial_percent, 2),
                     "paid_count": paid_count,
                     "conversion_percent": round(conversion_percent, 2),
                     "total_invited_revenue": round(total_invited_revenue, 2),

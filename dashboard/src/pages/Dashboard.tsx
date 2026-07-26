@@ -217,6 +217,15 @@ export function Dashboard() {
     refetchInterval: 90_000,
     staleTime: 60_000,
   });
+  // Payments breakdown (тип / провайдер / тариф / apple-номинал) —
+  // отдельный переключатель окна.
+  const [breakdownHours, setBreakdownHours] = useState<24 | 168 | 720>(24);
+  const paymentsBreakdown = useQuery({
+    queryKey: ["payments", "breakdown", breakdownHours],
+    queryFn: () => endpoints.paymentsBreakdown(breakdownHours),
+    refetchInterval: 120_000,
+    staleTime: 60_000,
+  });
   // Hourly breakdown: окно 1д / 7д / 30д, тот же metric switcher.
   const [hourlyDays, setHourlyDays] = useState<1 | 7 | 30>(7);
   const [hourlyMetric, setHourlyMetric] = useState<MetricKey>("payments_count");
@@ -605,6 +614,20 @@ export function Dashboard() {
             />
           </SurfaceCard>
         </section>
+        </Collapsible>
+
+        {/* Payments breakdown — что и как оплатили за последние 24ч/7д/30д. */}
+        <Collapsible
+          title="Оплаты · разбивка по продукту и провайдеру"
+          subtitle="что купили + как заплатили + Apple-номиналы"
+          remember="dash-payments-breakdown"
+        >
+          <PaymentsBreakdownCard
+            data={paymentsBreakdown.data}
+            loading={paymentsBreakdown.isLoading}
+            hours={breakdownHours}
+            onHoursChange={setBreakdownHours}
+          />
         </Collapsible>
 
         {/* Активность по часам + funnel. Collapsed по умолчанию. */}
@@ -1496,33 +1519,59 @@ function labelForKey(key?: string, fallback?: string): string {
 
 // ─ Segments card (kept) ──────────────────────────────────────────────
 
-const SEGMENT_GROUPS: { title: string; keys: string[] }[] = [
+// Группы + краткое описание для plashka-header. Каждая группа
+// сворачивается отдельно (Collapsible), список плашек по вертикали.
+// Все свёрнуты по умолчанию — иначе экран сегментов растягивается
+// на 500+ px.
+const SEGMENT_GROUPS: { title: string; sub: string; keys: string[] }[] = [
   {
     title: "База",
+    sub: "все юзеры · активные · без подписки · без Remnawave · холодные",
     keys: [
       "all_users",
       "active_subscriptions",
       "no_subscription",
       "no_remnawave",
+      "started_1d_cold",
+      "started_3d_cold",
       "started_7d_cold",
+      "started_14d_cold",
+      "started_30d_cold",
     ],
   },
   {
     title: "Активный триал",
-    keys: ["trial_active_any", "trial_activated_today"],
+    sub: "сейчас идут · день 1/2/3 · активирован за 24ч",
+    keys: [
+      "trial_active_any",
+      "trial_activated_today",
+      "trial_active_day1",
+      "trial_active_day2",
+      "trial_active_day3",
+      "trial_ends_in_1d",
+    ],
   },
   {
-    title: "Триал-воронка (истёк)",
+    title: "Триал истёк · реактивация",
+    sub: "6ч / 1д / 2д / 3д / 7д / 14д / 30д / 60д / 90д / 180д / 365д",
     keys: [
-      "trial_ends_in_1d",
       "trial_expired_6h",
       "trial_expired_1d",
       "trial_expired_2d",
       "trial_expired_3d",
+      "trial_expired_7d",
+      "trial_expired_14d",
+      "trial_expired_30d",
+      "trial_expired_60d",
+      "trial_expired_90d",
+      "trial_expired_180d",
+      "trial_expired_365d",
+      "trial_expired_within_6m",
     ],
   },
   {
     title: "Платные — скоро истекут",
+    sub: "1д / 3д / 7д / 14д — pre-churn напоминания",
     keys: [
       "paid_expires_in_1d",
       "paid_expires_in_3d",
@@ -1531,12 +1580,37 @@ const SEGMENT_GROUPS: { title: string; keys: string[] }[] = [
     ],
   },
   {
-    title: "Истёкли (любая подписка)",
-    keys: ["expired_1d", "expired_2d", "expired_3d"],
+    title: "Платные истекли · реактивация",
+    sub: "1д / 7д / 14д / 30д / 60д / 90д / 180д / 365д / 2 года",
+    keys: [
+      "paid_expired_1d",
+      "paid_expired_7d",
+      "paid_expired_14d",
+      "paid_expired_30d",
+      "paid_expired_60d",
+      "paid_expired_90d",
+      "paid_expired_180d",
+      "paid_expired_365d",
+      "paid_expired_730d",
+      "paid_lapsed_any",
+    ],
   },
   {
-    title: "Реактивация платных",
-    keys: ["paid_expired_1d", "paid_expired_30d", "paid_lapsed_any"],
+    title: "Истёкла любая подписка",
+    sub: "агрегированные окна (триал ∪ платная)",
+    keys: ["expired_1d", "expired_2d", "expired_3d", "expires_in_3d"],
+  },
+  {
+    title: "Апселл · особые",
+    sub: "VIP · Basic · Plus · Combo · со скидкой · с балансом",
+    keys: [
+      "vip_active",
+      "basic_active",
+      "plus_active",
+      "combo_active",
+      "discount_active",
+      "has_balance_50plus",
+    ],
   },
 ];
 
@@ -1555,34 +1629,54 @@ function SegmentsCard({
       <SurfaceHeader
         eyebrow="Сегменты"
         title="Аудитории для рассылок"
-        sub="обновляется каждые 5 минут · клик → создать рассылку"
+        sub="обновляется каждые 5 мин · клик по строке → создать рассылку"
       />
       {error ? (
         <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
           Не удалось загрузить сегменты.
         </div>
       ) : (
-        <div className="mt-4 space-y-5">
-          {SEGMENT_GROUPS.map((group) => (
-            <div key={group.title}>
-              <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-                {group.title}
-              </div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {group.keys.map((k) => {
-                  const s = byKey.get(k);
-                  return (
-                    <SegmentRow
-                      key={k}
-                      label={s?.label ?? k}
-                      count={s?.count}
-                      loading={loading}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+        <div className="mt-4 space-y-2.5">
+          {SEGMENT_GROUPS.map((group) => {
+            // Total-count группы (сумма всех сегментов) для badge в header.
+            // count === -1 значит ошибка счётчика — пропускаем.
+            const total = group.keys.reduce((a, k) => {
+              const s = byKey.get(k);
+              return s && s.count >= 0 ? a + s.count : a;
+            }, 0);
+            const badge = loading
+              ? "…"
+              : total > 0
+              ? fmtNum(total)
+              : "0";
+            return (
+              <Collapsible
+                key={group.title}
+                title={group.title}
+                subtitle={group.sub}
+                remember={`segments-${group.title}`}
+                badge={
+                  <span className="rounded-md bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent tabular-nums">
+                    {badge}
+                  </span>
+                }
+              >
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {group.keys.map((k) => {
+                    const s = byKey.get(k);
+                    return (
+                      <SegmentRow
+                        key={k}
+                        label={s?.label ?? k}
+                        count={s?.count}
+                        loading={loading}
+                      />
+                    );
+                  })}
+                </div>
+              </Collapsible>
+            );
+          })}
         </div>
       )}
     </SurfaceCard>
@@ -1706,11 +1800,18 @@ function TopReferrersList({
   return (
     <ol className="mt-4 space-y-1.5">
       {data.slice(0, 5).map((r, i) => {
-        const id = asNum(r.telegram_id) ?? 0;
+        // Backend возвращает referrer_id/total_invited_revenue/
+        // total_cashback_paid — раньше был баг: читали telegram_id/
+        // total_revenue/cashback_paid → всё показывалось как «—».
+        const id = asNum(r.referrer_id) ?? asNum(r.telegram_id) ?? 0;
         const username = (r.username as string) || "—";
         const invited = asNum(r.invited_count) ?? 0;
-        const revenue = asNum(r.total_revenue) ?? 0;
-        const cashback = asNum(r.cashback_paid) ?? 0;
+        const trials = asNum(r.trial_count) ?? 0;
+        const paid = asNum(r.paid_count) ?? 0;
+        const trialPct = asNum(r.trial_percent) ?? 0;
+        const paidPct = asNum(r.conversion_percent) ?? 0;
+        const revenue = asNum(r.total_invited_revenue) ?? asNum(r.total_revenue) ?? 0;
+        const cashback = asNum(r.total_cashback_paid) ?? asNum(r.cashback_paid) ?? 0;
         return (
           <Link
             key={String(id) + "_" + i}
@@ -1724,8 +1825,35 @@ function TopReferrersList({
               <div className="truncate text-sm font-medium text-fg">
                 {username !== "—" ? `@${username}` : `tg:${id}`}
               </div>
-              <div className="truncate text-[11px] text-fg-muted">
-                {fmtNum(invited)} приглашённых · кэшбэк {fmtRub(cashback)}
+              <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] tabular-nums">
+                <span className="rounded-md bg-fg/5 px-1.5 py-0.5 text-fg-muted">
+                  👥 {fmtNum(invited)}
+                </span>
+                <span
+                  className="rounded-md bg-info/10 px-1.5 py-0.5 text-info"
+                  title="сколько из приглашённых активировали пробный период"
+                >
+                  🎁 {fmtNum(trials)}
+                  {invited > 0 && (
+                    <span className="ml-0.5 text-info/70">
+                      · {trialPct.toFixed(0)}%
+                    </span>
+                  )}
+                </span>
+                <span
+                  className="rounded-md bg-success/10 px-1.5 py-0.5 text-success"
+                  title="сколько из приглашённых сделали хотя бы одну оплату"
+                >
+                  💳 {fmtNum(paid)}
+                  {invited > 0 && (
+                    <span className="ml-0.5 text-success/70">
+                      · {paidPct.toFixed(0)}%
+                    </span>
+                  )}
+                </span>
+                <span className="text-fg-subtle">
+                  кэшбэк {fmtRub(cashback)}
+                </span>
               </div>
             </div>
             <div className="shrink-0 text-right">
@@ -1833,6 +1961,182 @@ const PROVIDER_COLORS: Record<string, string> = {
   balance: "#7C3AED",
   unknown: "#94A3B8",
 };
+
+// Локализуем ключи для читаемого label в PaymentsBreakdownCard.
+const _PT_LABEL: Record<string, string> = {
+  subscription: "Подписка",
+  balance_topup: "Пополнение баланса",
+  gift: "Подарок",
+  telegram_premium: "Telegram Premium",
+  telegram_stars: "Telegram Stars",
+  traffic_pack: "Пакет ГБ",
+  apple_id: "Apple ID",
+  steam: "Steam",
+  spotify: "Spotify Premium",
+  proxy: "MTProxy",
+  unknown: "Прочее",
+};
+const _APPLE_REGION_LABEL: Record<string, string> = {
+  usa: "🇺🇸 USA",
+  turkey: "🇹🇷 Turkey",
+  russia: "🇷🇺 Russia",
+  india: "🇮🇳 India",
+};
+const _APPLE_CUR: Record<string, string> = {
+  usa: "$",
+  turkey: "TL",
+  russia: "₽",
+  india: "INR",
+};
+
+function PaymentsBreakdownCard({
+  data,
+  loading,
+  hours,
+  onHoursChange,
+}: {
+  data:
+    | {
+        total: { count: number; revenue_rubles: number };
+        by_provider: Array<{ provider: string; count: number; revenue_rubles: number }>;
+        by_type: Array<{ purchase_type: string; count: number; revenue_rubles: number }>;
+        by_tariff: Array<{ tariff: string; count: number; revenue_rubles: number }>;
+        by_apple_nominal: Array<{
+          region: string;
+          nominal: number;
+          count: number;
+          revenue_rubles: number;
+        }>;
+      }
+    | undefined;
+  loading: boolean;
+  hours: 24 | 168 | 720;
+  onHoursChange: (h: 24 | 168 | 720) => void;
+}) {
+  const label = (h: number) => (h === 24 ? "24ч" : h === 168 ? "7д" : "30д");
+  return (
+    <SurfaceCard className="mt-2">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <SurfaceHeader
+          eyebrow={`Оплаты · ${label(hours)}`}
+          title="Разбивка по продукту и провайдеру"
+          sub={
+            data
+              ? `${fmtNum(data.total.count)} шт · ${fmtRub(data.total.revenue_rubles)}`
+              : undefined
+          }
+        />
+        <SegPill<24 | 168 | 720>
+          value={hours}
+          options={[24, 168, 720]}
+          onChange={onHoursChange}
+          fmt={label}
+        />
+      </div>
+      {loading ? (
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="skeleton h-32" />
+          ))}
+        </div>
+      ) : !data || data.total.count === 0 ? (
+        <div className="mt-6 text-sm text-fg-subtle">
+          За выбранный период оплат не было.
+        </div>
+      ) : (
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <BreakdownList
+            title="По продукту"
+            rows={data.by_type.map((r) => ({
+              label: _PT_LABEL[r.purchase_type] ?? r.purchase_type,
+              count: r.count,
+              revenue: r.revenue_rubles,
+            }))}
+          />
+          <BreakdownList
+            title="По провайдеру оплаты"
+            rows={data.by_provider.map((r) => ({
+              label: PROVIDER_LABELS[r.provider] ?? r.provider,
+              count: r.count,
+              revenue: r.revenue_rubles,
+              color: PROVIDER_COLORS[r.provider],
+            }))}
+          />
+          <BreakdownList
+            title="Топ-15 тарифов"
+            rows={data.by_tariff.map((r) => ({
+              label: r.tariff,
+              count: r.count,
+              revenue: r.revenue_rubles,
+            }))}
+          />
+          {data.by_apple_nominal.length > 0 && (
+            <BreakdownList
+              title="Apple ID · по номиналу"
+              rows={data.by_apple_nominal.map((r) => ({
+                label: `${_APPLE_REGION_LABEL[r.region] ?? r.region} · ${r.nominal}${_APPLE_CUR[r.region] ?? "$"}`,
+                count: r.count,
+                revenue: r.revenue_rubles,
+              }))}
+            />
+          )}
+        </div>
+      )}
+    </SurfaceCard>
+  );
+}
+
+function BreakdownList({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: Array<{ label: string; count: number; revenue: number; color?: string }>;
+}) {
+  const totalRev = rows.reduce((a, r) => a + r.revenue, 0);
+  return (
+    <div className="rounded-xl border border-border bg-bg-subtle/40 p-3">
+      <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+        {title}
+      </div>
+      <div className="space-y-1.5">
+        {rows.length === 0 && (
+          <div className="text-xs text-fg-subtle">Нет данных</div>
+        )}
+        {rows.map((r) => {
+          const pct = totalRev > 0 ? (r.revenue / totalRev) * 100 : 0;
+          return (
+            <div key={r.label} className="text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  {r.color && (
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ background: r.color }}
+                    />
+                  )}
+                  <span className="truncate text-fg-muted">{r.label}</span>
+                </div>
+                <div className="shrink-0 tabular-nums text-fg">
+                  {fmtRub(r.revenue)}
+                  <span className="ml-1.5 text-[10px] text-fg-subtle">
+                    {fmtNum(r.count)}
+                  </span>
+                </div>
+              </div>
+              <div className="mt-1 h-1 overflow-hidden rounded-full bg-bg-elevated">
+                <div
+                  className="h-full bg-accent/70 transition-[width] duration-500"
+                  style={{ width: `${Math.max(2, pct)}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function ProvidersBlock({
   data,

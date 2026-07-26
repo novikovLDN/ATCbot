@@ -300,6 +300,22 @@ export const endpoints = {
     api.get<Record<string, unknown>>(`/broadcasts/${id}`),
   broadcastStats: (id: number) =>
     api.get<Record<string, unknown>>(`/broadcasts/${id}/stats`),
+  broadcastAnalytics: (id: number) =>
+    api.get<{
+      total_recipients: number;
+      sent: number;
+      failed: number;
+      deleted: number;
+      delivered: number;
+      converted_1d: number;
+      converted_3d: number;
+      converted_7d: number;
+      revenue_kop_1d: number;
+      revenue_kop_3d: number;
+      revenue_kop_7d: number;
+      conversion_rate_7d: number;
+      blocked_estimate: number;
+    }>(`/broadcasts/${id}/analytics`),
   broadcastSegments: () =>
     api.get<
       Array<{
@@ -498,6 +514,32 @@ export const endpoints = {
     api.get<Array<{ provider: string; count: number; revenue_rubles: number }>>(
       `/payments/by-provider?hours=${hours}`,
     ),
+  paymentsBreakdown: (hours: number) =>
+    api.get<{
+      hours: number;
+      total: { count: number; revenue_rubles: number };
+      by_provider: Array<{
+        provider: string;
+        count: number;
+        revenue_rubles: number;
+      }>;
+      by_type: Array<{
+        purchase_type: string;
+        count: number;
+        revenue_rubles: number;
+      }>;
+      by_tariff: Array<{
+        tariff: string;
+        count: number;
+        revenue_rubles: number;
+      }>;
+      by_apple_nominal: Array<{
+        region: string;
+        nominal: number;
+        count: number;
+        revenue_rubles: number;
+      }>;
+    }>(`/payments/breakdown?hours=${hours}`),
   paymentsRecent: (params: { limit?: number; hours?: number; status?: string } = {}) => {
     const u = new URLSearchParams();
     if (params.limit !== undefined) u.set("limit", String(params.limit));
