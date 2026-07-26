@@ -141,6 +141,18 @@ export default {
         "num-tick":    "num-tick 0.35s cubic-bezier(0.34, 1.56, 0.64, 1)",
         // Ticker-marquee для лента-виджета.
         "ticker":      "ticker 32s linear infinite",
+        // Collapse animation — плавное раскрытие блока.
+        "collapse-in":  "collapse-in 0.35s cubic-bezier(0.16, 1, 0.3, 1)",
+        // Hover-tilt 3D — subtle отклонение карточки при наведении.
+        "tilt-hover":   "tilt-hover 0.3s ease-out forwards",
+        // Bento-fade — asymmetric-grid card enter (mount).
+        "bento-in":     "bento-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) backwards",
+        // Attention-pulse — короткий пульс на карточке когда через WS
+        // пришло событие «сюда обратились» (пример: revenue вырос).
+        "attention":    "attention 0.9s cubic-bezier(0.4, 0, 0.2, 1) 1",
+        // Ambient shimmer — очень медленный gradient-shift на живых
+        // hero-KPI (revenue). 20 сек, барочно.
+        "ambient":      "ambient 20s ease-in-out infinite",
       },
       keyframes: {
         "pulse-glow": {
@@ -241,6 +253,27 @@ export default {
         "ticker": {
           from: { transform: "translateX(0%)" },
           to:   { transform: "translateX(-50%)" },
+        },
+        "collapse-in": {
+          from: { opacity: "0", transform: "translateY(-4px) scaleY(0.98)" },
+          to:   { opacity: "1", transform: "translateY(0) scaleY(1)" },
+        },
+        "tilt-hover": {
+          from: { transform: "perspective(800px) rotateX(0deg) rotateY(0deg)" },
+          to:   { transform: "perspective(800px) rotateX(1.5deg) rotateY(-1.5deg) translateZ(6px)" },
+        },
+        "bento-in": {
+          from: { opacity: "0", transform: "translateY(16px) scale(0.97)" },
+          to:   { opacity: "1", transform: "translateY(0) scale(1)" },
+        },
+        "attention": {
+          "0%":   { boxShadow: "0 0 0 0 rgba(37,99,235,0.35)" },
+          "50%":  { boxShadow: "0 0 0 8px rgba(37,99,235,0.12)" },
+          "100%": { boxShadow: "0 0 0 0 rgba(37,99,235,0)" },
+        },
+        "ambient": {
+          "0%, 100%": { backgroundPosition: "0% 50%" },
+          "50%":      { backgroundPosition: "100% 50%" },
         },
       },
     },
