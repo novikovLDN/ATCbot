@@ -15,6 +15,7 @@ import {
   Stethoscope,
   CreditCard,
   Bell,
+  BarChart3,
   Settings as SettingsIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -38,6 +39,7 @@ const sections: Section[] = [
     label: "Main",
     items: [
       { to: "/", label: "Главная", icon: LayoutDashboard },
+      { to: "/statistics", label: "📊 Статистика", icon: BarChart3 },
       { to: "/users", label: "Пользователи", icon: Users },
       { to: "/analytics", label: "Аналитика", icon: TrendingUp },
       { to: "/payments", label: "Платежи", icon: CreditCard },
