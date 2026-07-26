@@ -20,6 +20,7 @@ import {
 } from "recharts";
 
 import { endpoints } from "@/lib/api";
+import { Collapsible } from "@/components/Collapsible";
 import { useEventStream, type BusEvent } from "@/lib/ws";
 import { LivePaymentTicker } from "@/components/LivePaymentTicker";
 import {
@@ -487,7 +488,13 @@ export function Dashboard() {
           </div>
         </SurfaceCard>
 
-        {/* Подписки — health */}
+        {/* Подписки — health. Collapsible: свернутая по умолчанию, если
+            админу нужны быстрые KPI — hero + Финансы выше уже дают всё. */}
+        <Collapsible
+          title="Подписки · health"
+          subtitle="renewal, lifetime, retention — расширенные метрики"
+          remember="dash-subs-health"
+        >
         <SurfaceCard>
           <SurfaceHeader
             eyebrow="Подписки"
@@ -533,8 +540,14 @@ export function Dashboard() {
             />
           </div>
         </SurfaceCard>
+        </Collapsible>
 
-        {/* Маркетинг: реферальная программа */}
+        {/* Маркетинг: реферальная программа. Collapsed по умолчанию. */}
+        <Collapsible
+          title="Маркетинг · реферальная программа"
+          subtitle="доход от рефералов, топ-амбассадоры, breakdown тарифов и провайдеров"
+          remember="dash-marketing"
+        >
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <SurfaceCard className="lg:col-span-1">
             <SurfaceHeader
@@ -592,8 +605,14 @@ export function Dashboard() {
             />
           </SurfaceCard>
         </section>
+        </Collapsible>
 
-        {/* Hourly activity — пик активности по часам МСК */}
+        {/* Активность по часам + funnel. Collapsed по умолчанию. */}
+        <Collapsible
+          title="Активность и воронка"
+          subtitle="hourly-график покупок + conversion-funnel"
+          remember="dash-activity"
+        >
         <SurfaceCard>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <SurfaceHeader
@@ -630,15 +649,29 @@ export function Dashboard() {
             loading={overview.isLoading || revenue.isLoading}
           />
         </SurfaceCard>
+        </Collapsible>
 
-        {/* Segments */}
+        {/* Сегменты рассылки. Collapsed по умолчанию —
+            служебная информация, не критичная для «одного взгляда». */}
+        <Collapsible
+          title="Сегменты рассылки"
+          subtitle="кто и сколько по каждой когорте (для планирования кампаний)"
+          remember="dash-segments"
+        >
         <SegmentsCard
           loading={segments.isLoading}
           error={segments.isError}
           data={segments.data}
         />
+        </Collapsible>
 
-        {/* Live */}
+        {/* Live-поток событий. Collapsed по умолчанию — live-ticker
+            уже висит наверху; тут детальный лог для расследований. */}
+        <Collapsible
+          title="Live · поток событий"
+          subtitle="детальный лог WS — регистрации, платежи, админ-действия"
+          remember="dash-live"
+        >
         <SurfaceCard>
           <SurfaceHeader
             eyebrow="Live"
@@ -689,10 +722,19 @@ export function Dashboard() {
             </ul>
           )}
         </SurfaceCard>
+        </Collapsible>
 
         {/* «Сверка» — reconciliation of premium subscriptions vs. paid history.
-            Lives at the very bottom of the main dashboard per product spec. */}
-        <ReconciliationSection />
+            Lives at the very bottom of the main dashboard per product spec.
+            Скрыто по умолчанию — используется редко, только когда есть подозрение
+            на рассинхрон Remnawave ↔ БД. */}
+        <Collapsible
+          title="Сверка · Remnawave ↔ БД"
+          subtitle="разница между panel-подписками и локальной историей"
+          remember="dash-reconciliation"
+        >
+          <ReconciliationSection />
+        </Collapsible>
       </div>
     </div>
   );
