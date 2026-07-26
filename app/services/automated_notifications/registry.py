@@ -112,6 +112,8 @@ register_notification(NotificationSpec(
 ))
 
 # Подписки — reminders.
+# Тексты синхронизированы с i18n/ru.py (reminder.paid_*) — если админ
+# ничего не менял, отправляется тот же текст что и до реестра.
 register_notification(NotificationSpec(
     key="subscription.reminder_7d",
     title="Подписка: за 7 дней до окончания",
@@ -122,9 +124,9 @@ register_notification(NotificationSpec(
     ),
     category="subscription",
     default_text_ru=(
-        "📅 <b>Подписка заканчивается через 7 дней</b>\n\n"
-        "Через неделю ваш доступ Atlas Secure закончится. "
-        "Продлите заранее — не потеряете день."
+        "<tg-emoji emoji-id=\"5454415424319931791\">📅</tg-emoji> "
+        "Подписка заканчивается через 7 дней. Продлите заранее — "
+        "доступ не прервётся."
     ),
     template_vars=[],
     default_trigger={"before_expiry_hours": 24 * 7, "tolerance_hours": 12},
@@ -135,13 +137,13 @@ register_notification(NotificationSpec(
     title="Подписка: за 3 дня до окончания",
     description=(
         "3 дня до конца платной подписки. Классическая точка "
-        "renewal-подсказки."
+        "renewal-подсказки. На проде отправляется с photo-header'ом."
     ),
     category="subscription",
     default_text_ru=(
-        "⏳ <b>Подписка заканчивается через 3 дня</b>\n\n"
-        "Через 3 дня доступ отключится. Продлите сейчас, чтобы "
-        "не прерывать использование."
+        "<tg-emoji emoji-id=\"5454415424319931791\">📅</tg-emoji> "
+        "Ваша подписка Atlas Secure активна ещё 3 дня\n\n"
+        "Продлите заранее — и доступ не прервётся ни на секунду 🤍"
     ),
     template_vars=[],
     default_trigger={"before_expiry_hours": 24 * 3, "tolerance_hours": 6},
@@ -153,25 +155,49 @@ register_notification(NotificationSpec(
     description="Финальный напоминающий за сутки до конца платной подписки.",
     category="subscription",
     default_text_ru=(
-        "🔔 <b>Подписка заканчивается завтра</b>\n\n"
-        "Продлите сегодня — ваш VPN-ключ и настройки сохранятся."
+        "<tg-emoji emoji-id=\"5190806721286657692\">🔴</tg-emoji> "
+        "Подписка заканчивается завтра. Продлите сейчас, чтобы "
+        "VPN продолжил работать."
     ),
     template_vars=[],
     default_trigger={"before_expiry_hours": 24, "tolerance_hours": 2},
 ))
 
 register_notification(NotificationSpec(
-    key="subscription.reminder_3h",
-    title="Подписка: за 3 часа до окончания",
+    key="subscription.reminder_24h",
+    title="Подписка: за 24 часа (legacy)",
     description=(
-        "3 часа до конца платной подписки. Обычно шлётся с "
-        "спец-скидкой 15% на продление."
+        "Старая ветка reminder-логики — 24 часа до истечения. "
+        "Действует одновременно с reminder_1d, обычно один из них "
+        "выигрывает первым. Оставлен для BC."
     ),
     category="subscription",
     default_text_ru=(
-        "🔥 <b>3 часа до отключения VPN</b>\n\n"
-        "Продлите со <b>скидкой 15%</b> — оффер действует до конца "
-        "текущей подписки."
+        "<tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> "
+        "Осталось менее 24 часов подписки\n\n"
+        "Продлите сейчас одним нажатием, чтобы VPN продолжил работать "
+        "без перерыва 🛡"
+    ),
+    template_vars=[],
+    default_trigger={"before_expiry_hours": 24, "tolerance_hours": 1},
+))
+
+register_notification(NotificationSpec(
+    key="subscription.reminder_3h",
+    title="Подписка: за 3 часа до окончания (со скидкой 15%)",
+    description=(
+        "3 часа до конца платной подписки. Шлётся со спец-кнопкой "
+        "скидки 15% на продление (её текст меняется через 'reminder."
+        "paid_3h_discount_btn' в i18n, если понадобится)."
+    ),
+    category="subscription",
+    default_text_ru=(
+        "<tg-emoji emoji-id=\"5190806721286657692\">🚨</tg-emoji> "
+        "<b>3 часа до отключения</b>\n\n"
+        "После этого VPN перестанет работать. Сайты и приложения "
+        "вернутся к блокировкам.\n\n"
+        "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> "
+        "Успейте — <b>скидка 15%</b> на продление. Действует 3 часа."
     ),
     template_vars=[],
     default_trigger={"before_expiry_hours": 3, "tolerance_hours": 1},
