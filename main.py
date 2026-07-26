@@ -304,6 +304,20 @@ async def main():
     except Exception as e:
         logger.warning("admin_notifier failed to start: %s", e)
 
+    # Scheduled + recurring broadcasts (migration 067)
+    # Long-lived task: раз в минуту проверяет БД и запускает готовые рассылки.
+    try:
+        from app.services.scheduled_broadcasts_worker import (
+            run_scheduled_broadcasts_worker,
+        )
+        sched_bcast_task = asyncio.create_task(
+            run_scheduled_broadcasts_worker(bot)
+        )
+        background_tasks.append(sched_bcast_task)
+        logger.info("Scheduled broadcasts worker started")
+    except Exception as e:
+        logger.warning("scheduled_broadcasts_worker failed to start: %s", e)
+
     # NB: incy_crypto.selftest() used to be scheduled here for the
     # crypt1 / Node-sidecar code path. Production `to_incy_link()` is
     # now pure-Python (`incy://add/<plain_url>` — universal across
