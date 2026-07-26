@@ -63,12 +63,13 @@ async def process_confirmed_payment(
         _purchase_type = pending.get("purchase_type") or "subscription"
         _tariff = pending.get("tariff") or ""
 
-        # Stars / Premium / Apple ID / Steam / Proxy — just mark paid + send
-        # notifications (no subscription to finalize)
+        # Stars / Premium / Apple ID / Steam / Spotify / Proxy — just mark
+        # paid + send notifications (no subscription to finalize)
         if (
-            _purchase_type in ("telegram_stars", "telegram_premium", "steam", "proxy")
+            _purchase_type in ("telegram_stars", "telegram_premium", "steam", "proxy", "spotify")
             or _tariff.startswith("apple_id_")
             or _tariff.startswith("steam_")
+            or _tariff.startswith("spotify_")
         ):
             marked = await database.mark_pending_purchase_paid(purchase_id)
             if not marked:
@@ -98,6 +99,9 @@ async def process_confirmed_payment(
                     nominal = int(tariff_parts[3]) if len(tariff_parts) >= 4 else 0
                     from app.handlers.callbacks.navigation import send_apple_id_success
                     await send_apple_id_success(bot, telegram_id, region, nominal, amount_rubles)
+                elif _purchase_type == "spotify" or _tariff.startswith("spotify_"):
+                    from app.handlers.payments.spotify_purchase import send_spotify_success
+                    await send_spotify_success(bot, telegram_id, purchase_id, pending)
             except Exception as notif_err:
                 logger.error(f"{provider} webhook: notification failed for {_purchase_type}: {notif_err}")
 

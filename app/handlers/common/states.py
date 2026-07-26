@@ -170,6 +170,22 @@ class SteamPurchaseState(StatesGroup):
     processing_payment = State()
 
 
+class SpotifyPurchaseState(StatesGroup):
+    """Shop: Spotify Premium (EG-регион).
+
+    Disclaimer → info → choose_plan → choose_duration →
+    email input → email confirm → password input → password confirm →
+    review → payment_method → processing.
+    """
+    waiting_for_email = State()
+    confirming_email = State()
+    waiting_for_password = State()
+    confirming_password = State()
+    reviewing = State()
+    choose_payment_method = State()
+    processing_payment = State()
+
+
 class BomberState(StatesGroup):
     playing = State()
 

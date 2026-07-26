@@ -41,11 +41,17 @@ class AdminAppleKey(StatesGroup):
 
 
 # Флаг для шаблона (без страны — страна уже читается по флагу).
-_FLAG_BY_REGION = {"usa": "🇺🇸", "turkey": "🇹🇷"}
+_FLAG_BY_REGION = {
+    "usa": "🇺🇸", "turkey": "🇹🇷", "russia": "🇷🇺", "india": "🇮🇳",
+}
 # Как показать валюту в сообщении для юзера. TRY читаемее чем TL.
-_CURRENCY_LABEL = {"usa": "$", "turkey": "TRY"}
+_CURRENCY_LABEL = {
+    "usa": "$", "turkey": "TRY", "russia": "₽", "india": "INR",
+}
 # Полное человеко-читаемое название региона (для страховки в превью).
-_REGION_LABEL = {"usa": "USA", "turkey": "Turkey"}
+_REGION_LABEL = {
+    "usa": "USA", "turkey": "Turkey", "russia": "Russia", "india": "India",
+}
 
 _APPLE_INSTRUCTION_URL = "https://support.apple.com/en-us/118242"
 
@@ -58,10 +64,12 @@ def _admin_only(callback: CallbackQuery) -> bool:
 
 
 def _fmt_nominal(region: str, nominal: int) -> str:
-    """5$ / 500TRY — в зависимости от региона."""
+    """5$ / 500 TRY / 500₽ / 100 INR — в зависимости от региона."""
     cur = _CURRENCY_LABEL.get(region, "$")
     if cur == "$":
         return f"{nominal}$"
+    if cur == "₽":
+        return f"{nominal}₽"
     return f"{nominal} {cur}"
 
 
