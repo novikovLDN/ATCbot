@@ -22,6 +22,7 @@ from .bonus import admin_bonus_router
 from .stage_users import admin_stage_users_router
 from .farm_storm import admin_farm_storm_router
 from .apple_id_delivery import apple_id_delivery_router
+from .spotify_delivery import spotify_delivery_router
 
 router = Router()
 
@@ -47,3 +48,4 @@ router.include_router(admin_bonus_router)
 router.include_router(admin_stage_users_router)
 router.include_router(admin_farm_storm_router)
 router.include_router(apple_id_delivery_router)
+router.include_router(spotify_delivery_router)

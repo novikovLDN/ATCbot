@@ -1736,10 +1736,48 @@ _APPLE_TRY_RATE = 2.9   # RUB per 1 TRY
 _APPLE_NOMINALS = {
     "usa": [2, 5, 10, 15, 20, 25, 50, 60, 70],
     "turkey": [100, 150, 200, 300, 500, 600],
+    "russia": [500, 800, 1000, 1500, 2000, 2500, 3000],
+    "india": [100, 200, 250, 500, 1000],
 }
-_APPLE_CURRENCIES = {"usa": "$", "turkey": "TL"}
+_APPLE_CURRENCIES = {"usa": "$", "turkey": "TL", "russia": "₽", "india": "INR"}
 _APPLE_RATES = {"usa": _APPLE_USD_RATE, "turkey": _APPLE_TRY_RATE}
-_APPLE_REGIONS = {"usa": "🇺🇸 USA", "turkey": "🇹🇷 Turkey"}
+_APPLE_REGIONS = {
+    "usa": "🇺🇸 USA",
+    "turkey": "🇹🇷 Turkey",
+    "russia": "🇷🇺 Russia",
+    "india": "🇮🇳 India",
+}
+
+# Явные price-точки для регионов, где нет линейного rate-конвертирования.
+# Ключ — nominal региона, значение — цена в рублях к оплате.
+_APPLE_PRICES_EXPLICIT: dict[str, dict[int, int]] = {
+    "russia": {
+        500: 1400, 800: 2200, 1000: 2600, 1500: 3900,
+        2000: 5200, 2500: 6400, 3000: 7700,
+    },
+    "india": {
+        100: 149, 200: 249, 250: 299, 500: 599, 1000: 1099,
+    },
+}
+
+
+def _apple_price_rub(region: str, nominal: int) -> float:
+    """RUB-цена номинала для региона. Explicit-таблица приоритетнее rate."""
+    table = _APPLE_PRICES_EXPLICIT.get(region)
+    if table and nominal in table:
+        return float(table[nominal])
+    rate = _APPLE_RATES.get(region, 93)
+    return round(nominal * rate, 2)
+
+
+def _apple_nominal_label(region: str, nominal: int) -> str:
+    """5$ / 500 TL / 500₽ / 100 INR — как показать номинал юзеру."""
+    cur = _APPLE_CURRENCIES.get(region, "$")
+    if cur == "$":
+        return f"{nominal}$"
+    if cur == "₽":
+        return f"{nominal}₽"
+    return f"{nominal} {cur}"
 
 
 @router.callback_query(F.data == "mini_shop")
@@ -1759,6 +1797,7 @@ async def callback_mini_shop(callback: CallbackQuery):
         # [InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="stars_buy")],
         [InlineKeyboardButton(text="🍎 Пополнить Apple ID", callback_data="apple_region")],
         [InlineKeyboardButton(text="🎮 Пополнить Steam", callback_data="steam:disclaimer")],
+        [InlineKeyboardButton(text="🎧 Spotify Premium", callback_data="spotify:start")],
         [InlineKeyboardButton(text="🧠 Claude Pro/Max (скоро)", callback_data="claude_coming_soon")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
@@ -1866,6 +1905,8 @@ async def callback_apple_region(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🇺🇸 USA", callback_data="apple_amount:usa")],
         [InlineKeyboardButton(text="🇹🇷 Turkey", callback_data="apple_amount:turkey")],
+        [InlineKeyboardButton(text="🇷🇺 Russia", callback_data="apple_amount:russia")],
+        [InlineKeyboardButton(text="🇮🇳 India", callback_data="apple_amount:india")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
@@ -1881,8 +1922,6 @@ async def callback_apple_amount(callback: CallbackQuery):
     region = callback.data.split(":")[1]
     language = await resolve_user_language(callback.from_user.id)
     nominals = _APPLE_NOMINALS.get(region, [])
-    currency = _APPLE_CURRENCIES.get(region, "$")
-    rate = _APPLE_RATES.get(region, 93)
     region_label = _APPLE_REGIONS.get(region, region)
 
     text = i18n_get_text(language, "shop.apple_amount_title", region=region_label)
@@ -1890,9 +1929,9 @@ async def callback_apple_amount(callback: CallbackQuery):
     buttons = []
     row = []
     for nom in nominals:
-        price_rub = round(nom * rate)
+        price_rub = round(_apple_price_rub(region, nom))
         row.append(InlineKeyboardButton(
-            text=f"{nom}{currency} — {price_rub}₽",
+            text=f"{_apple_nominal_label(region, nom)} — {price_rub}₽",
             callback_data=f"apple_confirm:{region}:{nom}",
         ))
         if len(row) == 2:
@@ -1923,11 +1962,9 @@ async def callback_apple_confirm(callback: CallbackQuery):
     nominal = int(parts[2])
     language = await resolve_user_language(callback.from_user.id)
 
-    currency = _APPLE_CURRENCIES.get(region, "$")
-    rate = _APPLE_RATES.get(region, 93)
     region_label = _APPLE_REGIONS.get(region, region)
-    price_rub = round(nominal * rate, 2)
-    nominal_str = f"{nominal}{currency}"
+    price_rub = _apple_price_rub(region, nominal)
+    nominal_str = _apple_nominal_label(region, nominal)
 
     text = i18n_get_text(language, "shop.apple_confirm",
                          region=region_label, nominal=nominal_str, price=price_rub)
@@ -1964,16 +2001,15 @@ async def callback_apple_pay_lava(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    rate = _APPLE_RATES.get(region, 93)
-    price_rub = round(nominal * rate, 2)
+    price_rub = _apple_price_rub(region, nominal)
 
     import lava_service
     if not lava_service.is_enabled():
         await callback.answer("Оплата картой временно недоступна", show_alert=True)
         return
 
-    currency = _APPLE_CURRENCIES.get(region, "$")
     region_label = _APPLE_REGIONS.get(region, region)
+    nominal_label = _apple_nominal_label(region, nominal)
 
     purchase_id = await database.create_pending_purchase(
         telegram_id=telegram_id,
@@ -1986,7 +2022,7 @@ async def callback_apple_pay_lava(callback: CallbackQuery):
     invoice_data = await lava_service.create_invoice(
         amount_rubles=price_rub,
         purchase_id=purchase_id,
-        comment=f"Apple ID {region_label} {nominal}{currency}",
+        comment=f"Apple ID {region_label} {nominal_label}",
     )
 
     payment_url = invoice_data["payment_url"]
@@ -2018,9 +2054,8 @@ async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int
     from datetime import datetime, timezone
 
     language = await resolve_user_language(telegram_id)
-    currency = _APPLE_CURRENCIES.get(region, "$")
     region_label = _APPLE_REGIONS.get(region, region)
-    nominal_str = f"{nominal}{currency}"
+    nominal_str = _apple_nominal_label(region, nominal)
     price_str = f"{price_rub:.2f}"
 
     # User notification
@@ -2070,10 +2105,9 @@ async def callback_apple_pay_card(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    rate = _APPLE_RATES.get(region, 93)
-    price_rub = round(nominal * rate, 2)
+    price_rub = _apple_price_rub(region, nominal)
     price_kopecks = round(price_rub * 100)
-    currency = _APPLE_CURRENCIES.get(region, "$")
+    nominal_label = _apple_nominal_label(region, nominal)
     region_label = _APPLE_REGIONS.get(region, region)
 
     if not config.TG_PROVIDER_TOKEN:
@@ -2099,12 +2133,12 @@ async def callback_apple_pay_card(callback: CallbackQuery):
     try:
         invoice_msg = await callback.bot.send_invoice(
             chat_id=telegram_id,
-            title=f"Apple ID {region_label} {nominal}{currency}",
-            description=f"Пополнение Apple ID {region_label} на {nominal}{currency}",
+            title=f"Apple ID {region_label} {nominal_label}",
+            description=f"Пополнение Apple ID {region_label} на {nominal_label}",
             payload=payload,
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
-            prices=[LabeledPrice(label=f"Apple ID {nominal}{currency}", amount=price_kopecks)],
+            prices=[LabeledPrice(label=f"Apple ID {nominal_label}", amount=price_kopecks)],
         )
         await callback.bot.send_message(
             chat_id=telegram_id,
@@ -2139,10 +2173,9 @@ async def callback_apple_pay_sbp(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    rate = _APPLE_RATES.get(region, 93)
-    price_rub = round(nominal * rate, 2)
+    price_rub = _apple_price_rub(region, nominal)
     price_kopecks = round(price_rub * 100)
-    currency = _APPLE_CURRENCIES.get(region, "$")
+    nominal_label = _apple_nominal_label(region, nominal)
     region_label = _APPLE_REGIONS.get(region, region)
 
     import platega_service
@@ -2164,7 +2197,7 @@ async def callback_apple_pay_sbp(callback: CallbackQuery):
 
         tx_data = await platega_service.create_transaction(
             amount_rubles=sbp_price_rubles,
-            description=f"Apple ID {region_label} {nominal}{currency}",
+            description=f"Apple ID {region_label} {nominal_label}",
             purchase_id=purchase_id,
         )
 
