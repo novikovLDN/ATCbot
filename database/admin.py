@@ -330,24 +330,13 @@ async def create_broadcast(
     message_a: str = None,
     message_b: str = None,
     photo_file_id: Optional[str] = None,
+    animation_file_id: Optional[str] = None,
     buttons: Optional[list] = None,
 ) -> int:
     """Создать новое уведомление.
 
-    Args:
-        title: Заголовок уведомления
-        message: Текст уведомления (для обычных уведомлений)
-        broadcast_type: Тип уведомления (info | maintenance | security | promo)
-        segment: Сегмент получателей (all_users | active_subscriptions)
-        sent_by: Telegram ID администратора
-        is_ab_test: Является ли уведомление A/B тестом
-        message_a: Текст варианта A (для A/B тестов)
-        message_b: Текст варианта B (для A/B тестов)
-        photo_file_id: Telegram file_id прикреплённого фото (для clone/re-send)
-        buttons: список ключей кнопок из _BUTTON_TYPES (для clone/re-send)
-
-    Returns:
-        ID созданного уведомления
+    photo_file_id и animation_file_id мутуально-эксклюзивные — если
+    заданы оба, animation имеет приоритет при отправке.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -355,21 +344,21 @@ async def create_broadcast(
             row = await conn.fetchrow(
                 """INSERT INTO broadcasts
                        (title, message_a, message_b, is_ab_test, type,
-                        segment, sent_by, photo_file_id, buttons)
-                   VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8)
+                        segment, sent_by, photo_file_id, animation_file_id, buttons)
+                   VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8, $9)
                    RETURNING id""",
                 title, message_a, message_b, broadcast_type, segment, sent_by,
-                photo_file_id, buttons,
+                photo_file_id, animation_file_id, buttons,
             )
         else:
             row = await conn.fetchrow(
                 """INSERT INTO broadcasts
                        (title, message, is_ab_test, type, segment,
-                        sent_by, photo_file_id, buttons)
-                   VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7)
+                        sent_by, photo_file_id, animation_file_id, buttons)
+                   VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8)
                    RETURNING id""",
                 title, message, broadcast_type, segment, sent_by,
-                photo_file_id, buttons,
+                photo_file_id, animation_file_id, buttons,
             )
         return row["id"]
 

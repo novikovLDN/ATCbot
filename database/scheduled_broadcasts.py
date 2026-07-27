@@ -35,6 +35,7 @@ async def create_scheduled_broadcast(
     recurrence: str,
     created_by: int,
     photo_file_id: Optional[str] = None,
+    animation_file_id: Optional[str] = None,
     buttons: Optional[List[str]] = None,
     discount_percent: Optional[int] = None,
     discount_hours: Optional[int] = None,
@@ -54,13 +55,15 @@ async def create_scheduled_broadcast(
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """INSERT INTO scheduled_broadcasts (
-                    source_broadcast_id, title, message, photo_file_id, buttons,
+                    source_broadcast_id, title, message, photo_file_id,
+                    animation_file_id, buttons,
                     segment, discount_percent, discount_hours, discount_label,
                     gift_reveal_percent, scheduled_at, recurrence,
                     recurrence_end_at, created_by
-               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
                RETURNING id""",
             source_broadcast_id, title, message, photo_file_id,
+            animation_file_id,
             list(buttons) if buttons else None,
             segment, discount_percent, discount_hours, discount_label,
             gift_reveal_percent, scheduled_at, recurrence,

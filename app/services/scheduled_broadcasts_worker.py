@@ -63,6 +63,7 @@ async def _dispatch_one(bot: Bot, sched: Dict[str, Any]) -> None:
             segment=sched["segment"],
             sent_by=int(sched["created_by"]),
             photo_file_id=sched.get("photo_file_id"),
+            animation_file_id=sched.get("animation_file_id"),
             buttons=list(sched.get("buttons") or []) or None,
         )
     except Exception as e:
@@ -117,6 +118,7 @@ async def _dispatch_one(bot: Bot, sched: Dict[str, Any]) -> None:
         message=message_html,
         reply_markup=reply_markup,
         photo_file_id=sched.get("photo_file_id"),
+        animation_file_id=sched.get("animation_file_id"),
         admin_telegram_id=int(sched["created_by"]),
     ))
 

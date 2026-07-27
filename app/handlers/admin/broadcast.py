@@ -113,9 +113,18 @@ async def _safe_send_with_buttons(
     semaphore: asyncio.Semaphore,
     reply_markup: InlineKeyboardMarkup | None = None,
     photo_file_id: str | None = None,
+    animation_file_id: str | None = None,
     caption: str | None = None,
 ) -> int | None:
-    """Send message with optional inline buttons. Returns message_id on success, None on failure."""
+    """Send message with optional inline buttons.
+
+    Приоритет media:
+      1) animation_file_id (GIF/MP4) → send_animation
+      2) photo_file_id → send_photo
+      3) plain text → send_message
+
+    Returns message_id on success, None on failure.
+    """
     from app.utils.telegram_safe import convert_tg_emoji
     text = convert_tg_emoji(text)
     if caption:
@@ -123,7 +132,15 @@ async def _safe_send_with_buttons(
     async with semaphore:
         for attempt in range(BROADCAST_RETRY_LIMIT):
             try:
-                if photo_file_id:
+                if animation_file_id:
+                    result = await bot.send_animation(
+                        user_id,
+                        animation=animation_file_id,
+                        caption=caption or text,
+                        reply_markup=reply_markup,
+                        parse_mode="HTML",
+                    )
+                elif photo_file_id:
                     result = await bot.send_photo(
                         user_id,
                         photo=photo_file_id,
