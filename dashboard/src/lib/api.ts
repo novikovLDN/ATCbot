@@ -367,6 +367,7 @@ export const endpoints = {
     message: string;
     segment: string;
     photo_file_id?: string | null;
+    animation_file_id?: string | null;
     buttons: string[];
     discount_percent?: number | null;
     discount_hours?: number | null;
@@ -382,6 +383,7 @@ export const endpoints = {
     message: string;
     segment: string;
     photo_file_id?: string | null;
+    animation_file_id?: string | null;
     buttons: string[];
     discount_percent?: number | null;
     discount_hours?: number | null;
@@ -900,11 +902,13 @@ export async function downloadCsv(path: string, filename: string) {
 }
 
 // Multipart upload — special case, can't use api.post (JSON-only).
-export async function uploadBroadcastPhoto(file: File): Promise<{ file_id: string }> {
+async function _uploadMultipart(
+  path: string, file: File,
+): Promise<{ file_id: string }> {
   const token = auth.get();
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch("/dashboard/api/broadcasts/upload-photo", {
+  const res = await fetch(path, {
     method: "POST",
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: fd,
@@ -920,4 +924,12 @@ export async function uploadBroadcastPhoto(file: File): Promise<{ file_id: strin
     throw new ApiError(res.status, detail);
   }
   return res.json();
+}
+
+export function uploadBroadcastPhoto(file: File): Promise<{ file_id: string }> {
+  return _uploadMultipart("/dashboard/api/broadcasts/upload-photo", file);
+}
+
+export function uploadBroadcastAnimation(file: File): Promise<{ file_id: string }> {
+  return _uploadMultipart("/dashboard/api/broadcasts/upload-animation", file);
 }
