@@ -5,13 +5,17 @@ import {
   ArrowLeft,
   ArrowRight,
   Image as ImageIcon,
+  Film,
   Send,
   Users as UsersIcon,
   CheckCircle2,
   X,
   AlertCircle,
 } from "lucide-react";
-import { ApiError, endpoints, uploadBroadcastPhoto } from "@/lib/api";
+import {
+  ApiError, endpoints,
+  uploadBroadcastPhoto, uploadBroadcastAnimation,
+} from "@/lib/api";
 import { fmtNum } from "@/lib/format";
 import { toast } from "@/store/toast";
 import { Spinner } from "@/components/Spinner";
@@ -62,7 +66,9 @@ export function BroadcastCreate() {
   const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
   const [photoFileId, setPhotoFileId] = useState<string | null>(null);
+  const [animationFileId, setAnimationFileId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadingAnimation, setUploadingAnimation] = useState(false);
   const [segment, setSegment] = useState<string>("");
   const [buttons, setButtons] = useState<string[]>([]);
   const [discountPercent, setDiscountPercent] = useState<number | "">("");
@@ -99,6 +105,7 @@ export function BroadcastCreate() {
     setTitle(asStr(src.title));
     setMessage(asStr(src.message));
     setPhotoFileId(asStr(src.photo_file_id) || null);
+    setAnimationFileId(asStr(src.animation_file_id) || null);
     if (Array.isArray(src.buttons)) {
       setButtons((src.buttons as unknown[]).map((x) => String(x)));
     }
@@ -119,6 +126,7 @@ export function BroadcastCreate() {
         message,
         segment,
         photo_file_id: photoFileId ?? null,
+        animation_file_id: animationFileId ?? null,
         buttons,
         discount_percent:
           typeof discountPercent === "number" ? discountPercent : null,
@@ -147,6 +155,7 @@ export function BroadcastCreate() {
         message,
         segment: segment || "active_subscriptions",
         photo_file_id: photoFileId ?? null,
+        animation_file_id: animationFileId ?? null,
         buttons,
         discount_percent:
           typeof discountPercent === "number" ? discountPercent : null,
@@ -189,11 +198,29 @@ export function BroadcastCreate() {
     try {
       const { file_id } = await uploadBroadcastPhoto(file);
       setPhotoFileId(file_id);
+      // Фото и GIF взаимно-эксклюзивны — сбросим противоположное.
+      setAnimationFileId(null);
       toast.success("Фото загружено");
     } catch (e: unknown) {
       toast.error((e as ApiError)?.detail ?? "Не удалось загрузить фото");
     } finally {
       setUploading(false);
+    }
+  };
+
+  const onPickAnimation = async (file: File | undefined) => {
+    if (!file) return;
+    setUploadingAnimation(true);
+    try {
+      const { file_id } = await uploadBroadcastAnimation(file);
+      setAnimationFileId(file_id);
+      // GIF и фото взаимно-эксклюзивны — сбросим противоположное.
+      setPhotoFileId(null);
+      toast.success("GIF загружен");
+    } catch (e: unknown) {
+      toast.error((e as ApiError)?.detail ?? "Не удалось загрузить GIF");
+    } finally {
+      setUploadingAnimation(false);
     }
   };
 
@@ -264,42 +291,72 @@ export function BroadcastCreate() {
 
           <div>
             <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Фото (необязательно)
+              Медиа (фото или GIF · необязательно)
             </div>
-            {photoFileId ? (
-              <div className="flex items-center gap-3 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm">
-                <CheckCircle2 className="h-4 w-4 text-success" />
-                <div className="flex-1 truncate text-fg">Фото прикреплено</div>
+            {/* Attached state — единый блок для photo или animation */}
+            {(photoFileId || animationFileId) ? (
+              <div
+                className={
+                  photoFileId
+                    ? "flex items-center gap-3 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm"
+                    : "flex items-center gap-3 rounded-xl border border-info/30 bg-info/10 px-4 py-3 text-sm"
+                }
+              >
+                {photoFileId ? (
+                  <CheckCircle2 className="h-4 w-4 text-success" />
+                ) : (
+                  <Film className="h-4 w-4 text-info" />
+                )}
+                <div className="flex-1 truncate text-fg">
+                  {photoFileId ? "🖼 Фото прикреплено" : "🎬 GIF прикреплён"}
+                </div>
                 <button
                   type="button"
-                  onClick={() => setPhotoFileId(null)}
+                  onClick={() => {
+                    setPhotoFileId(null);
+                    setAnimationFileId(null);
+                  }}
                   className="btn-ghost"
-                  aria-label="Убрать фото"
+                  aria-label="Убрать медиа"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
             ) : (
-              <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-border bg-bg-subtle/40 px-4 py-4 text-sm text-fg-muted transition hover:border-fg-subtle hover:bg-bg-elevated/60">
-                {uploading ? <Spinner /> : <ImageIcon className="h-4 w-4" />}
-                <span className="flex-1">
-                  {uploading
-                    ? "Загружаю в Telegram..."
-                    : "Выбрать файл (≤10MB, jpg/png)"}
-                </span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  disabled={uploading}
-                  onChange={(e) => onPickPhoto(e.target.files?.[0])}
-                />
-              </label>
+              // Два параллельных выбора: фото ИЛИ GIF.
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-border bg-bg-subtle/40 px-4 py-4 text-sm text-fg-muted transition hover:border-fg-subtle hover:bg-bg-elevated/60">
+                  {uploading ? <Spinner /> : <ImageIcon className="h-4 w-4" />}
+                  <span className="flex-1">
+                    {uploading ? "Загружаю..." : "🖼 Фото (≤10MB, jpg/png)"}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    disabled={uploading || uploadingAnimation}
+                    onChange={(e) => onPickPhoto(e.target.files?.[0])}
+                  />
+                </label>
+                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-border bg-bg-subtle/40 px-4 py-4 text-sm text-fg-muted transition hover:border-fg-subtle hover:bg-bg-elevated/60">
+                  {uploadingAnimation ? <Spinner /> : <Film className="h-4 w-4" />}
+                  <span className="flex-1">
+                    {uploadingAnimation ? "Загружаю..." : "🎬 GIF/MP4 (≤20MB)"}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/gif,video/mp4"
+                    className="hidden"
+                    disabled={uploading || uploadingAnimation}
+                    onChange={(e) => onPickAnimation(e.target.files?.[0])}
+                  />
+                </label>
+              </div>
             )}
             <p className="mt-1.5 text-[11px] text-fg-subtle">
-              При загрузке бот отправит копию фото в твой Telegram — это
-              нужно, чтобы получить <code>file_id</code> для рассылки. Так же
-              устроен встроенный конструктор.
+              Фото и GIF взаимно-эксклюзивные — при выборе одного второе
+              сбрасывается. При загрузке бот отправит копию файла в твой
+              Telegram — это нужно, чтобы получить <code>file_id</code>.
             </p>
           </div>
 
@@ -530,6 +587,11 @@ export function BroadcastCreate() {
             {photoFileId && (
               <div className="mt-3 inline-flex items-center gap-1.5 text-xs text-success">
                 <ImageIcon className="h-3 w-3" /> С фото
+              </div>
+            )}
+            {animationFileId && (
+              <div className="mt-3 inline-flex items-center gap-1.5 text-xs text-info">
+                <Film className="h-3 w-3" /> С GIF
               </div>
             )}
             {buttons.length > 0 && (

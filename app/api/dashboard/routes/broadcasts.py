@@ -357,6 +357,53 @@ async def upload_photo(
     return {"file_id": msg.photo[-1].file_id}
 
 
+@router.post("/upload-animation")
+async def upload_animation(
+    file: UploadFile = File(...),
+    admin: dict = Depends(require_admin),
+):
+    """Загрузить GIF/MP4-animation → получить Telegram file_id.
+
+    Механика та же что у /upload-photo: bot шлёт файл в чат админа
+    как animation, Telegram возвращает file_id, который потом
+    используется в broadcast для send_animation.
+
+    Ограничение размера: 20 MB (Telegram Bot API лимит на animation).
+    Accept: image/gif, video/mp4.
+    """
+    bot = _get_bot()
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "empty_file")
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(413, "file_too_large_max_20MB")
+
+    filename = (file.filename or "animation.gif").lower()
+    if not (filename.endswith(".gif") or filename.endswith(".mp4")):
+        # По content-type тоже проверим на всякий случай
+        ct = (file.content_type or "").lower()
+        if ct not in ("image/gif", "video/mp4"):
+            raise HTTPException(
+                400, "only .gif or .mp4 accepted"
+            )
+
+    animation = BufferedInputFile(
+        content, filename=file.filename or "animation.gif",
+    )
+    try:
+        msg = await bot.send_animation(
+            chat_id=int(admin["sub"]),
+            animation=animation,
+            caption="🎬 GIF загружен для рассылки",
+        )
+    except Exception as e:
+        raise HTTPException(500, f"upload_to_telegram_failed: {e}")
+
+    if not msg.animation:
+        raise HTTPException(500, "telegram_returned_no_animation")
+    return {"file_id": msg.animation.file_id}
+
+
 # ── CREATE + SEND ────────────────────────────────────────────────────
 
 
@@ -410,6 +457,9 @@ class BroadcastCreateRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
     segment: str = Field(..., min_length=1, max_length=60)
     photo_file_id: Optional[str] = Field(None, max_length=300)
+    # GIF/MP4 animation — мутуально-эксклюзивно с photo_file_id.
+    # Если заданы оба — в бэкенде отдаётся приоритет animation.
+    animation_file_id: Optional[str] = Field(None, max_length=300)
     buttons: list[str] = Field(default_factory=list)
     discount_percent: Optional[int] = Field(None, ge=1, le=100)
     discount_hours: Optional[int] = Field(None, gt=0, le=8760)
@@ -553,6 +603,7 @@ async def broadcast_test_self(
             admin_id,
             message_html,
             photo_file_id=body.photo_file_id,
+            animation_file_id=body.animation_file_id,
             reply_markup=reply_markup,
             parse_mode="HTML",
         )
@@ -600,6 +651,7 @@ async def broadcast_create(
             segment=body.segment,
             sent_by=int(admin["sub"]),
             photo_file_id=body.photo_file_id,
+            animation_file_id=body.animation_file_id,
             buttons=list(body.buttons) if body.buttons else None,
         )
     except Exception as e:
@@ -648,6 +700,7 @@ async def broadcast_create(
         message=message_html,
         reply_markup=reply_markup,
         photo_file_id=body.photo_file_id,
+        animation_file_id=body.animation_file_id,
         admin_telegram_id=int(admin["sub"]),
     ))
 
@@ -901,6 +954,7 @@ async def broadcast_schedule_create(
             recurrence_end_at=end_utc,
             created_by=int(admin["sub"]),
             photo_file_id=(source.get("photo_file_id") or None),
+            animation_file_id=(source.get("animation_file_id") or None),
             buttons=list(source.get("buttons") or []) or None,
             discount_percent=disc.get("discount_percent"),
             discount_hours=disc.get("discount_hours"),

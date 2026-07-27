@@ -46,6 +46,7 @@ async def send_broadcast(
     message: str,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
     photo_file_id: Optional[str] = None,
+    animation_file_id: Optional[str] = None,
     is_ab_test: bool = False,
     message_a: Optional[str] = None,
     message_b: Optional[str] = None,
@@ -54,8 +55,9 @@ async def send_broadcast(
     """Send to every uid in user_ids. Returns final stats dict.
 
     Supports the same {bypass_key} substitution as the bot wizard,
-    and the same A/B variant split. Photo + caption path is used when
-    photo_file_id is set (caption = message).
+    and the same A/B variant split. Media priority:
+      animation_file_id (GIF/MP4) > photo_file_id > plain text.
+    caption = message (для photo/animation).
     """
     from app.services.user_subscription_links import get_user_bypass_url
 
@@ -64,13 +66,15 @@ async def send_broadcast(
     sent_count = 0
     failed_count = 0
     processed = 0
-    has_photo = photo_file_id is not None
+    has_animation = animation_file_id is not None
+    has_photo = photo_file_id is not None and not has_animation
 
     async def _send_one(
         uid: int,
         msg: str,
         variant: Optional[str],
         p_fid: Optional[str],
+        a_fid: Optional[str],
         cap: Optional[str],
     ):
         needs_key = "{bypass_key}" in (msg or "") or "{bypass_key}" in (cap or "")
@@ -89,7 +93,9 @@ async def send_broadcast(
         msg_id = await _safe_send_with_buttons(
             bot, uid, msg, semaphore,
             reply_markup=reply_markup,
-            photo_file_id=p_fid, caption=cap,
+            photo_file_id=p_fid,
+            animation_file_id=a_fid,
+            caption=cap,
         )
         return (uid, variant, msg_id)
 
@@ -101,14 +107,16 @@ async def send_broadcast(
                 if is_ab_test and message_a and message_b:
                     variant = "A" if random.random() < 0.5 else "B"
                     msg_for_user = message_a if variant == "A" else message_b
-                    items.append((uid, msg_for_user, variant, None, None))
+                    items.append((uid, msg_for_user, variant, None, None, None))
                 else:
-                    if has_photo:
-                        items.append((uid, message, None, photo_file_id, message))
+                    if has_animation:
+                        items.append((uid, message, None, None, animation_file_id, message))
+                    elif has_photo:
+                        items.append((uid, message, None, photo_file_id, None, message))
                     else:
-                        items.append((uid, message, None, None, None))
+                        items.append((uid, message, None, None, None, None))
 
-            tasks = [_send_one(uid, m, v, p, c) for uid, m, v, p, c in items]
+            tasks = [_send_one(uid, m, v, p, a, c) for uid, m, v, p, a, c in items]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for r in results:
