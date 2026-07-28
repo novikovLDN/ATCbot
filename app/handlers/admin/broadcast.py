@@ -197,7 +197,7 @@ def _build_broadcast_reply_markup(
                 callback_data="broadcast_gift_1y_40",
             )])
         elif btn == "bypass":
-            rows.append([InlineKeyboardButton(text="🌐 Включить обход", callback_data="traffic_info")])
+            rows.append([InlineKeyboardButton(text="🌐 Включить обход", callback_data="broadcast_bypass")])
         elif btn == "channel":
             rows.append([InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/ATC_VPN")])
         elif btn == "support":
