@@ -785,7 +785,7 @@ def _build_reply_markup(
             )])
         elif btn == "bypass":
             rows.append([InlineKeyboardButton(
-                text="🌐 Включить обход", callback_data="traffic_info",
+                text="🌐 Включить обход", callback_data="broadcast_bypass",
             )])
         elif btn == "happ_ios":
             rows.append([InlineKeyboardButton(
