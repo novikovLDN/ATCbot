@@ -435,9 +435,12 @@ def get_notification_schedule() -> List[Dict[str, Any]]:
     # что и inline-блок reminder_24h («заканчивается завтра») из
     # trial_notifications.py:184-195. Юзер получал два сообщения об
     # одном и том же в течение 5 минут. Убрано.
-    return [
-        {"hours": 6, "key": "trial.notification_6h", "has_button": False},
-    ]
+    #
+    # 2026-XX: +6ч «✨ Просто напоминание, VPN лучше включать всегда»
+    # тоже убрано — бледный push без CTA, юзер видит его как спам.
+    # Осталось: T+5м bypass_activated, T+48ч reminder_24h,
+    # T+69ч reminder_3h, T+71ч notification_71h.
+    return []
 
 
 def get_final_reminder_config() -> Dict[str, Any]:
