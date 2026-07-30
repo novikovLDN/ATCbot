@@ -123,7 +123,8 @@ register_notification(NotificationSpec(
     default_text_ru=(
         "🚨 Последний час пробного доступа\n\n"
         "Через час VPN будет отключён.\n\n"
-        "Оформите подписку, чтобы продолжить пользоваться защитой."
+        "Оформите подписку, чтобы оставаться на связи, "
+        "даже когда глушат связь!"
     ),
     template_vars=[],
     default_trigger={"before_expiry_hours": 1, "tolerance_hours": 0.5},
