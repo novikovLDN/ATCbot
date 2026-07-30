@@ -340,27 +340,59 @@ async def create_broadcast(
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        if is_ab_test:
-            row = await conn.fetchrow(
-                """INSERT INTO broadcasts
-                       (title, message_a, message_b, is_ab_test, type,
-                        segment, sent_by, photo_file_id, animation_file_id, buttons)
-                   VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8, $9)
-                   RETURNING id""",
-                title, message_a, message_b, broadcast_type, segment, sent_by,
-                photo_file_id, animation_file_id, buttons,
+        # Try new schema (migration 070 — animation_file_id).
+        try:
+            if is_ab_test:
+                row = await conn.fetchrow(
+                    """INSERT INTO broadcasts
+                           (title, message_a, message_b, is_ab_test, type,
+                            segment, sent_by, photo_file_id, animation_file_id, buttons)
+                       VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8, $9)
+                       RETURNING id""",
+                    title, message_a, message_b, broadcast_type, segment, sent_by,
+                    photo_file_id, animation_file_id, buttons,
+                )
+            else:
+                row = await conn.fetchrow(
+                    """INSERT INTO broadcasts
+                           (title, message, is_ab_test, type, segment,
+                            sent_by, photo_file_id, animation_file_id, buttons)
+                       VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8)
+                       RETURNING id""",
+                    title, message, broadcast_type, segment, sent_by,
+                    photo_file_id, animation_file_id, buttons,
+                )
+            return row["id"]
+        except Exception as e:
+            # Migration 070 не применена — колонки animation_file_id нет.
+            # Fallback на pre-070 схему.
+            if "animation_file_id" not in str(e):
+                raise
+            logger.warning(
+                "broadcasts.animation_file_id missing (migration 070 not applied) "
+                "— falling back to legacy INSERT",
             )
-        else:
-            row = await conn.fetchrow(
-                """INSERT INTO broadcasts
-                       (title, message, is_ab_test, type, segment,
-                        sent_by, photo_file_id, animation_file_id, buttons)
-                   VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8)
-                   RETURNING id""",
-                title, message, broadcast_type, segment, sent_by,
-                photo_file_id, animation_file_id, buttons,
-            )
-        return row["id"]
+            if is_ab_test:
+                row = await conn.fetchrow(
+                    """INSERT INTO broadcasts
+                           (title, message_a, message_b, is_ab_test, type,
+                            segment, sent_by, photo_file_id, buttons)
+                       VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8)
+                       RETURNING id""",
+                    title, message_a, message_b, broadcast_type, segment, sent_by,
+                    photo_file_id, buttons,
+                )
+            else:
+                row = await conn.fetchrow(
+                    """INSERT INTO broadcasts
+                           (title, message, is_ab_test, type, segment,
+                            sent_by, photo_file_id, buttons)
+                       VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7)
+                       RETURNING id""",
+                    title, message, broadcast_type, segment, sent_by,
+                    photo_file_id, buttons,
+                )
+            return row["id"]
 
 
 async def get_broadcast(broadcast_id: int) -> Optional[Dict[str, Any]]:
