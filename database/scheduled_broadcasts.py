@@ -53,23 +53,51 @@ async def create_scheduled_broadcast(
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """INSERT INTO scheduled_broadcasts (
-                    source_broadcast_id, title, message, photo_file_id,
-                    animation_file_id, buttons,
-                    segment, discount_percent, discount_hours, discount_label,
-                    gift_reveal_percent, scheduled_at, recurrence,
-                    recurrence_end_at, created_by
-               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-               RETURNING id""",
-            source_broadcast_id, title, message, photo_file_id,
-            animation_file_id,
-            list(buttons) if buttons else None,
-            segment, discount_percent, discount_hours, discount_label,
-            gift_reveal_percent, scheduled_at, recurrence,
-            recurrence_end_at, created_by,
-        )
-        return int(row["id"])
+        # Try new schema (migration 070 — animation_file_id).
+        try:
+            row = await conn.fetchrow(
+                """INSERT INTO scheduled_broadcasts (
+                        source_broadcast_id, title, message, photo_file_id,
+                        animation_file_id, buttons,
+                        segment, discount_percent, discount_hours, discount_label,
+                        gift_reveal_percent, scheduled_at, recurrence,
+                        recurrence_end_at, created_by
+                   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                   RETURNING id""",
+                source_broadcast_id, title, message, photo_file_id,
+                animation_file_id,
+                list(buttons) if buttons else None,
+                segment, discount_percent, discount_hours, discount_label,
+                gift_reveal_percent, scheduled_at, recurrence,
+                recurrence_end_at, created_by,
+            )
+            return int(row["id"])
+        except Exception as e:
+            # Migration 070 not yet applied — column animation_file_id
+            # отсутствует. Fallback на pre-070 схему без animation.
+            # Только если ошибка — про эту колонку; всё остальное поднимаем.
+            if "animation_file_id" not in str(e):
+                raise
+            logger.warning(
+                "scheduled_broadcasts.animation_file_id missing "
+                "(migration 070 not applied) — falling back to legacy INSERT",
+            )
+            row = await conn.fetchrow(
+                """INSERT INTO scheduled_broadcasts (
+                        source_broadcast_id, title, message, photo_file_id,
+                        buttons,
+                        segment, discount_percent, discount_hours, discount_label,
+                        gift_reveal_percent, scheduled_at, recurrence,
+                        recurrence_end_at, created_by
+                   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                   RETURNING id""",
+                source_broadcast_id, title, message, photo_file_id,
+                list(buttons) if buttons else None,
+                segment, discount_percent, discount_hours, discount_label,
+                gift_reveal_percent, scheduled_at, recurrence,
+                recurrence_end_at, created_by,
+            )
+            return int(row["id"])
 
 
 async def list_scheduled_broadcasts(
