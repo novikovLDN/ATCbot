@@ -61,3 +61,6 @@ vpn_keys.txt
 # Node.js sidecar — installed via `npm install` in Docker / dev shell
 node_modules/
 
+
+# graphify knowledge graph output
+graphify-out/
