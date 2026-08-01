@@ -1964,7 +1964,8 @@ async def callback_apple_confirm(callback: CallbackQuery):
     parts = callback.data.split(":")
     region = parts[1]
     nominal = int(parts[2])
-    language = await resolve_user_language(callback.from_user.id)
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
 
     region_label = _APPLE_REGIONS.get(region, region)
     price_rub = _apple_price_rub(region, nominal)
@@ -1977,10 +1978,19 @@ async def callback_apple_confirm(callback: CallbackQuery):
         [InlineKeyboardButton(text="💳 Банковская карта", callback_data=f"apple_pay_card:{region}:{nominal}")],
         [InlineKeyboardButton(text="📱 СБП 3%", callback_data=f"apple_pay_lava:{region}:{nominal}")],
         [InlineKeyboardButton(text="📱 СБП", callback_data=f"apple_pay_sbp:{region}:{nominal}")],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"), callback_data=f"apple_amount:{region}",
-        )],
     ]
+    # Wata — admin-only beta
+    try:
+        import wata_service
+        if wata_service.is_visible_to(telegram_id):
+            buttons.append([InlineKeyboardButton(
+                text="💳 Wata (тест)", callback_data=f"apple_pay_wata:{region}:{nominal}",
+            )])
+    except Exception:
+        pass
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"), callback_data=f"apple_amount:{region}",
+    )])
 
     await safe_edit_text(
         callback.message, text,
@@ -2051,6 +2061,66 @@ async def callback_apple_pay_lava(callback: CallbackQuery):
         except Exception:
             pass
     asyncio.create_task(_del(callback.bot, telegram_id, lava_msg))
+
+
+@router.callback_query(F.data.startswith("apple_pay_wata:"))
+async def callback_apple_pay_wata(callback: CallbackQuery):
+    """Apple ID — pay via Wata (admin-only beta)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    parts = callback.data.split(":")
+    region = parts[1]
+    nominal = int(parts[2])
+    telegram_id = callback.from_user.id
+
+    import wata_service
+    if not wata_service.is_visible_to(telegram_id):
+        await callback.answer("Wata пока в закрытой бете", show_alert=True)
+        return
+
+    price_rub = _apple_price_rub(region, nominal)
+    region_label = _APPLE_REGIONS.get(region, region)
+    nominal_label = _apple_nominal_label(region, nominal)
+
+    purchase_id = await database.create_pending_purchase(
+        telegram_id=telegram_id,
+        tariff=f"apple_id_{region}_{nominal}",
+        period_days=0,
+        price_kopecks=round(price_rub * 100),
+        purchase_type="apple_id",
+    )
+    try:
+        invoice = await wata_service.create_invoice(
+            amount_rubles=price_rub,
+            purchase_id=purchase_id,
+            comment=f"Apple ID {region_label} {nominal_label}",
+            user_id=telegram_id,
+        )
+    except Exception as e:
+        logger.exception("APPLE_WATA_INVOICE_ERROR user=%s: %s", telegram_id, e)
+        await callback.answer("Ошибка создания платежа Wata", show_alert=True)
+        return
+    try:
+        await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]))
+    except Exception:
+        pass
+
+    text = f"💳 <b>Оплата через Wata (тест)</b>\n\nApple ID {region_label} · {nominal_label}\nК оплате: <b>{price_rub:.2f} ₽</b>"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"💳 Оплатить {price_rub:.0f} ₽", url=invoice["payment_url"])],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop")],
+    ])
+    msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+    async def _del(bot, cid, m):
+        try:
+            await asyncio.sleep(15 * 60)
+            await bot.delete_message(chat_id=cid, message_id=m.message_id)
+        except Exception:
+            pass
+    asyncio.create_task(_del(callback.bot, telegram_id, msg))
 
 
 async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int, price_rub: float):
