@@ -574,8 +574,11 @@ async def process_trial_notifications(bot: Bot):
         # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
         logger.warning(f"trial_notifications: Database temporarily unavailable in process_trial_notifications: {type(e).__name__}: {str(e)[:100]}")
     except Exception as e:
-        logger.error(f"trial_notifications: Unexpected error in process_trial_notifications: {type(e).__name__}: {str(e)[:100]}")
-        logger.debug("trial_notifications: Full traceback in process_trial_notifications", exc_info=True)
+        # Full traceback в error-логе — на debug-уровне обычно фильтруется.
+        logger.exception(
+            "trial_notifications: Unexpected error in process_trial_notifications: %s: %s",
+            type(e).__name__, str(e)[:200],
+        )
 
 
 async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datetime):
