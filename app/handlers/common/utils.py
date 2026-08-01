@@ -5,6 +5,7 @@ import asyncio
 import logging
 import re
 import time
+from html import escape as html_escape
 from typing import Any, Dict, Optional
 
 import database
@@ -278,6 +279,9 @@ def sanitize_display_name(name: str) -> str:
     - Обрезает до MAX_DISPLAY_NAME_LENGTH символов
     - Удаляет ведущие/завершающие пробелы
     - Если содержит запрещённые слова — возвращает пустую строку (вызывающий подставит fallback)
+    - Экранирует HTML: результат подставляется в сообщения с parse_mode="HTML",
+      и символ < в имени пользователя ломал разметку целиком — Telegram
+      отклонял сообщение, и экран профиля просто не приходил.
     """
     if not name:
         return ""
@@ -290,7 +294,9 @@ def sanitize_display_name(name: str) -> str:
     if _contains_banned_word(name):
         return ""
 
-    return name
+    # Экранирование последним шагом: проверка запрещённых слов должна видеть
+    # исходный текст, а не &lt;-последовательности.
+    return html_escape(name, quote=False)
 
 
 def validate_callback_data(data: str) -> bool:
