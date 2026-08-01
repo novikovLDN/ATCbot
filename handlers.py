@@ -1034,6 +1034,17 @@ async def show_payment_method_selection(
         row2.append(btn_lava)
     buttons.append(row2)
 
+    # Wata — admin-only beta
+    try:
+        import wata_service
+        if wata_service.is_visible_to(telegram_id):
+            buttons.append([InlineKeyboardButton(
+                text="💳 Wata (тест)",
+                callback_data="pay:wata",
+            )])
+    except Exception:
+        pass
+
     if platega_on:
         buttons.append([btn_intl])
 
