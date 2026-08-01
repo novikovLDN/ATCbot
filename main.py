@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+import signal
 import sys
 import uuid
 
@@ -679,7 +680,50 @@ async def main():
             sys.exit(1)
 
         # Keep process alive — wait for shutdown signal
-        await asyncio.gather(*background_tasks, return_exceptions=True)
+        #
+        # Раньше здесь стоял asyncio.gather по всем задачам. Он ждал их
+        # завершения и не реагировал на SIGTERM: Railway при деплое шлёт именно
+        # SIGTERM, KeyboardInterrupt при этом не возникает, процесс убивался
+        # снаружи и блок finally ниже не выполнялся никогда — вебхук не
+        # удалялся, задачи не отменялись, соединения не закрывались.
+        #
+        # Кроме того, gather не давал заметить смерть отдельной задачи: если
+        # падал uvicorn или воркер, процесс продолжал жить пустой оболочкой.
+        # FIRST_COMPLETED возвращает управление и в этом случае — процесс
+        # корректно завершится, а Railway поднимет его заново.
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig_name in ("SIGTERM", "SIGINT"):
+            sig = getattr(signal, sig_name, None)
+            if sig is None:
+                continue
+            try:
+                loop.add_signal_handler(sig, stop_event.set)
+                logger.info("SIGNAL_HANDLER_REGISTERED signal=%s", sig_name)
+            except NotImplementedError:
+                # Windows не поддерживает add_signal_handler
+                logger.warning("SIGNAL_HANDLER_UNSUPPORTED signal=%s", sig_name)
+
+        stop_waiter = asyncio.create_task(stop_event.wait(), name="shutdown_signal")
+        done, _pending = await asyncio.wait(
+            [stop_waiter, *background_tasks],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        stop_waiter.cancel()
+
+        for finished in done:
+            name = finished.get_name() if hasattr(finished, "get_name") else "unknown"
+            if finished is stop_waiter:
+                logger.info("SHUTDOWN_SIGNAL_RECEIVED — начинается корректная остановка")
+                continue
+            exc = finished.exception() if not finished.cancelled() else None
+            if exc is not None:
+                logger.error(
+                    "BACKGROUND_TASK_DIED task=%s error=%s: %s — процесс будет остановлен",
+                    name, type(exc).__name__, exc,
+                )
+            else:
+                logger.error("BACKGROUND_TASK_EXITED task=%s — процесс будет остановлен", name)
     except SystemExit:
         raise
     finally:
