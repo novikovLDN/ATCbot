@@ -306,6 +306,13 @@ export const endpoints = {
     api.get<Record<string, unknown>>(`/broadcasts/${id}`),
   broadcastStats: (id: number) =>
     api.get<Record<string, unknown>>(`/broadcasts/${id}/stats`),
+  broadcastPatchTag: (id: number, tag: string | null, tagColor: string | null) =>
+    api.patch<{
+      ok: boolean;
+      id: number;
+      tag: string | null;
+      tag_color: string | null;
+    }>(`/broadcasts/${id}/tag`, { tag, tag_color: tagColor }),
   broadcastAnalytics: (id: number) =>
     api.get<{
       total_recipients: number;
@@ -373,6 +380,8 @@ export const endpoints = {
     discount_hours?: number | null;
     discount_label?: string | null;
     gift_reveal_percent?: number | null;
+    tag?: string | null;
+    tag_color?: string | null;
   }) =>
     api.post<{ ok: boolean; broadcast_id: number; audience: number }>(
       "/broadcasts",
@@ -389,6 +398,8 @@ export const endpoints = {
     discount_hours?: number | null;
     discount_label?: string | null;
     gift_reveal_percent?: number | null;
+    tag?: string | null;
+    tag_color?: string | null;
   }) =>
     api.post<{
       ok: boolean;
