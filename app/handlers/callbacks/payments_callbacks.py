@@ -145,6 +145,16 @@ async def callback_topup_amount(callback: CallbackQuery):
             text=i18n_get_text(language, "payment.lava"),
             callback_data=f"topup_lava:{amount}"
         )])
+    # Wata — admin-only beta
+    try:
+        import wata_service
+        if wata_service.is_visible_to(telegram_id):
+            buttons.append([InlineKeyboardButton(
+                text="💳 Wata (тест)",
+                callback_data=f"topup_wata:{amount}"
+            )])
+    except Exception:
+        pass
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="topup_balance"
@@ -1799,6 +1809,71 @@ async def callback_topup_lava(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception(f"Error creating Lava invoice for balance top-up: {e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+@payments_router.callback_query(F.data.startswith("topup_wata:"))
+async def callback_topup_wata(callback: CallbackQuery):
+    """Пополнение баланса через Wata (карта/СБП/T-Pay). Admin-only beta."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    telegram_id = callback.from_user.id
+
+    import wata_service
+    if not wata_service.is_visible_to(telegram_id):
+        await callback.answer("Wata пока в закрытой бете", show_alert=True)
+        return
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(
+            rate_limit_message or i18n_get_text(language, "common.rate_limit_message"),
+            show_alert=True,
+        )
+        return
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        amount = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+    if amount <= 0 or amount > 100000:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+
+    try:
+        purchase_id = await subscription_service.create_balance_topup_purchase(
+            telegram_id=telegram_id,
+            amount_kopecks=amount * 100,
+            currency="RUB",
+        )
+        invoice = await wata_service.create_invoice(
+            amount_rubles=float(amount),
+            purchase_id=purchase_id,
+            comment=f"Пополнение баланса на {amount} ₽",
+            user_id=telegram_id,
+        )
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]))
+        except Exception as e:
+            logger.error(f"Failed to save wata invoice_id: {e}")
+
+        logger.info(
+            f"balance_topup_invoice_created: provider=wata, user={telegram_id}, "
+            f"purchase_id={purchase_id}, amount={amount}",
+        )
+        text = f"💳 <b>Оплата через Wata (тест)</b>\n\nСумма: {amount} ₽\n\nНажмите кнопку ниже — откроется форма оплаты."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить {amount} ₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="topup_balance")],
+        ])
+        msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error creating Wata invoice for balance top-up: {e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 

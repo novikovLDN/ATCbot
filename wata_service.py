@@ -54,6 +54,17 @@ def is_enabled() -> bool:
     return bool(WATA_ACCESS_TOKEN)
 
 
+def is_visible_to(telegram_id: int) -> bool:
+    """Пока Wata в закрытом бета-режиме — показываем кнопку только
+    админу. Убрать проверку → показать всем, когда протестируется."""
+    if not is_enabled():
+        return False
+    try:
+        return int(telegram_id) == int(config.ADMIN_TELEGRAM_ID)
+    except Exception:
+        return False
+
+
 logger.info(
     "WATA_CONFIG: token_len=%d sandbox=%s api=%s enabled=%s",
     len(WATA_ACCESS_TOKEN), WATA_SANDBOX, WATA_API_URL, is_enabled(),
