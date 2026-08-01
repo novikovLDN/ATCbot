@@ -181,6 +181,17 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
     except Exception:
         pass
 
+    # Wata — admin-only beta
+    try:
+        import wata_service
+        if wata_service.is_visible_to(telegram_id):
+            buttons.append([InlineKeyboardButton(
+                text="💳 Wata (тест)",
+                callback_data="steam:pay:wata",
+            )])
+    except Exception:
+        pass
+
     # SBP via Platega (+markup)
     if getattr(config, "PLATEGA_MERCHANT_ID", None):
         sbp_price = math.ceil(price_rub * (1 + config.SBP_MARKUP_PERCENT / 100))
@@ -537,6 +548,48 @@ async def callback_steam_pay_lava(callback: CallbackQuery, state: FSMContext):
         await state.set_state(SteamPurchaseState.processing_payment)
     except Exception as e:
         logger.exception("STEAM_LAVA_ERROR user=%s err=%s", telegram_id, e)
+        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+
+
+@steam_purchase_router.callback_query(
+    F.data == "steam:pay:wata",
+    StateFilter(SteamPurchaseState.choose_payment_method),
+)
+async def callback_steam_pay_wata(callback: CallbackQuery, state: FSMContext):
+    """Steam — Wata (admin-only beta)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    telegram_id = callback.from_user.id
+    import wata_service
+    if not wata_service.is_visible_to(telegram_id):
+        await callback.answer("Wata пока в закрытой бете", show_alert=True)
+        return
+    res = await _get_steam_fsm(callback, state)
+    if not res:
+        return
+    amount, login, price, language = res
+    try:
+        purchase_id, _ = await _create_pending_purchase(telegram_id, login, amount, price)
+        invoice = await wata_service.create_invoice(
+            amount_rubles=float(price),
+            purchase_id=purchase_id,
+            comment=f"Steam {login} — {amount} ₽",
+            user_id=telegram_id,
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить {price} ₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+        ])
+        msg = await callback.bot.send_message(
+            telegram_id, f"💳 Wata (тест) · Steam {login} · {amount} ₽",
+            reply_markup=kb, parse_mode="HTML",
+        )
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg.message_id))
+        await state.set_state(SteamPurchaseState.processing_payment)
+    except Exception as e:
+        logger.exception("STEAM_WATA_ERROR user=%s err=%s", telegram_id, e)
         await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
 
 
