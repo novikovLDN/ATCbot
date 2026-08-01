@@ -14,6 +14,13 @@ import config
 import database
 from aiogram import Bot
 
+from database.subscriptions import (
+    PaymentAlreadyProcessed,
+    PaymentAmountMismatch,
+    PurchaseInvalidStatus,
+    PurchaseLocked,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +56,9 @@ async def process_confirmed_payment(
     Returns:
         Response dict with "status" key ("ok", "already_processed", "error")
     """
+    # Объявлено до try: ветка восстановления в except обращается к pending, и при
+    # исключении на самом первом запросе это давало UnboundLocalError.
+    pending: Optional[Dict[str, Any]] = None
     try:
         # Check if this is a notification-only purchase (no subscription to activate).
         # Accept both 'pending' and 'expired' — user may have started a new purchase
@@ -174,9 +184,26 @@ async def process_confirmed_payment(
         except Exception as sync_err:
             logger.warning("SITE_SYNC_FIRE_AND_FORGET_ERROR: %s", sync_err)
 
-    except ValueError as e:
+    except (PurchaseLocked, PurchaseInvalidStatus, PaymentAmountMismatch) as e:
+        # Раньше все эти причины попадали в общий except ValueError вместе с
+        # «уже обработано»: провайдеру уходил HTTP 200 already_processed, повтора
+        # не было, алерт не поднимался. Расхождение суммы означало, что деньги
+        # списаны, товар не выдан и об этом никто не узнал.
+        reason = type(e).__name__
+        logger.error(
+            f"PAYMENT_REJECTED: provider={provider}, user={telegram_id}, "
+            f"purchase_id={purchase_id}, reason={reason}, error={e}"
+        )
+        from app.services.admin_alerts import alert_payment_failure
+        tariff, period_days = await _lookup_purchase_tariff(purchase_id)
+        await alert_payment_failure(
+            bot, provider, telegram_id, purchase_id, e, is_transient=False,
+            amount_rubles=amount_rubles, tariff=tariff, period_days=period_days,
+        )
+        return {"status": "error", "reason": reason}
+    except PaymentAlreadyProcessed as e:
         logger.info(
-            f"{provider} webhook: purchase already processed (ValueError): "
+            f"{provider} webhook: purchase already processed: "
             f"purchase_id={purchase_id}, error={e}"
         )
         # Provider retry path: the first webhook committed the DB, but the

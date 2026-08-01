@@ -4391,6 +4391,22 @@ async def mark_proxy_purchased(telegram_id: int) -> None:
         )
 
 
+class PaymentAlreadyProcessed(ValueError):
+    """Покупка уже финализирована — законный повтор вебхука от провайдера."""
+
+
+class PaymentAmountMismatch(ValueError):
+    """Оплаченная сумма не совпала с ценой покупки за пределами допуска."""
+
+
+class PurchaseLocked(ValueError):
+    """Покупка не найдена или заблокирована параллельной финализацией."""
+
+
+class PurchaseInvalidStatus(ValueError):
+    """Покупка в статусе, из которого её нельзя финализировать."""
+
+
 async def finalize_purchase(
     purchase_id: str,
     payment_provider: str,
@@ -4446,7 +4462,7 @@ async def finalize_purchase(
             # Could be not found OR locked by another concurrent finalization
             error_msg = f"Pending purchase not found or locked: purchase_id={purchase_id}"
             logger.error(f"finalize_purchase: payment_rejected: reason=purchase_not_found_or_locked, {error_msg}")
-            raise ValueError(error_msg)
+            raise PurchaseLocked(error_msg)
         pending_purchase = dict(pending_row)
         telegram_id = pending_purchase["telegram_id"]
         status = pending_purchase.get("status")
@@ -4454,11 +4470,11 @@ async def finalize_purchase(
         if status == "paid":
             error_msg = f"Pending purchase already processed: purchase_id={purchase_id}, status={status}"
             logger.warning(f"finalize_purchase: payment_rejected: reason=already_processed, {error_msg}")
-            raise ValueError(error_msg)
+            raise PaymentAlreadyProcessed(error_msg)
         if status not in ("pending", "expired"):
             error_msg = f"Pending purchase invalid status: purchase_id={purchase_id}, status={status}"
             logger.warning(f"finalize_purchase: payment_rejected: reason=invalid_status, {error_msg}")
-            raise ValueError(error_msg)
+            raise PurchaseInvalidStatus(error_msg)
         if status == "expired":
             logger.info(f"finalize_purchase: recovering expired purchase: purchase_id={purchase_id}, user={telegram_id}")
         tariff_type = pending_purchase.get("tariff")
@@ -4484,7 +4500,7 @@ async def finalize_purchase(
                 f"diff={amount_diff:.2f} RUB (tolerance={max_tolerance:.2f} RUB)"
             )
             logger.error(f"finalize_purchase: PAYMENT_AMOUNT_MISMATCH: {error_msg}")
-            raise ValueError(error_msg)
+            raise PaymentAmountMismatch(error_msg)
 
         # TWO-PHASE: Phase 1 — add_vless_user OUTSIDE transaction (orphan prevention)
         pre_provisioned_uuid = None
