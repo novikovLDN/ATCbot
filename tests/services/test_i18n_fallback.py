@@ -57,3 +57,51 @@ def test_database_unavailable_key_has_usable_output():
     out = get_text("ru", "errors.database_unavailable", "База данных временно недоступна")
     assert out == "База данных временно недоступна"
     assert "errors." not in out
+
+
+class TestBuyButtonKeys:
+    """Кнопки выбора периода ломались на шести языках из семи.
+
+    buy.button_price и buy.button_price_discount содержали плейсхолдер {gb},
+    которого нет в аргументах вызова — это давало KeyError. Варианты с badge
+    отсутствовали и в этих языках, и в английском фолбэке, поэтому кнопка
+    подписывалась сырым ключом 'buy.button_price_badge'.
+    """
+
+    KEYS = (
+        "buy.button_price",
+        "buy.button_price_badge",
+        "buy.button_price_discount",
+        "buy.button_price_discount_badge",
+    )
+
+    @pytest.mark.parametrize("lang", sorted(LANGUAGES))
+    @pytest.mark.parametrize("key", KEYS)
+    def test_key_present_in_every_language(self, lang, key):
+        assert key in LANGUAGES[lang], f"{key} отсутствует в {lang}"
+
+    @pytest.mark.parametrize("lang", sorted(LANGUAGES))
+    def test_button_price_renders(self, lang):
+        out = get_text(lang, "buy.button_price", price=499, period="1 месяц")
+        assert "{" not in out, f"неподставленный плейсхолдер в {lang}: {out}"
+        assert "499" in out
+
+    @pytest.mark.parametrize("lang", sorted(LANGUAGES))
+    def test_button_price_badge_renders(self, lang):
+        out = get_text(lang, "buy.button_price_badge", price=499, period="1 месяц", badge="ХИТ")
+        assert "{" not in out, f"неподставленный плейсхолдер в {lang}: {out}"
+        assert "buy.button" not in out, f"вместо текста показан сырой ключ в {lang}"
+
+    @pytest.mark.parametrize("lang", sorted(LANGUAGES))
+    def test_button_price_discount_renders(self, lang):
+        out = get_text(lang, "buy.button_price_discount", base=699, final=499, period="1 месяц")
+        assert "{" not in out, f"неподставленный плейсхолдер в {lang}: {out}"
+
+    @pytest.mark.parametrize("lang", sorted(LANGUAGES))
+    def test_button_price_discount_badge_renders(self, lang):
+        out = get_text(
+            lang, "buy.button_price_discount_badge",
+            base=699, final=499, period="1 месяц", badge="ХИТ",
+        )
+        assert "{" not in out, f"неподставленный плейсхолдер в {lang}: {out}"
+        assert "buy.button" not in out, f"вместо текста показан сырой ключ в {lang}"
