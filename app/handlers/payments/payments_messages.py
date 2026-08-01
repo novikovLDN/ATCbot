@@ -6,7 +6,7 @@ Architecture invariant: Bot never generates VLESS locally. vpn_key must come fro
 """
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from aiogram import Router, F
@@ -825,7 +825,10 @@ async def process_successful_payment(message: Message, state: FSMContext):
                             await database.clear_remnawave_uuid(telegram_id)
                         try:
                             from app.services import remnawave_service
-                            from datetime import datetime, timezone, timedelta
+                            # Локальный импорт datetime здесь делал имена datetime и
+                            # timezone локальными на всю функцию, из-за чего строка 210
+                            # падала с UnboundLocalError, а except Exception её глушил —
+                            # блок оценки состояния системы не работал никогда.
                             far_future = datetime.now(timezone.utc) + timedelta(days=3650)
                             await remnawave_service.create_remnawave_user(
                                 telegram_id, "basic", far_future,
