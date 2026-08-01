@@ -10,6 +10,8 @@ import {
   Clock,
   Calendar as CalendarIcon,
   Copy,
+  LayoutList,
+  Rows3,
   Plus,
   Repeat,
   Trash2,
@@ -38,6 +40,141 @@ interface BroadcastRow extends Record<string, unknown> {
   sent_count?: number;
   failed_count?: number;
   status?: string;
+  tag?: string | null;
+  tag_color?: string | null;
+}
+
+// 7 семантических цветов. Совпадают с backend _VALID_TAG_COLORS.
+// Значения — Tailwind bg/text классы (в light-theme дашборде).
+const TAG_COLOR_CLASSES: Record<string, string> = {
+  gray: "bg-fg/8 text-fg-muted",
+  red: "bg-danger/15 text-danger",
+  orange: "bg-warning/15 text-warning",
+  yellow: "bg-[#F59E0B]/15 text-[#B45309]",
+  green: "bg-success/15 text-success",
+  blue: "bg-info/15 text-info",
+  purple: "bg-special/15 text-special",
+};
+
+const TAG_COLOR_LABELS: Array<{ key: string; label: string }> = [
+  { key: "gray", label: "Серый" },
+  { key: "red", label: "Красный · срочное" },
+  { key: "orange", label: "Оранжевый · реактивация" },
+  { key: "yellow", label: "Жёлтый · тест" },
+  { key: "green", label: "Зелёный · новое" },
+  { key: "blue", label: "Синий · инфо" },
+  { key: "purple", label: "Фиолетовый · VIP" },
+];
+
+function TagEditor({
+  broadcastId,
+  currentTag,
+  currentColor,
+}: {
+  broadcastId: number;
+  currentTag: string;
+  currentColor: string;
+}) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [tag, setTag] = useState(currentTag);
+  const [color, setColor] = useState(currentColor || "gray");
+
+  const save = useMutation({
+    mutationFn: () =>
+      endpoints.broadcastPatchTag(
+        broadcastId,
+        tag.trim() || null,
+        tag.trim() ? color : null,
+      ),
+    onSuccess: () => {
+      toast.success(tag.trim() ? "Тег обновлён" : "Тег снят");
+      qc.invalidateQueries({ queryKey: ["broadcasts"] });
+      setEditing(false);
+    },
+    onError: (e: unknown) =>
+      toast.error((e as ApiError)?.detail ?? "Не удалось сохранить тег"),
+  });
+
+  if (!editing) {
+    return (
+      <div className="mt-1.5">
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="text-[11px] text-fg-subtle underline decoration-dotted underline-offset-4 hover:text-fg-muted"
+        >
+          {currentTag ? "изменить тег" : "+ добавить тег"}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 rounded-lg border border-border bg-bg-subtle/40 p-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          value={tag}
+          onChange={(e) => setTag(e.target.value)}
+          maxLength={40}
+          placeholder="летняя акция"
+          className="input flex-1 py-1 text-xs"
+          autoFocus
+        />
+        <button
+          type="button"
+          onClick={() => save.mutate()}
+          disabled={save.isPending}
+          className="btn-primary py-1 text-xs"
+        >
+          {save.isPending ? <Spinner /> : <CheckCircle2 className="h-3 w-3" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setEditing(false);
+            setTag(currentTag);
+            setColor(currentColor || "gray");
+          }}
+          className="btn-ghost py-1 text-xs"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {TAG_COLOR_LABELS.map((c) => (
+          <button
+            type="button"
+            key={c.key}
+            onClick={() => setColor(c.key)}
+            title={c.label}
+            className={
+              color === c.key
+                ? `rounded-md px-2 py-0.5 text-[10px] font-semibold ring-2 ring-accent/60 ${TAG_COLOR_CLASSES[c.key]}`
+                : `rounded-md px-2 py-0.5 text-[10px] font-medium opacity-60 hover:opacity-100 ${TAG_COLOR_CLASSES[c.key]}`
+            }
+          >
+            ●
+          </button>
+        ))}
+        <span className="ml-1 self-center text-[10px] text-fg-subtle">
+          цвет метки
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function TagChip({ tag, color }: { tag: string; color?: string | null }) {
+  const cls = TAG_COLOR_CLASSES[color || "gray"] ?? TAG_COLOR_CLASSES.gray;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${cls}`}
+    >
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />
+      {tag}
+    </span>
+  );
 }
 
 interface SendProgress {
@@ -63,6 +200,25 @@ export function Broadcasts() {
   // panel can render the same up-to-date status. Cleared 8s after `done`.
   const [sending, setSending] = useState<Record<number, SendProgress>>({});
   const detailRef = useRef<HTMLDivElement | null>(null);
+
+  // View mode: compact = только title (как раньше), expanded =
+  // title + полный текст + сегмент + получатели + кнопка «Отправить снова».
+  // Persist в localStorage — админ переключил один раз, остаётся так.
+  const [viewMode, setViewMode] = useState<"compact" | "expanded">(() => {
+    try {
+      const v = localStorage.getItem("broadcasts:viewMode");
+      return v === "expanded" ? "expanded" : "compact";
+    } catch {
+      return "compact";
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("broadcasts:viewMode", viewMode);
+    } catch {
+      /* localStorage disabled */
+    }
+  }, [viewMode]);
 
   useEventStream((e: BusEvent) => {
     const bid = Number(e.broadcast_id ?? 0);
@@ -158,10 +314,32 @@ export function Broadcasts() {
         <div className="flex items-center gap-2">
           <button
             type="button"
+            onClick={() =>
+              setViewMode((m) => (m === "compact" ? "expanded" : "compact"))
+            }
+            className="btn-secondary"
+            title={
+              viewMode === "compact"
+                ? "Переключить на расширенный вид (текст + сегмент + получатели)"
+                : "Переключить на компактный вид (только заголовки)"
+            }
+          >
+            {viewMode === "compact" ? (
+              <Rows3 className="h-3.5 w-3.5" />
+            ) : (
+              <LayoutList className="h-3.5 w-3.5" />
+            )}
+            <span className="hidden sm:inline">
+              {viewMode === "compact" ? "Расширенно" : "Компактно"}
+            </span>
+          </button>
+          <button
+            type="button"
             onClick={() => list.refetch()}
             className="btn-secondary"
           >
-            <RefreshCcw className="h-3.5 w-3.5" /> Обновить
+            <RefreshCcw className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Обновить</span>
           </button>
           <Link to="/broadcasts/new" className="btn-primary">
             <Plus className="h-3.5 w-3.5" /> Создать
@@ -189,76 +367,20 @@ export function Broadcasts() {
               description="Когда отправите первую рассылку, она появится здесь."
             />
           ) : (
-            <ul className="divide-y divide-border/60">
+            <ul className={viewMode === "expanded" ? "space-y-3" : "divide-y divide-border/60"}>
               {list.data.map((b) => {
                 const id = Number(b.id ?? 0);
                 const prog = sending[id];
                 return (
-                  <li key={id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelected(id)}
-                      className={
-                        selected === id
-                          ? "flex w-full items-start gap-3 rounded-lg bg-accent/10 px-2 py-3 text-left text-fg shadow-[inset_0_0_0_1px_rgba(14,165,233,0.25)] transition"
-                          : "flex w-full items-start gap-3 rounded-lg px-2 py-3 text-left transition hover:bg-accent/[0.04]"
-                      }
-                    >
-                      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
-                        <Megaphone className="h-3.5 w-3.5" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-medium text-fg">
-                            {truncate(String(b.title ?? "Без названия"), 60)}
-                          </span>
-                          {b.is_ab_test && (
-                            <span className="badge-muted">A/B</span>
-                          )}
-                          {b.broadcast_type && (
-                            <span className="badge-muted">
-                              {String(b.broadcast_type)}
-                            </span>
-                          )}
-                          {prog?.status === "running" && (
-                            <span className="badge-accent">
-                              <Send className="h-3 w-3 animate-pulse" />
-                              отправляется
-                            </span>
-                          )}
-                          {prog?.status === "done" && (
-                            <span className="badge-success">
-                              <CheckCircle2 className="h-3 w-3" /> готово
-                            </span>
-                          )}
-                          {prog?.status === "failed" && (
-                            <span className="badge-danger">
-                              <AlertCircle className="h-3 w-3" /> сбой
-                            </span>
-                          )}
-                        </div>
-                        {typeof b.message === "string" && (
-                          <div className="mt-1 truncate text-xs text-fg-muted">
-                            {truncate(String(b.message), 100)}
-                          </div>
-                        )}
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-fg-subtle">
-                          {b.created_at && (
-                            <span>{fmtDate(String(b.created_at))}</span>
-                          )}
-                          {b.segment && (
-                            <span>· сегмент {String(b.segment)}</span>
-                          )}
-                        </div>
-                        {prog && prog.total > 0 && (
-                          <div className="mt-2">
-                            <SendProgressBar prog={prog} />
-                          </div>
-                        )}
-                      </div>
-                      <ChevronRight className="h-4 w-4 shrink-0 text-fg-subtle" />
-                    </button>
-                  </li>
+                  <BroadcastListRow
+                    key={id}
+                    row={b}
+                    id={id}
+                    selected={selected === id}
+                    onSelect={() => setSelected(id)}
+                    progress={prog}
+                    mode={viewMode}
+                  />
                 );
               })}
             </ul>
@@ -319,6 +441,215 @@ function SendProgressBar({ prog }: { prog: SendProgress }) {
       </div>
     </div>
   );
+}
+
+/**
+ * BroadcastListRow — рендер одной строки списка с поддержкой двух видов:
+ *   compact  — как раньше: title + короткий превью + сегмент + прогресс
+ *   expanded — карточка: title жирный + полный текст + сегмент/получатели
+ *              в правой колонке + inline-кнопка «Отправить снова»
+ */
+function BroadcastListRow({
+  row,
+  id,
+  selected,
+  onSelect,
+  progress,
+  mode,
+}: {
+  row: BroadcastRow;
+  id: number;
+  selected: boolean;
+  onSelect: () => void;
+  progress?: SendProgress;
+  mode: "compact" | "expanded";
+}) {
+  const navigate = useNavigate();
+  const running = progress?.status === "running";
+  const done = progress?.status === "done";
+  const failed = progress?.status === "failed";
+
+  if (mode === "expanded") {
+    // Расширенная карточка. Клик по всей карточке (кроме кнопки) → select.
+    return (
+      <li>
+        <div
+          className={
+            selected
+              ? "rounded-xl border border-accent/40 bg-accent/[0.06] p-3 transition"
+              : "rounded-xl border border-border bg-bg-card p-3 transition hover:border-fg-subtle"
+          }
+        >
+          <div className="flex items-start gap-3">
+            <button
+              type="button"
+              onClick={onSelect}
+              className="flex min-w-0 flex-1 items-start gap-3 text-left"
+            >
+              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
+                <Megaphone className="h-3.5 w-3.5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-fg">
+                    {truncate(String(row.title ?? "Без названия"), 80)}
+                  </span>
+                  {row.tag && <TagChip tag={String(row.tag)} color={row.tag_color as string | undefined} />}
+                  {row.is_ab_test && <span className="badge-muted">A/B</span>}
+                  {running && (
+                    <span className="badge-accent">
+                      <Send className="h-3 w-3 animate-pulse" /> отправляется
+                    </span>
+                  )}
+                  {done && (
+                    <span className="badge-success">
+                      <CheckCircle2 className="h-3 w-3" /> готово
+                    </span>
+                  )}
+                  {failed && (
+                    <span className="badge-danger">
+                      <AlertCircle className="h-3 w-3" /> сбой
+                    </span>
+                  )}
+                </div>
+                <div className="mt-0.5 text-[11px] text-fg-subtle">
+                  #{id}
+                  {row.created_at && ` · ${fmtDate(String(row.created_at))}`}
+                  {row.broadcast_type && ` · ${String(row.broadcast_type)}`}
+                </div>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(`/broadcasts/new?clone=${id}`);
+              }}
+              className="btn-ghost shrink-0"
+              title="Клонировать текст+фото+кнопки в новую рассылку"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Снова</span>
+            </button>
+          </div>
+
+          {/* Полный текст сообщения */}
+          {typeof row.message === "string" && row.message && (
+            <div className="mt-2.5 rounded-lg border border-border/60 bg-bg-subtle/40 p-3 text-[13px] leading-relaxed text-fg">
+              <div
+                className="whitespace-pre-wrap"
+                dangerouslySetInnerHTML={{
+                  __html: expandedSanitize(String(row.message)),
+                }}
+              />
+            </div>
+          )}
+
+          {/* Правая колонка: сегмент + получатели + прогресс */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-fg-muted">
+            {row.segment && (
+              <span className="inline-flex items-center gap-1">
+                <UsersIcon className="h-3 w-3" /> сегмент:{" "}
+                <b className="text-fg">{String(row.segment)}</b>
+              </span>
+            )}
+            {typeof row.total_recipients === "number" && (
+              <span className="inline-flex items-center gap-1">
+                · получателей: <b className="text-fg tabular-nums">{fmtNum(row.total_recipients)}</b>
+              </span>
+            )}
+            {typeof row.sent_count === "number" && (
+              <span className="inline-flex items-center gap-1 text-success">
+                · ✓ {fmtNum(row.sent_count)}
+              </span>
+            )}
+            {typeof row.failed_count === "number" && row.failed_count > 0 && (
+              <span className="inline-flex items-center gap-1 text-danger">
+                · ✕ {fmtNum(row.failed_count)}
+              </span>
+            )}
+          </div>
+          {progress && progress.total > 0 && (
+            <div className="mt-2">
+              <SendProgressBar prog={progress} />
+            </div>
+          )}
+        </div>
+      </li>
+    );
+  }
+
+  // Compact — прежний вид.
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onSelect}
+        className={
+          selected
+            ? "flex w-full items-start gap-3 rounded-lg bg-accent/10 px-2 py-3 text-left text-fg shadow-[inset_0_0_0_1px_rgba(14,165,233,0.25)] transition"
+            : "flex w-full items-start gap-3 rounded-lg px-2 py-3 text-left transition hover:bg-accent/[0.04]"
+        }
+      >
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
+          <Megaphone className="h-3.5 w-3.5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium text-fg">
+              {truncate(String(row.title ?? "Без названия"), 60)}
+            </span>
+            {row.tag && <TagChip tag={String(row.tag)} color={row.tag_color as string | undefined} />}
+            {row.is_ab_test && <span className="badge-muted">A/B</span>}
+            {row.broadcast_type && (
+              <span className="badge-muted">{String(row.broadcast_type)}</span>
+            )}
+            {running && (
+              <span className="badge-accent">
+                <Send className="h-3 w-3 animate-pulse" /> отправляется
+              </span>
+            )}
+            {done && (
+              <span className="badge-success">
+                <CheckCircle2 className="h-3 w-3" /> готово
+              </span>
+            )}
+            {failed && (
+              <span className="badge-danger">
+                <AlertCircle className="h-3 w-3" /> сбой
+              </span>
+            )}
+          </div>
+          {typeof row.message === "string" && (
+            <div className="mt-1 truncate text-xs text-fg-muted">
+              {truncate(String(row.message), 100)}
+            </div>
+          )}
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-fg-subtle">
+            {row.created_at && <span>{fmtDate(String(row.created_at))}</span>}
+            {row.segment && <span>· сегмент {String(row.segment)}</span>}
+          </div>
+          {progress && progress.total > 0 && (
+            <div className="mt-2">
+              <SendProgressBar prog={progress} />
+            </div>
+          )}
+        </div>
+        <ChevronRight className="h-4 w-4 shrink-0 text-fg-subtle" />
+      </button>
+    </li>
+  );
+}
+
+// Специальный sanitize для expanded-вида. Точно так же строгий как
+// sanitize() ниже, но выделен отдельно — на случай если понадобится
+// разрешить чуть больше HTML-тегов в превью.
+function expandedSanitize(html: string): string {
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
+    .replace(/on\w+="[^"]*"/gi, "")
+    .replace(/javascript:/gi, "");
 }
 
 function BroadcastDetail({
@@ -423,9 +754,15 @@ function BroadcastDetail({
           onClose={() => setShowSchedule(false)}
         />
       )}
-      <h3 className="text-lg font-semibold text-fg">
+      <h3 className="flex flex-wrap items-center gap-2 text-lg font-semibold text-fg">
         {truncate(String(b.title ?? "Без названия"), 80)}
+        {b.tag && <TagChip tag={String(b.tag)} color={b.tag_color as string | undefined} />}
       </h3>
+      <TagEditor
+        broadcastId={id}
+        currentTag={(b.tag as string) || ""}
+        currentColor={(b.tag_color as string) || "gray"}
+      />
 
       {progress && (
         <div

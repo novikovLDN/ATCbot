@@ -332,46 +332,81 @@ async def create_broadcast(
     photo_file_id: Optional[str] = None,
     animation_file_id: Optional[str] = None,
     buttons: Optional[list] = None,
+    tag: Optional[str] = None,
+    tag_color: Optional[str] = None,
 ) -> int:
     """Создать новое уведомление.
 
     photo_file_id и animation_file_id мутуально-эксклюзивные — если
     заданы оба, animation имеет приоритет при отправке.
+    tag/tag_color — опциональная цветная метка (migration 071).
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Try new schema (migration 070 — animation_file_id).
+        # Try newest schema (migration 071 — tag/tag_color + 070 animation).
         try:
             if is_ab_test:
                 row = await conn.fetchrow(
                     """INSERT INTO broadcasts
                            (title, message_a, message_b, is_ab_test, type,
-                            segment, sent_by, photo_file_id, animation_file_id, buttons)
-                       VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8, $9)
+                            segment, sent_by, photo_file_id, animation_file_id,
+                            buttons, tag, tag_color)
+                       VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8, $9, $10, $11)
                        RETURNING id""",
                     title, message_a, message_b, broadcast_type, segment, sent_by,
-                    photo_file_id, animation_file_id, buttons,
+                    photo_file_id, animation_file_id, buttons, tag, tag_color,
                 )
             else:
                 row = await conn.fetchrow(
                     """INSERT INTO broadcasts
                            (title, message, is_ab_test, type, segment,
-                            sent_by, photo_file_id, animation_file_id, buttons)
-                       VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8)
+                            sent_by, photo_file_id, animation_file_id,
+                            buttons, tag, tag_color)
+                       VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8, $9, $10)
                        RETURNING id""",
                     title, message, broadcast_type, segment, sent_by,
-                    photo_file_id, animation_file_id, buttons,
+                    photo_file_id, animation_file_id, buttons, tag, tag_color,
                 )
             return row["id"]
         except Exception as e:
-            # Migration 070 не применена — колонки animation_file_id нет.
-            # Fallback на pre-070 схему.
-            if "animation_file_id" not in str(e):
+            _emsg = str(e)
+            # Migration 071 (tag) не применена.
+            missing_tag = "\"tag\"" in _emsg or "column tag " in _emsg or "tag_color" in _emsg
+            missing_anim = "animation_file_id" in _emsg
+            if not (missing_tag or missing_anim):
                 raise
             logger.warning(
-                "broadcasts.animation_file_id missing (migration 070 not applied) "
-                "— falling back to legacy INSERT",
+                "broadcasts new columns missing (migration 070/071 not applied) "
+                "— falling back: missing_tag=%s missing_anim=%s",
+                missing_tag, missing_anim,
             )
+            # Пробуем средний вариант (070 применена, 071 нет).
+            if missing_tag and not missing_anim:
+                try:
+                    if is_ab_test:
+                        row = await conn.fetchrow(
+                            """INSERT INTO broadcasts
+                                   (title, message_a, message_b, is_ab_test, type,
+                                    segment, sent_by, photo_file_id, animation_file_id, buttons)
+                               VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8, $9)
+                               RETURNING id""",
+                            title, message_a, message_b, broadcast_type, segment, sent_by,
+                            photo_file_id, animation_file_id, buttons,
+                        )
+                    else:
+                        row = await conn.fetchrow(
+                            """INSERT INTO broadcasts
+                                   (title, message, is_ab_test, type, segment,
+                                    sent_by, photo_file_id, animation_file_id, buttons)
+                               VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8)
+                               RETURNING id""",
+                            title, message, broadcast_type, segment, sent_by,
+                            photo_file_id, animation_file_id, buttons,
+                        )
+                    return row["id"]
+                except Exception:
+                    pass
+            # Совсем старая схема (ни 070, ни 071).
             if is_ab_test:
                 row = await conn.fetchrow(
                     """INSERT INTO broadcasts
@@ -393,6 +428,27 @@ async def create_broadcast(
                     photo_file_id, buttons,
                 )
             return row["id"]
+
+
+async def update_broadcast_tag(
+    broadcast_id: int, tag: Optional[str], tag_color: Optional[str],
+) -> bool:
+    """PATCH тега уже существующей рассылки. Пустая строка → NULL."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            res = await conn.execute(
+                """UPDATE broadcasts
+                   SET tag = $2, tag_color = $3
+                   WHERE id = $1""",
+                broadcast_id, tag or None, tag_color or None,
+            )
+        except Exception as e:
+            if "tag" not in str(e):
+                raise
+            logger.warning("update_broadcast_tag: migration 071 not applied")
+            return False
+    return res.startswith("UPDATE ") and res != "UPDATE 0"
 
 
 async def get_broadcast(broadcast_id: int) -> Optional[Dict[str, Any]]:

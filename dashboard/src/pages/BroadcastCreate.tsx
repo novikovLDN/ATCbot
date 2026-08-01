@@ -64,6 +64,8 @@ export function BroadcastCreate() {
 
   // Form state
   const [title, setTitle] = useState("");
+  const [tag, setTag] = useState("");
+  const [tagColor, setTagColor] = useState<string>("gray");
   const [message, setMessage] = useState("");
   const [photoFileId, setPhotoFileId] = useState<string | null>(null);
   const [animationFileId, setAnimationFileId] = useState<string | null>(null);
@@ -106,6 +108,8 @@ export function BroadcastCreate() {
     setMessage(asStr(src.message));
     setPhotoFileId(asStr(src.photo_file_id) || null);
     setAnimationFileId(asStr(src.animation_file_id) || null);
+    setTag(asStr(src.tag) || "");
+    setTagColor(asStr(src.tag_color) || "gray");
     if (Array.isArray(src.buttons)) {
       setButtons((src.buttons as unknown[]).map((x) => String(x)));
     }
@@ -134,6 +138,8 @@ export function BroadcastCreate() {
         gift_reveal_percent: buttons.includes("gift_reveal")
           ? giftRevealPercent
           : null,
+        tag: tag.trim() || null,
+        tag_color: tag.trim() ? tagColor : null,
       }),
     onSuccess: (data) => {
       toast.success(
@@ -163,6 +169,8 @@ export function BroadcastCreate() {
         gift_reveal_percent: buttons.includes("gift_reveal")
           ? giftRevealPercent
           : null,
+        tag: tag.trim() || null,
+        tag_color: tag.trim() ? tagColor : null,
       }),
     onSuccess: (data) => {
       if (data.split) {
@@ -257,6 +265,51 @@ export function BroadcastCreate() {
               autoFocus
             />
           </label>
+
+          <div>
+            <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-fg-subtle">
+              Тег / метка (необязательно)
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={tag}
+                onChange={(e) => setTag(e.target.value)}
+                maxLength={40}
+                placeholder="летняя акция / реактивация / A-B тест"
+                className="input flex-1 min-w-[180px]"
+              />
+              <div className="flex flex-wrap items-center gap-1">
+                {[
+                  { key: "gray", cls: "bg-fg/8 text-fg-muted" },
+                  { key: "red", cls: "bg-danger/15 text-danger" },
+                  { key: "orange", cls: "bg-warning/15 text-warning" },
+                  { key: "yellow", cls: "bg-[#F59E0B]/15 text-[#B45309]" },
+                  { key: "green", cls: "bg-success/15 text-success" },
+                  { key: "blue", cls: "bg-info/15 text-info" },
+                  { key: "purple", cls: "bg-special/15 text-special" },
+                ].map((c) => (
+                  <button
+                    type="button"
+                    key={c.key}
+                    onClick={() => setTagColor(c.key)}
+                    title={c.key}
+                    className={
+                      tagColor === c.key
+                        ? `rounded-md px-2 py-0.5 text-[10px] font-semibold ring-2 ring-accent/60 ${c.cls}`
+                        : `rounded-md px-2 py-0.5 text-[10px] font-medium opacity-60 hover:opacity-100 ${c.cls}`
+                    }
+                  >
+                    ●
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="mt-1 text-[11px] text-fg-subtle">
+              Метка отображается chip'ом рядом с заголовком в списке рассылок.
+              Помогает группировать по кампании/цели. Пусто = без тега.
+            </p>
+          </div>
           <label className="block">
             <div className="mb-1.5 flex items-center justify-between text-xs font-medium uppercase tracking-wider text-fg-subtle">
               <span>Сообщение (HTML)</span>

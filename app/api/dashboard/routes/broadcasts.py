@@ -304,6 +304,43 @@ async def broadcast_stats(broadcast_id: int = Path(..., gt=0)):
     return _serialize(stats or {})
 
 
+class BroadcastTagPatch(BaseModel):
+    """PATCH body для тега рассылки. Пустая строка = снять тег."""
+    tag: Optional[str] = Field(None, max_length=40)
+    tag_color: Optional[str] = Field(None, max_length=16)
+
+    @field_validator("tag_color")
+    @classmethod
+    def _valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        v = v.lower().strip()
+        if v not in _VALID_TAG_COLORS:
+            raise ValueError(f"tag_color must be one of {sorted(_VALID_TAG_COLORS)}")
+        return v
+
+
+@router.patch("/{broadcast_id}/tag")
+async def broadcast_patch_tag(
+    body: BroadcastTagPatch,
+    broadcast_id: int = Path(..., gt=0),
+):
+    """Обновить/снять цветной тег уже существующей рассылки.
+    Пустые значения → NULL (снять тег)."""
+    try:
+        ok = await database.update_broadcast_tag(
+            broadcast_id,
+            (body.tag or "").strip() or None,
+            body.tag_color,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"tag_patch_failed: {e}")
+    if not ok:
+        raise HTTPException(404, "broadcast not found or migration 071 pending")
+    return {"ok": True, "id": broadcast_id, "tag": body.tag,
+            "tag_color": body.tag_color}
+
+
 @router.get("/{broadcast_id}/analytics")
 async def broadcast_analytics(broadcast_id: int = Path(..., gt=0)):
     """Расширенная аналитика рассылки: conversion / revenue / blocked.
@@ -452,6 +489,11 @@ _BUTTON_TYPES = {
 _GIFT_REVEAL_PERCENT_CHOICES = (20, 25, 30, 35, 40)
 
 
+_VALID_TAG_COLORS = {
+    "gray", "red", "orange", "yellow", "green", "blue", "purple",
+}
+
+
 class BroadcastCreateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     message: str = Field(..., min_length=1, max_length=4000)
@@ -467,6 +509,21 @@ class BroadcastCreateRequest(BaseModel):
     # Процент для кнопки «👀 Посмотреть подарок». Пресеты 20/25/30/35/40.
     # Действует 48ч после клика (продолжительность зашита в коде callback'а).
     gift_reveal_percent: Optional[int] = Field(None, ge=20, le=40)
+    # Опциональная цветная метка (migration 071)
+    tag: Optional[str] = Field(None, max_length=40)
+    tag_color: Optional[str] = Field(None, max_length=16)
+
+    @field_validator("tag_color")
+    @classmethod
+    def _valid_tag_color(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        v = v.lower().strip()
+        if v not in _VALID_TAG_COLORS:
+            raise ValueError(
+                f"tag_color must be one of {sorted(_VALID_TAG_COLORS)}",
+            )
+        return v
 
     @field_validator("buttons")
     @classmethod
@@ -653,6 +710,8 @@ async def broadcast_create(
             photo_file_id=body.photo_file_id,
             animation_file_id=body.animation_file_id,
             buttons=list(body.buttons) if body.buttons else None,
+            tag=body.tag,
+            tag_color=body.tag_color,
         )
     except Exception as e:
         raise HTTPException(500, f"create_broadcast_failed: {e}")
