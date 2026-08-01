@@ -69,3 +69,39 @@ class TestClassifyPurchase:
         """Тарифы VPN не должны случайно попасть в товарную ветку."""
         for tariff in ("basic", "plus", "biz_start", "bypass_only"):
             assert classify({"tariff": tariff}) == "subscription"
+
+
+@pytest.fixture(scope="module")
+def resolve_amount():
+    from app.handlers.payments.payments_messages import resolve_payment_amount_rubles
+    return resolve_payment_amount_rubles
+
+
+class TestResolvePaymentAmountRubles:
+    """Для Stars total_amount — количество звёзд, а не рубли.
+
+    Раньше это число записывалось как рублёвая сумма: выручка и реферальный
+    кешбэк считались от числа звёзд, то есть занижались в разы.
+    """
+
+    def test_stars_uses_purchase_price_not_star_count(self, resolve_amount):
+        pending = {"price_kopecks": 49900}
+        assert resolve_amount(150, True, pending) == 499.0
+
+    def test_stars_without_price_falls_back_and_does_not_crash(self, resolve_amount):
+        assert resolve_amount(150, True, {}) == 150.0
+
+    def test_stars_with_none_purchase_falls_back(self, resolve_amount):
+        assert resolve_amount(150, True, None) == 150.0
+
+    def test_card_converts_kopecks_to_rubles(self, resolve_amount):
+        pending = {"price_kopecks": 49900}
+        assert resolve_amount(49900, False, pending) == 499.0
+
+    def test_card_ignores_purchase_price(self, resolve_amount):
+        """Для карты источник истины — фактически списанная сумма."""
+        pending = {"price_kopecks": 49900}
+        assert resolve_amount(19900, False, pending) == 199.0
+
+    def test_zero_price_kopecks_falls_back_to_star_count(self, resolve_amount):
+        assert resolve_amount(75, True, {"price_kopecks": 0}) == 75.0

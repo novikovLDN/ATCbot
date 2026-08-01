@@ -69,6 +69,30 @@ _TARIFF_PREFIX_ROUTES = (
 )
 
 
+def resolve_payment_amount_rubles(
+    total_amount: int, is_stars: bool, pending_purchase: Optional[dict]
+) -> float:
+    """Рублёвая сумма платежа.
+
+    Для Stars total_amount — это количество звёзд, а не рубли: записывать его
+    как рублёвую сумму нельзя, иначе выручка и реферальный кешбэк считаются
+    от числа звёзд. Берём цену, зафиксированную при создании покупки.
+    Для карты total_amount приходит в копейках.
+    """
+    if not is_stars:
+        return total_amount / 100.0
+
+    price_kopecks = (pending_purchase or {}).get("price_kopecks")
+    if price_kopecks:
+        return price_kopecks / 100.0
+
+    logger.error(
+        "STARS_PRICE_MISSING: у покупки нет price_kopecks, выручка будет занижена, stars=%s",
+        total_amount,
+    )
+    return float(total_amount)
+
+
 def classify_purchase(pending_purchase: Optional[dict]) -> str:
     """Определить, как обрабатывать оплаченную покупку.
 
@@ -585,8 +609,10 @@ async def process_successful_payment(message: Message, state: FSMContext):
     tariff_type = pending_purchase["tariff"]
     period_days = pending_purchase["period_days"]
     promo_code_used = pending_purchase.get("promo_code")
-    # Для Stars: total_amount = кол-во Stars напрямую; для RUB: total_amount в копейках
-    payment_amount_rubles = payment.total_amount if is_stars_payment else payment.total_amount / 100.0
+    # Для Stars total_amount — количество звёзд, а не рубли: берём цену покупки.
+    payment_amount_rubles = resolve_payment_amount_rubles(
+        payment.total_amount, is_stars_payment, pending_purchase
+    )
     
     # КРИТИЧНО: Логируем верификацию платежа
     logger.info(
