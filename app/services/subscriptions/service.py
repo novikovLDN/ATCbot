@@ -367,17 +367,35 @@ def parse_expires_at(expires_at: Any) -> Optional[datetime]:
         return expires_at
     
     if isinstance(expires_at, str):
+        # fromisoformat возвращает naive, если в строке нет смещения.
+        # Домен работает только с aware UTC, поэтому нормализуем результат:
+        # без нормализации сравнение с now падало с TypeError.
         try:
-            return datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+            return _ensure_utc(datetime.fromisoformat(expires_at.replace('Z', '+00:00')))
         except Exception as e:
             logger.debug("Date parse (Z format) failed: %s", e)
             try:
-                return datetime.fromisoformat(expires_at)
+                return _ensure_utc(datetime.fromisoformat(expires_at))
             except Exception as e2:
                 logger.debug("Date parse (plain) failed: %s", e2)
                 return None
     
     return None
+
+
+def _ensure_utc(moment: Optional[datetime]) -> Optional[datetime]:
+    """Привести момент времени к aware UTC.
+
+    Домен работает только с aware-датами, но `now` приходит извне и может
+    оказаться naive — например из кода, который ещё не перевели на
+    datetime.now(timezone.utc). Naive трактуем как UTC: так же, как
+    database._from_db_utc трактует значения из БД.
+    """
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
 
 
 def is_subscription_active(
@@ -412,9 +430,8 @@ def is_subscription_active(
         logger.warning(f"is_subscription_active: unexpected subscription type: {type(subscription)}")
         return False
     
-    if now is None:
-        now = datetime.now(timezone.utc)
-    
+    now = _ensure_utc(now) or datetime.now(timezone.utc)
+
     status = subscription.get("status")
     if status != "active":
         return False
@@ -448,9 +465,8 @@ def get_subscription_status(
     Returns:
         SubscriptionStatus with all status information
     """
-    if now is None:
-        now = datetime.now(timezone.utc)
-    
+    now = _ensure_utc(now) or datetime.now(timezone.utc)
+
     if not subscription:
         return SubscriptionStatus(
             is_active=False,

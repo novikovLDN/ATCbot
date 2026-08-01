@@ -8,7 +8,7 @@ Tests focus on business logic:
 - Edge cases
 """
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock
 from app.services.subscriptions.service import (
     parse_expires_at,
@@ -26,9 +26,21 @@ class TestParseExpiresAt:
         assert parse_expires_at(None) is None
     
     def test_parse_datetime(self):
-        """datetime object should be returned as-is"""
+        """naive datetime трактуется как UTC и возвращается aware"""
         dt = datetime(2024, 1, 15, 12, 0, 0)
+        assert parse_expires_at(dt) == datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_parse_aware_datetime_preserved(self):
+        """aware datetime возвращается без изменения момента времени"""
+        dt = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
         assert parse_expires_at(dt) == dt
+
+    def test_parse_naive_iso_string_becomes_aware(self):
+        """ISO-строка без смещения не должна возвращаться naive — иначе сравнение падает"""
+        result = parse_expires_at("2024-02-15T12:00:00")
+        assert result is not None
+        assert result.tzinfo is not None
+        assert result == datetime(2024, 2, 15, 12, 0, 0, tzinfo=timezone.utc)
     
     def test_parse_iso_string(self):
         """ISO format string should be parsed correctly"""
@@ -165,7 +177,7 @@ class TestGetSubscriptionStatus:
         
         assert status.is_active is True
         assert status.has_subscription is True
-        assert status.expires_at == future
+        assert status.expires_at == future.replace(tzinfo=timezone.utc)
         assert status.activation_status == "active"
         assert status.is_expired is False
     
@@ -183,7 +195,7 @@ class TestGetSubscriptionStatus:
         
         assert status.is_active is False
         assert status.has_subscription is True
-        assert status.expires_at == past
+        assert status.expires_at == past.replace(tzinfo=timezone.utc)
         assert status.is_expired is True
     
     def test_pending_activation(self):
@@ -200,7 +212,7 @@ class TestGetSubscriptionStatus:
         
         assert status.is_active is False  # No UUID means not active
         assert status.has_subscription is True
-        assert status.expires_at == future
+        assert status.expires_at == future.replace(tzinfo=timezone.utc)
         assert status.activation_status == "pending"
         assert status.is_expired is False
     
