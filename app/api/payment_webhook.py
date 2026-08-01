@@ -228,3 +228,68 @@ async def _handle_lava_webhook(request: Request):
 @router.post("/webhooks/lava")
 async def lava_webhook(request: Request):
     return await _handle_lava_webhook(request)
+
+
+# ── Wata (wata.pro) — H2H REST API ────────────────────────────────
+
+async def _handle_wata_webhook(request: Request):
+    """Обработчик webhook'ов от Wata.
+
+    Особенности:
+      - Raw body ОБЯЗАТЕЛЕН для проверки RSA-SHA512 подписи (X-Signature).
+        Если middleware пересобрал JSON — подпись не сойдётся.
+      - kind=Payment + transactionStatus=Paid → confirm.
+      - Всё остальное (Pending / Declined / Refund) → ignored.
+    """
+    if _bot is None:
+        logger.critical("Wata webhook received but bot is not initialized")
+        await _log_pe("setup_missing", "wata", error_message="bot not initialized")
+        return JSONResponse({"status": "error"}, status_code=500)
+    try:
+        import wata_service
+        if not wata_service.is_enabled():
+            logger.warning("Wata webhook received but service is disabled")
+            return JSONResponse({"status": "disabled"})
+
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        # Raw body для подписи + parsed JSON для логики.
+        raw = await request.body()
+        try:
+            body = await request.json()
+        except Exception as e:
+            logger.error(f"Wata webhook: invalid JSON: {e}")
+            await _log_pe("webhook_invalid_json", "wata", error_message=str(e)[:300])
+            return JSONResponse({"status": "invalid"}, status_code=400)
+
+        result = await asyncio.wait_for(
+            wata_service.process_webhook_data(headers, raw, body, _bot),
+            timeout=_WEBHOOK_TIMEOUT,
+        )
+        return JSONResponse(result)
+
+    except ImportError:
+        logger.error("wata_service not available")
+        await _log_pe("service_missing", "wata")
+        return JSONResponse({"status": "error"}, status_code=500)
+    except ValueError as e:
+        logger.info(f"Wata webhook: already processed: {e}")
+        return JSONResponse({"status": "already_processed"})
+    except TransientPaymentError as e:
+        logger.error(f"Wata webhook transient error: {e}")
+        await _log_pe("transient", "wata", error_message=str(e)[:500])
+        return JSONResponse({"status": "transient_error"}, status_code=500)
+    except asyncio.TimeoutError:
+        logger.error("Wata webhook timeout")
+        await _log_pe("timeout", "wata", error_message=f">{_WEBHOOK_TIMEOUT}s")
+        return JSONResponse({"status": "timeout"}, status_code=500)
+    except Exception as e:
+        logger.exception(f"Wata webhook error: {e}")
+        await _log_pe("unhandled_exception", "wata",
+                      error_code=type(e).__name__,
+                      error_message=str(e)[:500])
+        return JSONResponse({"status": "error"}, status_code=500)
+
+
+@router.post("/webhooks/wata")
+async def wata_webhook(request: Request):
+    return await _handle_wata_webhook(request)

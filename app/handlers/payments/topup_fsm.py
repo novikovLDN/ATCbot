@@ -109,6 +109,16 @@ async def process_topup_amount(message: Message, state: FSMContext):
             text=i18n_get_text(language, "payment.lava"),
             callback_data=f"topup_lava:{amount}"
         )])
+    # Wata — admin-only на этапе тестирования
+    try:
+        import wata_service
+        if wata_service.is_visible_to(telegram_id):
+            buttons.append([InlineKeyboardButton(
+                text="💳 Wata (тест)",
+                callback_data=f"topup_wata:{amount}"
+            )])
+    except Exception:
+        pass
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="topup_balance"

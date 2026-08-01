@@ -540,6 +540,16 @@ async def cb_payment_methods(callback: CallbackQuery, state: FSMContext):
         text="📱 СБП",
         callback_data=f"spotify_pay:sbp:{plan}:{months}",
     )])
+    # Wata — admin-only beta
+    try:
+        import wata_service
+        if wata_service.is_visible_to(callback.from_user.id):
+            rows.append([InlineKeyboardButton(
+                text="💳 Wata (тест)",
+                callback_data=f"spotify_pay:wata:{plan}:{months}",
+            )])
+    except Exception:
+        pass
     rows.append([InlineKeyboardButton(
         text="🔙 К заказу",
         callback_data="spotify:pass:ok",
@@ -681,6 +691,53 @@ async def cb_pay_lava(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.exception("SPOTIFY_LAVA_ERROR user=%s: %s", telegram_id, e)
         await callback.answer("Ошибка создания счёта", show_alert=True)
+
+
+@spotify_purchase_router.callback_query(F.data.startswith("spotify_pay:wata:"))
+async def cb_pay_wata(callback: CallbackQuery, state: FSMContext):
+    """Spotify — Wata (admin-only beta)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    telegram_id = callback.from_user.id
+    import wata_service
+    if not wata_service.is_visible_to(telegram_id):
+        await callback.answer("Wata пока в закрытой бете", show_alert=True)
+        return
+    flow = await _get_flow_data(callback, state)
+    if not flow:
+        return
+    plan, months, price, email, password = flow
+    price_kopecks = price * 100
+    purchase_id = await _create_pending(
+        telegram_id, plan, months, price_kopecks, email, password,
+    )
+    label = f"Spotify {_plan_meta(plan)['label']} {_duration_label(months)}"
+    try:
+        invoice = await wata_service.create_invoice(
+            amount_rubles=float(price),
+            purchase_id=purchase_id,
+            comment=label,
+            user_id=telegram_id,
+        )
+        try:
+            await database.update_pending_purchase_invoice_id(
+                purchase_id, str(invoice["invoice_id"]),
+            )
+        except Exception:
+            pass
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop")],
+        ])
+        await callback.message.answer(
+            f"💳 <b>Wata (тест)</b> · {label}\nК оплате: <b>{price}₽</b>",
+            reply_markup=kb, parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.exception("SPOTIFY_WATA_ERROR user=%s: %s", telegram_id, e)
+        await callback.answer("Ошибка создания счёта Wata", show_alert=True)
 
 
 @spotify_purchase_router.callback_query(F.data.startswith("spotify_pay:sbp:"))

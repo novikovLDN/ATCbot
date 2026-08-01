@@ -203,6 +203,16 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
             text=i18n_get_text(language, "payment.lava"),
             callback_data=f"bypass_pay_lava:{gb}",
         )])
+    # Wata — admin-only beta
+    try:
+        import wata_service
+        if wata_service.is_visible_to(callback.from_user.id):
+            buttons.append([InlineKeyboardButton(
+                text="💳 Wata (тест)",
+                callback_data=f"bypass_pay_wata:{gb}",
+            )])
+    except Exception:
+        pass
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
@@ -791,6 +801,16 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
             text=i18n_get_text(language, "traffic.pay_lava", price=price),
             callback_data=f"traffic_pay_lava:{gb}",
         )])
+    # Wata — admin-only beta
+    try:
+        import wata_service
+        if wata_service.is_visible_to(callback.from_user.id):
+            buttons.append([InlineKeyboardButton(
+                text=f"💳 Wata тест · {price}₽",
+                callback_data=f"traffic_pay_wata:{gb}",
+            )])
+    except Exception:
+        pass
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
@@ -1157,6 +1177,61 @@ async def callback_traffic_pay_lava(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
+@traffic_router.callback_query(F.data.startswith("traffic_pay_wata:"))
+async def callback_traffic_pay_wata(callback: CallbackQuery):
+    """Traffic pack — Wata (admin-only beta)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    import wata_service
+    if not wata_service.is_visible_to(telegram_id):
+        await callback.answer("Wata пока в закрытой бете", show_alert=True)
+        return
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+    pack = config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
+    if not pack:
+        return
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+    base_price = pack["price"]
+    price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
+    try:
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=f"traffic_{gb}gb",
+            period_days=0,
+            price_kopecks=price * 100,
+            purchase_type="traffic_pack",
+        )
+        invoice = await wata_service.create_invoice(
+            amount_rubles=float(price),
+            purchase_id=purchase_id,
+            comment=f"Atlas Secure — {gb} GB traffic",
+            user_id=telegram_id,
+        )
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]))
+        except Exception:
+            pass
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_traffic")],
+        ])
+        msg = await callback.message.answer(
+            f"💳 <b>Wata (тест)</b>\n\n{gb} ГБ трафика · <b>{price}₽</b>",
+            reply_markup=keyboard, parse_mode="HTML",
+        )
+        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg))
+        await callback.answer()
+    except Exception as e:
+        logger.exception("TRAFFIC_WATA_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
 # ── Bypass-only payment handlers ─────────────────────────────────────
 
 def _get_bypass_pack(gb: int):
@@ -1464,4 +1539,55 @@ async def callback_bypass_pay_lava(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception("BYPASS_LAVA_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+@traffic_router.callback_query(F.data.startswith("bypass_pay_wata:"))
+async def callback_bypass_pay_wata(callback: CallbackQuery):
+    """Bypass-only pack — Wata (admin-only beta)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    import wata_service
+    if not wata_service.is_visible_to(telegram_id):
+        await callback.answer("Wata пока в закрытой бете", show_alert=True)
+        return
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+    price, pack = await _bypass_price(telegram_id, gb)
+    if not price:
+        return
+    try:
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=f"bypass_{gb}gb",
+            period_days=0,
+            price_kopecks=price * 100,
+            purchase_type="traffic_pack",
+        )
+        invoice = await wata_service.create_invoice(
+            amount_rubles=float(price),
+            purchase_id=purchase_id,
+            comment=f"Atlas Secure — Bypass {gb} GB",
+            user_id=telegram_id,
+        )
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]))
+        except Exception:
+            pass
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only")],
+        ])
+        msg = await callback.message.answer(
+            f"💳 <b>Wata (тест)</b> · Bypass {gb} GB · <b>{price}₽</b>",
+            reply_markup=keyboard, parse_mode="HTML",
+        )
+        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg))
+        await callback.answer()
+    except Exception as e:
+        logger.exception("BYPASS_WATA_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
