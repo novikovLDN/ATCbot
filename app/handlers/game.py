@@ -1015,37 +1015,34 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
     plant = PLANT_TYPES.get(plant_type, {})
     reward_kopecks = plant.get("reward", 0)
     reward_rubles = reward_kopecks / 100.0
-    
-    # Add reward to balance
-    success = await database.increase_balance(
+
+    # Сброс грядки и начисление — одной транзакцией под advisory-локом.
+    # Раньше это были три отдельные операции, и двойной клик начислял награду
+    # несколько раз: обе копии обработчика успевали пройти проверку статуса.
+    success, reason = await database.harvest_plot_atomic(
         telegram_id=telegram_id,
-        amount=reward_rubles,
+        plot_id=plot_id,
+        reward_kopecks=int(reward_kopecks),
         source="farm_harvest",
-        description=f"Farm harvest: {plant.get('name', 'unknown')}"
+        description=f"Farm harvest: {plant.get('name', 'unknown')}",
     )
-    
+
     if not success:
-        await callback.answer("Ошибка при начислении награды", show_alert=True)
+        if reason == "plot_wrong_status":
+            # Сюда попадает второй клик по той же грядке — это не ошибка.
+            await callback.answer("Эта грядка уже собрана", show_alert=True)
+        else:
+            logger.warning(
+                "FARM_HARVEST_FAILED user=%s plot=%s reason=%s",
+                telegram_id, plot_id, reason,
+            )
+            await callback.answer("Ошибка при начислении награды", show_alert=True)
         return
-    
-    # Reset plot
-    plot["status"] = "empty"
-    plot["plant_type"] = None
-    plot["planted_at"] = None
-    plot["ready_at"] = None
-    plot["dead_at"] = None
-    plot["notified_ready"] = False
-    plot["notified_12h"] = False
-    plot["notified_dead"] = False
-    plot["water_used_at"] = None
-    plot["fertilizer_used_at"] = None
-    
-    await database.save_farm_plots(telegram_id, farm_plots)
-    
+
     # Refresh balance
     farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
-    
+
     await callback.answer(f"🌾 Урожай собран! +{reward_rubles:.0f} ₽", show_alert=True)
 
 
@@ -1525,32 +1522,26 @@ async def callback_farm_early_harvest(callback: CallbackQuery):
         await callback.answer("Ранний сбор недоступен для этого растения.", show_alert=True)
         return
 
-    # Credit balance and reset plot to empty (mirrors normal harvest cleanup).
-    ok = await database.increase_balance(
+    # Сброс грядки и начисление — одной транзакцией под advisory-локом, иначе
+    # двойной клик по «собрать незрелым» начисляет половину награды дважды.
+    ok, reason = await database.harvest_plot_atomic(
         telegram_id=telegram_id,
-        amount=half_reward_kopecks / 100.0,
+        plot_id=plot_id,
+        reward_kopecks=half_reward_kopecks,
+        expected_status="growing",
         source="farm_early_harvest",
         description=f"Early harvest plot {plot_id} ({plant.get('name','')})",
     )
     if not ok:
-        await callback.answer("Не удалось зачислить награду.", show_alert=True)
+        if reason == "plot_wrong_status":
+            await callback.answer("Эта грядка уже собрана", show_alert=True)
+        else:
+            logger.warning(
+                "FARM_EARLY_HARVEST_FAILED user=%s plot=%s reason=%s",
+                telegram_id, plot_id, reason,
+            )
+            await callback.answer("Не удалось зачислить награду.", show_alert=True)
         return
-
-    for p in farm_plots:
-        if int(p.get("plot_id", -1)) == plot_id:
-            p["status"] = "empty"
-            p["plant_type"] = None
-            p["planted_at"] = None
-            p["ready_at"] = None
-            p["dead_at"] = None
-            p["notified_ready"] = False
-            p["notified_12h"] = False
-            p["notified_dead"] = False
-            p["water_used_at"] = None
-            p["fertilizer_used_at"] = None
-            p["storm_shielded"] = False
-            break
-    await database.save_farm_plots(telegram_id, farm_plots)
 
     await callback.answer(
         f"🚜 Собрано {plant.get('emoji','')} незрелым: +{half_reward_kopecks // 100} ₽",

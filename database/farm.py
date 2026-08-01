@@ -295,6 +295,104 @@ async def apply_storm_shield_atomic(
             return await _do(own_conn)
 
 
+async def harvest_plot_atomic(
+    telegram_id: int,
+    plot_id: int,
+    reward_kopecks: int,
+    *,
+    expected_status: str = "ready",
+    source: str = "farm_harvest",
+    description: str = "",
+) -> Tuple[bool, str]:
+    """Собрать урожай с грядки атомарно: сброс грядки и начисление в одной транзакции.
+
+    Раньше сбор был read-modify-write без блокировки: состояние читалось,
+    проверялся статус, начислялась награда и только потом грядка сбрасывалась
+    отдельным запросом. Два параллельных клика проходили проверку оба и
+    начисляли награду дважды.
+
+    Здесь грядка переводится в 'empty' под тем же advisory-локом, под которым
+    начисляется баланс, поэтому второй запрос увидит уже пустую грядку и
+    получит отказ.
+
+    Returns (success, reason). reason: "ok", "user_not_found", "plot_not_found",
+    "plot_wrong_status", "db_not_ready", "no_reward".
+    """
+    if not _core.DB_READY:
+        return False, "db_not_ready"
+    if reward_kopecks <= 0:
+        return False, "no_reward"
+
+    pool = await get_pool()
+    if pool is None:
+        return False, "db_not_ready"
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+
+            row = await conn.fetchrow(
+                "SELECT farm_plots FROM users WHERE telegram_id = $1 FOR UPDATE",
+                telegram_id,
+            )
+            if not row:
+                return False, "user_not_found"
+
+            plots = row["farm_plots"]
+            if isinstance(plots, str):
+                plots = json.loads(plots)
+            if not isinstance(plots, list):
+                return False, "plot_not_found"
+
+            target_idx = None
+            for i, p in enumerate(plots):
+                if int(p.get("plot_id", -1)) == plot_id:
+                    target_idx = i
+                    break
+            if target_idx is None:
+                return False, "plot_not_found"
+
+            target = plots[target_idx]
+            if target.get("status") != expected_status:
+                # Сюда попадает второй параллельный клик: грядку уже собрали.
+                return False, "plot_wrong_status"
+
+            plots[target_idx] = {
+                "plot_id": plot_id,
+                "status": "empty",
+                "plant_type": None,
+                "planted_at": None,
+                "ready_at": None,
+                "dead_at": None,
+                "notified_ready": False,
+                "notified_12h": False,
+                "notified_dead": False,
+                "water_used_at": None,
+                "fertilizer_used_at": None,
+                "storm_shielded": False,
+            }
+            await conn.execute(
+                "UPDATE users SET farm_plots = $1::jsonb WHERE telegram_id = $2",
+                json.dumps(plots), telegram_id,
+            )
+            await conn.execute(
+                "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
+                reward_kopecks, telegram_id,
+            )
+            await conn.execute(
+                """INSERT INTO balance_transactions
+                   (user_id, amount, type, source, description)
+                   VALUES ($1, $2, 'topup', $3, $4)""",
+                telegram_id, reward_kopecks, source,
+                description or f"Farm harvest plot {plot_id}",
+            )
+            logger.info(
+                "FARM_HARVEST_ATOMIC user=%s plot=%s reward_kopecks=%s source=%s",
+                telegram_id, plot_id, reward_kopecks, source,
+            )
+            return True, "ok"
+
+
 async def execute_storm_for_user(
     telegram_id: int,
     farm_plots: List[Dict[str, Any]],

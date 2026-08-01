@@ -260,6 +260,7 @@ from database.farm import (  # noqa: F401
     replace_pending_storm_at,
     list_users_with_growing_plots,
     apply_storm_shield_atomic,
+    harvest_plot_atomic,
     execute_storm_for_user,
     touch_last_seen,
     STORM_ANNOUNCE_BEFORE_HOURS,
