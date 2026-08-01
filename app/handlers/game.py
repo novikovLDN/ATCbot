@@ -218,11 +218,29 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                 logger.info("GAME_BOWL [user=%s] no_subscription paywall", telegram_id)
                 return
 
-            await conn.execute(
-                "UPDATE users SET game_last_played = $1 WHERE telegram_id = $2",
+            # Захват кулдауна атомарным UPDATE: условие проверяется той же
+            # операцией, что и запись. Раньше между SELECT выше и этим UPDATE
+            # не было ни транзакции, ни блокировки, поэтому параллельные клики
+            # проходили проверку оба и получали по гранту подписки каждый.
+            claimed = await conn.fetchval(
+                """
+                UPDATE users
+                   SET game_last_played = $1
+                 WHERE telegram_id = $2
+                   AND (game_last_played IS NULL OR game_last_played <= $3)
+                RETURNING telegram_id
+                """,
                 database._to_db_utc(now),
                 telegram_id,
+                database._to_db_utc(now - cooldown),
             )
+            if claimed is None:
+                logger.info(
+                    "GAME_BOWL [user=%s] cooldown_race_blocked — параллельный клик уже занял попытку",
+                    telegram_id,
+                )
+                await callback.answer("Игра уже запущена, подождите", show_alert=True)
+                return
 
         dice_message = await bot.send_dice(chat_id=chat_id, emoji="🎳")
         await asyncio.sleep(4)
@@ -353,11 +371,28 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                 logger.info("GAME_DICE [user=%s] no_subscription paywall", telegram_id)
                 return
 
-            await conn.execute(
-                "UPDATE users SET dice_last_played = $1 WHERE telegram_id = $2",
+            # Захват кулдауна атомарным UPDATE — см. комментарий в боулинге.
+            # Без условия в самом UPDATE параллельные клики получали по гранту
+            # подписки каждый, а кубики дают до 6 дней за раз.
+            claimed = await conn.fetchval(
+                """
+                UPDATE users
+                   SET dice_last_played = $1
+                 WHERE telegram_id = $2
+                   AND (dice_last_played IS NULL OR dice_last_played <= $3)
+                RETURNING telegram_id
+                """,
                 database._to_db_utc(now),
                 telegram_id,
+                database._to_db_utc(now - cooldown),
             )
+            if claimed is None:
+                logger.info(
+                    "GAME_DICE [user=%s] cooldown_race_blocked — параллельный клик уже занял попытку",
+                    telegram_id,
+                )
+                await callback.answer("Игра уже запущена, подождите", show_alert=True)
+                return
 
         dice_message = await bot.send_dice(chat_id=chat_id, emoji="🎲")
         await asyncio.sleep(2)
