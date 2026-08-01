@@ -23,6 +23,14 @@ from unittest.mock import patch, MagicMock, AsyncMock
 FAKE_CRYPTOBOT_TOKEN = "test-cryptobot-token-12345"
 FAKE_PLATEGA_MERCHANT_ID = "test-merchant-001"
 FAKE_PLATEGA_SECRET = "test-platega-secret-xyz"
+FAKE_LAVA_JWT = "test-lava-jwt-token"
+FAKE_LAVA_SHOP_ID = "test-lava-shop-uuid"
+FAKE_LAVA_SIGN_KEY = "test-lava-sign-key-abc"
+
+
+def _compute_lava_signature(raw_body: bytes, sign_key: str) -> str:
+    """Reproduce Lava HMAC-SHA256 webhook signature algorithm."""
+    return hmac.new(sign_key.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
 
 
 def _compute_cryptobot_signature(raw_body: bytes, api_token: str) -> str:
@@ -39,6 +47,9 @@ def _make_mock_config(**overrides):
     cfg.PLATEGA_MERCHANT_ID = overrides.get("PLATEGA_MERCHANT_ID", FAKE_PLATEGA_MERCHANT_ID)
     cfg.PLATEGA_SECRET = overrides.get("PLATEGA_SECRET", FAKE_PLATEGA_SECRET)
     cfg.PLATEGA_API_URL = overrides.get("PLATEGA_API_URL", "https://api.platega.io")
+    cfg.LAVA_JWT_TOKEN = overrides.get("LAVA_JWT_TOKEN", FAKE_LAVA_JWT)
+    cfg.LAVA_SHOP_ID = overrides.get("LAVA_SHOP_ID", FAKE_LAVA_SHOP_ID)
+    cfg.LAVA_SIGN_KEY = overrides.get("LAVA_SIGN_KEY", FAKE_LAVA_SIGN_KEY)
     cfg.SBP_MARKUP_PERCENT = 11
     cfg.VALID_SUBSCRIPTION_TYPES = ["basic", "plus"]
     cfg.is_biz_tariff = lambda t: False
@@ -73,6 +84,30 @@ def _load_cryptobot_service(config_mock=None, db_mock=None):
         return mod
     finally:
         # Restore originals to avoid leaking mocks
+        for mod_name, orig in saved.items():
+            if orig is None:
+                sys.modules.pop(mod_name, None)
+            else:
+                sys.modules[mod_name] = orig
+
+
+def _load_lava_service(config_mock=None, db_mock=None):
+    """Load lava_service with mocked heavy dependencies."""
+    cfg = config_mock or _make_mock_config()
+    db = db_mock or _make_mock_database()
+
+    saved = {}
+    for mod_name, mock_obj in [("config", cfg), ("database", db), ("vpn_utils", MagicMock())]:
+        saved[mod_name] = sys.modules.get(mod_name)
+        sys.modules[mod_name] = mock_obj
+
+    try:
+        if "lava_service" in sys.modules:
+            mod = importlib.reload(sys.modules["lava_service"])
+        else:
+            mod = importlib.import_module("lava_service")
+        return mod
+    finally:
         for mod_name, orig in saved.items():
             if orig is None:
                 sys.modules.pop(mod_name, None)
@@ -231,4 +266,103 @@ class TestPlategaWebhookAuth:
             "paymentDetails": {"amount": 200},
         }
         result = await svc.process_webhook_data(headers, body, MagicMock())
+        assert result["status"] != "unauthorized"
+
+
+# ---------------------------------------------------------------------------
+# Lava webhook signature verification
+# ---------------------------------------------------------------------------
+
+
+class TestLavaWebhookAuth:
+    """Lava auth: HMAC-SHA256 подпись сырого тела в заголовке Authorization.
+
+    До этих тестов подпись не проверялась вовсе: функция _verify_webhook_signature
+    была объявлена и ни разу не вызывалась, поэтому любой POST на публичный
+    /webhooks/lava с известным purchase_id активировал подписку без оплаты.
+    """
+
+    @pytest.mark.asyncio
+    async def test_valid_signature_accepted(self):
+        db_mock = _make_mock_database(db_ready=True)
+        svc = _load_lava_service(db_mock=db_mock)
+        svc.database = db_mock
+
+        body = {"order_id": "purchase_abc123", "status": "success", "amount": 1599}
+        raw = json.dumps(body).encode("utf-8")
+        headers = {"authorization": _compute_lava_signature(raw, FAKE_LAVA_SIGN_KEY)}
+
+        result = await svc.process_webhook_data(headers, body, MagicMock(), raw)
+        assert result["status"] != "unauthorized"
+
+    @pytest.mark.asyncio
+    async def test_missing_signature_rejected(self):
+        db_mock = _make_mock_database(db_ready=True)
+        svc = _load_lava_service(db_mock=db_mock)
+        svc.database = db_mock
+
+        body = {"order_id": "purchase_abc123", "status": "success", "amount": 1599}
+        raw = json.dumps(body).encode("utf-8")
+
+        result = await svc.process_webhook_data({}, body, MagicMock(), raw)
+        assert result["status"] == "unauthorized"
+
+    @pytest.mark.asyncio
+    async def test_wrong_signature_rejected(self):
+        db_mock = _make_mock_database(db_ready=True)
+        svc = _load_lava_service(db_mock=db_mock)
+        svc.database = db_mock
+
+        body = {"order_id": "purchase_abc123", "status": "success", "amount": 1599}
+        raw = json.dumps(body).encode("utf-8")
+        headers = {"authorization": "0" * 64}
+
+        result = await svc.process_webhook_data(headers, body, MagicMock(), raw)
+        assert result["status"] == "unauthorized"
+
+    @pytest.mark.asyncio
+    async def test_tampered_body_rejected(self):
+        """Подпись считается от сырого тела: подмена суммы после подписи должна ломать проверку."""
+        db_mock = _make_mock_database(db_ready=True)
+        svc = _load_lava_service(db_mock=db_mock)
+        svc.database = db_mock
+
+        original = {"order_id": "purchase_abc123", "status": "success", "amount": 10}
+        signature = _compute_lava_signature(json.dumps(original).encode("utf-8"), FAKE_LAVA_SIGN_KEY)
+
+        tampered = {"order_id": "purchase_abc123", "status": "success", "amount": 9999}
+        tampered_raw = json.dumps(tampered).encode("utf-8")
+
+        result = await svc.process_webhook_data(
+            {"authorization": signature}, tampered, MagicMock(), tampered_raw
+        )
+        assert result["status"] == "unauthorized"
+
+    @pytest.mark.asyncio
+    async def test_unconfigured_sign_key_rejects_instead_of_allowing(self):
+        """Ненастроенный ключ обязан закрывать вебхук, а не открывать его настежь."""
+        cfg = _make_mock_config(LAVA_SIGN_KEY="")
+        db_mock = _make_mock_database(db_ready=True)
+        svc = _load_lava_service(config_mock=cfg, db_mock=db_mock)
+        svc.database = db_mock
+
+        body = {"order_id": "purchase_abc123", "status": "success", "amount": 1599}
+        raw = json.dumps(body).encode("utf-8")
+
+        result = await svc.process_webhook_data(
+            {"authorization": "anything"}, body, MagicMock(), raw
+        )
+        assert result["status"] == "unauthorized"
+
+    @pytest.mark.asyncio
+    async def test_case_insensitive_authorization_header(self):
+        db_mock = _make_mock_database(db_ready=True)
+        svc = _load_lava_service(db_mock=db_mock)
+        svc.database = db_mock
+
+        body = {"order_id": "purchase_xyz", "status": "success", "amount": 500}
+        raw = json.dumps(body).encode("utf-8")
+        headers = {"Authorization": _compute_lava_signature(raw, FAKE_LAVA_SIGN_KEY)}
+
+        result = await svc.process_webhook_data(headers, body, MagicMock(), raw)
         assert result["status"] != "unauthorized"

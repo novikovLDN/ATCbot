@@ -14,6 +14,7 @@ Security:
 """
 
 import asyncio
+import json
 import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -188,17 +189,24 @@ async def _handle_lava_webhook(request: Request):
             return JSONResponse({"status": "disabled"})
 
         headers = {k.lower(): v for k, v in request.headers.items()}
+        # Сырые байты нужны для проверки подписи: повторная сериализация
+        # изменила бы порядок ключей и пробелы, и HMAC перестал бы сходиться.
+        raw_body = await request.body()
         try:
-            body = await request.json()
+            body = json.loads(raw_body)
         except Exception as e:
             logger.error(f"Lava webhook: invalid JSON: {e}")
             await _log_pe("webhook_invalid_json", "lava", error_message=str(e)[:300])
             return JSONResponse({"status": "invalid"}, status_code=400)
 
         result = await asyncio.wait_for(
-            lava_service.process_webhook_data(headers, body, _bot),
+            lava_service.process_webhook_data(headers, body, _bot, raw_body),
             timeout=_WEBHOOK_TIMEOUT,
         )
+        if result.get("status") == "unauthorized":
+            await _log_pe("webhook_bad_signature", "lava",
+                          error_message="signature verification failed")
+            return JSONResponse(result, status_code=401)
         return JSONResponse(result)
 
     except ImportError:

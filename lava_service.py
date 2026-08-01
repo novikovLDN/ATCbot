@@ -179,10 +179,19 @@ def _verify_webhook_signature(body_bytes: bytes, received_sig: str) -> bool:
     """Verify webhook signature using additional key.
 
     Lava sends signature in Authorization header of webhook.
+
+    Ненастроенный ключ означает отказ, а не пропуск проверки: иначе забытая
+    переменная окружения открывает публичный эндпоинт на выдачу подписок.
     """
     if not LAVA_SIGN_KEY:
-        logger.warning("Lava webhook: no SIGN_KEY configured, skipping signature check")
-        return True
+        logger.error(
+            "Lava webhook: LAVA_SIGN_KEY не настроен — запрос отклонён. "
+            "Задайте переменную окружения, иначе вебхук работать не будет."
+        )
+        return False
+
+    if not received_sig:
+        return False
 
     expected = hmac.new(
         LAVA_SIGN_KEY.encode('utf-8'),
@@ -192,7 +201,9 @@ def _verify_webhook_signature(body_bytes: bytes, received_sig: str) -> bool:
     return hmac.compare_digest(expected, received_sig)
 
 
-async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
+async def process_webhook_data(
+    headers: dict, body: dict, bot: Bot, raw_body: Optional[bytes] = None
+) -> dict:
     """Process Lava Business webhook.
 
     Webhook format:
@@ -214,6 +225,21 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
     if not is_enabled():
         logger.error("Lava webhook: service not configured")
         return {"status": "disabled"}
+
+    # Подпись проверяется до любого обращения к БД и до поиска покупки.
+    # Считается от сырого тела: повторная сериализация body изменила бы байты
+    # (порядок ключей, пробелы) и подпись перестала бы сходиться.
+    if raw_body is None:
+        raw_body = json.dumps(body).encode("utf-8")
+        logger.warning(
+            "Lava webhook: сырое тело не передано, подпись считается от пересобранного JSON"
+        )
+    signature = (headers or {}).get("authorization") or (headers or {}).get("Authorization") or ""
+    if not _verify_webhook_signature(raw_body, signature):
+        logger.error(
+            "Lava webhook: подпись не прошла проверку, order_id=%s", body.get("order_id")
+        )
+        return {"status": "unauthorized"}
 
     invoice_id = body.get("invoice_id")
     order_id = body.get("order_id")
