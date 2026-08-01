@@ -87,6 +87,55 @@ async def cmd_admin(message: Message):
     await message.answer(body, reply_markup=kb, parse_mode="HTML")
 
 
+@admin_base_router.message(Command("wata_status"))
+@admin_only
+async def cmd_wata_status(message: Message):
+    """Диагностика видимости кнопки Wata: подхватился ли токен,
+    совпадает ли admin_id, что вернёт is_visible_to для текущего юзера."""
+    lines = ["🔧 <b>Wata status</b>", ""]
+    try:
+        import wata_service
+    except Exception as e:
+        await message.answer(f"❌ Импорт wata_service упал: <code>{e}</code>", parse_mode="HTML")
+        return
+
+    tok_len = len(wata_service.WATA_ACCESS_TOKEN or "")
+    lines.append(f"• Token loaded: <b>{'YES' if tok_len else 'NO'}</b> (длина {tok_len})")
+    lines.append(f"• Sandbox: <b>{wata_service.WATA_SANDBOX}</b>")
+    lines.append(f"• API URL: <code>{wata_service.WATA_API_URL}</code>")
+    lines.append(f"• is_enabled(): <b>{wata_service.is_enabled()}</b>")
+    lines.append("")
+
+    my_id = message.from_user.id if message.from_user else 0
+    admin_id = int(config.ADMIN_TELEGRAM_ID)
+    match = int(my_id) == admin_id
+    lines.append(f"• Ваш telegram_id: <code>{my_id}</code>")
+    lines.append(f"• ADMIN_TELEGRAM_ID: <code>{admin_id}</code>")
+    lines.append(f"• Совпадает: <b>{'YES' if match else 'NO'}</b>")
+    lines.append("")
+
+    visible = wata_service.is_visible_to(my_id)
+    lines.append(f"🎯 <b>is_visible_to(вы): {visible}</b>")
+    if not visible:
+        lines.append("")
+        lines.append("<i>Кнопка Wata будет скрыта. Причина:</i>")
+        if tok_len == 0:
+            lines.append("→ WATA_ACCESS_TOKEN не задан в env")
+        elif not match:
+            lines.append("→ ваш ID не совпадает с ADMIN_TELEGRAM_ID")
+
+    # Пингуем API (ping /public-key чтобы проверить сетевую связность)
+    try:
+        import asyncio as _a
+        _res = await _a.wait_for(wata_service._get_public_key(), timeout=5.0)
+        lines.append("")
+        lines.append(f"• API ping /public-key: <b>{'OK' if _res else 'FAIL'}</b>")
+    except Exception as e:
+        lines.append(f"• API ping /public-key: <b>FAIL</b> — {type(e).__name__}")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
 @admin_base_router.callback_query(F.data == "admin:reset_password")
 @admin_only
 async def callback_reset_password(callback: CallbackQuery):
