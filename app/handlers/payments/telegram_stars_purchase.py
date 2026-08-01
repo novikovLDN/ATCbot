@@ -286,6 +286,13 @@ async def process_stars_username(message: Message, state: FSMContext):
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(text="💳 Карта (Lava)", callback_data="stars_pay:lava")])
+    # Wata — admin-only beta
+    try:
+        import wata_service
+        if wata_service.is_visible_to(telegram_id):
+            buttons.append([InlineKeyboardButton(text="💳 Wata (тест)", callback_data="stars_pay:wata")])
+    except Exception:
+        pass
 
     if config.PLATEGA_MERCHANT_ID:
         import math
@@ -438,6 +445,46 @@ async def callback_stars_pay_lava(callback: CallbackQuery, state: FSMContext):
         await state.set_state(TelegramStarsState.processing_payment)
     except Exception as e:
         logger.exception("STARS_LAVA_ERROR user=%s error=%s", telegram_id, e)
+        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+
+
+@stars_purchase_router.callback_query(F.data == "stars_pay:wata", StateFilter(TelegramStarsState.choose_payment_method))
+async def callback_stars_pay_wata(callback: CallbackQuery, state: FSMContext):
+    """Stars — Wata (admin-only beta)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    telegram_id = callback.from_user.id
+    import wata_service
+    if not wata_service.is_visible_to(telegram_id):
+        await callback.answer("Wata пока в закрытой бете", show_alert=True)
+        return
+    result = await _get_stars_fsm_data(callback, state)
+    if not result:
+        return
+    username, stars, price, language = result
+    try:
+        purchase_id, _ = await _create_stars_purchase(telegram_id, username, stars, price)
+        invoice = await wata_service.create_invoice(
+            amount_rubles=float(price),
+            purchase_id=purchase_id,
+            comment=f"Telegram Stars {stars}⭐ → {username}",
+            user_id=telegram_id,
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+        ])
+        msg = await callback.bot.send_message(
+            telegram_id,
+            f"💳 <b>Wata (тест)</b> · {stars}⭐ → {username} · <b>{price}₽</b>",
+            reply_markup=kb, parse_mode="HTML",
+        )
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg.message_id))
+        await state.set_state(TelegramStarsState.processing_payment)
+    except Exception as e:
+        logger.exception("STARS_WATA_ERROR user=%s error=%s", telegram_id, e)
         await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
 
 
