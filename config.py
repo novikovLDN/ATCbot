@@ -397,6 +397,12 @@ LAVA_SIGN_KEY = env("LAVA_SIGN_KEY", default="")  # Additional key for JWT HMAC 
 LAVA_SHOP_ID = env("LAVA_SHOP_ID", default="")  # Project/shop ID
 LAVA_API_URL = env("LAVA_API_URL") or "https://api.lava.ru"
 
+# Wata (wata.pro) Configuration — H2H REST API.
+# Access token (Bearer JWT) выдаётся в личном кабинете мерчанта.
+# WATA_SANDBOX=true → https://api-sandbox.wata.pro (тестовые карты).
+WATA_ACCESS_TOKEN = env("WATA_ACCESS_TOKEN", default="")
+WATA_SANDBOX = env("WATA_SANDBOX", default="false").lower() in ("1", "true", "yes")
+
 # Site Sync API (Atlas Secure website ↔ Bot sync)
 SITE_API_URL = env("SITE_API_URL", default="")  # e.g. https://qodev.dev/api/bot
 SITE_BOT_API_KEY = env("SITE_BOT_API_KEY", default="")  # X-Bot-Api-Key header
