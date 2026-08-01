@@ -7,6 +7,7 @@ Architecture invariant: Bot never generates VLESS locally. vpn_key must come fro
 import logging
 import time
 from datetime import datetime, timezone
+from typing import Optional
 
 from aiogram import Router, F
 from aiogram.filters import StateFilter
@@ -49,6 +50,43 @@ from app.handlers.common.utils import clear_promo_session
 
 payments_router = Router()
 logger = logging.getLogger(__name__)
+
+
+# Типы покупок, у которых есть собственная ветка обработки в
+# process_successful_payment. Всё, что сюда не попало, финализируется как
+# VPN-подписка — поэтому забытый тип означает «деньги списаны, товар не выдан».
+_ROUTED_PURCHASE_TYPES = frozenset({
+    "gift", "telegram_premium", "telegram_stars", "steam",
+    "apple_id", "traffic_pack", "spotify", "proxy",
+})
+
+# Некоторые покупки опознаются по префиксу тарифа, а не по purchase_type:
+# так же, как это делает app/services/payments/confirmation.py для вебхуков.
+_TARIFF_PREFIX_ROUTES = (
+    ("spotify_", "spotify"),
+    ("steam_", "steam"),
+    ("apple_id_", "apple_id"),
+)
+
+
+def classify_purchase(pending_purchase: Optional[dict]) -> str:
+    """Определить, как обрабатывать оплаченную покупку.
+
+    Возвращает 'subscription' только для настоящих VPN-подписок. Любой
+    товар со своей веткой обязан вернуть собственный тип, иначе оплата
+    уйдёт в финализацию подписки и товар не будет выдан.
+    """
+    purchase = pending_purchase or {}
+    purchase_type = (purchase.get("purchase_type") or "").strip()
+    if purchase_type in _ROUTED_PURCHASE_TYPES:
+        return purchase_type
+
+    tariff = str(purchase.get("tariff") or "")
+    for prefix, route in _TARIFF_PREFIX_ROUTES:
+        if tariff.startswith(prefix):
+            return route
+
+    return "subscription"
 
 
 @payments_router.pre_checkout_query()
@@ -692,6 +730,37 @@ async def process_successful_payment(message: Message, state: FSMContext):
             operation="payment_finalization",
             duration_ms=duration_ms,
             payment_type="steam",
+        )
+        return
+
+    # --- Spotify purchase: mark paid + send success + notify admin ---
+    # Без этой ветки оплата картой проваливалась в финализацию VPN-подписки:
+    # деньги списывались, Spotify не выдавался, заказ до админа не доходил.
+    # Ветка вебхуков (app/services/payments/confirmation.py) обрабатывала
+    # spotify корректно — расходилась только оплата через Telegram Payments.
+    if classify_purchase(pending_purchase) == "spotify":
+        try:
+            from app.handlers.payments.spotify_purchase import send_spotify_success
+            await send_spotify_success(
+                message.bot, telegram_id, purchase_id, pending_purchase,
+            )
+            await database.mark_pending_purchase_paid(purchase_id)
+            logger.info(
+                "SPOTIFY_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
+                purchase_id, telegram_id, payment_amount_rubles,
+            )
+        except Exception as e:
+            logger.exception("SPOTIFY_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
+            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+        await state.clear()
+        duration_ms = (time.time() - start_time) * 1000
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="success",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            duration_ms=duration_ms,
+            payment_type="spotify",
         )
         return
 
