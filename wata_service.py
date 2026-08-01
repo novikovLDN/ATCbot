@@ -283,6 +283,97 @@ async def _verify_webhook_signature(raw_body: bytes, signature_b64: str) -> bool
 
 # ── Webhook processing ─────────────────────────────────────────────
 
+async def _notify_user_declined(
+    bot: Bot, order_id: str, transaction_id: Optional[str],
+    error_code: Optional[str], error_description: Optional[str],
+) -> None:
+    """Оплата отклонена — уведомить юзера + логировать для админа.
+
+    Юзеру: короткий текст + error_code как «билет» для поддержки.
+    Админу: полный error_description в логах + событие в bus.
+
+    Fail-open: если pending_purchase не найден, юзеру не пишем
+    (нечего связать), но лог остаётся.
+    """
+    try:
+        pending = await database.get_pending_purchase_by_id(
+            order_id, check_expiry=False,
+        )
+    except Exception as e:
+        logger.warning("Wata declined: pending lookup failed order=%s: %s", order_id, e)
+        return
+    if not pending:
+        logger.warning("Wata declined: pending not found for order=%s", order_id)
+        return
+
+    telegram_id = int(pending.get("telegram_id") or 0)
+    if not telegram_id:
+        return
+
+    # Помечаем pending как expired — юзер сможет попробовать заново.
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE pending_purchases SET status = 'expired' "
+                "WHERE purchase_id = $1 AND status = 'pending'",
+                order_id,
+            )
+    except Exception as e:
+        logger.warning("Wata declined: mark expired failed: %s", e)
+
+    # Короткий человекочитаемый билет для поддержки:
+    # берём последние 8 символов order_id + errorCode если есть.
+    ticket = f"WATA-{order_id[-8:].upper()}"
+    if error_code:
+        ticket += f"-{error_code}"
+
+    text = (
+        "❌ <b>Оплата не прошла</b>\n\n"
+        f"Что-то пошло не так на стороне банка. Ваш заказ "
+        f"<code>{order_id[-12:]}</code> отменён, деньги не списаны.\n\n"
+        f"🎫 <b>Код обращения:</b> <code>{ticket}</code>\n\n"
+        f"Попробуйте ещё раз или обратитесь в поддержку с этим кодом — "
+        f"мы поможем разобраться."
+    )
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/atlas_suppbot")],
+        [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="mini_shop")],
+    ])
+    try:
+        await bot.send_message(
+            chat_id=telegram_id, text=text,
+            reply_markup=kb, parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning("Wata declined: user notify failed tg=%s: %s", telegram_id, e)
+
+    # Админу — уведомление с полным контекстом для дебага.
+    try:
+        import config as _cfg
+        admin_text = (
+            f"❌ <b>Wata: отклонённая оплата</b>\n\n"
+            f"Юзер: <code>{telegram_id}</code>\n"
+            f"Заказ: <code>{order_id}</code>\n"
+            f"Транзакция: <code>{transaction_id or '—'}</code>\n"
+            f"🎫 Тикет юзеру: <code>{ticket}</code>\n\n"
+            f"<b>Error code:</b> <code>{error_code or '—'}</code>\n"
+            f"<b>Description:</b> {error_description or '—'}"
+        )
+        await bot.send_message(
+            chat_id=int(_cfg.ADMIN_TELEGRAM_ID),
+            text=admin_text, parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning("Wata declined: admin notify failed: %s", e)
+
+    logger.info(
+        "Wata declined notified: tg=%s order=%s tx=%s code=%s ticket=%s",
+        telegram_id, order_id, transaction_id, error_code, ticket,
+    )
+
+
 async def process_webhook_data(
     headers: dict, raw_body: bytes, body: dict, bot: Bot,
 ) -> dict:
@@ -308,21 +399,35 @@ async def process_webhook_data(
     order_id = body.get("orderId")
     transaction_id = body.get("transactionId") or body.get("id")
     amount = body.get("amount")
+    error_code = body.get("errorCode")
+    error_description = body.get("errorDescription")
 
     logger.info(
-        "Wata webhook: order=%s tx=%s status=%s kind=%s amount=%s",
-        order_id, transaction_id, tx_status, kind, amount,
+        "Wata webhook: order=%s tx=%s status=%s kind=%s amount=%s err=%s",
+        order_id, transaction_id, tx_status, kind, amount, error_code,
     )
 
+    if kind == "Refund":
+        # Возвраты обрабатываются отдельно (пока не нужно юзер-нотификаций).
+        logger.info("Wata webhook: refund kind=%s tx=%s — noop for now", kind, transaction_id)
+        return {"status": "ignored"}
     if kind != "Payment":
         logger.info("Wata webhook: ignoring kind=%s", kind)
-        return {"status": "ignored"}
-    if tx_status != "Paid":
-        logger.info("Wata webhook: ignoring status=%s", tx_status)
         return {"status": "ignored"}
     if not order_id:
         logger.error("Wata webhook: missing orderId")
         return {"status": "invalid"}
+
+    # ── Declined → уведомить юзера с error-кодом ──────────────────────
+    if tx_status == "Declined":
+        await _notify_user_declined(
+            bot, order_id, transaction_id, error_code, error_description,
+        )
+        return {"status": "declined_notified"}
+    if tx_status != "Paid":
+        # Created / Pending — промежуточные, ждём следующий webhook.
+        logger.info("Wata webhook: ignoring intermediate status=%s", tx_status)
+        return {"status": "ignored"}
 
     from app.services.payments.confirmation import (
         lookup_pending_purchase, process_confirmed_payment,
