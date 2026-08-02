@@ -145,11 +145,6 @@ from database.subscriptions import (  # noqa: F401
     is_user_first_purchase,
     get_subscriptions_for_reminders,
     get_admin_stats,
-    get_admin_referral_stats,
-    get_admin_referral_detail,
-    get_referral_overall_stats,
-    get_referral_rewards_history,
-    get_referral_rewards_history_count,
     calculate_final_price,
     set_special_offer,
     get_special_offer_info,
@@ -167,6 +162,15 @@ from database.subscriptions import (  # noqa: F401
     set_combo_flag,
     set_bypass_only_flag,
     ensure_bypass_only_subscription,
+)
+
+# Referral analytics: отчёты админки по рефералам
+from database.referral_analytics import (  # noqa: F401
+    get_admin_referral_stats,
+    get_admin_referral_detail,
+    get_referral_overall_stats,
+    get_referral_rewards_history,
+    get_referral_rewards_history_count,
 )
 
 # Promo codes: выдача, валидация, атомарное потребление

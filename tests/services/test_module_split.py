@@ -36,6 +36,33 @@ def test_available_via_subscriptions(name):
     assert hasattr(subs, name), f"database.subscriptions.{name} исчез после разбивки"
 
 
+REFERRAL_NAMES = [
+    "get_admin_referral_stats",
+    "get_admin_referral_detail",
+    "get_referral_overall_stats",
+    "get_referral_rewards_history",
+    "get_referral_rewards_history_count",
+]
+
+
+@pytest.mark.parametrize("name", REFERRAL_NAMES)
+def test_referral_available_via_package(name):
+    import database
+    assert hasattr(database, name), f"database.{name} исчез после разбивки"
+
+
+@pytest.mark.parametrize("name", REFERRAL_NAMES)
+def test_referral_available_via_subscriptions(name):
+    import database.subscriptions as subs
+    assert hasattr(subs, name)
+
+
+@pytest.mark.parametrize("name", REFERRAL_NAMES)
+def test_referral_defined_in_its_module(name):
+    import database.referral_analytics as ra
+    assert hasattr(ra, name)
+
+
 @pytest.mark.parametrize("name", PROMO_NAMES)
 def test_defined_in_promo_module(name):
     import database.promo as promo
