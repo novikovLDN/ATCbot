@@ -799,7 +799,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             region = tariff_parts[2] if len(tariff_parts) >= 3 else "usa"
             nominal = int(tariff_parts[3]) if len(tariff_parts) >= 4 else 0
 
-            from app.handlers.callbacks.navigation import send_apple_id_success
+            from app.handlers.callbacks.apple_id import send_apple_id_success
             await send_apple_id_success(
                 message.bot, telegram_id, region, nominal, payment_amount_rubles,
             )

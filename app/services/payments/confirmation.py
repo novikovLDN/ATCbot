@@ -107,7 +107,7 @@ async def process_confirmed_payment(
                     tariff_parts = _tariff.split("_")
                     region = tariff_parts[2] if len(tariff_parts) >= 3 else "usa"
                     nominal = int(tariff_parts[3]) if len(tariff_parts) >= 4 else 0
-                    from app.handlers.callbacks.navigation import send_apple_id_success
+                    from app.handlers.callbacks.apple_id import send_apple_id_success
                     await send_apple_id_success(bot, telegram_id, region, nominal, amount_rubles)
                 elif _purchase_type == "spotify" or _tariff.startswith("spotify_"):
                     from app.handlers.payments.spotify_purchase import send_spotify_success
