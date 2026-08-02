@@ -52,6 +52,9 @@ class TestGetAdminUserOverview:
             mock_db.get_user_extended_stats = AsyncMock(return_value=stats)
             mock_db.get_user_discount = AsyncMock(return_value=None)
             mock_db.is_vip_user = AsyncMock(return_value=False)
+            # Скидка на трафик добавлена в обзор позже написания теста —
+            # без мока обращение уходит в MagicMock и падает на await.
+            mock_db.get_user_traffic_discount = AsyncMock(return_value=None)
             mock_trial.is_trial_available = AsyncMock(return_value=False)
             
             status = SubscriptionStatus(
@@ -86,6 +89,7 @@ class TestGetAdminUserOverview:
             mock_db.get_user_extended_stats = AsyncMock(return_value={})
             mock_db.get_user_discount = AsyncMock(return_value=discount)
             mock_db.is_vip_user = AsyncMock(return_value=True)
+            mock_db.get_user_traffic_discount = AsyncMock(return_value=None)
             mock_trial.is_trial_available = AsyncMock(return_value=False)
             
             status = SubscriptionStatus(

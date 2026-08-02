@@ -774,6 +774,10 @@ async def test_status_handler_recognises_held_lock(monkeypatch, tmp_path: Path):
     assert "held by live migration" in rendered or "stale" not in rendered.split("Lock:")[1].split("CSV:")[0]
 
 
+@pytest.mark.skipif(
+    not Path("/proc").exists(),
+    reason="защита от переиспользования PID читает /proc — его нет на macOS",
+)
 @pytest.mark.asyncio
 async def test_status_handler_reports_pid_reuse_as_stale(monkeypatch, tmp_path: Path):
     """Lock has live PID whose cmdline doesn't match → 'stale (PID … unrelated)'."""
@@ -893,6 +897,10 @@ def test_read_lock_state_dead_pid(monkeypatch, tmp_path: Path):
     assert out["alive"] is False
 
 
+@pytest.mark.skipif(
+    not Path("/proc").exists(),
+    reason="защита от переиспользования PID читает /proc — его нет на macOS",
+)
 def test_read_lock_state_pid_reused_by_unrelated_process(monkeypatch, tmp_path: Path):
     """Live PID + cmdline doesn't match marker → alive=True, our_script=False."""
     lock = tmp_path / "migration.lock"

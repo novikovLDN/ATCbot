@@ -71,6 +71,9 @@ def test_csv_log_writes_header_and_rows(tmp_path: Path):
             uuid_remnawave_bypass=None,
             uuid_remnawave_premium="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             forced_uuid_accepted=True,
+            # Поле добавлено в LogRow позже написания теста: отмечает строки,
+            # где сущность не создавалась заново, а была найдена в панели.
+            recovered=False,
             status="ok",
             http_status=201,
             subscription_url="https://r/sub/x",
@@ -83,6 +86,7 @@ def test_csv_log_writes_header_and_rows(tmp_path: Path):
             uuid_remnawave_bypass=None,
             uuid_remnawave_premium=None,
             forced_uuid_accepted=False,
+            recovered=False,
             status="failed",
             http_status=400,
             subscription_url=None,
@@ -104,7 +108,7 @@ def test_csv_log_appends_without_duplicate_header(tmp_path: Path):
     row = mod.LogRow(
         timestamp="t", telegram_id=1, uuid_samopis="u",
         uuid_remnawave_bypass=None, uuid_remnawave_premium=None,
-        forced_uuid_accepted=False, status="dry-run",
+        forced_uuid_accepted=False, recovered=False, status="dry-run",
         http_status=0, subscription_url=None, error=None,
     )
 
@@ -427,8 +431,17 @@ def test_pid_is_alive_self_with_marker_present(monkeypatch):
     assert mod._pid_is_alive(os.getpid(), cmdline_marker="python") is True
 
 
+@pytest.mark.skipif(
+    not Path("/proc").exists(),
+    reason="защита от переиспользования PID читает /proc — его нет на macOS",
+)
 def test_pid_is_alive_self_without_marker_returns_false(monkeypatch):
-    """Live PID + cmdline missing marker → treated as STALE (PID-reuse defence)."""
+    """Живой PID без нашего маркера в cmdline считается устаревшим.
+
+    Это защита от переиспользования PID внутри Docker: номер процесса могли
+    выдать заново другому процессу, и без сверки cmdline мы бы решили, что
+    миграция всё ещё идёт. Проверка возможна только там, где есть /proc.
+    """
     mod = _load()
     import os
     assert mod._pid_is_alive(

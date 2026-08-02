@@ -241,15 +241,24 @@ class TestPlategaWebhookAuth:
         assert result["status"] == "unauthorized"
 
     @pytest.mark.asyncio
-    async def test_db_not_ready_returns_degraded(self):
+    async def test_db_not_ready_asks_provider_to_retry(self):
+        """Неготовая база — временный сбой, а не отказ.
+
+        Раньше тест ожидал ответ degraded с кодом 200. Это означало бы, что
+        провайдер считает вебхук доставленным и больше не повторит его —
+        платёж потерялся бы вместе с недоступностью базы. Поэтому поднимается
+        TransientPaymentError: эндпоинт отвечает 500, провайдер повторяет.
+        """
+        from app.services.payments.confirmation import TransientPaymentError
+
         db_mock = _make_mock_database(db_ready=False)
         svc = _load_platega_service(db_mock=db_mock)
         svc.database = db_mock
 
         headers = {"x-merchantid": FAKE_PLATEGA_MERCHANT_ID, "x-secret": FAKE_PLATEGA_SECRET}
         body = {"id": "txn-001", "status": "confirmed"}
-        result = await svc.process_webhook_data(headers, body, MagicMock())
-        assert result["status"] == "degraded"
+        with pytest.raises(TransientPaymentError):
+            await svc.process_webhook_data(headers, body, MagicMock())
 
     @pytest.mark.asyncio
     async def test_case_insensitive_headers(self):
