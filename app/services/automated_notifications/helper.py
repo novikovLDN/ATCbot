@@ -149,13 +149,31 @@ async def is_notification_enabled(key: str) -> bool:
 
 
 async def get_notification_text(
-    key: str, *, params: Optional[Dict[str, Any]] = None,
+    key: str, *, language: str = "ru", params: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Вернуть готовый текст (с str.format) или None если отключено.
 
-    Fallback: если ключ нет в БД или что-то сломалось, берём default_text_ru
+    ВАЖНО про язык. В таблице automated_notifications хранится ТОЛЬКО
+    русский текст: и default_text_ru, и админский custom_text_ru. Поэтому
+    для нерусских пользователей эта функция ничего не отдаёт — вызывающий
+    код обязан взять перевод из i18n.
+
+    Почему это отдельное правило: раньше параметра language не было, и
+    типовой вызов `(await get_notification_text(key)) or i18n.get_text(lang, ...)`
+    никогда не доходил до правой части. Строка в БД существует всегда
+    (sync_registry_to_db создаёт её при старте бота), значит выражение слева
+    не None — и все автонапоминания уходили на русском независимо от языка
+    пользователя. Английский и остальные локали были мёртвым кодом.
+
+    Fallback: если ключа нет в БД или что-то сломалось, берём default_text_ru
     из REGISTRY, чтобы не крашить bot-код.
+
+    Args:
+        language: язык получателя. Всё, кроме 'ru', → None (текст берётся
+            из i18n вызывающим кодом).
     """
+    if (language or "ru").strip().lower() != "ru":
+        return None
     row = await get_row(key)
     if row is not None and not row["is_enabled"]:
         return None

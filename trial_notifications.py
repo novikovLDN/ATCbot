@@ -236,8 +236,11 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
                 logger.info(f"trial_reminder_24h_skipped_disabled: user={telegram_id}")
                 return
             # Кастомный текст админа (fallback на i18n при отсутствии).
-            custom = await get_notification_text("trial.reminder_24h")
             language = await resolve_user_language(telegram_id)
+            # Язык обязателен: в automated_notifications лежит только
+            # русский текст, для остальных локалей вернётся None и
+            # сработает i18n-фолбэк ниже.
+            custom = await get_notification_text("trial.reminder_24h", language=language)
             text = custom or i18n.get_text(language, "trial.reminder_24h")
             keyboard = get_trial_buy_keyboard(language)
             success, status = await send_trial_notification(
@@ -273,8 +276,11 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
                 )
                 logger.info(f"trial_reminder_3h_skipped_disabled: user={telegram_id}")
                 return
-            custom = await get_notification_text("trial.reminder_3h")
             language = await resolve_user_language(telegram_id)
+            # Язык обязателен: в automated_notifications лежит только
+            # русский текст, для остальных локалей вернётся None и
+            # сработает i18n-фолбэк ниже.
+            custom = await get_notification_text("trial.reminder_3h", language=language)
             text = custom or i18n.get_text(language, "trial.reminder_3h")
             keyboard = get_trial_discount_keyboard(language)
             sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
@@ -395,7 +401,10 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
             await log_notification_send(_key, telegram_id, status="skipped_disabled")
             logger.info(f"trial_final_reminder_skipped_disabled: user={telegram_id}, key={_key}")
             return
-        _custom = await get_notification_text(_key)
+        # Только для ru: в automated_notifications нет переводов, и для
+        # остальных языков send_trial_notification возьмёт текст из i18n.
+        _lang = await resolve_user_language(telegram_id)
+        _custom = await get_notification_text(_key, language=_lang)
         success, status = await send_trial_notification(
             bot, pool, telegram_id, _key, payload_final["has_button"],
             custom_text=_custom,
@@ -441,7 +450,8 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
             await _log_send_impl(_key, telegram_id, status="skipped_disabled")
             logger.info(f"trial_schedule_skipped_disabled: user={telegram_id}, key={_key}")
             continue
-        _custom = await _get_text_impl(_key)
+        _lang = await resolve_user_language(telegram_id)
+        _custom = await _get_text_impl(_key, language=_lang)
         success, status = await send_trial_notification(
             bot, pool, telegram_id, _key, payload["has_button"],
             custom_text=_custom,

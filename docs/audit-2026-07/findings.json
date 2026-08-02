@@ -1576,7 +1576,17 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "notifications",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "get_notification_text получил параметр language и для всего, кроме 'ru', возвращает None — в automated_notifications хранится только русский текст, поэтому перевод обязан браться из i18n. Язык прокинут во все рантайм-вызовы: reminders.py (5 шт.), trial_notifications.py (4 шт.), payments_callbacks.py (подтверждение оплаты). Пример в registry.py переписан под новый контракт. Тест tests/services/test_automated_notification_language.py статически проверяет, что ни один вызов не остался без language — иначе i18n-фолбэк снова станет недостижимым.",
+      "fixed_in": [
+        "app/services/automated_notifications/helper.py",
+        "app/services/automated_notifications/registry.py",
+        "reminders.py",
+        "trial_notifications.py",
+        "app/handlers/callbacks/payments_callbacks.py",
+        "tests/services/test_automated_notification_language.py"
+      ]
     },
     {
       "title": "При апгрейде тарифа с баланса пользователь получает два сообщения подряд",

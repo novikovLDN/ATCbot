@@ -178,31 +178,31 @@ async def send_smart_reminders(bot: Bot):
 
                 elif reminder_type == ReminderType.REMINDER_7D:
                     notif_key = "subscription.reminder_7d"
-                    text = (await get_notification_text(notif_key)) or i18n.get_text(language, "reminder.paid_7d")
+                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_7d")
                     keyboard = get_renewal_keyboard_7d(language)
                     audit_message = "Paid subscription reminder (7d before expiry)"
 
                 elif reminder_type == ReminderType.REMINDER_3D:
                     notif_key = "subscription.reminder_3d"
-                    text = (await get_notification_text(notif_key)) or i18n.get_text(language, "reminder.paid_3d")
+                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_3d")
                     keyboard = get_renewal_keyboard_3d(language)
                     audit_message = "Paid subscription reminder (3d before expiry)"
 
                 elif reminder_type == ReminderType.REMINDER_1D:
                     notif_key = "subscription.reminder_1d"
-                    text = (await get_notification_text(notif_key)) or i18n.get_text(language, "reminder.paid_1d")
+                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_1d")
                     keyboard = get_renewal_keyboard_1d(language)
                     audit_message = "Paid subscription reminder (1d before expiry)"
 
                 elif reminder_type == ReminderType.REMINDER_24H:
                     notif_key = "subscription.reminder_24h"
-                    text = (await get_notification_text(notif_key)) or i18n.get_text(language, "reminder.paid_24h")
+                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_24h")
                     keyboard = get_renewal_keyboard(language)
                     audit_message = "Paid subscription reminder (24h before expiry)"
 
                 elif reminder_type == ReminderType.REMINDER_3H:
                     notif_key = "subscription.reminder_3h"
-                    text = (await get_notification_text(notif_key)) or i18n.get_text(language, "reminder.paid_3h_special")
+                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_3h_special")
                     keyboard = get_renewal_discount_keyboard(language)
                     audit_message = "Paid subscription reminder (3h before expiry) with 15% discount"
 

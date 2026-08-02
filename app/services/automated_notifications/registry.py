@@ -14,10 +14,14 @@ Registry автоуведомлений. При старте бота upsert'и�
     ))
 
 Использование в bot-коде:
-    text = await get_notification_text("trial.reminder_3h", telegram_id,
-                                       username=user.get("username"))
-    if text is None:
-        return  # notification disabled или без шаблона
+    language = await resolve_user_language(telegram_id)
+    text = await get_notification_text(
+        "trial.reminder_3h", language=language,
+        params={"username": user.get("username")},
+    )
+    # None значит одно из двух: уведомление выключено админом ИЛИ язык не 'ru'
+    # (в таблице лежит только русский текст). В обоих случаях берём i18n:
+    text = text or i18n.get_text(language, "trial.reminder_3h")
     await bot.send_message(telegram_id, text, parse_mode="HTML")
     await log_notification_send("trial.reminder_3h", telegram_id, status="sent")
 """

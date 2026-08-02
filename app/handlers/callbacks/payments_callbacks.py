@@ -369,7 +369,12 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                     _params = {"date": expires_str}
             if _key is not None:
                 _use_custom = await _autonotif_enabled(_key)
-                _custom = (await _autonotif_text(_key, params=_params)) if _use_custom else None
+                # language обязателен: в automated_notifications хранится только
+                # русский текст. Без него нерусский покупатель получал бы
+                # русское подтверждение вместо своего перевода.
+                _custom = (
+                    await _autonotif_text(_key, language=language, params=_params)
+                ) if _use_custom else None
                 text = _custom or i18n_get_text(language, _key, **_params)
                 try:
                     await _autonotif_log(
