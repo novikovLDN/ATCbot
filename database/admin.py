@@ -1408,7 +1408,36 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
             except Exception as e:
                 logger.exception(f"Error in admin_revoke_access_atomic for user {telegram_id}, transaction rolled back")
                 raise
-        # PHASE 2 (outside transaction): Remove UUID from Xray API
+        # ФАЗА 2 (вне транзакции): отключить доступ в панели.
+        #
+        # Раньше здесь вызывался только vpn_utils.safe_remove_vless_user_with_retry.
+        # После перехода на Remnawave эта функция стала заглушкой, поэтому отзыв
+        # доступа очищал запись в базе, но НЕ отключал пользователя в панели:
+        # ссылка продолжала работать, и человек пользовался VPN после отзыва.
+        #
+        # Отключение вынесено за транзакцию намеренно: это внешний HTTP-вызов,
+        # и держать транзакцию открытой на время сетевого запроса нельзя.
+        # Сбой отключения не откатывает отзыв — доступ уже снят в базе, а
+        # запись ADMIN_REVOKE_PREMIUM_DISABLE_FAILED говорит, что в панели
+        # нужно отключить вручную.
+        try:
+            from app.services.remnawave_premium import disable_premium_user
+            disabled = await disable_premium_user(telegram_id)
+            if disabled:
+                logger.info("ADMIN_REVOKE_PREMIUM_DISABLED user=%s", telegram_id)
+            else:
+                logger.warning(
+                    "ADMIN_REVOKE_PREMIUM_NOT_DISABLED user=%s — сущность не найдена "
+                    "в панели или панель отключена",
+                    telegram_id,
+                )
+        except Exception as e:
+            logger.critical(
+                "ADMIN_REVOKE_PREMIUM_DISABLE_FAILED user=%s error=%s — доступ снят "
+                "в базе, отключите пользователя в панели вручную",
+                telegram_id, e,
+            )
+
         if uuid_to_remove:
             try:
                 await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_remove)
