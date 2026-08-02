@@ -223,23 +223,40 @@ async def provision_subscription(
             description=f"Bypass via bot ({tariff})",
         )
         if not bresult.ok:
-            raise RuntimeError(
-                f"bypass provision failed: tg={telegram_id} "
-                f"status={bresult.status} error={bresult.error}"
+            # Сбой создания bypass НЕ отменяет выдачу premium.
+            #
+            # К этому моменту premium уже создан в панели. Если бросить
+            # исключение, произойдёт худшее из возможного: пользователь
+            # не получит ничего, в базу не запишется ни строки, а premium
+            # останется сиротой в панели — и найти его можно будет только
+            # админской сверкой.
+            #
+            # Поэтому возвращаем то, что удалось выдать, а недостающий
+            # bypass чиним отдельно: запись BYPASS_PROVISION_FAILED в логе
+            # содержит telegram_id и причину отказа панели.
+            logger.critical(
+                "BYPASS_PROVISION_FAILED tg=%s status=%s error=%s — premium выдан, "
+                "трафик обхода нужно доначислить вручную",
+                telegram_id, bresult.status, bresult.error,
             )
-        bypass_sub_url = bresult.subscription_url
-        try:
-            await database.set_remnawave_bypass_cache(
-                telegram_id,
-                bresult.panel_uuid,
-                bresult.subscription_url,
-                bresult.short_uuid,
-            )
-        except Exception as e:
-            logger.warning(
-                "PURCHASE_FLOW: failed to persist bypass cache tg=%s %s",
-                telegram_id, e,
-            )
+            bypass_sub_url = None
+        else:
+            bypass_sub_url = bresult.subscription_url
+            # Кэш пишем только при успехе: иначе в базу уйдут None вместо
+            # идентификаторов, и последующая проверка решит, что bypass
+            # уже создан, хотя его нет.
+            try:
+                await database.set_remnawave_bypass_cache(
+                    telegram_id,
+                    bresult.panel_uuid,
+                    bresult.subscription_url,
+                    bresult.short_uuid,
+                )
+            except Exception as e:
+                logger.warning(
+                    "PURCHASE_FLOW: failed to persist bypass cache tg=%s %s",
+                    telegram_id, e,
+                )
 
     logger.info(
         "PURCHASE_FLOW_DONE: tg=%s tariff=%s premium_uuid=%s bypass_uuid=%s "
