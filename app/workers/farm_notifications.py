@@ -46,8 +46,6 @@ async def farm_notifications_iteration(bot: Bot):
         elif farm_plots is None:
             continue
         
-        changed = False
-        
         for plot in farm_plots:
             if plot["status"] not in ("growing", "ready"):
                 continue
@@ -61,10 +59,17 @@ async def farm_notifications_iteration(bot: Bot):
             dead_at = datetime.fromisoformat(plot["dead_at"]) if plot.get("dead_at") else None
             
             # A: Ready notification
+            planted_at_snapshot = plot.get("planted_at")
+
             if ready_at and now >= ready_at and not plot.get("notified_ready"):
                 plot["status"] = "ready"
-                plot["notified_ready"] = True
-                changed = True
+                # Флаг ставится точечно, а не перезаписью всего массива:
+                # пока идёт рассылка, пользователь может собрать урожай, и
+                # запись устаревшего снимка затёрла бы его действие.
+                await database.mark_plot_notified(
+                    telegram_id, int(plot.get("plot_id", -1)), "notified_ready",
+                    expected_planted_at=planted_at_snapshot,
+                )
                 try:
                     await bot.send_message(
                         telegram_id,
@@ -77,8 +82,13 @@ async def farm_notifications_iteration(bot: Bot):
             
             # B: 12h warning
             if dead_at and now >= (dead_at - timedelta(hours=12)) and not plot.get("notified_12h"):
-                plot["notified_12h"] = True
-                changed = True
+                # Флаг ставится точечно, а не перезаписью всего массива:
+                # пока идёт рассылка, пользователь может собрать урожай, и
+                # запись устаревшего снимка затёрла бы его действие.
+                await database.mark_plot_notified(
+                    telegram_id, int(plot.get("plot_id", -1)), "notified_12h",
+                    expected_planted_at=planted_at_snapshot,
+                )
                 try:
                     await bot.send_message(
                         telegram_id,
@@ -92,8 +102,13 @@ async def farm_notifications_iteration(bot: Bot):
             # C: Dead notification
             if dead_at and now >= dead_at and not plot.get("notified_dead"):
                 plot["status"] = "dead"
-                plot["notified_dead"] = True
-                changed = True
+                # Флаг ставится точечно, а не перезаписью всего массива:
+                # пока идёт рассылка, пользователь может собрать урожай, и
+                # запись устаревшего снимка затёрла бы его действие.
+                await database.mark_plot_notified(
+                    telegram_id, int(plot.get("plot_id", -1)), "notified_dead",
+                    expected_planted_at=planted_at_snapshot,
+                )
                 try:
                     await bot.send_message(
                         telegram_id,
@@ -104,8 +119,8 @@ async def farm_notifications_iteration(bot: Bot):
                 except Exception as e:
                     logger.warning(f"Failed to send farm dead notification to {telegram_id}: {e}")
         
-        if changed:
-            await database.save_farm_plots(telegram_id, farm_plots)
+        # save_farm_plots здесь больше не вызывается: он записывал весь массив
+        # целиком и затирал изменения, сделанные пользователем во время рассылки.
 
 
 def _format_eta(delta_seconds: int) -> str:

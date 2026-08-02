@@ -464,6 +464,78 @@ async def harvest_plot_atomic(
             return True, "ok"
 
 
+async def mark_plot_notified(
+    telegram_id: int,
+    plot_id: int,
+    flag: str,
+    *,
+    expected_planted_at: Optional[str] = None,
+) -> bool:
+    """Поставить один флаг уведомления на одной грядке.
+
+    Зачем отдельная функция: воркер уведомлений раньше читал весь массив
+    грядок, рассылал сообщения (а это сетевые запросы, они занимают время)
+    и записывал массив обратно целиком. Если за это время пользователь
+    собирал урожай, его изменение затиралось устаревшим снимком: грядка
+    возвращалась в состояние «готова», хотя награда уже начислена.
+
+    Здесь под advisory-локом читается свежее состояние и меняется ровно
+    один флаг. Остальные грядки и все поля этой грядки остаются как есть.
+
+    expected_planted_at защищает от гонки другого рода: пока шло
+    уведомление, грядку могли собрать и засеять заново. Тогда время
+    посадки отличается, и флаг ставить нельзя — он относился к прошлому
+    растению.
+
+    Возвращает True, если флаг проставлен.
+    """
+    allowed = {"notified_ready", "notified_12h", "notified_dead"}
+    if flag not in allowed:
+        logger.error("MARK_PLOT_NOTIFIED_BAD_FLAG flag=%s user=%s", flag, telegram_id)
+        return False
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+            row = await conn.fetchrow(
+                "SELECT farm_plots FROM users WHERE telegram_id = $1 FOR UPDATE",
+                telegram_id,
+            )
+            if not row:
+                return False
+            plots = row["farm_plots"]
+            if isinstance(plots, str):
+                plots = json.loads(plots)
+            if not isinstance(plots, list):
+                return False
+
+            for i, p in enumerate(plots):
+                if int(p.get("plot_id", -1)) != plot_id:
+                    continue
+                if expected_planted_at is not None and p.get("planted_at") != expected_planted_at:
+                    # Грядку успели собрать и засеять заново — уведомление
+                    # относилось к прошлому растению.
+                    logger.info(
+                        "MARK_PLOT_NOTIFIED_STALE user=%s plot=%s flag=%s",
+                        telegram_id, plot_id, flag,
+                    )
+                    return False
+                if p.get(flag) is True:
+                    return False
+                plots[i] = {**p, flag: True}
+                await conn.execute(
+                    "UPDATE users SET farm_plots = $1::jsonb WHERE telegram_id = $2",
+                    json.dumps(plots), telegram_id,
+                )
+                return True
+            return False
+
+
 async def execute_storm_for_user(
     telegram_id: int,
     farm_plots: List[Dict[str, Any]],
