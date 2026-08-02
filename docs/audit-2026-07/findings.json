@@ -3023,7 +3023,14 @@
       },
       "_dom": "deadcode",
       "_status": "подтверждено",
-      "_corrected": "P2"
+      "_corrected": "P2",
+      "status": "fixed",
+      "resolution": "Источником схемы признан каталог migrations/. Сверка кода с миграциями показала, что только в core.py жили две таблицы (gift_subscriptions, user_traffic_discounts) и 26 колонок — они перенесены в migrations/073_schema_source_of_truth.sql, все операторы идемпотентны, поэтому миграция безопасна и на боевой базе. Сам блок из ~630 строк DDL в init_db теперь выполняется только при LEGACY_SCHEMA_BOOTSTRAP=1 — как аварийный бутстрап для локальной разработки. На каждом старте бот больше не просит ACCESS EXCLUSIVE на users/subscriptions/payments, то есть исчез и риск встать в очередь за autovacuum, и молчаливое проглатывание ошибки по lock_timeout. Тест tests/services/test_schema_single_source.py сверяет таблицы и колонки кода с миграциями — добавить объект мимо миграции больше нельзя.",
+      "fixed_in": [
+        "database/core.py",
+        "migrations/073_schema_source_of_truth.sql",
+        "tests/services/test_schema_single_source.py"
+      ]
     },
     {
       "title": "Автопродление считает цену по своей формуле мимо calculate_final_price и админских override",
