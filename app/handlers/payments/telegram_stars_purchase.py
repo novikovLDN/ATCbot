@@ -463,7 +463,10 @@ async def callback_stars_pay_sbp(callback: CallbackQuery, state: FSMContext):
     try:
         purchase_id, _ = await _create_stars_purchase(telegram_id, username, stars, sbp_price)
 
-        from app.services.payments import platega_service
+        # Модуль лежит в корне проекта, а не в app.services.payments —
+        # неверный путь здесь давал ImportError, и кнопка СБП падала
+        # при каждом нажатии.
+        import platega_service
         transaction = await platega_service.create_transaction(
             amount_kopecks=price_kopecks,
             order_id=purchase_id,
