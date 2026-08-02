@@ -473,8 +473,16 @@ async def get_recent_payments_feed(
         SELECT
             pp.id, pp.purchase_id, pp.telegram_id, pp.tariff,
             pp.purchase_type, pp.period_days, pp.price_kopecks,
-            pp.status, pp.created_at, pp.promo_code, pp.is_combo,
-            pp.country, pp.farm_plot_id,
+            pp.status, pp.created_at, pp.is_combo, pp.farm_plot_id,
+            -- У покупок Spotify поля promo_code и country заняты не по
+            -- назначению: там лежат пароль и email от аккаунта клиента.
+            -- Это исторический хак ради экономии колонок, но в отчётной
+            -- выдаче учётные данные светить нельзя — они попадали в ленту
+            -- платежей дашборда, откуда их видит любой, у кого есть доступ.
+            -- Отдаём заглушку; админ берёт данные в карточке заказа, куда
+            -- они приходят отдельным сообщением.
+            CASE WHEN pp.purchase_type = 'spotify' THEN NULL ELSE pp.promo_code END AS promo_code,
+            CASE WHEN pp.purchase_type = 'spotify' THEN NULL ELSE pp.country END AS country,
             COALESCE(pp.payment_provider, 'unknown') AS payment_provider,
             u.username
         FROM pending_purchases pp
@@ -523,8 +531,17 @@ async def get_user_purchases(telegram_id: int, limit: int = 100) -> list:
         SELECT
             pp.id, pp.purchase_id, pp.tariff,
             pp.purchase_type, pp.period_days, pp.price_kopecks,
-            pp.status, pp.created_at, pp.expires_at, pp.promo_code,
-            pp.is_combo, pp.country, pp.farm_plot_id,
+            pp.status, pp.created_at, pp.expires_at,
+            pp.is_combo, pp.farm_plot_id,
+            -- У покупок Spotify поля promo_code и country заняты не по
+            -- назначению: там лежат пароль и email от аккаунта клиента.
+            -- Это исторический хак ради экономии колонок, но в отчётной
+            -- выдаче учётные данные светить нельзя — они попадали в ленту
+            -- платежей дашборда, откуда их видит любой, у кого есть доступ.
+            -- Отдаём заглушку; админ берёт данные в карточке заказа, куда
+            -- они приходят отдельным сообщением.
+            CASE WHEN pp.purchase_type = 'spotify' THEN NULL ELSE pp.promo_code END AS promo_code,
+            CASE WHEN pp.purchase_type = 'spotify' THEN NULL ELSE pp.country END AS country,
             COALESCE(pp.payment_provider, 'unknown') AS payment_provider,
             pp.provider_invoice_id
         FROM pending_purchases pp
