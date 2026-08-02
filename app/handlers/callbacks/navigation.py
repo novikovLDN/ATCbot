@@ -662,7 +662,7 @@ async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
     from app.handlers.common.states import PurchaseState
     await state.set_state(PurchaseState.choose_payment_method)
 
-    from handlers import show_payment_method_selection
+    from app.handlers.payments.method_select import show_payment_method_selection
     await show_payment_method_selection(callback, base_tariff, period_days, price_kopecks)
 
 

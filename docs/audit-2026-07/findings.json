@@ -548,7 +548,12 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Модуль app/services/vpn_client.py (251 строка) удалён — фасад к выведенному из эксплуатации xray без единого потребителя.",
+      "fixed_in": [
+        "tests/services/test_dead_modules_removed.py"
+      ]
     },
     {
       "title": "xray_sync.py — воркер, который вхолостую обходит всех активных пользователей",
@@ -1434,7 +1439,9 @@
       "risk": "низкий",
       "confidence": "medium",
       "_dom": "games",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Закрыт вместе с P1-пунктом по i18n: ключ errors.database_unavailable добавлен во все семь словарей, плюс цепочка фолбэков продлена до русского."
     },
     {
       "title": "Инвойс на плёнку выставляется на полную цену, хотя на экране показан только недостающий остаток",
@@ -1648,7 +1655,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "notifications",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Закрыт вместе с P1-пунктом по автопродлению: текст читает item['amount_rubles'], эвристика «>1000 значит копейки» убрана."
     },
     {
       "title": "Apple ID: устаревшая кнопка «Подтвердить» может отправить ключ не тому покупателю",
@@ -2450,7 +2459,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "i18n",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Закрыт вместе с P1-пунктом: action_type передаётся и в cashback_title, и в cashback_amount, слово локализуется."
     },
     {
       "title": "Главный экран выбора тарифа собран русскими f-строками поверх i18n-ключей",
@@ -3067,7 +3078,12 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "handlers.py (1071 строка) удалён. Сверка по AST: 32 функции из 35 дословно повторяли app/handlers/common/*, наружу использовалась одна — show_payment_method_selection. Она вынесена в app/handlers/payments/method_select.py с русской инструкцией, пять импортов переписаны.",
+      "fixed_in": [
+        "tests/services/test_dead_modules_removed.py"
+      ]
     },
     {
       "title": "Админские клавиатуры существуют в трёх копиях; используется только версия admin/keyboards.py",
@@ -3093,7 +3109,12 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "app/utils/audit.py (418 строк) удалён — вторая параллельная подсистема аудита без вызывающих. Реальный аудит идёт через database._log_audit_event_atomic.",
+      "fixed_in": [
+        "tests/services/test_dead_modules_removed.py"
+      ]
     },
     {
       "title": "app/services/vpn_client.py — 251 строк мёртвого фасада к декоммиссированному xray",
@@ -3106,7 +3127,12 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Дубль пункта 33: app/services/vpn_client.py удалён.",
+      "fixed_in": [
+        "tests/services/test_dead_modules_removed.py"
+      ]
     },
     {
       "title": "Пакет app/core/i18n сломан на импорте и никем не используется",
@@ -3119,7 +3145,12 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Пакет app/core/i18n удалён — ломался на импорте (тянул несуществующий .manager) и никем не использовался. Рабочая локализация живёт в app/i18n.",
+      "fixed_in": [
+        "tests/services/test_dead_modules_removed.py"
+      ]
     },
     {
       "title": "Мёртвый legacy-API ручной модерации платежей в database/subscriptions.py (~350 строк, деньги)",

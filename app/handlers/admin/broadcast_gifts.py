@@ -254,7 +254,7 @@ async def callback_broadcast_gift_1m_buy(callback: CallbackQuery, state: FSMCont
         telegram_id, tariff, base_tariff, gb, price_kopecks,
     )
 
-    from handlers import show_payment_method_selection
+    from app.handlers.payments.method_select import show_payment_method_selection
     await show_payment_method_selection(callback, base_tariff, _GIFT1M_PERIOD_DAYS, price_kopecks)
 
 
@@ -463,7 +463,7 @@ async def callback_broadcast_gift_3m_buy(callback: CallbackQuery, state: FSMCont
         telegram_id, tariff, base_tariff, gb, price_kopecks,
     )
 
-    from handlers import show_payment_method_selection
+    from app.handlers.payments.method_select import show_payment_method_selection
     await show_payment_method_selection(callback, base_tariff, _GIFT3M_PERIOD_DAYS, price_kopecks)
 
 
@@ -800,7 +800,7 @@ async def callback_broadcast_gift_1y_40_buy(callback: CallbackQuery, state: FSMC
         period_days == _GIFT1Y40_PERIOD_DAYS_DISCOUNTED,
     )
 
-    from handlers import show_payment_method_selection
+    from app.handlers.payments.method_select import show_payment_method_selection
     await show_payment_method_selection(callback, base_tariff, period_days, price_kopecks)
 
 
