@@ -29,7 +29,6 @@ from app.handlers.common.keyboards import (
 )
 from app.handlers.common.states import PromoCodeInput, CorporateAccessRequest, PurchaseState
 from app.core.structured_logger import log_event
-from app.handlers.notifications import send_referral_cashback_notification
 
 payments_callbacks_router = Router()
 logger = logging.getLogger(__name__)

@@ -42,7 +42,7 @@ from app.utils.security import (
     log_security_warning,
 )
 from app.core.feature_flags import get_feature_flags
-from app.handlers.notifications import send_referral_cashback_notification
+from app.handlers.notifications import notify_referral_cashback
 from app.handlers.common.keyboards import get_payment_success_keyboard
 from app.handlers.common.states import BroadcastCreate
 from app.handlers.admin.promo_trial import PromoTrialFSM
@@ -490,34 +490,17 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     f"user={telegram_id}, error={e}] (notification flagged but message not delivered)"
                 )
             
-            # Отправляем уведомление о кешбэке (если начислен)
-            if referral_reward_result and referral_reward_result.get("success"):
-                try:
-                    notification_sent = await send_referral_cashback_notification(
-                        bot=message.bot,
-                        referrer_id=referral_reward_result.get("referrer_id"),
-                        referred_id=telegram_id,
-                        purchase_amount=payment_amount_rubles,
-                        cashback_amount=referral_reward_result.get("reward_amount"),
-                        cashback_percent=referral_reward_result.get("percent"),
-                        paid_referrals_count=referral_reward_result.get("paid_referrals_count", 0),
-                        referrals_needed=referral_reward_result.get("referrals_needed", 0),
-                        action_type="topup"
-                    )
-                    if notification_sent:
-                        logger.info(
-                            f"REFERRAL_NOTIFICATION_SENT [type=balance_topup, referrer={referral_reward_result.get('referrer_id')}, "
-                            f"referred={telegram_id}, amount={payment_amount_rubles} RUB]"
-                        )
-                        logger.info(f"Referral cashback processed for balance topup: user={telegram_id}, amount={payment_amount_rubles} RUB")
-                    else:
-                        logger.warning(
-                            f"REFERRAL_NOTIFICATION_FAILED [type=balance_topup, referrer={referral_reward_result.get('referrer_id')}, "
-                            f"referred={telegram_id}]"
-                        )
-                except Exception as e:
-                    logger.exception(f"Error sending referral cashback notification for balance topup: user={telegram_id}: {e}")
-            
+            # Уведомление о кешбэке рефереру — тот же хелпер, что и на
+            # остальных путях оплаты (см. app/handlers/notifications.py).
+            await notify_referral_cashback(
+                message.bot,
+                referral_reward_result,
+                referred_id=telegram_id,
+                purchase_amount=payment_amount_rubles,
+                action_type="topup",
+                context="telegram_payment:balance_topup",
+            )
+
             # Логируем событие
             logger.info(f"Balance topup successful: user={telegram_id}, amount={payment_amount_rubles} RUB, new_balance={new_balance} RUB")
             duration_ms = (time.time() - start_time) * 1000
@@ -1378,69 +1361,19 @@ async def process_successful_payment(message: Message, state: FSMContext):
         f"purchase_id={purchase_id}, expires_at={expires_str}, subscription_type={subscription_type}]"
     )
 
-    # КРИТИЧНО: pending_purchase уже помечен как paid в finalize_purchase
-    # Реферальный кешбэк уже обработан в finalize_purchase через process_referral_reward
-    # Отправляем уведомление рефереру (если кешбэк был начислен)
-    referral_reward = result.referral_reward
-    if referral_reward and referral_reward.get("success"):
-        try:
-            # Формируем период подписки для уведомления
-            subscription_period = None
-            if period_days:
-                if period_days == 30:
-                    subscription_period = "1 месяц"
-                elif period_days == 90:
-                    subscription_period = "3 месяца"
-                elif period_days == 180:
-                    subscription_period = "6 месяцев"
-                elif period_days == 365:
-                    subscription_period = "12 месяцев"
-                else:
-                    months = period_days // 30
-                    if months > 0:
-                        subscription_period = f"{months} месяц" + ("а" if months in [2, 3, 4] else ("ев" if months > 4 else ""))
-                    else:
-                        subscription_period = f"{period_days} дней"
-            
-            notification_sent = await send_referral_cashback_notification(
-                bot=message.bot,
-                referrer_id=referral_reward.get("referrer_id"),
-                referred_id=telegram_id,
-                purchase_amount=payment_amount_rubles,
-                cashback_amount=referral_reward.get("reward_amount"),
-                cashback_percent=referral_reward.get("percent"),
-                paid_referrals_count=referral_reward.get("paid_referrals_count", 0),
-                referrals_needed=referral_reward.get("referrals_needed", 0),
-                action_type="purchase",
-                subscription_period=subscription_period
-            )
-            if notification_sent:
-                logger.info(
-                    f"REFERRAL_NOTIFICATION_SENT [type=purchase, referrer={referral_reward.get('referrer_id')}, "
-                    f"referred={telegram_id}, purchase_id={purchase_id}]"
-                )
-            else:
-                logger.warning(
-                    "NOTIFICATION_FAILED",
-                    extra={
-                        "type": "purchase",
-                        "referrer": referral_reward.get("referrer_id"),
-                        "referred": telegram_id,
-                        "purchase_id": purchase_id,
-                        "error": "send_referral_cashback_notification returned False"
-                    }
-                )
-        except Exception as e:
-            logger.warning(
-                "NOTIFICATION_FAILED",
-                extra={
-                    "type": "purchase",
-                    "referred": telegram_id,
-                    "purchase_id": purchase_id if 'purchase_id' in locals() else None,
-                    "referrer": referral_reward.get("referrer_id") if referral_reward else None,
-                    "error": str(e)
-                }
-            )
+    # Кешбэк рефереру начислен внутри finalize_purchase (process_referral_reward),
+    # но сообщение отправляет вызывающий код. Формат периода и разбор словаря —
+    # в общем хелпере, чтобы все пути оплаты слали одинаковый текст.
+    await notify_referral_cashback(
+        message.bot,
+        result.referral_reward,
+        referred_id=telegram_id,
+        purchase_amount=payment_amount_rubles,
+        action_type="purchase",
+        period_days=period_days,
+        context=f"telegram_payment:{purchase_id}",
+    )
+
     
     logger.info(
         f"process_successful_payment: PAYMENT_COMPLETE [user={telegram_id}, payment_id={payment_id}, "

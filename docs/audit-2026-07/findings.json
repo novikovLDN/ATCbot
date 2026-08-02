@@ -1534,7 +1534,16 @@
       },
       "_dom": "notifications",
       "_status": "подтверждено",
-      "_corrected": "P2"
+      "_corrected": "P2",
+      "status": "fixed",
+      "resolution": "Добавлен общий хелпер app/handlers/notifications.py:notify_referral_cashback — он сам разбирает словарь referral_reward, форматирует срок подписки (format_subscription_period) и не пробрасывает исключения. confirmation.py теперь вызывает его после успешной финализации внутри существующего try/except уведомлений. Три остальных пути оплаты (карта в Telegram, пополнение баланса, покупка с баланса) переведены на тот же хелпер — копипаста форматирования периода удалена, тексты сошлись. Убраны три мёртвых импорта send_referral_cashback_notification. Тесты: tests/services/test_referral_notification.py (8 шт.).",
+      "fixed_in": [
+        "app/handlers/notifications.py",
+        "app/services/payments/confirmation.py",
+        "app/handlers/payments/payments_messages.py",
+        "app/handlers/callbacks/payments_callbacks.py",
+        "tests/services/test_referral_notification.py"
+      ]
     },
     {
       "title": "Флаги reminder_7d_sent и reminder_1d_sent никогда не сбрасываются — напоминания приходят один раз за всю жизнь пользователя",

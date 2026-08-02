@@ -17,7 +17,7 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.services.subscriptions import service as subscription_service
 from app.services.subscriptions.service import is_subscription_active
-from app.handlers.notifications import send_referral_cashback_notification
+from app.handlers.notifications import notify_referral_cashback
 from app.core.rate_limit import check_rate_limit
 from app.handlers.common.guards import ensure_db_ready_callback, ensure_db_ready_message
 from app.handlers.common.utils import (
@@ -192,33 +192,19 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         is_upgrade = result.get("is_basic_to_plus_upgrade", False)
         referral_reward_result = result.get("referral_reward")
         
-        # Отправляем уведомление о кешбэке (если начислен)
-        if referral_reward_result and referral_reward_result.get("success"):
-            try:
-                notification_sent = await send_referral_cashback_notification(
-                    bot=callback.message.bot,
-                    referrer_id=referral_reward_result.get("referrer_id"),
-                    referred_id=telegram_id,
-                    purchase_amount=final_price_rubles,
-                    cashback_amount=referral_reward_result.get("reward_amount"),
-                    cashback_percent=referral_reward_result.get("percent"),
-                    paid_referrals_count=referral_reward_result.get("paid_referrals_count", 0),
-                    referrals_needed=referral_reward_result.get("referrals_needed", 0),
-                    action_type="purchase" if not is_renewal else "renewal"
-                )
-                if notification_sent:
-                    logger.info(f"Referral cashback processed for balance payment: user={telegram_id}, amount={final_price_rubles} RUB")
-            except Exception as e:
-                logger.warning(
-                    "NOTIFICATION_FAILED",
-                    extra={
-                        "type": "balance_payment_referral",
-                        "user": telegram_id,
-                        "referrer": referral_reward_result.get("referrer_id") if referral_reward_result else None,
-                        "error": str(e)
-                    }
-                )
-        
+        # Уведомление рефереру о кешбэке — общий хелпер (см.
+        # app/handlers/notifications.py): он сам проверяет success и
+        # форматирует срок подписки одинаково на всех путях оплаты.
+        await notify_referral_cashback(
+            callback.message.bot,
+            referral_reward_result,
+            referred_id=telegram_id,
+            purchase_amount=final_price_rubles,
+            action_type="renewal" if is_renewal else "purchase",
+            period_days=period_days,
+            context="balance_payment",
+        )
+
         # Site sync (fire-and-forget)
         try:
             from app.services.site_sync import full_sync_after_payment, is_enabled as _site_sync_on

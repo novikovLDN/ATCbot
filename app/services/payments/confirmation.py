@@ -183,6 +183,21 @@ async def process_confirmed_payment(
                     result=result,
                     expires_at=expires_at,
                 )
+
+            # Кешбэк рефереру начислен внутри finalize_purchase, но сообщение
+            # отправляет вызывающий код. Вебхуки этот словарь не читали вовсе:
+            # деньги реферер получал, уведомление — никогда. Остальные пути
+            # оплаты (карта в Telegram, покупка с баланса) уведомление слали.
+            from app.handlers.notifications import notify_referral_cashback
+            await notify_referral_cashback(
+                bot,
+                result.get("referral_reward"),
+                referred_id=telegram_id,
+                purchase_amount=amount_rubles,
+                action_type="topup" if is_balance_topup else "purchase",
+                period_days=result.get("period_days"),
+                context=f"webhook:{provider}",
+            )
         except Exception as notif_err:
             logger.error(
                 f"PAYMENT_NOTIFICATION_FAILED: provider={provider}, user={telegram_id}, "

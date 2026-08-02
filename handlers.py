@@ -837,7 +837,6 @@ def get_reissue_notification_text(sub_url: str, language: str = "ru") -> str:
 
 
 # Re-export from modularized handlers module
-from app.handlers.notifications import send_referral_cashback_notification
 from app.handlers.common.screens import show_profile, _open_buy_screen, show_tariffs_main_screen
 
 # Original function moved to app.handlers.notifications

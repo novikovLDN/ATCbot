@@ -32,7 +32,6 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.services.subscriptions import service as subscription_service
 from app.services.subscriptions.service import is_subscription_active
-from app.handlers.notifications import send_referral_cashback_notification
 from app.core.rate_limit import check_rate_limit
 from app.handlers.common.guards import ensure_db_ready_callback, ensure_db_ready_message
 from app.handlers.common.utils import (

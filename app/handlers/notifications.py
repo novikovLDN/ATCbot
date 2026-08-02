@@ -124,3 +124,85 @@ async def send_referral_cashback_notification(
             }
         )
         return False
+
+
+def format_subscription_period(period_days: Optional[int]) -> Optional[str]:
+    """Человеческая длительность подписки для текста уведомления.
+
+    30 → «1 месяц», 90 → «3 месяца», 365 → «12 месяцев». Некратные периоды
+    (например, 45 дней после бонуса) отдаём как есть в днях, потому что
+    «1 месяц» для 45 дней — это враньё в тексте, который видит реферер.
+    """
+    if not period_days:
+        return None
+    known = {30: "1 месяц", 90: "3 месяца", 180: "6 месяцев", 365: "12 месяцев"}
+    if period_days in known:
+        return known[period_days]
+    months, rest = divmod(period_days, 30)
+    if months and not rest:
+        # 2-4 → «месяца», 5+ → «месяцев», 1 попадает в known выше.
+        suffix = "а" if months in (2, 3, 4) else "ев"
+        return f"{months} месяц{suffix}"
+    return f"{period_days} дней"
+
+
+async def notify_referral_cashback(
+    bot: Bot,
+    referral_reward: Optional[dict],
+    *,
+    referred_id: int,
+    purchase_amount: float,
+    action_type: str = "purchase",
+    period_days: Optional[int] = None,
+    context: str = "",
+) -> bool:
+    """Уведомить реферера о начисленном кешбэке — единая точка входа.
+
+    Зачем нужна: кешбэк начисляет finalize_purchase внутри транзакции и
+    возвращает словарь referral_reward. Уведомление же отправляет вызывающий
+    код, и таких мест несколько — оплата картой в Telegram, оплата с баланса,
+    вебхуки CryptoBot/Lava/Платеги. Вебхуки этот словарь просто не читали:
+    деньги рефереру начислялись, а сообщения он не получал никогда.
+
+    Функция сама разбирает словарь и молча выходит, если кешбэка не было
+    (`referral_reward` пустой или success=False) — вызывающему коду не нужно
+    повторять эту проверку. Исключения не пробрасываются: платёж уже
+    закоммичен, и падение уведомления не должно его ронять.
+
+    Args:
+        referral_reward: результат process_referral_reward из finalize_purchase.
+        referred_id: кто заплатил (реферал).
+        purchase_amount: сумма покупки в рублях.
+        action_type: "purchase" | "topup" — влияет на текст.
+        period_days: срок подписки, чтобы подставить «на 3 месяца».
+        context: метка для логов (например, имя провайдера).
+
+    Returns: True — уведомление отправлено, False — кешбэка не было или сбой.
+    """
+    if not referral_reward or not referral_reward.get("success"):
+        return False
+    try:
+        sent = await send_referral_cashback_notification(
+            bot=bot,
+            referrer_id=referral_reward.get("referrer_id"),
+            referred_id=referred_id,
+            purchase_amount=purchase_amount,
+            cashback_amount=referral_reward.get("reward_amount"),
+            cashback_percent=referral_reward.get("percent"),
+            paid_referrals_count=referral_reward.get("paid_referrals_count", 0),
+            referrals_needed=referral_reward.get("referrals_needed", 0),
+            action_type=action_type,
+            subscription_period=format_subscription_period(period_days),
+        )
+        if not sent:
+            logger.warning(
+                "REFERRAL_NOTIFICATION_FAILED [context=%s, referrer=%s, referred=%s]",
+                context, referral_reward.get("referrer_id"), referred_id,
+            )
+        return sent
+    except Exception as e:
+        logger.exception(
+            "REFERRAL_NOTIFICATION_ERROR [context=%s, referred=%s]: %s",
+            context, referred_id, e,
+        )
+        return False
