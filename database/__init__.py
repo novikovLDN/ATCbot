@@ -140,6 +140,18 @@ from database.subscriptions import (  # noqa: F401
     ensure_bypass_only_subscription,
 )
 
+# Discounts & VIP: персональные скидки и VIP-статус
+from database.discounts import (  # noqa: F401
+    get_user_discount,
+    create_user_discount,
+    has_claimed_referral_share_discount,
+    record_referral_share_discount_claim,
+    delete_user_discount,
+    is_vip_user,
+    grant_vip_status,
+    revoke_vip_status,
+)
+
 # Analytics: отчётный слой — выручка, LTV, ARPU, разбивки, ошибки оплат
 from database.analytics import (  # noqa: F401
     get_business_metrics,
@@ -355,14 +367,6 @@ from database.admin import (  # noqa: F401
     finalize_balance_topup,
     admin_grant_access_minutes_atomic,
     admin_revoke_access_atomic,
-    get_user_discount,
-    create_user_discount,
-    delete_user_discount,
-    has_claimed_referral_share_discount,
-    record_referral_share_discount_claim,
-    is_vip_user,
-    grant_vip_status,
-    revoke_vip_status,
     get_ltv,
     get_daily_timeseries,
     get_hourly_timeseries,

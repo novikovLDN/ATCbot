@@ -269,6 +269,44 @@ def test_analytics_module_is_read_only():
         )
 
 
+DISCOUNT_NAMES = [
+    "get_user_discount",
+    "create_user_discount",
+    "has_claimed_referral_share_discount",
+    "record_referral_share_discount_claim",
+    "delete_user_discount",
+    "is_vip_user",
+    "grant_vip_status",
+    "revoke_vip_status",
+]
+
+
+@pytest.mark.parametrize("name", DISCOUNT_NAMES)
+def test_discount_available_via_package(name):
+    import database
+    assert hasattr(database, name)
+
+
+@pytest.mark.parametrize("name", DISCOUNT_NAMES)
+def test_discount_available_via_admin(name):
+    import database.admin as adm
+    assert hasattr(adm, name)
+
+
+@pytest.mark.parametrize("name", DISCOUNT_NAMES)
+def test_discount_defined_in_its_module(name):
+    import database.discounts as d
+    assert hasattr(d, name)
+
+
+def test_is_vip_user_accepts_external_connection():
+    """is_vip_user вызывают изнутри чужих транзакций — параметр conn
+    обязан сохраниться, иначе чтение уйдёт мимо транзакции."""
+    import inspect
+    from database.discounts import is_vip_user
+    assert "conn" in inspect.signature(is_vip_user).parameters
+
+
 def test_split_modules_import_cleanly():
     """Каждый выделенный модуль обязан импортироваться сам по себе:
     потерянный import внутри переноса иначе всплывёт только в проде."""
@@ -276,7 +314,7 @@ def test_split_modules_import_cleanly():
     for mod in ("database.promo", "database.referral_analytics",
                 "database.reminders_queries", "database.trials_queries",
                 "database.pending_purchases", "database.broadcasts",
-                "database.analytics"):
+                "database.analytics", "database.discounts"):
         importlib.import_module(mod)
 
 
