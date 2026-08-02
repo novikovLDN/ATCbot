@@ -715,9 +715,22 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
         multiplier = config.BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
         stars_price = int(round(stars_price * multiplier))
 
-    # Получаем промо-сессию (промокоды НЕ применяются к Stars — цена фиксирована)
+    # Промокоды к оплате звёздами не применяются: прайс в Stars фиксированный
+    # и скидку в него не заложить.
+    #
+    # Раньше код промокода всё равно записывался в покупку, и при финализации
+    # платежа он потреблялся — сгорал, не дав пользователю ни рубля скидки.
+    # Теперь он не передаётся: промокод остаётся неиспользованным и сработает
+    # при оплате рублями.
     promo_session = await get_promo_session(state)
-    promo_code = promo_session.get("promo_code") if promo_session else None
+    unused_promo_code = promo_session.get("promo_code") if promo_session else None
+    if unused_promo_code:
+        logger.info(
+            "STARS_PROMO_NOT_APPLIED user=%s promo=%s — скидка к Stars не применяется, "
+            "код сохранён для оплаты рублями",
+            telegram_id, unused_promo_code,
+        )
+    promo_code = None
 
     # Для Stars: цена в копейках = stars_price * 100 (для pending_purchase, хранение)
     # Но фактическая оплата идёт в Stars, не в рублях
