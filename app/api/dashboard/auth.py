@@ -23,6 +23,8 @@ only work as a one-time bootstrap (when no creds exist) or as an
 admin-side recovery bridge (after pressing "Восстановить пароль" in
 the bot, which clears creds → setup form reappears).
 """
+import logging
+import time as _time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -33,6 +35,7 @@ from pydantic import BaseModel, Field, field_validator
 import config
 from app.services import admin_auth
 
+_log = logging.getLogger(__name__)
 router = APIRouter()
 
 _JWT_ALG = "HS256"
@@ -46,6 +49,56 @@ _JWT_ALG = "HS256"
 # Полное разделение bootstrap-токена и сессии требует правок фронтенда и
 # относится к подпроекту G.
 _MAGIC_TTL_HOURS = getattr(config, "DASHBOARD_MAGIC_LINK_TTL_HOURS", 24)
+
+
+# ── Ограничение попыток входа ─────────────────────────────────────────
+#
+# На /login не было никакой защиты от перебора: пароль можно было подбирать
+# с любой скоростью. Счётчик держится в памяти процесса — этого достаточно,
+# потому что дашборд работает в одном экземпляре, а при перезапуске окно
+# всё равно сбрасывается по времени.
+
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_WINDOW_SECONDS = 300
+_login_attempts: dict[str, list[float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    """IP клиента с учётом обратного прокси Railway."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _prune_attempts(ip: str, now: float) -> list:
+    recent = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW_SECONDS]
+    if recent:
+        _login_attempts[ip] = recent
+    else:
+        _login_attempts.pop(ip, None)
+    return recent
+
+
+def _login_attempts_allowed(ip: str) -> tuple[bool, int]:
+    """(разрешено, через сколько секунд пробовать снова)."""
+    now = _time.time()
+    # Чистим все протухшие записи, чтобы словарь не рос бесконечно.
+    for known_ip in list(_login_attempts):
+        _prune_attempts(known_ip, now)
+    recent = _login_attempts.get(ip, [])
+    if len(recent) < _LOGIN_MAX_ATTEMPTS:
+        return True, 0
+    retry_after = int(_LOGIN_WINDOW_SECONDS - (now - recent[0])) + 1
+    return False, max(1, retry_after)
+
+
+def _register_failed_login(ip: str) -> None:
+    _login_attempts.setdefault(ip, []).append(_time.time())
+
+
+def _reset_login_attempts(ip: str) -> None:
+    _login_attempts.pop(ip, None)
 
 
 def issue_login_token(admin_telegram_id: int) -> str:
@@ -187,7 +240,17 @@ async def auth_setup(body: SetupRequest, response: Response):
 
 
 @router.post("/login")
-async def auth_login(body: LoginRequest, response: Response):
+async def auth_login(body: LoginRequest, response: Response, request: Request):
+    client_ip = _client_ip(request)
+    allowed, retry_after = _login_attempts_allowed(client_ip)
+    if not allowed:
+        _log.warning(
+            "DASHBOARD_LOGIN_RATE_LIMITED ip=%s — превышено число попыток входа", client_ip
+        )
+        raise HTTPException(
+            429, "too_many_attempts", headers={"Retry-After": str(retry_after)}
+        )
+
     creds = await admin_auth.get_credentials()
     if not creds:
         raise HTTPException(409, "password_not_set")
@@ -196,8 +259,11 @@ async def auth_login(body: LoginRequest, response: Response):
     username_ok = body.username.strip().lower() == str(creds["username"]).strip().lower()
     password_ok = admin_auth.verify_password(body.password, str(creds["password_hash"]))
     if not (username_ok and password_ok):
+        _register_failed_login(client_ip)
+        _log.warning("DASHBOARD_LOGIN_FAILED ip=%s user=%s", client_ip, body.username[:40])
         raise HTTPException(401, "invalid_credentials")
 
+    _reset_login_attempts(client_ip)
     token = await admin_auth.create_session(config.ADMIN_TELEGRAM_ID)
     _set_session_cookie(response, token)
     return {"ok": True}
