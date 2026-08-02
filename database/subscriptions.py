@@ -3094,12 +3094,13 @@ async def _finalize_purchase_locked(
                         raise Exception(error_msg)
                     now_utc = datetime.now(timezone.utc)
                     payment_id = await conn.fetchval(
-                        """INSERT INTO payments (telegram_id, tariff, amount, status, paid_at)
-                           VALUES ($1, $2, $3, 'approved', $4) RETURNING id""",
+                        """INSERT INTO payments (telegram_id, tariff, amount, status, paid_at, payment_provider)
+                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
                         telegram_id,
                         "balance_topup",
                         round(amount_rubles * 100),
-                        _to_db_utc(now_utc)
+                        _to_db_utc(now_utc),
+                        payment_provider
                     )
                     if not payment_id:
                         error_msg = f"Failed to create payment record: purchase_id={purchase_id}, user={telegram_id}"
@@ -3154,10 +3155,11 @@ async def _finalize_purchase_locked(
                     )
                     now_utc = datetime.now(timezone.utc)
                     payment_id = await conn.fetchval(
-                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
-                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at, payment_provider)
+                           VALUES ($1, $2, $3, 'approved', $4, $5, $6) RETURNING id""",
                         telegram_id, tariff_type, round(amount_rubles * 100),
                         purchase_id, _to_db_utc(now_utc),
+                        payment_provider,
                     )
                     return {
                         "success": True,
@@ -3181,13 +3183,14 @@ async def _finalize_purchase_locked(
                     )
                     now_utc = datetime.now(timezone.utc)
                     payment_id = await conn.fetchval(
-                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
-                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at, payment_provider)
+                           VALUES ($1, $2, $3, 'approved', $4, $5, $6) RETURNING id""",
                         telegram_id,
                         f"gift_{tariff_type}_{period_days}",
                         round(amount_rubles * 100),
                         purchase_id,
                         _to_db_utc(now_utc),
+                        payment_provider,
                     )
                     if not payment_id:
                         raise Exception(f"Failed to create payment record for gift: purchase_id={purchase_id}")
@@ -3230,13 +3233,14 @@ async def _finalize_purchase_locked(
                     )
                     now_utc = datetime.now(timezone.utc)
                     payment_id = await conn.fetchval(
-                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
-                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at, payment_provider)
+                           VALUES ($1, $2, $3, 'approved', $4, $5, $6) RETURNING id""",
                         telegram_id,
                         tariff_type or "traffic_pack",
                         round(amount_rubles * 100),
                         purchase_id,
                         _to_db_utc(now_utc),
+                        payment_provider,
                     )
                     if not payment_id:
                         raise Exception(f"Failed to create payment record for traffic pack: purchase_id={purchase_id}")
@@ -3308,13 +3312,14 @@ async def _finalize_purchase_locked(
                         )
                     now_utc = datetime.now(timezone.utc)
                     payment_id = await conn.fetchval(
-                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
-                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at, payment_provider)
+                           VALUES ($1, $2, $3, 'approved', $4, $5, $6) RETURNING id""",
                         telegram_id,
                         tariff_type or "farm_storm_shield",
                         round(amount_rubles * 100),
                         purchase_id,
                         _to_db_utc(now_utc),
+                        payment_provider,
                     )
                     if not payment_id:
                         raise Exception(
@@ -3393,14 +3398,16 @@ async def _finalize_purchase_locked(
                     raise ValueError(error_msg)
                 now_utc = datetime.now(timezone.utc)
                 payment_id = await conn.fetchval(
-                    """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, cryptobot_payment_id, paid_at)
-                       VALUES ($1, $2, $3, 'pending', $4, $5, $6) RETURNING id""",
+                    """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id,
+                                             cryptobot_payment_id, paid_at, payment_provider)
+                       VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7) RETURNING id""",
                     telegram_id,
                     f"{tariff_type}_{period_days}",
                     round(amount_rubles * 100),
                     purchase_id,
                     str(invoice_id) if invoice_id else None,
-                    _to_db_utc(now_utc)
+                    _to_db_utc(now_utc),
+                    payment_provider,
                 )
                 if not payment_id:
                     error_msg = f"Failed to create payment record: purchase_id={purchase_id}, user={telegram_id}"

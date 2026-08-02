@@ -322,8 +322,12 @@ async def process_auto_renewals(bot: Bot):
                                 continue
                             
                             tariff_str = f"{tariff_type}_{period_days}"
+                            # payment_provider='balance': автопродление всегда
+                            # списывает с баланса — это внутреннее движение уже
+                            # учтённых денег, а не новая выручка (см. миграцию 072).
                             payment_id = await conn.fetchval(
-                                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
+                                """INSERT INTO payments (telegram_id, tariff, amount, status, payment_provider)
+                                   VALUES ($1, $2, $3, 'approved', 'balance') RETURNING id""",
                                 telegram_id, tariff_str, round(amount_rubles * 100)
                             )
                             

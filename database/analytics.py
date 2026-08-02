@@ -32,6 +32,35 @@ from database.core import get_pool, _to_db_utc, _from_db_utc, safe_int
 logger = logging.getLogger(__name__)
 
 
+# ──────────────────────────────────────────────────────────────────────
+#  ЧТО СЧИТАЕТСЯ ВЫРУЧКОЙ — единое определение на весь проект
+# ──────────────────────────────────────────────────────────────────────
+#
+# Выручка = ВНЕШНИЕ ПОСТУПЛЕНИЯ. Деньги считаются один раз — в момент, когда
+# они пришли извне (карта, СБП, крипта, Telegram Stars).
+#
+# Почему это пришлось проговорить. Внутри бота одни и те же рубли делают
+# несколько шагов: пополнение баланса → покупка подписки с этого баланса →
+# автопродление с него же. Каждый шаг создаёт свою строку, а отчёты
+# суммировали всё подряд: одни и те же деньги попадали в выручку два-три
+# раза, а реферальный кешбэк, потраченный с баланса, превращался в
+# «выручку» из воздуха. Порог milestone-пуша (5k/10k/…) срабатывал на
+# завышенных числах.
+#
+# Правило: строки с payment_provider='balance' — внутреннее движение, в
+# выручку не входят. Пополнение баланса входит: это и есть приход извне.
+#
+# Фильтр стоит в КАЖДОМ денежном запросе этого модуля и в database/admin.py.
+# Где его сознательно НЕТ — история подписок пользователя
+# (get_user_paid_subscription_history и её батч-версия): там вопрос не
+# «сколько мы заработали», а «что человеку выдано», и покупка с баланса —
+# такая же полноценная покупка.
+#
+# NULL в payment_provider = строки до миграции 072. Считаем их выручкой:
+# до появления покупок с баланса других вариантов не было.
+REVENUE_EXTERNAL_ONLY_SQL = "COALESCE(payment_provider, '') <> 'balance'"
+
+
 async def get_business_metrics() -> Dict[str, Any]:
     """Получить бизнес-метрики сервиса
     
@@ -246,7 +275,7 @@ async def get_revenue_for_period(
                    COALESCE(SUM(price_kopecks), 0)::BIGINT AS total_kopecks,
                    COUNT(*)::BIGINT AS count
                FROM pending_purchases
-               WHERE status = 'paid' AND created_at >= $1""",
+               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance' AND created_at >= $1""",
             since,
         )
         by_type_rows = await conn.fetch(
@@ -255,7 +284,7 @@ async def get_revenue_for_period(
                    COUNT(*)::BIGINT AS count,
                    COALESCE(SUM(price_kopecks), 0)::BIGINT AS revenue_kopecks
                FROM pending_purchases
-               WHERE status = 'paid' AND created_at >= $1
+               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance' AND created_at >= $1
                GROUP BY purchase_type
                ORDER BY revenue_kopecks DESC""",
             since,
@@ -294,7 +323,7 @@ async def get_payments_by_provider(hours: int) -> list:
                        COUNT(*)::BIGINT AS count,
                        COALESCE(SUM(price_kopecks), 0)::BIGINT AS revenue_kopecks
                    FROM pending_purchases
-                   WHERE status = 'paid' AND created_at >= $1
+                   WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance' AND created_at >= $1
                    GROUP BY provider
                    ORDER BY revenue_kopecks DESC""",
                 since,
@@ -342,7 +371,7 @@ async def get_payments_breakdown(hours: int) -> Dict[str, Any]:
                 """SELECT COUNT(*)::BIGINT AS count,
                           COALESCE(SUM(price_kopecks), 0)::BIGINT AS revenue_kop
                    FROM pending_purchases
-                   WHERE status = 'paid' AND created_at >= $1""",
+                   WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance' AND created_at >= $1""",
                 since,
             )
             out["total"] = {
@@ -359,7 +388,7 @@ async def get_payments_breakdown(hours: int) -> Dict[str, Any]:
                           COUNT(*)::BIGINT AS c,
                           COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
                    FROM pending_purchases
-                   WHERE status = 'paid' AND created_at >= $1
+                   WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance' AND created_at >= $1
                    GROUP BY k
                    ORDER BY rev DESC""",
                 since,
@@ -379,7 +408,7 @@ async def get_payments_breakdown(hours: int) -> Dict[str, Any]:
                           COUNT(*)::BIGINT AS c,
                           COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
                    FROM pending_purchases
-                   WHERE status = 'paid' AND created_at >= $1
+                   WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance' AND created_at >= $1
                    GROUP BY k
                    ORDER BY rev DESC""",
                 since,
@@ -399,7 +428,7 @@ async def get_payments_breakdown(hours: int) -> Dict[str, Any]:
                           COUNT(*)::BIGINT AS c,
                           COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
                    FROM pending_purchases
-                   WHERE status = 'paid' AND created_at >= $1
+                   WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance' AND created_at >= $1
                    GROUP BY k
                    ORDER BY rev DESC
                    LIMIT 15""",
@@ -420,7 +449,7 @@ async def get_payments_breakdown(hours: int) -> Dict[str, Any]:
                 """SELECT tariff, COUNT(*)::BIGINT AS c,
                           COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
                    FROM pending_purchases
-                   WHERE status = 'paid' AND created_at >= $1
+                   WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance' AND created_at >= $1
                      AND tariff LIKE 'apple_id_%'
                    GROUP BY tariff
                    ORDER BY rev DESC""",
@@ -828,7 +857,7 @@ async def get_purchase_breakdown() -> Dict[str, Any]:
                 price_kopecks,
                 created_at
             FROM pending_purchases
-            WHERE status = 'paid'
+            WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
         )
         SELECT
             category,
@@ -901,7 +930,7 @@ async def get_extended_bot_stats() -> Dict[str, Any]:
         # Выручка — из pending_purchases: payments не содержит товары
         # мини-магазина и двоит деньги при покупке с баланса.
         total_revenue = await conn.fetchval(
-            "SELECT COALESCE(SUM(price_kopecks), 0) FROM pending_purchases WHERE status = 'paid'"
+            "SELECT COALESCE(SUM(price_kopecks), 0) FROM pending_purchases WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'"
         ) or 0
 
         # Выручка за 30 дней (оценка MRR).
@@ -911,7 +940,7 @@ async def get_extended_bot_stats() -> Dict[str, Any]:
         mrr_since = _to_db_utc(now - timedelta(days=30))
         mrr = await conn.fetchval(
             "SELECT COALESCE(SUM(price_kopecks), 0) FROM pending_purchases "
-            "WHERE status = 'paid' AND created_at >= $1",
+            "WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance' AND created_at >= $1",
             mrr_since
         ) or 0
 
@@ -976,7 +1005,7 @@ async def get_total_revenue() -> float:
         total_kopecks = await conn.fetchval(
             """SELECT COALESCE(SUM(price_kopecks), 0)
                FROM pending_purchases
-               WHERE status = 'paid'"""
+               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'"""
         ) or 0
         
         return total_kopecks / 100.0  # Конвертируем из копеек в рубли
@@ -994,7 +1023,7 @@ async def get_paying_users_count() -> int:
         count = await conn.fetchval(
             """SELECT COUNT(DISTINCT telegram_id)
                FROM pending_purchases
-               WHERE status = 'paid'"""
+               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'"""
         ) or 0
         
         return count
@@ -1018,7 +1047,7 @@ async def get_user_ltv(telegram_id: int) -> float:
         total_kopecks = await conn.fetchval(
             """SELECT COALESCE(SUM(price_kopecks), 0)
                FROM pending_purchases
-               WHERE telegram_id = $1 AND status = 'paid'""",
+               WHERE telegram_id = $1 AND status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'""",
             telegram_id
         ) or 0
         
@@ -1038,7 +1067,7 @@ async def get_average_ltv() -> float:
         ltv_data = await conn.fetch(
             """SELECT telegram_id, COALESCE(SUM(price_kopecks), 0) as total_payments
                FROM pending_purchases
-               WHERE status = 'paid'
+               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
                GROUP BY telegram_id"""
         )
         
@@ -1078,7 +1107,7 @@ async def get_arpu() -> float:
         total_revenue_kopecks = await conn.fetchval(
             """SELECT COALESCE(SUM(price_kopecks), 0)
                FROM pending_purchases
-               WHERE status = 'paid'"""
+               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'"""
         ) or 0
         
         total_revenue = total_revenue_kopecks / 100.0
@@ -1087,7 +1116,7 @@ async def get_arpu() -> float:
         paying_users_count = await conn.fetchval(
             """SELECT COUNT(DISTINCT telegram_id)
                FROM pending_purchases
-               WHERE status = 'paid'"""
+               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'"""
         ) or 0
         
         # ARPU = общий доход / платящие пользователи

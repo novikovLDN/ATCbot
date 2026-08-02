@@ -239,7 +239,7 @@ async def get_user_extended_stats(telegram_id: int) -> Dict[str, Any]:
                    MAX(paid_at) AS last_paid_at
                FROM pending_purchases
                WHERE telegram_id = $1
-                 AND status = 'paid'""",
+                 AND status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'""",
             telegram_id,
         )
         total_payments = int(pay_row["n"] or 0) if pay_row else 0
@@ -843,9 +843,15 @@ async def finalize_balance_purchase(
                         "grant_access returned invalid result for NEW subscription: vpn_key is missing"
                     )
                 
-                # STEP 3: Создаем запись о платеже
+                # STEP 3: Создаем запись о платеже.
+                # payment_provider='balance' — это внутреннее движение уже
+                # учтённых денег, а не новая выручка: рубли попали в отчёты
+                # ещё при пополнении баланса. Без пометки строка неотличима
+                # от прямой оплаты картой (tariff тот же), и одни и те же
+                # деньги считались дважды. См. миграцию 072.
                 payment_id = await conn.fetchval(
-                    "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
+                    """INSERT INTO payments (telegram_id, tariff, amount, status, payment_provider)
+                       VALUES ($1, $2, $3, 'approved', 'balance') RETURNING id""",
                     telegram_id, f"{tariff_type}_{period_days}", amount_kopecks
                 )
                 
@@ -1728,7 +1734,7 @@ async def get_daily_timeseries(days: int) -> Dict[str, Any]:
                        COALESCE(SUM(price_kopecks), 0)::bigint AS revenue_kopecks,
                        COUNT(*)::int AS payments_count
                 FROM pending_purchases
-                WHERE status = 'paid'
+                WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
                   AND created_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
                 GROUP BY 1
             ),
@@ -1801,7 +1807,7 @@ async def get_hourly_timeseries(days: int) -> Dict[str, Any]:
                        COALESCE(SUM(price_kopecks), 0)::bigint AS revenue_kopecks,
                        COUNT(*)::int AS payments_count
                 FROM pending_purchases
-                WHERE status = 'paid'
+                WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
                   AND created_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
                 GROUP BY 1
             ),
@@ -1867,7 +1873,7 @@ async def get_ltv() -> float:
                FROM (
                    SELECT telegram_id, SUM(price_kopecks) as user_total
                    FROM pending_purchases
-                   WHERE status = 'paid'
+                   WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
                    GROUP BY telegram_id
                ) as user_ltvs"""
         ) or 0
@@ -1988,7 +1994,7 @@ async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
         revenue_kopecks = await conn.fetchval(
             """SELECT COALESCE(SUM(price_kopecks), 0)
                FROM pending_purchases
-               WHERE status = 'paid'
+               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
                AND created_at >= $1 AND created_at < $2""",
             start_naive, end_naive
         ) or 0
@@ -1999,7 +2005,7 @@ async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
         payments_count = await conn.fetchval(
             """SELECT COUNT(*)
                FROM pending_purchases
-               WHERE status = 'paid'
+               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
                AND created_at >= $1 AND created_at < $2""",
             start_naive, end_naive
         ) or 0
@@ -2054,7 +2060,7 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
         revenue_kopecks = await conn.fetchval(
             """SELECT COALESCE(SUM(price_kopecks), 0)
                FROM pending_purchases
-               WHERE status = 'paid'
+               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
                AND created_at >= $1 AND created_at < $2""",
             start_naive, end_naive
         ) or 0
@@ -2065,7 +2071,7 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
         payments_count = await conn.fetchval(
             """SELECT COUNT(*)
                FROM pending_purchases
-               WHERE status = 'paid'
+               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
                AND created_at >= $1 AND created_at < $2""",
             start_naive, end_naive
         ) or 0

@@ -1989,7 +1989,17 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "dashboard",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Зафиксировано единое определение: выручка = внешние поступления. Строки с payment_provider='balance' (покупка с баланса, автопродление) — внутреннее движение уже учтённых денег и в выручку не входят; пополнение баланса входит, это и есть приход извне. Правило записано константой REVENUE_EXTERNAL_ONLY_SQL с объяснением в database/analytics.py и применено во ВСЕХ денежных запросах analytics.py (17) и admin.py (8): get_revenue_for_period, get_payments_by_provider, get_payments_breakdown, get_total_revenue, get_arpu, get_ltv, get_average_ltv, get_daily_timeseries, карточка пользователя. Сознательно НЕ применено в get_user_paid_subscription_history и её батч-версии: там вопрос «что человеку выдано», а не «сколько заработали». В payments добавлена колонка payment_provider (миграция 072, аддитивная, с бэкфиллом по purchase_id): раньше покупку с баланса нельзя было отличить от оплаты картой — tariff у них одинаковый. Тест tests/services/test_revenue_definition.py проверяет каждый запрос по status='paid', поэтому новый отчёт без фильтра не пройдёт.",
+      "fixed_in": [
+        "database/analytics.py",
+        "database/admin.py",
+        "database/subscriptions.py",
+        "auto_renewal.py",
+        "migrations/072_payments_payment_provider.sql",
+        "tests/services/test_revenue_definition.py"
+      ]
     },
     {
       "title": "Тот же двойной учёт в pending_purchases завышает «Доход сегодня» и порог milestone-пуша",
@@ -2002,7 +2012,17 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "dashboard",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Зафиксировано единое определение: выручка = внешние поступления. Строки с payment_provider='balance' (покупка с баланса, автопродление) — внутреннее движение уже учтённых денег и в выручку не входят; пополнение баланса входит, это и есть приход извне. Правило записано константой REVENUE_EXTERNAL_ONLY_SQL с объяснением в database/analytics.py и применено во ВСЕХ денежных запросах analytics.py (17) и admin.py (8): get_revenue_for_period, get_payments_by_provider, get_payments_breakdown, get_total_revenue, get_arpu, get_ltv, get_average_ltv, get_daily_timeseries, карточка пользователя. Сознательно НЕ применено в get_user_paid_subscription_history и её батч-версии: там вопрос «что человеку выдано», а не «сколько заработали». В payments добавлена колонка payment_provider (миграция 072, аддитивная, с бэкфиллом по purchase_id): раньше покупку с баланса нельзя было отличить от оплаты картой — tariff у них одинаковый. Тест tests/services/test_revenue_definition.py проверяет каждый запрос по status='paid', поэтому новый отчёт без фильтра не пройдёт.",
+      "fixed_in": [
+        "database/analytics.py",
+        "database/admin.py",
+        "database/subscriptions.py",
+        "auto_renewal.py",
+        "migrations/072_payments_payment_provider.sql",
+        "tests/services/test_revenue_definition.py"
+      ]
     },
     {
       "title": "Удаление пользователя из дашборда физически стирает историю платежей — выручка меняется задним числом",
