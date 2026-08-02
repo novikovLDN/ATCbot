@@ -15,6 +15,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.filters import StateFilter
 from aiogram.exceptions import TelegramBadRequest
 
+import config
 import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
@@ -248,15 +249,38 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
 
         if dice_value == 6:
             try:
+                # Месячный потолок: без него игры раздавали порядка 12,5 дней
+                # подписки в месяц и заменяли собой покупку.
+                granted_days, already, _remaining = await database.check_game_days_cap(
+                    telegram_id, 7, config.GAME_MONTHLY_DAYS_CAP
+                )
+                if granted_days <= 0:
+                    logger.info(
+                        "GAME_BOWL [user=%s] cap_reached granted_this_month=%s cap=%s",
+                        telegram_id, already, config.GAME_MONTHLY_DAYS_CAP,
+                    )
+                    await safe_edit_text(
+                        callback.message,
+                        i18n_get_text(
+                            language, "games.monthly_cap_reached",
+                            "🎳 <b>Страйк!</b>\n\nНо месячный лимит бонусных дней уже выбран "
+                            "({cap} дн.). Следующие бонусы — в новом месяце.",
+                        ).format(cap=config.GAME_MONTHLY_DAYS_CAP),
+                        reply_markup=get_games_back_keyboard(language),
+                        parse_mode="HTML",
+                    )
+                    return
+
                 # Preserve current tariff (don't downgrade Plus to Basic)
                 sub = await database.get_subscription(telegram_id)
                 current_tariff = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
                 result = await database.grant_access(
                     telegram_id=telegram_id,
-                    duration=timedelta(days=7),
+                    duration=timedelta(days=granted_days),
                     source="game_strike",
                     tariff=current_tariff,
                 )
+                await database.log_game_reward_days(telegram_id, granted_days, "bowling")
                 end_dt = result.get("subscription_end")
                 if end_dt and hasattr(end_dt, "strftime"):
                     end_str = end_dt.strftime("%d.%m.%Y")
@@ -400,21 +424,43 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
 
         # Grant days equal to dice value (1-6)
         try:
+            # Месячный потолок игровых наград — см. комментарий в боулинге.
+            granted_days, already, _remaining = await database.check_game_days_cap(
+                telegram_id, dice_value, config.GAME_MONTHLY_DAYS_CAP
+            )
+            if granted_days <= 0:
+                logger.info(
+                    "GAME_DICE [user=%s] cap_reached granted_this_month=%s cap=%s",
+                    telegram_id, already, config.GAME_MONTHLY_DAYS_CAP,
+                )
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=i18n_get_text(
+                        language, "games.monthly_cap_reached",
+                        "🎲 Выпало: {value}!\n\nНо месячный лимит бонусных дней уже выбран "
+                        "({cap} дн.). Следующие бонусы — в новом месяце.",
+                    ).format(value=dice_value, cap=config.GAME_MONTHLY_DAYS_CAP),
+                    reply_markup=get_games_back_keyboard(language),
+                    parse_mode="HTML",
+                )
+                return
+
             # Preserve current tariff (don't downgrade Plus to Basic)
             sub = await database.get_subscription(telegram_id)
             current_tariff = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
             result = await database.grant_access(
                 telegram_id=telegram_id,
-                duration=timedelta(days=dice_value),
+                duration=timedelta(days=granted_days),
                 source="game_dice",
                 tariff=current_tariff,
             )
+            await database.log_game_reward_days(telegram_id, granted_days, "dice")
             end_dt = result.get("subscription_end")
             if end_dt and hasattr(end_dt, "strftime"):
                 end_str = end_dt.strftime("%d.%m.%Y")
             else:
                 end_str = "—"
-            text = i18n_get_text(language, "games.dice_success", "🎲 Выпало: {value}!\n\n🎉 Вам начислено {value} дней подписки!\n\nВаша подписка действует до: {date}").format(value=dice_value, date=end_str)
+            text = i18n_get_text(language, "games.dice_success", "🎲 Выпало: {value}!\n\n🎉 Вам начислено {value} дней подписки!\n\nВаша подписка действует до: {date}").format(value=granted_days, date=end_str)
             logger.info(
                 "GAME_DICE [user=%s] dice_value=%s grant_ok expires=%s",
                 telegram_id, dice_value, end_str,

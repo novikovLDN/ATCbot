@@ -295,6 +295,77 @@ async def apply_storm_shield_atomic(
             return await _do(own_conn)
 
 
+GAME_REWARD_ACTION_PREFIX = "game_reward_"
+
+
+async def get_game_days_granted_this_month(telegram_id: int) -> int:
+    """Сколько дней подписки игрок уже получил от игр в текущем месяце.
+
+    Учёт ведётся в audit_log, чтобы не заводить новую таблицу: схема БД
+    сейчас управляется двумя конкурирующими механизмами (SQL-миграции и DDL
+    в database/core.py), и разводить их — задача подпроекта B.
+    """
+    if not _core.DB_READY:
+        return 0
+    pool = await get_pool()
+    if pool is None:
+        return 0
+    try:
+        async with pool.acquire() as conn:
+            total = await conn.fetchval(
+                """
+                SELECT COALESCE(SUM(details::int), 0)
+                  FROM audit_log
+                 WHERE telegram_id = $1
+                   AND action LIKE $2
+                   AND created_at >= date_trunc('month', CURRENT_TIMESTAMP)
+                """,
+                telegram_id, f"{GAME_REWARD_ACTION_PREFIX}%",
+            )
+        return int(total or 0)
+    except Exception as e:
+        # Счётчик не должен ломать игру: при сбое считаем, что лимит не выбран,
+        # но пишем ошибку — иначе потолок молча перестанет работать.
+        logger.error("GAME_CAP_READ_FAILED user=%s error=%s", telegram_id, e)
+        return 0
+
+
+async def log_game_reward_days(telegram_id: int, days: int, game: str) -> None:
+    """Записать выданные игрой дни подписки для учёта месячного потолка."""
+    if days <= 0 or not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO audit_log (action, telegram_id, target_user, details)
+                VALUES ($1, $2, NULL, $3)
+                """,
+                f"{GAME_REWARD_ACTION_PREFIX}{game}", telegram_id, str(int(days)),
+            )
+    except Exception as e:
+        logger.error(
+            "GAME_REWARD_LOG_FAILED user=%s game=%s days=%s error=%s",
+            telegram_id, game, days, e,
+        )
+
+
+async def check_game_days_cap(telegram_id: int, requested_days: int, cap: int) -> tuple:
+    """Проверить месячный потолок игровых наград.
+
+    Возвращает (разрешённые_дни, уже_выдано, остаток_до_потолка).
+    Ноль в первом элементе означает, что лимит исчерпан.
+    """
+    if cap <= 0:
+        return requested_days, 0, requested_days
+    granted = await get_game_days_granted_this_month(telegram_id)
+    remaining = max(0, cap - granted)
+    return min(requested_days, remaining), granted, remaining
+
+
 async def harvest_plot_atomic(
     telegram_id: int,
     plot_id: int,

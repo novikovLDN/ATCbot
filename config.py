@@ -103,6 +103,15 @@ try:
     DASHBOARD_MAGIC_LINK_TTL_HOURS = max(1, int(env("DASHBOARD_MAGIC_LINK_TTL_HOURS") or 24))
 except ValueError:
     DASHBOARD_MAGIC_LINK_TTL_HOURS = 24
+
+# Месячный потолок дней подписки, которые пользователь может получить от
+# мини-игр. Без потолка кубики и боулинг раздавали порядка 12,5 дней в месяц,
+# то есть игра заменяла покупку. 0 отключает ограничение.
+try:
+    GAME_MONTHLY_DAYS_CAP = max(0, int(env("GAME_MONTHLY_DAYS_CAP") or 3))
+except ValueError:
+    GAME_MONTHLY_DAYS_CAP = 3
+
 DASHBOARD_ENABLED = bool(JWT_SECRET and DASHBOARD_BASE_URL)
 if not DASHBOARD_ENABLED:
     _log.info(
