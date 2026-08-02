@@ -677,14 +677,39 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
         return
 
-    # Получаем цену в Stars из TARIFFS_STARS
-    if tariff_type not in config.TARIFFS_STARS or period_days not in config.TARIFFS_STARS[tariff_type]:
-        error_text = i18n_get_text(language, "errors.tariff")
-        await callback.answer(error_text, show_alert=True)
-        logger.error(f"Stars tariff not found: tariff={tariff_type}, period={period_days}")
-        return
+    # Цена в Stars.
+    #
+    # ВАЖНО ПРО КОМБО: в FSM комбо-покупка лежит под ИМЕНЕМ БАЗОВОГО ТАРИФА
+    # ("basic"/"plus"), а признак комбо — в combo_bypass_gb (см.
+    # app/handlers/callbacks/navigation.py, обработчик выбора периода комбо).
+    # Таблица TARIFFS_STARS содержит только обычные тарифы, поэтому без
+    # отдельной ветки комбо продавалось по цене обычной подписки, а пакет ГБ
+    # обхода уходил бесплатно: например «Комбо Плюс» на месяц списывал 325⭐
+    # вместо ~459⭐ и сверху отдавал 75 ГБ. Заодно в отчётность попадала
+    # заниженная сумма, потому что price_kopecks пишется отсюда же.
+    combo_bypass_gb = fsm_data.get("combo_bypass_gb", 0) or 0
+    is_combo_purchase = combo_bypass_gb > 0
 
-    stars_price = config.TARIFFS_STARS[tariff_type][period_days]["price"]
+    if is_combo_purchase:
+        combo_key = f"combo_{tariff_type}"
+        combo_info = (config.COMBO_TARIFFS or {}).get(combo_key, {}).get(period_days)
+        if not combo_info or not combo_info.get("price"):
+            error_text = i18n_get_text(language, "errors.tariff")
+            await callback.answer(error_text, show_alert=True)
+            logger.error(
+                "Stars combo tariff not found: combo=%s, period=%s", combo_key, period_days
+            )
+            return
+        # Та же конверсия рубли→Stars, что и в подарках (app/handlers/callbacks/gift.py):
+        # наценка 1.7 и курс 1.85 ₽ за звезду, округление вверх.
+        stars_price = math.ceil(int(combo_info["price"]) * 1.7 / 1.85)
+    else:
+        if tariff_type not in config.TARIFFS_STARS or period_days not in config.TARIFFS_STARS[tariff_type]:
+            error_text = i18n_get_text(language, "errors.tariff")
+            await callback.answer(error_text, show_alert=True)
+            logger.error(f"Stars tariff not found: tariff={tariff_type}, period={period_days}")
+            return
+        stars_price = config.TARIFFS_STARS[tariff_type][period_days]["price"]
     # Для бизнес-тарифов применяем множитель страны к Stars
     if country and config.is_biz_tariff(tariff_type):
         multiplier = config.BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
@@ -707,7 +732,9 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
             price_kopecks=stars_price_kopecks,
             promo_code=promo_code,
             country=country,
-            is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
+            # tariff остаётся базовым намеренно: в subscription_type комбо
+            # не хранится, туда идёт уровень доступа, а комбо помечается флагом.
+            is_combo=is_combo_purchase,
         )
 
         await state.update_data(purchase_id=purchase_id, payment_method="stars")
