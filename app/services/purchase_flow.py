@@ -2,7 +2,7 @@
 Purchase-time provisioning of Remnawave entities.
 
 Replaces the legacy `vpn_utils.add_vless_user` call at purchase /
-trial / renewal time when `config.PURCHASE_FLOW_REMNAWAVE` is on.
+trial / renewal time.
 Creates / adopts BOTH entities the customer wants in the new world:
 
   premium  — squad MainServer, expireAt = subscription_end, unlimited bytes
@@ -22,7 +22,7 @@ existing grant_access / finalize_purchase code consumes it unchanged:
 bypass URL — so the rest of the bot continues to ship two links to
 Plus / Basic / Trial buyers without code changes elsewhere.
 
-This module never calls vpnapi master.  When `PURCHASE_FLOW_REMNAWAVE`
+This module never calls vpnapi master.  Remnawave
 is OFF the legacy `vpn_utils.add_vless_user` is used instead by the
 caller (see database/subscriptions.py:grant_access).
 """
@@ -130,7 +130,7 @@ async def provision_subscription(
     existing retry logic (`MAX_VPN_RETRIES` loop in grant_access) kicks in.
     """
     if not config.REMNAWAVE_ENABLED:
-        raise RuntimeError("PURCHASE_FLOW_REMNAWAVE is on but REMNAWAVE_API_URL/TOKEN are not set")
+        raise RuntimeError("REMNAWAVE_API_URL/REMNAWAVE_API_TOKEN не настроены — провижининг невозможен")
 
     import database  # lazy import — keeps unit tests asyncpg-free
 

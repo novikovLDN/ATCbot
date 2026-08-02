@@ -2550,32 +2550,16 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 ret_val = (expires_at, is_renewal, final_vpn_key)
             except Exception as e:
                 if uuid_to_cleanup_on_failure:
-                    # When Task-2 cut-over is on the entity lives in Remnawave,
-                    # not in the samopis xray master.  Don't dial samopis on
-                    # rollback — that would 404 and add noise.  The orphan
-                    # remnawave entities (if any) will be visible via the
-                    # admin 🔬 Verify button and can be cleaned manually.
-                    if getattr(config, "PURCHASE_FLOW_REMNAWAVE", False):
-                        uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                        logger.warning(
-                            "PURCHASE_FLOW_ORPHAN_NOT_CLEANED uuid=%s reason=tx_rolled_back "
-                            "payment_id=%s user=%s — clean via Remnawave panel",
-                            uuid_preview, payment_id, telegram_id,
-                        )
-                    else:
-                        try:
-                            await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                            logger.critical(
-                                f"ORPHAN_PREVENTED uuid={uuid_preview} reason=approve_payment_atomic_tx_failed "
-                                f"payment_id={payment_id} user={telegram_id} error={e}"
-                            )
-                        except Exception as remove_err:
-                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                            logger.critical(
-                                f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} "
-                                f"payment_id={payment_id} user={telegram_id}"
-                            )
+                    # Сущность живёт в Remnawave, а не в снятом с эксплуатации
+                    # samopis xray: дёргать его на откате бессмысленно — вернётся
+                    # 404 и шум в логах. Возможные сироты видны в админской
+                    # проверке и вычищаются вручную через панель.
+                    uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
+                    logger.warning(
+                        "PURCHASE_FLOW_ORPHAN_NOT_CLEANED uuid=%s reason=tx_rolled_back "
+                        "payment_id=%s user=%s — clean via Remnawave panel",
+                        uuid_preview, payment_id, telegram_id,
+                    )
                 logger.exception(f"Error in atomic approve for payment {payment_id}, transaction rolled back")
                 raise
         if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):

@@ -598,7 +598,6 @@ SUBSCRIPTION_PROXY_ENABLED = _envbool("SUBSCRIPTION_PROXY_ENABLED", False)
 # rollback (e.g. samopis temporarily reinstated); legacy
 # vpn_utils.add_vless_user / update / remove calls become no-ops while
 # this flag is on.
-PURCHASE_FLOW_REMNAWAVE = _envbool("PURCHASE_FLOW_REMNAWAVE", True)
 
 # Bypass username pattern.  TZ asks for `tg_{telegram_id}_bypass`, but the
 # existing ~2500 bypass entities in the panel are named just `{telegram_id}`.

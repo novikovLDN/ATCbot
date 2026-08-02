@@ -5,7 +5,7 @@ Helpers that return the right subscription URL for a Telegram user
 Why this exists: the legacy `vpn_utils.build_sub_url` is synchronous
 and always returns the samopis-style URL
 `https://atlassecure.ru/api/sub/{token}?id={id}`.  After the Task 2
-cut-over (config.PURCHASE_FLOW_REMNAWAVE=true) we want the bot's
+cut-over we want the bot's
 "Подключиться" buttons / copy-key blocks to surface the Remnawave-
 issued URL instead — but the legacy helper has too many sync call
 sites to flip in one go.
