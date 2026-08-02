@@ -821,7 +821,9 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Проверено заново: setup_platform достижим (кнопки в connect_guide.py:803,834), мёртвого острова уже нет — экраны переехали в app/handlers/callbacks/connect_guide.py при разбивке navigation.py. Legacy-редирект setup_key оставлен сознательно: кнопки в уже отправленных сообщениях живут вечно, и их нажатие должно работать, а не отвечать тишиной. QR-flow используется bypass_setup.py."
     },
     {
       "title": "Обработчик оплаты комбо с баланса не имеет ни одной кнопки",
@@ -849,7 +851,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Экран «Статус сервиса» — на него не вело ни одной кнопки; проверено скриптом по всем callback_data в репозитории. Удалён вместе с остальными мёртвыми экранами."
     },
     {
       "title": "Экран «VIP-доступ» недостижим",
@@ -863,7 +867,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Экран «VIP-доступ» (menu_vip_access) удалён — ни одной кнопки во всём боте. Тексты в словарях оставлены: вернуть экран дешевле, чем переписывать текст на семь языков."
     },
     {
       "title": "Экран «История подписок» недостижим",
@@ -877,7 +883,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Экран «История подписок» (subscription_history) удалён — кнопок нет ни на одном экране."
     },
     {
       "title": "callback_get_sub_key — мёртвый экран, выдающий ссылку подписки в обход текущей политики",
@@ -891,7 +899,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "callback_get_sub_key удалён: выдавал ссылку подписки в обход текущей политики показа ключей, кнопок на него не было."
     },
     {
       "title": "back_to_main — мёртвый дубль menu_main",
@@ -905,7 +915,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "back_to_main удалён — мёртвый дубль menu_main."
     },
     {
       "title": "go_profile — мёртвый дубль menu_profile",
@@ -919,7 +931,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "go_profile удалён — мёртвый дубль menu_profile."
     },
     {
       "title": "Кнопка «Политика конфиденциальности» на экране самой политики ведёт на себя же и молча не срабатывает",
@@ -1041,7 +1055,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "get_broadcast_type_keyboard и её четыре кнопки broadcast_type:* удалены — билдер никем не вызывался, экран не показывался."
     },
     {
       "title": "Пять неиспользуемых билдеров клавиатур в keyboards.py, часть из них — заглушки-обманки",
@@ -1055,7 +1071,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Удалены шесть неиспользуемых билдеров: get_connect_button, get_profile_keyboard_with_copy, get_profile_keyboard_old, get_vpn_key_keyboard, get_tariff_keyboard, get_broadcast_type_keyboard (66 строк). Реэкспорты в app/handlers/common/__init__.py почищены."
     },
     {
       "title": "handlers.py дублирует весь легаси-набор экранов главного меню и профиля",
@@ -1069,7 +1087,9 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Закрыт вместе с пунктом 195: handlers.py удалён целиком."
     },
     {
       "title": "Экран установки на шаге 2 превращается в тупик для юзера без подписки",

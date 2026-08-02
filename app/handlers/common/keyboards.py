@@ -30,16 +30,6 @@ def _strip_lead_emoji(s: str) -> str:
 MINI_APP_URL = config.env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app")
 
 
-def get_connect_button():
-    """Одна кнопка WebApp «Подключиться» (Mini App)."""
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text="🚀 Подключиться",
-            web_app=WebAppInfo(url=MINI_APP_URL),
-        )
-    ]])
-
-
 def get_connect_keyboard(language: str = "ru"):
     """Клавиатура после активации: Подключиться + Помощь."""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -477,40 +467,6 @@ def get_profile_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vip: bool = False, has_subscription: bool = True):
-    """Клавиатура профиля с кнопкой копирования ключа и историей (старая версия, для совместимости)"""
-    return get_profile_keyboard(language, has_subscription)
-
-
-def get_profile_keyboard_old(language: str):
-    """Клавиатура с кнопками профиля и инструкции (после активации) - старая версия, переименована"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "main.profile"),
-                callback_data="menu_profile"
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "main.instruction"),
-                callback_data="connect_instruction"
-            ),
-        ],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "profile.copy_key"),
-            callback_data="copy_key"
-        )]
-    ])
-
-
-def get_vpn_key_keyboard(
-    language: str,
-    subscription_type: str = "basic",
-    vpn_key: Optional[str] = None,
-):
-    """Клавиатура после активации/оплаты: Подключиться (WebApp) + Профиль."""
-    return get_connect_keyboard()
-
-
 def get_payment_success_keyboard(
     language: str,
     subscription_type: str = "basic",
@@ -527,29 +483,6 @@ def get_payment_success_keyboard(
             url="https://t.me/atlas_suppbot",
         )],
     ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str = None, purchase_id: str = None):
-    """Клавиатура выбора тарифа с учетом скидок
-
-    DEPRECATED: Кнопки тарифов создаются в callback_tariff_type с использованием calculate_final_price.
-    """
-    buttons = []
-
-    for tariff_key in config.TARIFFS.keys():
-        base_text = i18n_get_text(language, "buy.tariff_button_" + str(tariff_key), f"tariff_button_{tariff_key}")
-        buttons.append([InlineKeyboardButton(text=base_text, callback_data=f"tariff_type:{tariff_key}")])
-
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "buy.enter_promo"),
-        callback_data="enter_promo"
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
-        callback_data="menu_main"
-    )])
-
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -684,17 +617,6 @@ def get_broadcast_test_type_keyboard(language: str = "ru"):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._normal"), callback_data="broadcast_test_type:normal")],
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._ab_test"), callback_data="broadcast_test_type:ab")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
-    ])
-
-
-def get_broadcast_type_keyboard(language: str = "ru"):
-    """Клавиатура выбора типа уведомления"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_info"), callback_data="broadcast_type:info")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_maintenance"), callback_data="broadcast_type:maintenance")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_security"), callback_data="broadcast_type:security")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_promo"), callback_data="broadcast_type:promo")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
     ])
 

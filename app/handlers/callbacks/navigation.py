@@ -73,34 +73,6 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "back_to_main")
-async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
-    """Возврат в главное меню с экрана выдачи ключа"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    await state.clear()
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    text = await _get_main_text(telegram_id, language)
-    keyboard = await get_main_menu_keyboard(language, telegram_id)
-
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await callback.bot.send_photo(
-        chat_id=callback.message.chat.id,
-        photo=_MAIN_PHOTO_ID,
-        caption=text,
-        parse_mode="HTML",
-        reply_markup=keyboard,
-    )
-
-
 async def _get_main_text(telegram_id: int, language: str) -> str:
     """Определяет текст главного экрана: обычный, бизнес, bypass-only или без подписки."""
     try:
@@ -408,45 +380,6 @@ async def callback_instruction(callback: CallbackQuery):
     await _open_instruction_screen(callback, callback.bot)
 
 
-
-@router.callback_query(F.data == "go_profile", StateFilter(default_state))
-@router.callback_query(F.data == "go_profile")
-async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
-    """Переход в профиль с экрана выдачи ключа - работает независимо от FSM состояния"""
-    telegram_id = callback.from_user.id
-    
-    # Немедленная обратная связь пользователю
-    await callback.answer()
-    
-    # Очищаем FSM состояние, если пользователь был в каком-то процессе
-    try:
-        current_state = await state.get_state()
-        if current_state is not None:
-            await state.clear()
-            logger.debug(f"Cleared FSM state for user {telegram_id}, was: {current_state}")
-    except Exception as e:
-        logger.debug(f"FSM state clear failed (may be already clear): {e}")
-    
-    try:
-        logger.info(f"Opening profile via go_profile for user {telegram_id}")
-        
-        language = await resolve_user_language(telegram_id)
-        
-        await show_profile(callback, language)
-        
-        logger.info(f"Profile opened successfully via go_profile for user {telegram_id}")
-    except Exception as e:
-        logger.exception(f"Error opening profile via go_profile for user {telegram_id}: {e}")
-        # Пытаемся отправить сообщение об ошибке
-        try:
-            user = await database.get_user(telegram_id)
-            language = await resolve_user_language(callback.from_user.id)
-            error_text = i18n_get_text(language, "errors.profile_load")
-            await callback.message.answer(error_text, parse_mode="HTML")
-        except Exception as e2:
-            logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
-
-
 @router.callback_query(F.data.in_({"copy_key_menu", "copy_key", "copy_key_plus", "copy_vpn_key"}))
 async def callback_connect_instead_of_copy(callback: CallbackQuery):
     """Ключи больше не отправляются в боте; показываем кнопку «Подключиться» (Mini App)."""
@@ -463,53 +396,6 @@ async def callback_connect_instead_of_copy(callback: CallbackQuery):
         parse_mode="HTML",
         reply_markup=get_connect_keyboard(language),
     )
-
-
-@router.callback_query(F.data == "get_sub_key")
-async def callback_get_sub_key(callback: CallbackQuery):
-    """Отправить ключ подписки с инструкцией по подключению."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
-        return
-
-    telegram_id = callback.from_user.id
-    subscription = await database.get_subscription(telegram_id)
-    if not subscription:
-        language = await resolve_user_language(telegram_id)
-        await callback.message.answer(
-            i18n_get_text(language, "get_key.no_subscription", "❌ У вас нет активной подписки."),
-            parse_mode="HTML",
-        )
-        return
-
-    language = await resolve_user_language(telegram_id)
-    from app.services.user_subscription_links import get_user_primary_subscription_url
-    sub_url = await get_user_primary_subscription_url(telegram_id)
-
-    text = i18n_get_text(language, "get_key.instruction_text",
-        "📖 <b>Инструкция по подключению</b>\n\n"
-        "<b>Happ</b> — откройте приложение → внизу нажмите на буфер обмена 🗒️ → ключ добавится автоматически\n\n"
-        "⸻\n\n"
-        "👇 Скопируйте ключ одним нажатием:")
-
-    full_text = f"{text}\n\n<code>{sub_url}</code>"
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.device_button"),
-            callback_data="setup_device",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
-        )],
-    ])
-
-    await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
 
 
 # ===================== COMBO SUBSCRIPTION =====================
