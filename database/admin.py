@@ -1,9 +1,31 @@
-"""
-Database operations: Admin, Analytics, Broadcasts, Exports, Gifts, VIP, Discounts.
+"""Админские операции над подписками и балансом.
 
-All shared state (get_pool, helpers) imported from database.core.
-DB_READY accessed via _core.DB_READY to get live value (not stale import-time copy).
-Cross-module calls use lazy imports to avoid circular dependencies.
+ЧТО ОСТАЛОСЬ ЗДЕСЬ ПОСЛЕ РАЗБИВКИ
+    Только действия админа, меняющие состояние:
+        admin_grant_access_atomic          выдать доступ на N дней
+        admin_grant_access_minutes_atomic  выдать доступ на минуты (тесты)
+        admin_revoke_access_atomic         отозвать доступ
+        finalize_balance_purchase          покупка подписки с баланса
+        finalize_balance_topup             пополнение баланса
+    Плюс экспорты и сверка bypass-сущностей.
+
+КУДА УЕХАЛО ОСТАЛЬНОЕ
+    database/broadcasts.py  рассылки, сегменты, A/B-тесты
+    database/analytics.py   выручка, LTV, ARPU, разбивки
+    database/discounts.py   персональные скидки и VIP
+    Все имена по-прежнему доступны через database.admin.
+
+ДВЕ ФАЗЫ ПРИ ВЫДАЧЕ ДОСТУПА
+    Сначала сущность создаётся в панели (внешний вызов), и только потом
+    открывается транзакция БД. Обратный порядок оставлял бы сироту в панели
+    при откате транзакции. Там, где выдаётся комбо, начисление ГБ обхода
+    тоже вынесено за транзакцию — по той же причине.
+
+КОМБО-ТАРИФЫ
+    В колонке subscription_type комбо не хранится: туда идёт базовый уровень
+    доступа, а сам факт комбо помечается флагом is_combo и начислением
+    трафика. Перечень тарифов, которые админ вправе выдать вручную, —
+    config.GRANTABLE_TARIFF_TYPES.
 """
 import asyncpg
 import logging

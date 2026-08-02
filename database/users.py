@@ -1,8 +1,23 @@
-"""
-Database operations: Users, Balance, Farm, Withdrawals, Referrals.
+"""Пользователи, баланс и ферма.
 
-All shared state (get_pool, helpers) imported from database.core.
-DB_READY accessed via _core.DB_READY to get live value (not stale import-time copy).
+ЧТО ЗДЕСЬ ЕСТЬ
+    Карточка пользователя, операции с балансом, данные фермы и заявки
+    на вывод средств.
+
+ДЕНЬГИ ХРАНЯТСЯ В КОПЕЙКАХ
+    В колонке balance лежат копейки, а функции принимают и отдают рубли.
+    Преобразование делается на границе: increase_balance и decrease_balance
+    умножают на 100 при записи. Любой прямой SQL к balance обязан помнить
+    об этом, иначе ошибка в сто раз пройдёт незамеченной.
+
+ИЗМЕНЕНИЕ БАЛАНСА ТОЛЬКО ЧЕРЕЗ ХЕЛПЕРЫ
+    increase_balance и decrease_balance берут advisory-лок на пользователя и
+    пишут строку в balance_transactions. Прямой UPDATE баланса в обход них
+    ломает и защиту от гонок, и историю операций.
+
+РЕФЕРАЛЬНАЯ ПРОГРАММА
+    Вынесена в database/referrals.py, но реэкспортируется отсюда: код годами
+    обращался к ней через database.users.
 """
 import asyncpg
 import base64

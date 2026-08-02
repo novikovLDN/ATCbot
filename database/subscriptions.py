@@ -1,9 +1,36 @@
-"""
-Database operations: Subscriptions, Payments, Trials, Access, Purchase flow, Promo codes, Reminders.
+"""Ядро подписок: выдача доступа, продление, проведение платежей.
 
-All shared state (get_pool, helpers) imported from database.core.
-DB_READY accessed via _core.DB_READY to get live value (not stale import-time copy).
-Cross-module calls (increase_balance, process_referral_reward) use lazy imports.
+ЧТО ОСТАЛОСЬ ЗДЕСЬ ПОСЛЕ РАЗБИВКИ
+    Только транзакционная часть — то, где меняется состояние подписки и
+    проводятся деньги:
+        grant_access            выдача и продление доступа
+        approve_payment_atomic  ручное подтверждение платежа админом
+        finalize_purchase       проведение оплаты и выдача товара
+        reissue_vpn_key_atomic  перевыпуск ключа
+        get_subscription        чтение текущего состояния
+
+КУДА УЕХАЛО ОСТАЛЬНОЕ
+    database/promo.py              промокоды
+    database/pending_purchases.py  учёт намерения оплатить
+    database/trials_queries.py     триал и спецпредложения
+    database/reminders_queries.py  напоминания об истечении
+    database/referral_analytics.py отчёты по рефералам
+    Все имена по-прежнему доступны через database.subscriptions —
+    существующий код менять не нужно.
+
+ГЛАВНОЕ ПРАВИЛО ЭТОГО ФАЙЛА
+    Внешние вызовы (создание сущности в панели, отправка сообщений) НИКОГДА
+    не выполняются внутри транзакции БД. Иначе откат оставит созданную
+    сущность сиротой, и найти её можно будет только ручной сверкой. Схема
+    везде одна: сначала внешний вызов, потом транзакция; при сбое транзакции
+    сирота фиксируется в логе для ручной очистки.
+
+ОБЩЕЕ СОСТОЯНИЕ
+    get_pool и хелперы приходят из database.core. DB_READY читается как
+    _core.DB_READY, а не импортируется по имени: иначе получится копия
+    значения на момент импорта, которая никогда не обновится.
+    Перекрёстные вызовы (increase_balance, process_referral_reward)
+    импортируются лениво, чтобы не замкнуть импорты в кольцо.
 """
 import asyncpg
 import asyncio
