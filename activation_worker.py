@@ -357,6 +357,31 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             subscription_id=subscription_id,
                         )
 
+                except ActivationNotAllowedError as e:
+                    # Активация запрещена для этой конкретной подписки: истекла,
+                    # уже активна, отозвана. Это не сбой воркера, а состояние
+                    # одной записи.
+                    #
+                    # Раньше исключение не перехватывалось и улетало во внешний
+                    # except всей функции: обработка обрывалась, и все подписки
+                    # из очереди после неё оставались неактивированными до
+                    # следующего тика. Одна испорченная запись блокировала выдачу
+                    # всем остальным.
+                    logger.warning(
+                        "ACTIVATION_NOT_ALLOWED [subscription_id=%s, user=%s, reason=%s] "
+                        "— пропускаем эту подписку, очередь продолжается",
+                        subscription_id, telegram_id, e,
+                    )
+
+                except ActivationServiceError as e:
+                    # Любая другая доменная ошибка сервиса активации: логируем
+                    # и идём дальше по очереди по той же причине.
+                    logger.error(
+                        "ACTIVATION_SERVICE_ERROR [subscription_id=%s, user=%s, error=%s] "
+                        "— пропускаем эту подписку, очередь продолжается",
+                        subscription_id, telegram_id, e,
+                    )
+
             # Connection released before sleep — no conn held during asyncio.sleep
             await asyncio.sleep(0.5)
 
