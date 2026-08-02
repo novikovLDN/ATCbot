@@ -4131,6 +4131,29 @@ async def create_pending_balance_topup_purchase(
         return purchase_id
 
 
+# Единый перечень типов покупок и тарифов для CHECK-констрейнтов
+# pending_purchases. Держится здесь, а не в тексте SQL, потому что список
+# восстанавливается в рантайме при расхождении схемы: пропущенный тип
+# означает, что соответствующая покупка перестанет создаваться навсегда.
+PURCHASE_TYPES = (
+    "subscription", "balance_topup", "gift", "telegram_premium",
+    "telegram_stars", "traffic_pack", "apple_id", "spotify",
+    "steam", "proxy", "farm_effect",
+)
+
+TARIFF_VALUES = (
+    "basic", "plus", "biz_starter", "biz_team", "biz_business",
+    "biz_pro", "biz_enterprise", "biz_ultimate",
+    "telegram_premium", "telegram_stars",
+)
+
+TARIFF_PREFIXES = ("traffic_", "apple_id_", "bypass_", "spotify_", "steam_")
+
+_PURCHASE_TYPES_SQL = ", ".join(f"'{t}'" for t in PURCHASE_TYPES)
+_TARIFF_VALUES_SQL = ", ".join(f"'{t}'" for t in TARIFF_VALUES)
+_TARIFF_PREFIXES_SQL = " OR ".join(f"tariff LIKE '{p}%'" for p in TARIFF_PREFIXES)
+
+
 async def create_pending_purchase(
     telegram_id: int,
     tariff: str,  # "basic", "plus", or "biz_*"
@@ -4178,17 +4201,28 @@ async def create_pending_purchase(
             await conn.execute(_insert_sql, *_insert_args)
         except Exception as e:
             if "purchase_type_check" in str(e) or "tariff_check" in str(e):
-                # Auto-fix CHECK constraints for traffic_pack support
-                logger.warning("create_pending_purchase: fixing CHECK constraints")
+                # Аварийная починка CHECK-констрейнтов.
+                #
+                # Опасность этого места: констрейнт пересоздаётся по списку,
+                # записанному прямо здесь. Раньше в списке не было steam, proxy
+                # и farm_effect, поэтому одно срабатывание навсегда делало эти
+                # покупки невозможными — то есть «починка» ломала три рабочих
+                # сценария. Списки вынесены в константы модуля, чтобы новый тип
+                # покупки нельзя было забыть в одном из двух мест.
+                logger.error(
+                    "create_pending_purchase: схема расходится с кодом, "
+                    "восстанавливаю CHECK-констрейнты (purchase_type=%s, tariff=%s)",
+                    purchase_type, tariff,
+                )
                 await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_purchase_type_check")
                 await conn.execute(
                     "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_purchase_type_check "
-                    "CHECK (purchase_type IN ('subscription', 'balance_topup', 'gift', 'telegram_premium', 'telegram_stars', 'traffic_pack', 'apple_id', 'spotify'))"
+                    f"CHECK (purchase_type IN ({_PURCHASE_TYPES_SQL}))"
                 )
                 await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_tariff_check")
                 await conn.execute(
                     "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_tariff_check "
-                    "CHECK (tariff IS NULL OR tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate', 'telegram_premium', 'telegram_stars') OR tariff LIKE 'traffic_%' OR tariff LIKE 'apple_id_%' OR tariff LIKE 'bypass_%' OR tariff LIKE 'spotify_%')"
+                    f"CHECK (tariff IS NULL OR tariff IN ({_TARIFF_VALUES_SQL}) OR {_TARIFF_PREFIXES_SQL})"
                 )
                 await conn.execute(_insert_sql, *_insert_args)
             else:
