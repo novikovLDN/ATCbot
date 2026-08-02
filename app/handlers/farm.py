@@ -628,49 +628,29 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
-
-    if plot_count >= FARM_MAX_PLOTS:
-        await callback.answer("Максимальное количество грядок достигнуто", show_alert=True)
-        return
-
-    price = FARM_PLOT_PRICE_KOPECKS
-    if balance < price:
-        await callback.answer("Недостаточно средств", show_alert=True)
-        return
-
-    # Deduct balance
-    success = await database.decrease_balance(
-        telegram_id=telegram_id,
-        amount=price / 100.0,
-        source="farm_buy_plot",
-        description="Farm plot purchase"
+    # Покупка грядки одной транзакцией: списание, грядка и счётчик вместе.
+    # Раньше это были три отдельных запроса — сбой между ними снимал деньги
+    # без грядки, а параллельные клики создавали две грядки с одним номером.
+    ok, reason = await database.buy_farm_plot_atomic(
+        telegram_id,
+        price_kopecks=FARM_PLOT_PRICE_KOPECKS,
+        max_plots=FARM_MAX_PLOTS,
+        description=f"Покупка грядки за {FARM_PLOT_PRICE_KOPECKS // 100} ₽",
     )
-    
-    if not success:
-        await callback.answer("Ошибка при списании средств", show_alert=True)
+    if not ok:
+        messages = {
+            "max_plots_reached": "Максимальное количество грядок достигнуто",
+            "insufficient_balance": "Недостаточно средств",
+        }
+        await callback.answer(
+            messages.get(reason, "Не удалось купить грядку"), show_alert=True
+        )
+        if reason not in messages:
+            logger.warning(
+                "FARM_BUY_PLOT_FAILED user=%s reason=%s", telegram_id, reason
+            )
         return
-    
-    # Add new empty plot
-    new_plot = {
-        "plot_id": plot_count,
-        "status": "empty",
-        "plant_type": None,
-        "planted_at": None,
-        "ready_at": None,
-        "dead_at": None,
-        "notified_ready": False,
-        "notified_12h": False,
-        "notified_dead": False,
-        "water_used_at": None,
-        "fertilizer_used_at": None
-    }
-    farm_plots.append(new_plot)
-    plot_count += 1
-    
-    await database.save_farm_plots(telegram_id, farm_plots)
-    await database.update_farm_plot_count(telegram_id, plot_count)
-    
+
     # Refresh balance
     farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)

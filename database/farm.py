@@ -464,6 +464,96 @@ async def harvest_plot_atomic(
             return True, "ok"
 
 
+async def buy_farm_plot_atomic(
+    telegram_id: int,
+    price_kopecks: int,
+    max_plots: int,
+    *,
+    source: str = "farm_buy_plot",
+    description: str = "Покупка грядки",
+) -> Tuple[bool, str]:
+    """Купить грядку одной транзакцией: списание, грядка и счётчик вместе.
+
+    Раньше это были три отдельных запроса: decrease_balance, save_farm_plots
+    и update_farm_plot_count. Сбой между первым и вторым снимал деньги, не
+    выдав грядку; сбой между вторым и третьим давал грядку, которую не видел
+    счётчик. Параллельные клики к тому же читали одинаковый plot_count и
+    создавали две грядки с одним идентификатором.
+
+    Здесь всё под advisory-локом: свежее состояние читается внутри
+    транзакции, проверки лимита и баланса делаются по нему же.
+
+    Returns (успех, причина). Причины: "ok", "max_plots_reached",
+    "insufficient_balance", "user_not_found", "db_not_ready".
+    """
+    if not _core.DB_READY:
+        return False, "db_not_ready"
+    pool = await get_pool()
+    if pool is None:
+        return False, "db_not_ready"
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+
+            row = await conn.fetchrow(
+                "SELECT farm_plots, farm_plot_count, balance FROM users "
+                "WHERE telegram_id = $1 FOR UPDATE",
+                telegram_id,
+            )
+            if not row:
+                return False, "user_not_found"
+
+            plots = row["farm_plots"]
+            if isinstance(plots, str):
+                plots = json.loads(plots)
+            if not isinstance(plots, list):
+                plots = []
+
+            # Счётчик и фактическая длина массива могли разойтись из-за старой
+            # неатомарной покупки — берём большее, чтобы не выдать грядку
+            # с уже занятым идентификатором.
+            current_count = max(int(row["farm_plot_count"] or 0), len(plots))
+            if current_count >= max_plots:
+                return False, "max_plots_reached"
+
+            current_balance = int(row["balance"] or 0)
+            if current_balance < price_kopecks:
+                return False, "insufficient_balance"
+
+            plots.append({
+                "plot_id": current_count,
+                "status": "empty",
+                "plant_type": None,
+                "planted_at": None,
+                "ready_at": None,
+                "dead_at": None,
+                "notified_ready": False,
+                "notified_12h": False,
+                "notified_dead": False,
+                "water_used_at": None,
+                "fertilizer_used_at": None,
+                "storm_shielded": False,
+            })
+
+            await conn.execute(
+                "UPDATE users SET balance = balance - $1, farm_plots = $2::jsonb, "
+                "farm_plot_count = $3 WHERE telegram_id = $4",
+                price_kopecks, json.dumps(plots), current_count + 1, telegram_id,
+            )
+            await conn.execute(
+                """INSERT INTO balance_transactions
+                   (user_id, amount, type, source, description)
+                   VALUES ($1, $2, 'subscription_payment', $3, $4)""",
+                telegram_id, -price_kopecks, source, description,
+            )
+            logger.info(
+                "FARM_PLOT_BOUGHT user=%s plot_id=%s price_kopecks=%s",
+                telegram_id, current_count, price_kopecks,
+            )
+            return True, "ok"
+
+
 async def mark_plot_notified(
     telegram_id: int,
     plot_id: int,

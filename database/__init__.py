@@ -347,6 +347,7 @@ from database.farm import (  # noqa: F401
     apply_storm_shield_atomic,
     harvest_plot_atomic,
     mark_plot_notified,
+    buy_farm_plot_atomic,
     get_game_days_granted_this_month,
     log_game_reward_days,
     check_game_days_cap,
