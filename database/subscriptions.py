@@ -826,15 +826,39 @@ async def reissue_subscription_key(subscription_id: int) -> "Tuple[str, str]":
         logger.error(f"reissue_subscription_key: {error_msg}")
         raise ValueError(error_msg)
     
+    # Перевыпуск идёт через Remnawave.
+    #
+    # Раньше здесь вызывался vpn_utils.reissue_vpn_access, который внутри
+    # обращается к add_vless_user. После снятия samopis xray эта функция стала
+    # заглушкой и возвращает пустой vless_url, а следом стоит проверка
+    # «пустая ссылка — ошибка». То есть админский перевыпуск ключа падал
+    # гарантированно, при любом состоянии системы.
+    #
+    # reissue_premium_user_entity удаляет старую сущность в панели и создаёт
+    # новую: старая ссылка перестаёт работать, выдаётся свежая — ровно то,
+    # чего ждут от перевыпуска.
     try:
-        new_uuid, vless_url = await vpn_utils.reissue_vpn_access(
-            old_uuid=old_uuid,
-            telegram_id=telegram_id,
-            subscription_end=expires_at
+        from app.services import remnawave_premium
+
+        new_uuid = _generate_subscription_uuid()
+        result = await remnawave_premium.reissue_premium_user_entity(
+            telegram_id,
+            requested_uuid=new_uuid,
+            expire_at=expires_at,
+            description="Premium reissued by admin",
         )
+        if not result.ok or not result.subscription_url:
+            error_msg = (
+                f"Remnawave reissue failed: status={getattr(result, 'status', None)} "
+                f"error={getattr(result, 'error', None)}"
+            )
+            raise RuntimeError(error_msg)
+        # Панель — источник истины по идентификатору сущности.
+        new_uuid = result.panel_uuid or new_uuid
+        vless_url = result.subscription_url
     except Exception as e:
         logger.error(
-            f"reissue_subscription_key: VPN_API_FAILED [subscription_id={subscription_id}, "
+            f"reissue_subscription_key: REMNAWAVE_REISSUE_FAILED [subscription_id={subscription_id}, "
             f"telegram_id={telegram_id}, error={str(e)}]"
         )
         raise

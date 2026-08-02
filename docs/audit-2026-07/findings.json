@@ -426,7 +426,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Перевыпуск переведён на remnawave_premium.reissue_premium_user_entity. Раньше шёл через заглушку add_vless_user с пустой ссылкой и падал всегда."
     },
     {
       "title": "Админский отзыв доступа не отключает premium в Remnawave",
