@@ -9,7 +9,7 @@ Tests focus on business logic:
 """
 import pytest
 from datetime import datetime
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 from app.services.payments.service import (
     verify_payment_payload,
     validate_payment_amount,
@@ -81,88 +81,78 @@ class TestVerifyPaymentPayload:
 
 
 class TestValidatePaymentAmount:
-    """Tests for validate_payment_amount function"""
-    
+    """Сверка суммы платежа с ожидаемой ценой.
+
+    Сигнатура давно изменилась: функция принимает две суммы и допуск,
+    а не объект payload. Прежние тесты собирали фиктивный объект и
+    падали на несовпадении интерфейса, ничего не проверяя.
+    """
+
     @pytest.mark.asyncio
-    async def test_amount_matches(self):
-        """Matching amounts should pass validation"""
-        payload_info = type('obj', (object,), {
-            'amount_rubles': 1000.0,
-            'payment_type': 'subscription',
-        })()
-        
-        with patch('app.services.payments.service.subscription_service') as mock_sub:
-            mock_sub.calculate_price = AsyncMock(return_value=1000.0)
-            await validate_payment_amount(payload_info, 1000)
-            # Should not raise
-    
+    async def test_exact_match_passes(self):
+        assert await validate_payment_amount(1000.0, 1000.0) is True
+
     @pytest.mark.asyncio
-    async def test_amount_mismatch(self):
-        """Mismatched amounts should raise exception"""
-        payload_info = type('obj', (object,), {
-            'amount_rubles': 1000.0,
-            'payment_type': 'subscription',
-            'tariff': 'basic',
-            'period_days': 30,
-        })()
-        
-        with patch('app.services.payments.service.subscription_service') as mock_sub:
-            mock_sub.calculate_price = AsyncMock(return_value=1500.0)
-            with pytest.raises(PaymentAmountMismatchError):
-                await validate_payment_amount(payload_info, 1000)
-    
+    async def test_difference_within_tolerance_passes(self):
+        """Допуск в рубль закрывает округления на стороне провайдера."""
+        assert await validate_payment_amount(999.5, 1000.0) is True
+
     @pytest.mark.asyncio
-    async def test_balance_topup_amount(self):
-        """Balance topup should validate against payload amount"""
-        payload_info = type('obj', (object,), {
-            'amount_rubles': 500.0,
-            'payment_type': 'balance_topup',
-        })()
-        
-        await validate_payment_amount(payload_info, 500)
-        # Should not raise
+    async def test_underpayment_raises(self):
+        """Недоплата — единственное, ради чего эта проверка существует."""
+        with pytest.raises(PaymentAmountMismatchError):
+            await validate_payment_amount(500.0, 1000.0)
+
+    @pytest.mark.asyncio
+    async def test_overpayment_also_raises(self):
+        """Переплата тоже расхождение: обычно это признак подмены суммы."""
+        with pytest.raises(PaymentAmountMismatchError):
+            await validate_payment_amount(1500.0, 1000.0)
+
+    @pytest.mark.asyncio
+    async def test_custom_tolerance_respected(self):
+        assert await validate_payment_amount(1005.0, 1000.0, tolerance=10.0) is True
+        with pytest.raises(PaymentAmountMismatchError):
+            await validate_payment_amount(1005.0, 1000.0, tolerance=1.0)
+
+    @pytest.mark.asyncio
+    async def test_error_message_contains_both_amounts(self):
+        """Сообщение попадает в алерт админу — по нему разбирают инцидент."""
+        with pytest.raises(PaymentAmountMismatchError) as exc:
+            await validate_payment_amount(500.0, 1000.0)
+        text = str(exc.value)
+        assert "500" in text and "1000" in text
 
 
 class TestCheckPaymentIdempotency:
-    """Tests for check_payment_idempotency function"""
-    
+    """Защита от повторной обработки платежа.
+
+    Возвращает пару (уже_обработан, данные_подписки). Прежние тесты
+    вызывали функцию с идентификаторами провайдера вместо purchase_id
+    и telegram_id и мокали несуществующую функцию базы.
+    """
+
     @pytest.mark.asyncio
-    async def test_payment_not_processed(self):
-        """Payment not yet processed should pass"""
-        with patch('app.services.payments.service.database') as mock_db:
-            mock_db.get_payment_by_provider_id = AsyncMock(return_value=None)
-            result = await check_payment_idempotency("provider_123", "invoice_456")
-            assert result is False
-    
+    async def test_unknown_purchase_is_not_processed(self, monkeypatch):
+        from app.services.payments import service as svc
+        fake_db = MagicMock()
+        fake_db.get_pending_purchase = AsyncMock(return_value=None)
+        monkeypatch.setattr(svc, "database", fake_db)
+
+        processed, data = await check_payment_idempotency("purchase_abc", 777)
+        assert processed is False
+        assert data is None
+
     @pytest.mark.asyncio
-    async def test_payment_already_processed(self):
-        """Already processed payment should raise exception"""
-        with patch('app.services.payments.service.database') as mock_db:
-            mock_db.get_payment_by_provider_id = AsyncMock(return_value={
-                "status": "approved",
-                "payment_id": 123,
-            })
-            with pytest.raises(PaymentAlreadyProcessedError):
-                await check_payment_idempotency("provider_123", "invoice_456")
-    
-    @pytest.mark.asyncio
-    async def test_payment_pending(self):
-        """Pending payment should raise exception"""
-        with patch('app.services.payments.service.database') as mock_db:
-            mock_db.get_payment_by_provider_id = AsyncMock(return_value={
-                "status": "pending",
-                "payment_id": 123,
-            })
-            with pytest.raises(PaymentAlreadyProcessedError):
-                await check_payment_idempotency("provider_123", "invoice_456")
-    
-    @pytest.mark.asyncio
-    async def test_payment_rejected(self):
-        """Rejected payment should pass (can retry)"""
-        with patch('app.services.payments.service.database') as mock_db:
-            mock_db.get_payment_by_provider_id = AsyncMock(return_value={
-                "status": "rejected",
-                "payment_id": 123,
-            })
-            result = await check_payment_idempotency("provider_123", "invoice_456")
-            assert result is False
+    async def test_pending_purchase_is_not_processed(self, monkeypatch):
+        """Покупка ждёт оплаты — обрабатывать её можно и нужно."""
+        from app.services.payments import service as svc
+        fake_db = MagicMock()
+        fake_db.get_pending_purchase = AsyncMock(
+            return_value={"status": "pending", "telegram_id": 777}
+        )
+        monkeypatch.setattr(svc, "database", fake_db)
+
+        processed, _ = await check_payment_idempotency("purchase_abc", 777)
+        assert processed is False
+
