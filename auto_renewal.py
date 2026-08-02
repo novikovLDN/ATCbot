@@ -12,6 +12,7 @@ import asyncpg
 import database
 import config
 from app import i18n
+from app.constants import tariffs
 from app.services.notifications import service as notification_service
 from app.services.language_service import resolve_user_language
 from app.utils.logging_helpers import (
@@ -234,7 +235,31 @@ async def process_auto_renewals(bot: Bot):
                         if tariff_type not in config.TARIFFS or period_days not in config.TARIFFS[tariff_type]:
                             tariff_type = "basic"
                             period_days = 30
-                        
+
+                        # Комбо-тариф: подписка вместе с пакетом ГБ обхода.
+                        #
+                        # Признак хранится отдельной колонкой subscriptions.is_combo,
+                        # а subscription_type содержит базовый тариф ('plus'), потому
+                        # что уровень доступа у комбо тот же. Автопродление про это не
+                        # знало: списывало цену обычного тарифа (Комбо Plus на месяц
+                        # стоит 499 ₽ против 449 ₽ у Plus) и не пополняло гигабайты
+                        # обхода — человек платил за комбо, а получал голую подписку.
+                        is_combo_sub = bool(subscription.get("is_combo"))
+                        combo_key = f"combo_{tariff_type}" if is_combo_sub else None
+                        combo_gb = tariffs.combo_bypass_gb(combo_key, period_days) if combo_key else 0
+                        combo_price = tariffs.combo_price_rubles(combo_key, period_days) if combo_key else None
+                        if is_combo_sub and combo_price is None:
+                            # Периода нет в таблице комбо (например, тариф купили
+                            # ещё до его появления). Продлеваем как обычную
+                            # подписку — это честнее, чем брать цену наугад.
+                            logger.warning(
+                                "AUTO_RENEWAL_COMBO_UNKNOWN_PERIOD user=%s combo=%s period_days=%s "
+                                "— продлеваем как обычную подписку",
+                                telegram_id, combo_key, period_days,
+                            )
+                            is_combo_sub = False
+                            combo_gb = 0
+
                         # Цену считает общий калькулятор, а не своя формула.
                         #
                         # Раньше здесь была отдельная лестница скидок: базовая
@@ -253,6 +278,9 @@ async def process_auto_renewals(bot: Bot):
                             telegram_id=telegram_id,
                             tariff=tariff_type,
                             period_days=period_days,
+                            # У комбо своя цена из config.COMBO_TARIFFS; скидки
+                            # калькулятор применит поверх неё, как и при покупке.
+                            base_price_override_rubles=combo_price,
                         )
                         amount_rubles = round(_price["final_price_kopecks"] / 100.0, 2)
 
@@ -263,7 +291,12 @@ async def process_auto_renewals(bot: Bot):
                         if balance_rubles >= amount_rubles:
                             duration = timedelta(days=period_days)
                             months = period_days // 30
-                            tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+                            # Название для строки в истории баланса. У комбо
+                            # оно должно отличаться: человек ищет в выписке
+                            # именно то, за что заплатил.
+                            tariff_name = tariffs.display_name(
+                                tariff_type, is_combo=is_combo_sub,
+                            )
                             success = await database.decrease_balance(
                                 telegram_id=telegram_id,
                                 amount=amount_rubles,
@@ -393,7 +426,8 @@ async def process_auto_renewals(bot: Bot):
                                 # Без этого ключа ветки «Комбо Plus»/«Комбо Basic»
                                 # в тексте уведомления были недостижимы, и
                                 # комбо-подписчик читал про обычный тариф.
-                                "is_combo": bool(subscription.get("is_combo")),
+                                "is_combo": is_combo_sub,
+                                "combo_gb": combo_gb,
                                 "tariff_type": tariff_type,
                                 "period_days": period_days,
                                 "xray_sync": xray_sync_info,
@@ -457,13 +491,42 @@ async def process_auto_renewals(bot: Bot):
                         logger.error(
                             f"AUTO_RENEWAL_XRAY_SYNC_FAILED user={item['telegram_id']} error={e}"
                         )
-                # Fire-and-forget: renew Remnawave bypass user
+                # Продление в панели. У комбо это не просто продление срока:
+                # вместе с подпиской человек оплатил пакет ГБ обхода, и его
+                # нужно начислить на новый период — ровно как при обычной
+                # покупке комбо (см. payments_messages.py). Раньше этого не
+                # происходило вовсе: комбо-подписчик платил за комбо и получал
+                # голую подписку без гигабайтов.
+                _ar_tariff = item.get("tariff_type", "basic")
+                _ar_expires = item.get("expires_at")
+                _ar_combo_gb = int(item.get("combo_gb") or 0)
                 try:
-                    from app.services.remnawave_service import renew_remnawave_user_bg
-                    _ar_tariff = item.get("tariff_type", "basic")
-                    _ar_expires = item.get("expires_at")
-                    if _ar_tariff in ("basic", "plus") and _ar_expires:
-                        renew_remnawave_user_bg(item["telegram_id"], _ar_tariff, _ar_expires, period_days=item.get("period_days", 30))
+                    if _ar_combo_gb > 0 and _ar_expires:
+                        from app.services import remnawave_service
+                        added = await remnawave_service.add_bypass_traffic(
+                            item["telegram_id"],
+                            _ar_combo_gb * 1024 ** 3,
+                            subscription_type=_ar_tariff,
+                            subscription_end=_ar_expires,
+                            period_days=item.get("period_days", 30),
+                        )
+                        if added:
+                            await database.record_traffic_purchase(item["telegram_id"], _ar_combo_gb, 0)
+                            logger.info(
+                                "AUTO_RENEWAL_COMBO_GB_ADDED user=%s gb=%s",
+                                item["telegram_id"], _ar_combo_gb,
+                            )
+                        else:
+                            logger.warning(
+                                "AUTO_RENEWAL_COMBO_GB_FAIL user=%s gb=%s — нужен ручной разбор",
+                                item["telegram_id"], _ar_combo_gb,
+                            )
+                    elif _ar_tariff in ("basic", "plus") and _ar_expires:
+                        from app.services.remnawave_service import renew_remnawave_user_bg
+                        renew_remnawave_user_bg(
+                            item["telegram_id"], _ar_tariff, _ar_expires,
+                            period_days=item.get("period_days", 30),
+                        )
                 except Exception as rmn_err:
                     logger.warning("REMNAWAVE_AUTORENEW_FAIL: tg=%s %s", item["telegram_id"], rmn_err)
 

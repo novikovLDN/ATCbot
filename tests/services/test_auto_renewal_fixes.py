@@ -83,6 +83,42 @@ def test_notification_reads_the_real_amount_key(source):
     )
 
 
+class TestComboRenewal:
+    """Комбо = подписка + пакет ГБ обхода, со своей ценой.
+
+    Признак лежит в отдельной колонке subscriptions.is_combo, а
+    subscription_type содержит базовый тариф ('plus'). Автопродление про это
+    не знало: списывало цену обычного тарифа (Комбо Plus на месяц — 499 ₽
+    против 449 ₽ у Plus) и не пополняло гигабайты обхода. Человек платил за
+    комбо и получал голую подписку.
+    """
+
+    def test_price_comes_from_combo_table(self, source):
+        assert "combo_price_rubles(" in source
+        assert "base_price_override_rubles=combo_price" in source, (
+            "цена комбо не передаётся в калькулятор — спишется цена обычного тарифа"
+        )
+
+    def test_bypass_gb_are_topped_up_after_commit(self, source):
+        phase_b = source[source.index("# PHASE B:"):]
+        assert "add_bypass_traffic(" in phase_b, "ГБ обхода не начисляются при продлении"
+        assert "record_traffic_purchase(" in phase_b
+
+    def test_unknown_combo_period_degrades_to_plain_subscription(self, source):
+        """Периода нет в таблице комбо — продлеваем как обычную подписку,
+        а не берём цену наугад."""
+        assert "AUTO_RENEWAL_COMBO_UNKNOWN_PERIOD" in source
+
+    def test_combo_helpers_return_expected_values(self):
+        """Код опирается на эти значения — проверяем их напрямую."""
+        from app.constants import tariffs
+
+        assert tariffs.combo_price_rubles("combo_plus", 30) == 499
+        assert tariffs.combo_bypass_gb("combo_plus", 30) == 75
+        assert tariffs.combo_price_rubles("combo_plus", 45) is None
+        assert tariffs.display_name("plus", is_combo=True) == "Комбо Плюс"
+
+
 def test_combo_flag_is_actually_put_into_payload(source):
     """Иначе ветки «Комбо …» в тексте недостижимы."""
     payload = source[source.index("notifications_to_send.append("):]

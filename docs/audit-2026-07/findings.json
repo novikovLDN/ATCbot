@@ -3361,7 +3361,13 @@
       "defect": "Тариф для продления берётся из last_payment как 'basic'/'plus' + period_days и проверяется по config.TARIFFS. Комбо-тарифы живут в config.COMBO_TARIFFS с другой ценой и своим объёмом bypass-ГБ, но автопродление про них не знает: списывается цена базового тарифа, а bypass-трафик не пополняется вовсе (renew_remnawave_user_bg вызывается без GB).",
       "failure_scenario": "Подписчик Комбо Plus с автопродлением платит цену обычного Plus и остаётся без обещанных bypass-гигабайтов на новый период. Обнаружится это только в поддержке.",
       "proposed_action": "Определять комбо по subscriptions.is_combo, брать цену из config.COMBO_TARIFFS через calculate_price с base_price_override_rubles и пополнять bypass-ГБ в фазе B, как это делает обычная покупка комбо.",
-      "source": "audit-followup"
+      "source": "audit-followup",
+      "status": "fixed",
+      "resolution": "Автопродление стало комбо-совместимым. Признак берётся из subscriptions.is_combo, цена — из config.COMBO_TARIFFS через tariffs.combo_price_rubles и передаётся в calculate_price как base_price_override_rubles (скидки применяются поверх, как при покупке). В фазе B, после коммита, начисляются ГБ обхода через remnawave_service.add_bypass_traffic + record_traffic_purchase — ровно как при обычной покупке комбо. Если периода нет в таблице комбо (тариф куплен до его появления), продлеваем как обычную подписку с warning в логах, а не берём цену наугад. Название в истории баланса и в уведомлении теперь тоже комбо-шное. Тесты: tests/services/test_auto_renewal_fixes.py::TestComboRenewal.",
+      "fixed_in": [
+        "auto_renewal.py",
+        "tests/services/test_auto_renewal_fixes.py"
+      ]
     }
   ],
   "refuted": [
