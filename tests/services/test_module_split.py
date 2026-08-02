@@ -172,13 +172,57 @@ def test_purchase_type_constants_moved_with_their_queries():
     assert subs.PURCHASE_TYPES is pp.PURCHASE_TYPES
 
 
+BROADCAST_NAMES = [
+    "create_broadcast",
+    "get_broadcast",
+    "get_users_by_segment",
+    "log_broadcast_send",
+    "get_broadcast_stats",
+    "get_broadcast_analytics",
+    "get_recent_broadcasts",
+    "get_ab_test_broadcasts",
+    "get_ab_test_stats",
+    "set_incident_mode",
+    "get_incident_settings",
+]
+
+
+@pytest.mark.parametrize("name", BROADCAST_NAMES)
+def test_broadcast_available_via_package(name):
+    import database
+    assert hasattr(database, name)
+
+
+@pytest.mark.parametrize("name", BROADCAST_NAMES)
+def test_broadcast_available_via_admin(name):
+    """Код годами обращался к рассылкам через database.admin."""
+    import database.admin as adm
+    assert hasattr(adm, name)
+
+
+@pytest.mark.parametrize("name", BROADCAST_NAMES)
+def test_broadcast_defined_in_its_module(name):
+    import database.broadcasts as br
+    assert hasattr(br, name)
+
+
+def test_money_functions_stayed_in_admin():
+    """Денежные операции не должны были уехать вместе с рассылками."""
+    import database.admin as adm
+    import database.broadcasts as br
+    for name in ("finalize_balance_purchase", "finalize_balance_topup",
+                 "admin_grant_access_atomic", "admin_revoke_access_atomic"):
+        assert hasattr(adm, name), f"{name} потерялась из admin"
+        assert not hasattr(br, name), f"{name} ошибочно уехала в broadcasts"
+
+
 def test_split_modules_import_cleanly():
     """Каждый выделенный модуль обязан импортироваться сам по себе:
     потерянный import внутри переноса иначе всплывёт только в проде."""
     import importlib
     for mod in ("database.promo", "database.referral_analytics",
                 "database.reminders_queries", "database.trials_queries",
-                "database.pending_purchases"):
+                "database.pending_purchases", "database.broadcasts"):
         importlib.import_module(mod)
 
 
