@@ -62,14 +62,40 @@ from app.handlers.game import (  # noqa: E402
 )
 
 
+# Сколько шторм может опаздывать, прежде чем считать его зависшим.
+#
+# Пока шторм «объявлен и не исполнен», посадка выключена у всех. Если воркер
+# не отработал — упал, был остановлен на деплое, база была недоступна — шторм
+# остаётся в этом состоянии навсегда, и ферма мертва для всех пользователей
+# без единой ошибки в интерфейсе. Через это окно перестаём считать его
+# действующим: лучше пропустить одно событие, чем заблокировать игру.
+STORM_STALE_AFTER_HOURS = 6
+
+
 async def _get_imminent_storm():
-    """Return the storm row if announced & not executed, else None."""
+    """Действующий шторм: объявлен, не исполнен и не просрочен.
+
+    Просроченный шторм игнорируется — см. STORM_STALE_AFTER_HOURS.
+    """
     storm = await database.get_pending_storm()
     if not storm:
         return None
-    if storm.get("announced_at") and not storm.get("executed_at"):
-        return storm
-    return None
+    if not storm.get("announced_at") or storm.get("executed_at"):
+        return None
+
+    scheduled_at = storm.get("scheduled_at")
+    if scheduled_at is not None:
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        overdue = datetime.now(timezone.utc) - scheduled_at
+        if overdue > timedelta(hours=STORM_STALE_AFTER_HOURS):
+            logger.warning(
+                "STORM_STALE storm_id=%s scheduled_at=%s overdue_hours=%.1f — "
+                "считаем шторм зависшим, посадка разблокирована",
+                storm.get("id"), scheduled_at, overdue.total_seconds() / 3600,
+            )
+            return None
+    return storm
 
 
 async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance=None):
