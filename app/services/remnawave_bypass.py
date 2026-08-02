@@ -126,6 +126,51 @@ def _result_from_existing(user: dict, *, http_status: int) -> BypassCreateResult
     )
 
 
+async def _adopt_existing_entity(
+    user: dict,
+    telegram_id: int,
+    *,
+    traffic_limit_bytes: int,
+    http_status: int,
+) -> BypassCreateResult:
+    """Принять уже существующую сущность и доначислить купленный трафик.
+
+    Раньше существующая сущность возвращалась как есть. Это значило, что
+    пользователь оплатил пакет ГБ, сущность в панели нашлась — и лимит
+    остался прежним: купленный трафик не начислялся вовсе.
+
+    Лимит именно ДОБАВЛЯЕТСЯ к текущему, а не перезаписывается: перезапись
+    съела бы неизрасходованный остаток предыдущего пакета.
+
+    Сбой начисления не отменяет adopt: подписка уже действует, а недостающий
+    трафик виден по записи BYPASS_ADOPT_TOPUP_FAILED и доначисляется вручную.
+    """
+    result = _result_from_existing(user, http_status=http_status)
+
+    if traffic_limit_bytes and int(traffic_limit_bytes) > 0:
+        try:
+            added = await add_bypass_traffic(telegram_id, int(traffic_limit_bytes))
+            if added:
+                logger.info(
+                    "REMNAWAVE_BYPASS_ADOPT_TOPUP_OK: tg=%s added_bytes=%s",
+                    telegram_id, traffic_limit_bytes,
+                )
+            else:
+                logger.error(
+                    "BYPASS_ADOPT_TOPUP_FAILED: tg=%s bytes=%s — сущность принята, "
+                    "трафик нужно доначислить вручную",
+                    telegram_id, traffic_limit_bytes,
+                )
+        except Exception as e:
+            logger.error(
+                "BYPASS_ADOPT_TOPUP_FAILED: tg=%s bytes=%s error=%s — сущность принята, "
+                "трафик нужно доначислить вручную",
+                telegram_id, traffic_limit_bytes, e,
+            )
+
+    return result
+
+
 # ── Create ────────────────────────────────────────────────────────────
 
 async def create_bypass_user_entity(
@@ -173,7 +218,10 @@ async def create_bypass_user_entity(
                 "REMNAWAVE_BYPASS_RECOVERED_PREFLIGHT: tg=%s username=%s uuid=%s",
                 telegram_id, username, (existing.get("uuid") or "")[:8],
             )
-            return _result_from_existing(existing, http_status=200)
+            return await _adopt_existing_entity(
+                existing, telegram_id,
+                traffic_limit_bytes=traffic_limit_bytes, http_status=200,
+            )
         logger.warning(
             "REMNAWAVE_BYPASS_USERNAME_TAKEN_UNRELATED: tg=%s username=%s existing_tg=%s",
             telegram_id, username, existing.get("telegramId"),
@@ -220,7 +268,10 @@ async def create_bypass_user_entity(
         except Exception:
             existing2 = None
         if existing2 and _is_our_entity(existing2, telegram_id):
-            return _result_from_existing(existing2, http_status=409)
+            return await _adopt_existing_entity(
+                existing2, telegram_id,
+                traffic_limit_bytes=traffic_limit_bytes, http_status=409,
+            )
 
     err_body = (raw or {}).get("body")
     err_str = str(err_body)[:200] if err_body is not None else "unknown_error"
