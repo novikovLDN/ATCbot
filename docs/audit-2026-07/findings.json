@@ -412,7 +412,9 @@
       },
       "_dom": "vpn",
       "_status": "подтверждено",
-      "_corrected": "P2"
+      "_corrected": "P2",
+      "status": "fixed",
+      "resolution": "Компенсация в finalize_purchase и approve_payment_atomic переведена на remnawave_api.delete_user. Раньше звалась заглушка (или только писалось предупреждение) — сирота оставалась в панели, и человек имел доступ, за который не заплатил."
     },
     {
       "title": "Админский перевыпуск ключа через reissue_subscription_key всегда падает",

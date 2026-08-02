@@ -2447,17 +2447,28 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 logger.info(f"Payment {payment_id} approved atomically for user {telegram_id}, is_renewal={is_renewal}")
                 ret_val = (expires_at, is_renewal, final_vpn_key)
             except Exception as e:
+                # Сущность из фазы 1 осталась сиротой в панели — удаляем.
+                #
+                # Раньше здесь стояло только предупреждение «почистите вручную»:
+                # дёргать снятый xray было бессмысленно, а обращения к панели
+                # не было вовсе. В итоге при откате транзакции пользователь
+                # оставался с рабочим доступом, за который не заплатил.
                 if uuid_to_cleanup_on_failure:
-                    # Сущность живёт в Remnawave, а не в снятом с эксплуатации
-                    # samopis xray: дёргать его на откате бессмысленно — вернётся
-                    # 404 и шум в логах. Возможные сироты видны в админской
-                    # проверке и вычищаются вручную через панель.
                     uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                    logger.warning(
-                        "PURCHASE_FLOW_ORPHAN_NOT_CLEANED uuid=%s reason=tx_rolled_back "
-                        "payment_id=%s user=%s — clean via Remnawave panel",
-                        uuid_preview, payment_id, telegram_id,
-                    )
+                    try:
+                        from app.services import remnawave_api
+                        await remnawave_api.delete_user(uuid_to_cleanup_on_failure)
+                        logger.critical(
+                            "ORPHAN_PREVENTED uuid=%s reason=approve_tx_rolled_back "
+                            "payment_id=%s user=%s",
+                            uuid_preview, payment_id, telegram_id,
+                        )
+                    except Exception as remove_err:
+                        logger.critical(
+                            "ORPHAN_PREVENTED_REMOVAL_FAILED uuid=%s reason=%s payment_id=%s "
+                            "user=%s — удалите сущность в панели вручную",
+                            uuid_preview, remove_err, payment_id, telegram_id,
+                        )
                 logger.exception(f"Error in atomic approve for payment {payment_id}, transaction rolled back")
                 raise
         if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
@@ -3464,20 +3475,28 @@ async def _finalize_purchase_locked(
                         "period_days": period_days,
                     }
         except Exception as tx_err:
-            # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray
+            # Фаза 2 упала — сущность из фазы 1 осталась сиротой в панели.
+            #
+            # Раньше здесь вызывался vpn_utils.safe_remove_vless_user_with_retry.
+            # После снятия samopis xray это заглушка: компенсация ничего не
+            # удаляла, лог рапортовал ORPHAN_PREVENTED, а сущность продолжала
+            # жить в панели. Пользователь не платил, но доступ у него был.
+            #
+            # Удаляем через API панели — тот же способ, что в перевыпуске ключа.
             if uuid_to_cleanup_on_failure:
+                uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
                 try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
+                    from app.services import remnawave_api
+                    await remnawave_api.delete_user(uuid_to_cleanup_on_failure)
                     logger.critical(
                         f"ORPHAN_PREVENTED uuid={uuid_preview} reason=phase2_failed "
                         f"purchase_id={purchase_id} user={telegram_id} error={tx_err}"
                     )
                 except Exception as remove_err:
-                    uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
                     logger.critical(
                         f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} "
-                        f"purchase_id={purchase_id} user={telegram_id}"
+                        f"purchase_id={purchase_id} user={telegram_id} — удалите сущность "
+                        f"в панели вручную"
                     )
             raise
         if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
