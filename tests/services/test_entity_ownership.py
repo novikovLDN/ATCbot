@@ -40,6 +40,15 @@ class TestBypassOwnership:
         entity = {"username": build_bypass_username(999999), "description": ""}
         assert bypass_is_ours(entity, TG) is False
 
+    def test_explicit_foreign_owner_beats_matching_username(self):
+        """Имя наше, но владелец указан явно и он чужой — запись чужая.
+
+        Имя мог занять админ вручную; перезапись отобрала бы доступ
+        у другого человека.
+        """
+        entity = {"username": build_bypass_username(TG), "telegramId": 999999}
+        assert bypass_is_ours(entity, TG) is False
+
     @pytest.mark.parametrize("bad", [None, "", 42, []])
     def test_non_dict_is_safe(self, bad):
         assert bypass_is_ours(bad, TG) is False
@@ -62,3 +71,8 @@ class TestPremiumOwnership:
 
     def test_broken_telegram_id_does_not_crash(self):
         assert premium_is_ours({"telegramId": "не-число"}, TG) is False
+
+    def test_explicit_foreign_owner_beats_matching_username(self):
+        entity = {"username": build_premium_username(TG), "telegramId": 999999,
+                  "description": "manually created by admin"}
+        assert premium_is_ours(entity, TG) is False

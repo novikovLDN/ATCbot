@@ -117,11 +117,15 @@ def _is_our_entity(user: dict, telegram_id: int) -> bool:
     tg_field = user.get("telegramId")
     if tg_field is None:
         tg_field = user.get("telegram_id")
-    try:
-        if tg_field is not None and int(tg_field) == int(telegram_id):
-            return True
-    except (TypeError, ValueError):
-        pass
+    if tg_field is not None:
+        # Явно указанный владелец решает всё. Если он чужой, запись чужая —
+        # даже когда имя совпадает с нашим шаблоном: имя мог занять админ
+        # вручную, и перезапись такой записи отобрала бы доступ у другого
+        # человека.
+        try:
+            return int(tg_field) == int(telegram_id)
+        except (TypeError, ValueError):
+            return False
 
     username = (user.get("username") or "").strip()
     if username and username == build_premium_username(telegram_id):
