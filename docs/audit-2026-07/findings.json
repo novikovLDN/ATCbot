@@ -3445,6 +3445,24 @@
         "auto_renewal.py",
         "tests/services/test_auto_renewal_fixes.py"
       ]
+    },
+    {
+      "title": "Path traversal в SPA-фолбэке дашборда: соседний каталог и симлинк отдавались наружу",
+      "severity": "P1",
+      "category": "security",
+      "file": "app/api/__init__.py",
+      "line": 110,
+      "defect": "Введённый вместе с SPA-фолбэком (пункт 129) маршрут /dashboard/{path} проверял путь через os.path.normpath + candidate.startswith(_dist). Две дыры: (1) startswith без разделителя пропускает соседний каталог с тем же префиксом — dist-backup, dist.old; (2) normpath чистит «..» только лексически и ничего не знает о симлинках, поэтому ссылка внутри dist на файл снаружи проходила проверку. Проверено эмпирически: старая реализация отдавала ../dist-backup/secret.txt и симлинк escape.txt, новая — нет.",
+      "failure_scenario": "Рядом с каталогом сборки лежит dist-backup или симлинк (типично после ручного деплоя или отката). Запрос GET /dashboard/../dist-backup/secret.txt отдаёт содержимое файла любому, кто знает путь: маршрут SPA намеренно не требует авторизации, иначе не открылась бы страница входа.",
+      "proposed_action": "Сделано: проверка вынесена в app/api/spa_files.py:safe_asset_path — realpath вместо normpath, сравнение с разделителем на конце, явный отказ на «..» и абсолютный путь.",
+      "source": "security-review",
+      "status": "fixed",
+      "resolution": "Логика вынесена из app/api/__init__.py (там она была объявлена внутри try-блока и не тестировалась) в app/api/spa_files.py:safe_asset_path. Три проверки: явный отказ на «..» и абсолютный путь (FastAPI отдаёт {path:path} уже раскодированным, поэтому %2e%2e%2f доезжает обычными точками); realpath вместо normpath — закрывает симлинки; сравнение candidate == dist или startswith(dist + os.sep) — закрывает соседний каталог dist-backup. Тесты: tests/services/test_dashboard_spa_routing.py (16 шт.), включая параметризованный набор форм traversal, симлинк, соседний каталог и проверку, что легитимные ассеты и deep-link по-прежнему работают.",
+      "fixed_in": [
+        "app/api/spa_files.py",
+        "app/api/__init__.py",
+        "tests/services/test_dashboard_spa_routing.py"
+      ]
     }
   ],
   "refuted": [

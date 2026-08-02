@@ -102,20 +102,23 @@ try:
             # /dashboard/api и /dashboard/ws подключены выше и сюда не
             # доходят: у FastAPI побеждает первый совпавший маршрут.
             from fastapi.responses import FileResponse
-            _index = _os.path.join(_dist, "index.html")
+            from app.api.spa_files import safe_asset_path as _safe_asset_path
+
+            # realpath один раз на старте: сравнивать нужно с разрешёнными
+            # симлинками, а каталог сборки между запросами не меняется.
+            _dist_real = _os.path.realpath(_dist)
+            _index = _os.path.join(_dist_real, "index.html")
 
             @app.get("/dashboard", include_in_schema=False)
             @app.get("/dashboard/{spa_path:path}", include_in_schema=False)
             async def _dashboard_spa(spa_path: str = ""):
-                candidate = _os.path.normpath(_os.path.join(_dist, spa_path))
-                # normpath + проверка префикса закрывают ../ — наружу из dist
-                # отдать ничего нельзя.
-                if (
-                    spa_path
-                    and candidate.startswith(_dist)
-                    and _os.path.isfile(candidate)
-                ):
-                    return FileResponse(candidate)
+                # Проверка пути — в app/api/spa_files.py, там же объяснение,
+                # почему недостаточно normpath и голого startswith.
+                asset = _safe_asset_path(_dist_real, spa_path)
+                if asset:
+                    return FileResponse(asset)
+                # Всё остальное — index.html: маршрут доделает React.
+                # Отдавать 404 нельзя, иначе F5 на разделе снова сломается.
                 return FileResponse(_index)
 
             logger.info("DASHBOARD mounted: api+ws+spa (dist=%s)", _dist)
