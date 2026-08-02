@@ -216,13 +216,67 @@ def test_money_functions_stayed_in_admin():
         assert not hasattr(br, name), f"{name} ошибочно уехала в broadcasts"
 
 
+ANALYTICS_NAMES = [
+    "get_business_metrics",
+    "get_analytics_by_period",
+    "get_revenue_for_period",
+    "get_payments_breakdown",
+    "get_recent_payments_feed",
+    "get_user_purchases",
+    "get_traffic_stats",
+    "get_purchase_breakdown",
+    "get_extended_bot_stats",
+    "get_total_revenue",
+    "get_paying_users_count",
+    "get_user_ltv",
+    "get_average_ltv",
+    "get_arpu",
+]
+
+
+@pytest.mark.parametrize("name", ANALYTICS_NAMES)
+def test_analytics_available_via_package(name):
+    import database
+    assert hasattr(database, name)
+
+
+@pytest.mark.parametrize("name", ANALYTICS_NAMES)
+def test_analytics_available_via_admin(name):
+    import database.admin as adm
+    assert hasattr(adm, name)
+
+
+@pytest.mark.parametrize("name", ANALYTICS_NAMES)
+def test_analytics_defined_in_its_module(name):
+    import database.analytics as an
+    assert hasattr(an, name)
+
+
+def test_analytics_module_is_read_only():
+    """Отчётный слой не должен содержать операций записи: если сюда
+    просочится UPDATE или ALTER, значит граница проведена неверно.
+    Журнал ошибок оплаты — единственное исключение, он пишет свою таблицу."""
+    import inspect
+    import re
+    import database.analytics as an
+    src = inspect.getsource(an)
+    without_error_log = re.sub(
+        r"async def log_payment_error.*?(?=\nasync def |\Z)", "", src, flags=re.S
+    )
+    for verb in ("UPDATE ", "DELETE FROM", "ALTER TABLE"):
+        assert verb not in without_error_log.upper(), (
+            f"в аналитике найдена операция записи: {verb}"
+        )
+
+
 def test_split_modules_import_cleanly():
     """Каждый выделенный модуль обязан импортироваться сам по себе:
     потерянный import внутри переноса иначе всплывёт только в проде."""
     import importlib
     for mod in ("database.promo", "database.referral_analytics",
                 "database.reminders_queries", "database.trials_queries",
-                "database.pending_purchases", "database.broadcasts"):
+                "database.pending_purchases", "database.broadcasts",
+                "database.analytics"):
         importlib.import_module(mod)
 
 
