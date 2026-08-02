@@ -117,12 +117,6 @@ from database.subscriptions import (  # noqa: F401
     admin_switch_tariff,
     has_any_subscription,
     has_any_payment,
-    has_trial_used,
-    get_trial_info,
-    get_active_paid_subscription,
-    mark_trial_used,
-    is_eligible_for_trial,
-    is_trial_available,
     get_active_subscription,
     update_subscription_uuid,
     get_all_active_subscriptions,
@@ -140,9 +134,6 @@ from database.subscriptions import (  # noqa: F401
     is_user_first_purchase,
     get_admin_stats,
     calculate_final_price,
-    set_special_offer,
-    get_special_offer_info,
-    has_active_special_offer,
     create_pending_balance_topup_purchase,
     create_pending_purchase,
     has_purchased_proxy,
@@ -156,6 +147,19 @@ from database.subscriptions import (  # noqa: F401
     set_combo_flag,
     set_bypass_only_flag,
     ensure_bypass_only_subscription,
+)
+
+# Trials: пробный период и персональные спецпредложения
+from database.trials_queries import (  # noqa: F401
+    has_trial_used,
+    get_trial_info,
+    get_active_paid_subscription,
+    mark_trial_used,
+    is_eligible_for_trial,
+    is_trial_available,
+    set_special_offer,
+    get_special_offer_info,
+    has_active_special_offer,
 )
 
 # Reminders: выборки и отметки для напоминаний об истечении подписки

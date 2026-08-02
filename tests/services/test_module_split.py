@@ -97,12 +97,43 @@ def test_reminder_defined_in_its_module(name):
     assert hasattr(rq, name)
 
 
+TRIAL_NAMES = [
+    "has_trial_used",
+    "get_trial_info",
+    "get_active_paid_subscription",
+    "mark_trial_used",
+    "is_eligible_for_trial",
+    "is_trial_available",
+    "set_special_offer",
+    "get_special_offer_info",
+    "has_active_special_offer",
+]
+
+
+@pytest.mark.parametrize("name", TRIAL_NAMES)
+def test_trial_available_via_package(name):
+    import database
+    assert hasattr(database, name)
+
+
+@pytest.mark.parametrize("name", TRIAL_NAMES)
+def test_trial_available_via_subscriptions(name):
+    import database.subscriptions as subs
+    assert hasattr(subs, name)
+
+
+@pytest.mark.parametrize("name", TRIAL_NAMES)
+def test_trial_defined_in_its_module(name):
+    import database.trials_queries as tq
+    assert hasattr(tq, name)
+
+
 def test_split_modules_import_cleanly():
     """Каждый выделенный модуль обязан импортироваться сам по себе:
     потерянный import внутри переноса иначе всплывёт только в проде."""
     import importlib
     for mod in ("database.promo", "database.referral_analytics",
-                "database.reminders_queries"):
+                "database.reminders_queries", "database.trials_queries"):
         importlib.import_module(mod)
 
 
