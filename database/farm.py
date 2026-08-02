@@ -398,25 +398,31 @@ async def execute_storm_for_user(
     farm_plots: List[Dict[str, Any]],
     last_seen_at: Optional[datetime],
     announced_at: datetime,
-    plant_rewards: Dict[str, int],
+    plant_rewards: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Apply storm effects to one user's plots.
 
-    For each growing plot:
-        - shielded → keep growing, reset shield (one-shot), count as shielded
-        - online user (last_seen >= announced_at) → status=dead
-        - offline user → auto-harvest at 50% reward, status=empty (reuse plot)
+    Для каждой растущей грядки:
+        - со щитом → продолжает расти, щит сгорает (одноразовый)
+        - без щита → status=dead, независимо от присутствия игрока
 
-    plant_rewards maps plant_type → full reward in kopecks.
+    Раньше офлайновый игрок получал автосбор 50%, а онлайновый терял растение
+    целиком: присутствие в боте наказывалось, отсутствие вознаграждалось.
+    Теперь шторм действует одинаково на всех, а спастись можно только
+    действием — щитом или ранним сбором.
+
+    plant_rewards больше не используется и принимается лишь ради совместимости
+    вызовов; поля autoharv в ответе всегда нулевые и сохранены, чтобы не ломать
+    существующего потребителя.
 
     Returns a dict:
         {
             killed: int,
             shielded: int,
-            autoharv: int,
-            autoharv_kopecks: int,
+            autoharv: int,              # всегда 0
+            autoharv_kopecks: int,      # всегда 0
             killed_plants: list[(plot_id, plant_type)],   # for itemized push
-            autoharv_plants: list[(plot_id, plant_type, half_kopecks)],
+            autoharv_plants: list,      # всегда пустой
         }
     """
     empty_result = {
@@ -456,35 +462,21 @@ async def execute_storm_for_user(
         plant_type = p.get("plant_type") or ""
         plot_id = int(p.get("plot_id", -1))
 
-        if is_online:
-            killed += 1
-            killed_plants.append((plot_id, plant_type))
-            new_plots.append({
-                **p,
-                "status": "dead",
-                "dead_at": datetime.now(timezone.utc).isoformat(),
-                "storm_shielded": False,
-            })
-        else:
-            reward = plant_rewards.get(plant_type, 0)
-            half = reward // 2
-            autoharv += 1
-            autoharv_kopecks += half
-            autoharv_plants.append((plot_id, plant_type, half))
-            new_plots.append({
-                "plot_id": plot_id,
-                "status": "empty",
-                "plant_type": None,
-                "planted_at": None,
-                "ready_at": None,
-                "dead_at": None,
-                "notified_ready": False,
-                "notified_12h": False,
-                "notified_dead": False,
-                "water_used_at": None,
-                "fertilizer_used_at": None,
-                "storm_shielded": False,
-            })
+        # Шторм действует одинаково независимо от того, был ли игрок онлайн.
+        #
+        # Раньше офлайновый игрок получал автосбор 50%, а онлайновый терял
+        # растение целиком. Стимул был вывернут наизнанку: заходить в бота во
+        # время шторма было невыгодно, оптимальной стратегией было не заходить.
+        # Спастись по-прежнему можно — щитом или ранним сбором, но и то и
+        # другое требует присутствия.
+        killed += 1
+        killed_plants.append((plot_id, plant_type))
+        new_plots.append({
+            **p,
+            "status": "dead",
+            "dead_at": datetime.now(timezone.utc).isoformat(),
+            "storm_shielded": False,
+        })
 
     if killed == 0 and shielded == 0 and autoharv == 0:
         return empty_result
