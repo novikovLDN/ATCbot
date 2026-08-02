@@ -458,7 +458,9 @@
       "risk": "средний",
       "confidence": "medium",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "_is_our_entity в bypass и premium теперь опознаёт сущность ещё и по детерминированному имени: легаси-записи без telegramId и маркера больше не считаются чужими."
     },
     {
       "title": "Adopt bypass-сущности не начисляет купленный трафик",

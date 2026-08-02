@@ -63,13 +63,24 @@ def _bypass_expire_iso() -> str:
 
 
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
-    """Heuristic: does this panel entity belong to our bot?
+    """Принадлежит ли сущность в панели нашему боту.
 
-    Identical contract to remnawave_premium._is_our_entity — accept
-    on telegramId match OR description containing one of our markers.
+    Три независимых признака, любого достаточно:
+
+    1. telegramId совпадает — самый надёжный;
+    2. имя совпадает с тем, которое мы сами построили бы для этого
+       пользователя. Имя детерминированное, случайно совпасть не может;
+    3. в описании есть один из наших маркеров.
+
+    Признак по имени добавлен потому, что легаси-сущности, созданные до
+    перехода на Remnawave, не имеют ни telegramId, ни маркера в описании.
+    Без него выдача таким пользователям падала с conflict_unrelated_user:
+    панель отвечала «имя занято», код считал сущность чужой и отказывался
+    её принимать, хотя это была ровно та же самая запись бота.
     """
     if not isinstance(user, dict):
         return False
+
     tg_field = user.get("telegramId")
     if tg_field is None:
         tg_field = user.get("telegram_id")
@@ -78,6 +89,11 @@ def _is_our_entity(user: dict, telegram_id: int) -> bool:
             return True
     except (TypeError, ValueError):
         pass
+
+    username = (user.get("username") or "").strip()
+    if username and username == build_bypass_username(telegram_id):
+        return True
+
     desc = (user.get("description") or "").lower()
     if "bypass" in desc or "samopis" in desc or "via bot" in desc:
         return True

@@ -97,15 +97,23 @@ class PremiumCreateResult:
 
 
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
-    """Decide whether a panel entity originated from this bot's migration.
+    """Принадлежит ли сущность в панели нашему боту.
 
-    True if either:
-      - telegramId matches (Remnawave returns it as either `telegramId` or
-        `telegram_id` depending on version), OR
-      - description contains our import marker.
+    Три независимых признака, любого достаточно:
+
+    1. telegramId совпадает — панель отдаёт его как telegramId или
+       telegram_id в зависимости от версии;
+    2. имя совпадает с тем, которое мы сами построили бы для этого
+       пользователя. Имя детерминированное, случайно совпасть не может;
+    3. в описании есть маркер импорта.
+
+    Признак по имени добавлен по той же причине, что и в bypass: сущности,
+    созданные до перехода на Remnawave, не имеют ни telegramId, ни маркера,
+    и без него принимались за чужие.
     """
     if not isinstance(user, dict):
         return False
+
     tg_field = user.get("telegramId")
     if tg_field is None:
         tg_field = user.get("telegram_id")
@@ -114,6 +122,11 @@ def _is_our_entity(user: dict, telegram_id: int) -> bool:
             return True
     except (TypeError, ValueError):
         pass
+
+    username = (user.get("username") or "").strip()
+    if username and username == build_premium_username(telegram_id):
+        return True
+
     desc = (user.get("description") or "").lower()
     if "samopis" in desc or "imported from samopis" in desc:
         return True
