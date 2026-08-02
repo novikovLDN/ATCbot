@@ -370,7 +370,10 @@
       },
       "_dom": "vpn",
       "_status": "подтверждено",
-      "_corrected": "P1"
+      "_corrected": "P1",
+      "status": "fixed",
+      "fixed_in": "pending",
+      "resolution": "VPN_ENABLED перевязан с XRAY_API_* на REMNAWAVE_ENABLED: выдача идёт через панель, и удаление xray-переменных её больше не блокирует."
     },
     {
       "title": "Вся компенсация при сбое провижининга — no-op: orphan-сущности остаются в панели",

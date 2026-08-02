@@ -379,20 +379,38 @@ XRAY_API_TIMEOUT = float(env("XRAY_API_TIMEOUT", default="5.0"))
 # Optional: public URL of VPN server (e.g. for future subscription link features).
 VPN_SERVER_URL = env("VPN_SERVER_URL", default="").rstrip("/")
 
-# Флаг доступности VPN API
-VPN_ENABLED = bool(XRAY_API_URL and XRAY_API_KEY)
+# ====================================================================================
+# REMNAWAVE PANEL — единственный бэкенд выдачи VPN
+# ====================================================================================
+# Панель Remnawave создаёт и продлевает сущности пользователя, выдаёт ссылки
+# подписки и держит лимиты трафика. Прежний samopis xray снят с эксплуатации.
+REMNAWAVE_API_URL = env("REMNAWAVE_API_URL", default="").rstrip("/")
+# Историческое расхождение имён: часть окружений задаёт REMNAWAVE_TOKEN,
+# часть — REMNAWAVE_API_TOKEN. Принимаем оба, чтобы не требовать переименования.
+REMNAWAVE_API_TOKEN = env("REMNAWAVE_API_TOKEN", default="") or env("REMNAWAVE_TOKEN", default="")
+REMNAWAVE_ENABLED = bool(REMNAWAVE_API_URL and REMNAWAVE_API_TOKEN)
 
-# Feature flag для VPN provisioning (по умолчанию true в STAGE, false если VPN_ENABLED=False)
+if REMNAWAVE_ENABLED:
+    _log.info("REMNAWAVE_ENABLED=true, API_URL=%s", REMNAWAVE_API_URL)
+else:
+    _log.info("REMNAWAVE_ENABLED=false (URL or TOKEN not set)")
+
+# Флаг доступности выдачи VPN.
+#
+# ВАЖНО: раньше он вычислялся как bool(XRAY_API_URL and XRAY_API_KEY), то есть
+# зависел от снятого с эксплуатации samopis xray. Из-за этого удаление
+# переменных XRAY_API_* — казалось бы, безобидная уборка — полностью
+# блокировало выдачу подписок, хотя Remnawave настроен и работает.
+# Провижининг идёт через Remnawave, поэтому и флаг зависит от него.
+VPN_ENABLED = REMNAWAVE_ENABLED
+
+# Feature flag для VPN provisioning (по умолчанию true, false если VPN_ENABLED=False)
 VPN_PROVISIONING_ENABLED = env("VPN_PROVISIONING_ENABLED", default="true").lower() == "true" if VPN_ENABLED else False
 
 if not VPN_ENABLED:
-    _log.info("ARCH_MODE: API_ONLY_VLESS_GENERATION (REALITY + XTLS Vision)")
-    _log.warning("XRAY_API_URL or XRAY_API_KEY is not set!")
-    _log.warning("VPN operations will be BLOCKED until XRAY_API_URL and XRAY_API_KEY are configured")
-    _log.warning("Bot will continue running, but subscriptions cannot be activated")
-else:
-    _log.info("Using XRAY_API_URL from %s_XRAY_API_URL", APP_ENV.upper())
-    _log.info("Using XRAY_API_KEY from %s_XRAY_API_KEY", APP_ENV.upper())
+    _log.warning("REMNAWAVE_API_URL или REMNAWAVE_API_TOKEN не заданы!")
+    _log.warning("Выдача подписок заблокирована до настройки панели Remnawave")
+    _log.warning("Бот продолжит работу, но активировать подписки не сможет")
     _log.info("XRAY_API_TIMEOUT=%ss", XRAY_API_TIMEOUT)
     _log.info("VPN_PROVISIONING_ENABLED=%s", VPN_PROVISIONING_ENABLED)
     _log.info("VPN API configured successfully (VLESS + REALITY)")
@@ -458,20 +476,6 @@ APP_URL = env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railw
 
 # Subscription link base URL (domain serving /api/sub/{token}?id={id}).
 SUB_BASE_URL = env("SUB_BASE_URL", default="https://atlassecure.ru").rstrip("/")
-
-# ====================================================================================
-# REMNAWAVE PANEL CONFIGURATION (Bypass / Traffic limits)
-# ====================================================================================
-REMNAWAVE_API_URL = env("REMNAWAVE_API_URL", default="").rstrip("/")
-# Task 2 TZ uses `REMNAWAVE_TOKEN` as the canonical name; we honour both
-# spellings so an env-var rename isn't required to land the cut-over.
-REMNAWAVE_API_TOKEN = env("REMNAWAVE_API_TOKEN", default="") or env("REMNAWAVE_TOKEN", default="")
-REMNAWAVE_ENABLED = bool(REMNAWAVE_API_URL and REMNAWAVE_API_TOKEN)
-
-if REMNAWAVE_ENABLED:
-    _log.info("REMNAWAVE_ENABLED=true, API_URL=%s", REMNAWAVE_API_URL)
-else:
-    _log.info("REMNAWAVE_ENABLED=false (URL or TOKEN not set)")
 
 # Traffic limits per tariff (in bytes). Trial has NO bypass.
 TRAFFIC_LIMITS = {
