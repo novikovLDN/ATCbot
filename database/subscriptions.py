@@ -2850,11 +2850,61 @@ async def finalize_purchase(
             raise PurchaseLocked(error_msg)
 
         try:
-            return await _finalize_purchase_locked(
+            result = await _finalize_purchase_locked(
                 conn, purchase_id, payment_provider, amount_rubles, invoice_id
             )
+            _publish_payment_approved(
+                result, purchase_id=purchase_id, amount_rubles=amount_rubles,
+                payment_provider=payment_provider,
+            )
+            return result
         finally:
             await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", purchase_id)
+
+
+def _publish_payment_approved(
+    result: Dict[str, Any],
+    *,
+    purchase_id: str,
+    amount_rubles: float,
+    payment_provider: str,
+) -> None:
+    """Сообщить шине о состоявшейся оплате — событие payment:approved.
+
+    Кто это слушает:
+      • LivePaymentTicker в дашборде — живая лента оплат;
+      • app/services/admin_notifier — считает дневную выручку и шлёт админу
+        push при достижении milestone.
+
+    Почему функция появилась. Событие публиковалось ровно в одном месте —
+    внутри approve_payment_atomic, у которой нет ни одного вызывающего.
+    Реальные оплаты идут через finalize_purchase и в шину не писали ничего:
+    лента в дашборде была пустой всегда, milestone-push не приходил никогда.
+
+    Публикуем в обёртке, а не в теле под локом, потому что здесь транзакция
+    уже закоммичена: подписчик, который полезет в базу за подробностями,
+    увидит записанные данные, а не их отсутствие.
+
+    Падение шины не должно ронять оплату — деньги уже приняты и записаны.
+    """
+    if not result or not result.get("success"):
+        return
+    try:
+        from app.events import bus
+        expires_at = result.get("expires_at")
+        bus.publish({
+            "type": "payment:approved",
+            "payment_id": result.get("payment_id"),
+            "telegram_id": result.get("telegram_id"),
+            "purchase_id": purchase_id,
+            "amount_rubles": amount_rubles,
+            "provider": payment_provider,
+            "tariff": result.get("tariff_type"),
+            "is_renewal": bool(result.get("is_renewal")),
+            "expires_at": expires_at.isoformat() if hasattr(expires_at, "isoformat") else None,
+        })
+    except Exception as e:
+        logger.warning("PAYMENT_APPROVED_PUBLISH_FAILED purchase_id=%s: %s", purchase_id, e)
 
 
 async def _finalize_purchase_locked(
@@ -3087,6 +3137,7 @@ async def _finalize_purchase_locked(
                     return {
                         "success": True,
                         "payment_id": payment_id,
+                        "telegram_id": telegram_id,
                         "expires_at": None,
                         "vpn_key": None,
                         "is_renewal": False,
@@ -3111,6 +3162,7 @@ async def _finalize_purchase_locked(
                     return {
                         "success": True,
                         "payment_id": payment_id,
+                        "telegram_id": telegram_id,
                         "expires_at": None,
                         "vpn_key": None,
                         "is_renewal": False,
@@ -3160,6 +3212,7 @@ async def _finalize_purchase_locked(
                     return {
                         "success": True,
                         "payment_id": payment_id,
+                        "telegram_id": telegram_id,
                         "expires_at": None,
                         "vpn_key": None,
                         "is_renewal": False,
@@ -3233,6 +3286,7 @@ async def _finalize_purchase_locked(
                     return {
                         "success": True,
                         "payment_id": payment_id,
+                        "telegram_id": telegram_id,
                         "expires_at": None,
                         "vpn_key": None,
                         "is_renewal": False,
@@ -3317,6 +3371,7 @@ async def _finalize_purchase_locked(
                     return {
                         "success": True,
                         "payment_id": payment_id,
+                        "telegram_id": telegram_id,
                         "expires_at": None,
                         "vpn_key": None,
                         "is_renewal": False,
@@ -3398,6 +3453,7 @@ async def _finalize_purchase_locked(
                     ret_val = {
                         "success": True,
                         "payment_id": payment_id,
+                        "telegram_id": telegram_id,
                         "expires_at": expires_at,
                         "vpn_key": None,
                         "activation_status": "pending",
@@ -3516,6 +3572,7 @@ async def _finalize_purchase_locked(
                     ret_val = {
                         "success": True,
                         "payment_id": payment_id,
+                        "telegram_id": telegram_id,
                         "expires_at": expires_at,
                         "vpn_key": vpn_key,
                         "vpn_key_plus": vpn_key_plus_ret,

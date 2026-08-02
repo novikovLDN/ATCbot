@@ -165,17 +165,52 @@ async def _dashboard_url(path: str) -> str:
 
 
 async def _send(bot: Bot, *, title: str, body: str, tag: str, url: str) -> None:
-    """Primary delivery is browser web-push (system notifications).
-    Telegram DM is intentionally NOT used here — admin opted into web
-    push as the channel. The /settings → "тестовые в Telegram" button
-    still uses the bot directly for the dry-run."""
+    """Доставить админу уведомление: сначала браузерный push, затем — если
+    push не дошёл — личное сообщение в Telegram.
+
+    Почему нужен запасной канал. Раньше здесь был только web-push, а в
+    дашборде секция называлась «Telegram DM · Что присылать в личку» — то
+    есть тумблеры обещали личку, а управляли браузерными уведомлениями.
+    Хуже того, web-push молча ничего не делает в двух частых случаях:
+    подписок на устройствах ноль (админ не разрешил уведомления) и iOS,
+    где push работает только у приложения, добавленного «на экран Домой».
+    В обоих случаях админ не узнавал ни об ошибке платежа, ни о завершении
+    рассылки — и не понимал, что канал мёртв.
+
+    Логика простая: если push доставлен хотя бы на одно устройство, DM не
+    шлём (иначе дубль на каждое событие). Ноль доставок или исключение —
+    отправляем в Telegram. Ссылка на дашборд идёт текстом: в личке кнопки
+    не нужны, а URL кликабелен сам.
+    """
     from app.services import push_notifications
+
+    delivered = 0
     try:
-        await push_notifications.send_to_all(
+        stats = await push_notifications.send_to_all(
             title=title, body=body, tag=tag, url=url,
         )
+        delivered = int((stats or {}).get("sent") or 0)
     except Exception as e:
         logger.warning("admin_notifier push send failed: %s", e)
+
+    if delivered > 0:
+        return
+
+    admin_id = getattr(config, "ADMIN_TELEGRAM_ID", 0)
+    if not admin_id:
+        logger.warning(
+            "admin_notifier: push не доставлен и ADMIN_TELEGRAM_ID не задан — "
+            "уведомление '%s' потеряно", tag,
+        )
+        return
+    try:
+        text = f"<b>{title}</b>\n{body}"
+        if url:
+            text += f"\n\n{url}"
+        await bot.send_message(admin_id, text, parse_mode="HTML")
+        logger.info("admin_notifier: push пуст, отправлен Telegram DM tag=%s", tag)
+    except Exception as e:
+        logger.warning("admin_notifier telegram fallback failed: %s", e)
 
 
 async def _on_payment_error(bot: Bot, e: dict[str, Any]) -> None:

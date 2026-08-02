@@ -10,12 +10,15 @@ Time-range params accept a trailing-window in hours: `?hours=24`,
 `?since=<ISO datetime>` which overrides `hours` and uses that as an
 absolute lower bound (used for the "Сегодня (МСК)" dashboard tile).
 """
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 import database
 from app.api.dashboard.deps import require_admin
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -34,13 +37,26 @@ def _parse_since(since: str | None) -> datetime | None:
 
 @router.get("/overview")
 async def stats_overview():
-    """Single-shot blob for the dashboard home page.
-    Wraps get_extended_bot_stats() — returns total_users,
-    active_subs, pending_payments, business_metrics, referral stats.
+    """Один запрос со всеми числами для главной страницы дашборда.
 
-    Adds active_paid_subscriptions — same shape as active_subscriptions
-    but excludes trials, bypass-only and biz-tariff rows so the number
-    reflects only currently-paying-for-VPN users."""
+    Основа — get_extended_bot_stats(): пользователи, подписки, выручка,
+    конверсия, отток.
+
+    Плюс два блока, которых там нет:
+
+    • active_paid_subscriptions — как active_subscriptions, но без триалов,
+      bypass-only и biz-тарифов: только те, кто прямо сейчас платит за VPN.
+
+    • business_metrics — approval_rate_percent, avg_subscription_lifetime_days,
+      avg_renewals_per_user, avg_payment_approval_time_seconds. Фронт читает
+      их из overview в шести местах (Dashboard.tsx), а сюда они не клались
+      вовсе: get_extended_bot_stats такого ключа не возвращает, и шесть KPI
+      на главной всегда показывали «—». Отдельный /stats/business существует,
+      но дашборд его не вызывал.
+
+    Оба блока необязательные: их сбой не должен ронять всю главную страницу,
+    поэтому каждый обёрнут своим try и при ошибке отдаёт безопасное значение.
+    """
     try:
         data = await database.get_extended_bot_stats()
         try:
@@ -49,6 +65,11 @@ async def stats_overview():
             )
         except Exception:
             data["active_paid_subscriptions"] = data.get("active_subscriptions")
+        try:
+            data["business_metrics"] = await database.get_business_metrics()
+        except Exception as e:
+            logger.warning("stats_overview: business_metrics failed: %s", e)
+            data["business_metrics"] = {}
         return data
     except Exception as e:
         raise HTTPException(500, f"stats_overview_failed: {e}")

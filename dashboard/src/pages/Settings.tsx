@@ -37,21 +37,21 @@ const FLAGS: FlagDescriptor[] = [
     key: "payment_error",
     title: "Ошибки платежей",
     description:
-      "DM при сбоях webhook'ов (Platega / CryptoBot / Lava) и любых необработанных исключениях в платёжном потоке.",
+      "Push в браузер при сбоях webhook'ов (Platega / CryptoBot / Lava) и любых необработанных исключениях в платёжном потоке. Если push не доставлен — придёт в Telegram.",
     icon: AlertCircle,
   },
   {
     key: "broadcast_done",
     title: "Рассылка завершена",
     description:
-      "DM после окончания каждой рассылки с количеством доставленных и упавших сообщений.",
+      "Push после окончания каждой рассылки с количеством доставленных и упавших сообщений. Если push не доставлен — придёт в Telegram.",
     icon: Megaphone,
   },
   {
     key: "revenue_milestone",
     title: "Дневной доход",
     description:
-      "DM с похвалой при пересечении планок 5k / 10k / 15k / 20k / 25k / 30k / 35k ₽ за сутки (UTC).",
+      "Push с похвалой при пересечении планок 5k / 10k / 15k / 20k / 25k / 30k / 35k ₽ за сутки (МСК). Если push не доставлен — придёт в Telegram.",
     icon: TrendingUp,
   },
 ];
@@ -106,10 +106,10 @@ export function Settings() {
           </div>
           <div>
             <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Telegram DM
+              Уведомления админу
             </div>
             <h2 className="text-lg font-semibold text-fg">
-              Что присылать в личку
+              Push в браузер, с запасным каналом в Telegram
             </h2>
           </div>
         </div>

@@ -1931,7 +1931,13 @@
       },
       "_dom": "dashboard",
       "_status": "подтверждено",
-      "_corrected": "P2"
+      "_corrected": "P2",
+      "status": "fixed",
+      "resolution": "payment:approved публикуется из обёртки finalize_purchase после освобождения лока и коммита (_publish_payment_approved) — payload включает telegram_id, amount_rubles, tariff, is_renewal, provider, purchase_id. Во все возвраты _finalize_purchase_locked добавлен telegram_id, иначе лента показывала бы платежи без пользователя. Падение шины не роняет оплату. approve_payment_atomic остаётся недостижимым — вынесен отдельным пунктом мёртвого кода. Тесты: tests/services/test_payment_event_and_admin_notify.py.",
+      "fixed_in": [
+        "database/subscriptions.py",
+        "tests/services/test_payment_event_and_admin_notify.py"
+      ]
     },
     {
       "title": "Переключатели «Telegram DM» на самом деле управляют web-push, а DM не отправляются",
@@ -1944,7 +1950,14 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "dashboard",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Выбран надёжный вариант: _send сначала шлёт web-push, и если доставок ноль (нет подписок, iOS без установки на «экран Домой») или push упал — отправляет личное сообщение админу в Telegram. Дубля нет: при успешной доставке push DM не шлётся. Тексты в дашборде приведены в соответствие («Уведомления админу · Push в браузер, с запасным каналом в Telegram»), заодно исправлено «за сутки (UTC)» на «(МСК)» — код считает от полуночи МСК. Тесты: tests/services/test_payment_event_and_admin_notify.py.",
+      "fixed_in": [
+        "app/services/admin_notifier.py",
+        "dashboard/src/pages/Settings.tsx",
+        "tests/services/test_payment_event_and_admin_notify.py"
+      ]
     },
     {
       "title": "/stats/overview не отдаёт business_metrics — шесть KPI на дашборде всегда «—»",
@@ -1957,7 +1970,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "dashboard",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "stats_overview дополняет ответ ключом business_metrics (database.get_business_metrics) — фронт читает его оттуда уже сейчас, менять Dashboard.tsx не потребовалось. Сбой тяжёлого запроса по audit_log не роняет главную страницу: ключ отдаётся пустым словарём с warning в логах. Докстринг переписан по-русски и теперь соответствует коду. Тесты: tests/services/test_stats_overview_business_metrics.py.",
+      "fixed_in": [
+        "app/api/dashboard/routes/stats.py",
+        "tests/services/test_stats_overview_business_metrics.py"
+      ]
     },
     {
       "title": "Двойной учёт денег в таблице payments: пополнение баланса и покупка с баланса пишутся как две выручки",
@@ -3206,6 +3225,17 @@
       "defect": "farm_shield_lava и farm_shield_sbp создают инвойс независимо от того, сколько осталось до scheduled_at. Оплата через СБП/Lava занимает минуты, поэтому покупка за 1-2 минуты до удара заведомо не успеет примениться. Возврат на баланс теперь работает (см. предыдущий пункт), но лишний цикл «списали — вернули — объяснили» лучше не запускать вовсе.",
       "failure_scenario": "Пользователь видит баннер «до удара ≈ 0 ч», жмёт «Накрыть», платит, получает возврат и недоумение вместо защиты грядки.",
       "proposed_action": "Не показывать/не обрабатывать кнопки оплаты плёнки, если до scheduled_at осталось меньше N минут (разумно 10); вместо инвойса показывать «до шторма слишком мало времени, плёнку уже не установить».",
+      "source": "audit-followup"
+    },
+    {
+      "title": "approve_payment_atomic недостижим по коду — мёртвая ветка ручного подтверждения платежа",
+      "severity": "P2",
+      "category": "dead-code",
+      "file": "database/subscriptions.py",
+      "line": 2362,
+      "defect": "У approve_payment_atomic нет ни одного вызывающего: grep даёт только определение и реэкспорт в database/__init__.py. Внутри — своя логика grant_access, синхронизации с Remnawave и публикации payment:approved, дублирующая finalize_purchase. Дублирующийся код расходится с рабочим путём при каждой правке.",
+      "failure_scenario": "Разработчик правит финализацию платежа в одном месте из двух и считает задачу закрытой; вторая копия остаётся со старым поведением и однажды снова окажется на пути исполнения.",
+      "proposed_action": "Удалить approve_payment_atomic вместе с реэкспортом, предварительно проверив, что ручное подтверждение платежа из админки идёт через finalize_purchase.",
       "source": "audit-followup"
     }
   ],
