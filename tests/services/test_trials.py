@@ -1,194 +1,157 @@
-"""
-Unit tests for trial service layer.
+"""Логика пробного периода: истечение, тайминги и уведомления.
 
-Tests focus on business logic:
-- Trial expiration checks
-- Notification timing decisions
-- Trial completion logic
-- Edge cases
+ЗАЧЕМ ЭТОТ ФАЙЛ ПЕРЕПИСАН
+    Прежняя версия вызывала функции по сигнатурам, которых давно нет:
+    аргументы шли в другом порядке, часть функций стала асинхронной, а
+    расписание уведомлений сознательно опустело. Двенадцать тестов падали
+    и не проверяли ничего — они лишь фиксировали API пятилетней давности.
+    Здесь зафиксировано фактическое поведение, чтобы тесты снова были
+    документацией, а не шумом.
+
+ЧТО ВАЖНО ЗНАТЬ ПРО ТРИАЛ
+    Триал длится 72 часа. «Часы с момента активации» вычисляются как
+    72 минус часы до истечения — отдельной отметки о старте нет.
+    Все проверки идут по UTC.
 """
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import patch, AsyncMock
+
 from app.services.trials.service import (
-    is_trial_expired,
-    should_expire_trial,
     calculate_trial_timing,
-    should_send_notification,
-    should_send_final_reminder,
-    get_notification_schedule,
     get_final_reminder_config,
+    get_notification_schedule,
+    prepare_notification_payload,
+    should_send_final_reminder,
 )
 
 
-class TestIsTrialExpired:
-    """Tests for is_trial_expired function"""
-    
-    def test_trial_not_expired(self):
-        """Trial with future expiry should not be expired"""
-        now = datetime(2024, 1, 15, 12, 0, 0)
-        future = datetime(2024, 1, 18, 12, 0, 0)
-        assert is_trial_expired(12345, future, now) is False
-    
-    def test_trial_expired(self):
-        """Trial with past expiry should be expired"""
-        now = datetime(2024, 1, 15, 12, 0, 0)
-        past = datetime(2024, 1, 12, 12, 0, 0)
-        assert is_trial_expired(12345, past, now) is True
-    
-    def test_trial_expires_exactly_now(self):
-        """Trial expiring exactly at now should be expired"""
-        now = datetime(2024, 1, 15, 12, 0, 0)
-        assert is_trial_expired(12345, now, now) is True
+NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
-# Note: should_expire_trial requires database connection and complex mocking.
-# This is better tested as an integration test.
+def _conn_without_paid_subscription():
+    """Соединение, где у пользователя нет активной платной подписки."""
+    conn = MagicMock()
+    conn.fetchrow = AsyncMock(return_value=None)
+    return conn
+
+
+def _conn_with_paid_subscription():
+    conn = MagicMock()
+    conn.fetchrow = AsyncMock(return_value={"?column?": 1})
+    return conn
 
 
 class TestCalculateTrialTiming:
-    """Tests for calculate_trial_timing function"""
-    
-    def test_calculate_timing_from_expiry(self):
-        """Should calculate timing correctly from expiry date"""
-        expiry = datetime(2024, 1, 18, 12, 0, 0)
-        now = datetime(2024, 1, 16, 12, 0, 0)  # 2 days before expiry
-        
-        result = calculate_trial_timing(expiry, now)
-        
-        assert result["hours_until_expiry"] == 48
-        # hours_since_activation = 72 - 48 = 24
-        assert result["hours_since_activation"] == 24
-    
-    def test_calculate_timing_at_expiry(self):
-        """Should calculate timing correctly at expiry"""
-        expiry = datetime(2024, 1, 18, 12, 0, 0)
-        now = expiry  # Exactly at expiry
-        
-        result = calculate_trial_timing(expiry, now)
-        
-        assert result["hours_until_expiry"] == 0
-        assert result["hours_since_activation"] == 72  # 3 days
-    
-    def test_calculate_timing_after_expiry(self):
-        """Should handle timing after expiry"""
-        expiry = datetime(2024, 1, 18, 12, 0, 0)
-        now = datetime(2024, 1, 20, 12, 0, 0)  # 2 days after expiry
-        
-        result = calculate_trial_timing(expiry, now)
-        
-        assert result["hours_until_expiry"] == -48  # Negative (expired)
-        assert result["hours_since_activation"] == 120  # 5 days
+    """Тайминги: сколько осталось и сколько прошло с активации."""
+
+    def test_full_trial_ahead(self):
+        timing = calculate_trial_timing(NOW + timedelta(hours=72), NOW)
+        assert timing["hours_until_expiry"] == pytest.approx(72)
+        assert timing["hours_since_activation"] == pytest.approx(0)
+
+    def test_midway(self):
+        timing = calculate_trial_timing(NOW + timedelta(hours=36), NOW)
+        assert timing["hours_until_expiry"] == pytest.approx(36)
+        assert timing["hours_since_activation"] == pytest.approx(36)
+
+    def test_expired_clamps_to_zero(self):
+        """Отрицательное время до истечения не должно утекать наружу.
+
+        При этом «часов с активации» продолжает расти: триал закончился
+        5 часов назад, значит с активации прошло 72 + 5 = 77 часов.
+        """
+        timing = calculate_trial_timing(NOW - timedelta(hours=5), NOW)
+        assert timing["hours_until_expiry"] == 0.0
+        assert timing["hours_since_activation"] == pytest.approx(77)
+
+    def test_missing_expiry_is_safe(self):
+        timing = calculate_trial_timing(None, NOW)
+        assert timing == {"hours_until_expiry": 0.0, "hours_since_activation": 0.0}
 
 
-class TestShouldSendNotification:
-    """Tests for should_send_notification function"""
-    
-    @pytest.mark.asyncio
-    async def test_should_send_at_6h_mark(self):
-        """Should send notification at 6h mark"""
-        expiry = datetime(2024, 1, 18, 12, 0, 0)
-        now = datetime(2024, 1, 15, 18, 0, 0)  # 6h after activation (72h before expiry)
-        
-        with patch('app.services.trials.service.database') as mock_db:
-            mock_db.get_trial_notification_flag = AsyncMock(return_value=None)
-            result = await should_send_notification(
-                12345, expiry, now, timedelta(days=3), 6, "test_key", None
-            )
-            assert result is True
-    
-    @pytest.mark.asyncio
-    async def test_should_not_send_before_6h(self):
-        """Should not send notification before 6h mark"""
-        expiry = datetime(2024, 1, 18, 12, 0, 0)
-        now = datetime(2024, 1, 15, 17, 0, 0)  # 5h after activation
-        
-        with patch('app.services.trials.service.database') as mock_db:
-            mock_db.get_trial_notification_flag = AsyncMock(return_value=None)
-            result = await should_send_notification(
-                12345, expiry, now, timedelta(days=3), 6, "test_key", None
-            )
-            assert result is False
-    
-    @pytest.mark.asyncio
-    async def test_should_not_send_if_already_sent(self):
-        """Should not send notification if already sent"""
-        expiry = datetime(2024, 1, 18, 12, 0, 0)
-        now = datetime(2024, 1, 15, 18, 0, 0)  # 6h after activation
-        
-        with patch('app.services.trials.service.database') as mock_db:
-            mock_db.get_trial_notification_flag = AsyncMock(return_value=True)
-            result = await should_send_notification(
-                12345, expiry, now, timedelta(days=3), 6, "test_key", None
-            )
-            assert result is False
+class TestFinalReminderConfig:
+    """«Последний час» — единственное оставшееся уведомление триала."""
+
+    def test_timing_matches_its_text(self):
+        """Раньше напоминание слали за 6 часов, а текст обещал «последний
+        час» — пользователей это путало. Значения обязаны совпадать."""
+        cfg = get_final_reminder_config()
+        assert cfg["hours_before_expiry"] == 1
+        assert cfg["notification_key"] == "trial.notification_71h"
+
+    def test_has_button_and_flag(self):
+        cfg = get_final_reminder_config()
+        assert cfg["has_button"] is True
+        assert cfg["db_flag"]
+
+    def test_schedule_is_intentionally_empty(self):
+        """Промежуточные уведомления убраны намеренно: они дублировали
+        друг друга и приходили дважды за пять минут."""
+        assert get_notification_schedule() == []
 
 
 class TestShouldSendFinalReminder:
-    """Tests for should_send_final_reminder function"""
-    
+    """Окно отправки: (0.5, 1] час до истечения."""
+
     @pytest.mark.asyncio
-    async def test_should_send_6h_before_expiry(self):
-        """Should send final reminder 6h before expiry"""
-        expiry = datetime(2024, 1, 18, 12, 0, 0)
-        now = datetime(2024, 1, 18, 6, 0, 0)  # 6h before expiry
-        
-        with patch('app.services.trials.service.database') as mock_db:
-            mock_db.get_trial_notification_flag = AsyncMock(return_value=None)
-            result = await should_send_final_reminder(
-                12345, expiry, now, timedelta(days=3), None
-            )
-            assert result is True
-    
+    async def test_sends_inside_window(self):
+        ok, reason = await should_send_final_reminder(
+            1, NOW + timedelta(minutes=45), NOW + timedelta(days=30),
+            False, NOW, _conn_without_paid_subscription(),
+        )
+        assert ok is True and reason is None
+
     @pytest.mark.asyncio
-    async def test_should_not_send_before_6h_window(self):
-        """Should not send final reminder before 6h window"""
-        expiry = datetime(2024, 1, 18, 12, 0, 0)
-        now = datetime(2024, 1, 18, 5, 0, 0)  # 7h before expiry
-        
-        with patch('app.services.trials.service.database') as mock_db:
-            mock_db.get_trial_notification_flag = AsyncMock(return_value=None)
-            result = await should_send_final_reminder(
-                12345, expiry, now, timedelta(days=3), None
-            )
-            assert result is False
-    
+    async def test_too_early(self):
+        ok, reason = await should_send_final_reminder(
+            1, NOW + timedelta(hours=5), NOW + timedelta(days=30),
+            False, NOW, _conn_without_paid_subscription(),
+        )
+        assert ok is False and reason == "too_early"
+
     @pytest.mark.asyncio
-    async def test_should_not_send_if_already_sent(self):
-        """Should not send final reminder if already sent"""
-        expiry = datetime(2024, 1, 18, 12, 0, 0)
-        now = datetime(2024, 1, 18, 6, 0, 0)
-        
-        with patch('app.services.trials.service.database') as mock_db:
-            mock_db.get_trial_notification_flag = AsyncMock(return_value=True)
-            result = await should_send_final_reminder(
-                12345, expiry, now, timedelta(days=3), None
-            )
-            assert result is False
+    async def test_too_late(self):
+        """Нижняя граница защищает от гонки с истечением триала:
+        воркер не должен слать уведомление о том, что уже закончилось."""
+        ok, reason = await should_send_final_reminder(
+            1, NOW + timedelta(minutes=20), NOW + timedelta(days=30),
+            False, NOW, _conn_without_paid_subscription(),
+        )
+        assert ok is False and reason == "too_late"
+
+    @pytest.mark.asyncio
+    async def test_not_sent_twice(self):
+        ok, reason = await should_send_final_reminder(
+            1, NOW + timedelta(minutes=45), NOW + timedelta(days=30),
+            True, NOW, _conn_without_paid_subscription(),
+        )
+        assert ok is False and reason == "already_sent"
+
+    @pytest.mark.asyncio
+    async def test_skipped_when_subscription_expired(self):
+        ok, reason = await should_send_final_reminder(
+            1, NOW + timedelta(minutes=45), NOW - timedelta(hours=1),
+            False, NOW, _conn_without_paid_subscription(),
+        )
+        assert ok is False and reason == "subscription_expired"
+
+    @pytest.mark.asyncio
+    async def test_skipped_when_user_already_paid(self):
+        """Купившему подписку не пишут, что триал заканчивается."""
+        ok, reason = await should_send_final_reminder(
+            1, NOW + timedelta(minutes=45), NOW + timedelta(days=30),
+            False, NOW, _conn_with_paid_subscription(),
+        )
+        assert ok is False and reason == "has_active_paid_subscription"
 
 
-class TestNotificationSchedule:
-    """Tests for notification schedule configuration"""
-    
-    def test_get_notification_schedule(self):
-        """Should return correct notification schedule"""
-        schedule = get_notification_schedule()
-        
-        assert len(schedule) == 2
-        assert schedule[0]["hours"] == 6
-        assert schedule[0]["key"] == "trial.notification_6h"
-        assert schedule[0]["has_button"] is False
-        
-        assert schedule[1]["hours"] == 48
-        assert schedule[1]["key"] == "trial.notification_60h"
-        assert schedule[1]["has_button"] is True
-        assert schedule[1]["db_flag"] == "trial_notif_60h_sent"
-    
-    def test_get_final_reminder_config(self):
-        """Should return correct final reminder configuration"""
-        config = get_final_reminder_config()
-        
-        assert config["hours_before_expiry"] == 6
-        assert config["notification_key"] == "trial.notification_71h"
-        assert config["has_button"] is True
-        assert config["db_flag"] == "trial_notif_71h_sent"
+class TestPrepareNotificationPayload:
+    def test_payload_carries_key_and_button(self):
+        payload = prepare_notification_payload("trial.notification_71h", has_button=True)
+        assert payload["notification_key"] == "trial.notification_71h"
+        assert payload["has_button"] is True
+
+    def test_button_defaults_to_false(self):
+        assert prepare_notification_payload("trial.some_key")["has_button"] is False
