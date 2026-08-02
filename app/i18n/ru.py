@@ -313,6 +313,7 @@ LANG = {
     'errors.analytics': "Ошибка загрузки аналитики",
     'errors.check_logs': "Ошибка. Проверь логи.",
     'errors.dashboard_data': "Ошибка при получении данных дашборда",
+    'errors.database_unavailable': '⏳ База данных временно недоступна. Попробуйте через минуту.',
     'errors.data_fetch': "❌ Ошибка при получении данных: {error}",
     'errors.db_init_stage_warning': "⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны.",
     'errors.details': "Ошибка при получении деталей",

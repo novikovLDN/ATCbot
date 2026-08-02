@@ -263,6 +263,7 @@ LANG = {
     'errors.analytics': "Error loading analytics",
     'errors.check_logs': "Error. Check logs.",
     'errors.dashboard_data': "Error fetching dashboard data",
+    'errors.database_unavailable': '⏳ The database is temporarily unavailable. Please try again in a minute.',
     'errors.data_fetch': "❌ Error fetching data: {error}",
     'errors.db_init_stage_warning': "⚠️ Database is still initializing (STAGE). Some features may be unavailable.",
     'errors.details': "Error fetching details",

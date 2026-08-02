@@ -64,7 +64,28 @@ def get_text(language: str, key: str, default: Optional[str] = None, **kwargs) -
             return _safe_format(text, key, kwargs)
         return text
 
-    # 3. Запасной текст вызывающего кода, если он передан
+    # 3. Фолбэк на русский.
+    #
+    # Русский словарь самый полный: около сотни ключей, которые код реально
+    # запрашивает, есть только в нём (экраны Steam, Spotify, подключения).
+    # Без этой ступени пользователь с любым другим языком видел на экране
+    # сырой ключ вида «steam.title» — интерфейс выглядел сломанным.
+    #
+    # Текст на чужом языке хуже перевода, но несравнимо лучше служебной
+    # строки: человек хотя бы понимает, куда попал, и может пользоваться
+    # ботом. Каждый такой случай пишется в лог с уровнем warning — по нему
+    # и составляется список на перевод.
+    ru_dict = LANGUAGES.get(DEFAULT_LANGUAGE, {})
+    if key in ru_dict:
+        logger.warning(
+            "I18N fallback to RU for key=%s, lang=%s — ключ ждёт перевода", key, language,
+        )
+        text = ru_dict[key]
+        if kwargs:
+            return _safe_format(text, key, kwargs)
+        return text
+
+    # 4. Запасной текст вызывающего кода, если он передан
     if isinstance(default, str) and default:
         logger.error("I18N missing key in all languages: %s (использован запасной текст)", key)
         if kwargs:

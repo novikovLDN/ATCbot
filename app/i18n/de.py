@@ -256,6 +256,7 @@ LANG = {
     'errors.analytics': 'Fehler beim Laden der Analysen',
     'errors.check_logs': 'Fehler. Logs überprüfen.',
     'errors.dashboard_data': 'Fehler beim Abrufen der Dashboard-Daten',
+    'errors.database_unavailable': '⏳ Die Datenbank ist vorübergehend nicht verfügbar. Bitte versuchen Sie es in einer Minute erneut.',
     'errors.data_fetch': '❌ Fehler beim Abrufen der Daten: {error}',
     'errors.db_init_stage_warning': '⚠️ Datenbank wird noch initialisiert (STAGE). Einige Funktionen sind möglicherweise nicht verfügbar.',
     'errors.details': 'Fehler beim Abrufen der Details',

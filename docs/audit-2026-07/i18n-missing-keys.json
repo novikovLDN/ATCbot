@@ -1,0 +1,1182 @@
+{
+  "admin.notif_custom": {
+    "ru": "✏️ Кастомные уведомления",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_promo": {
+    "ru": "🎯 Промо-уведомления",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_promo_choose_discount": {
+    "ru": "Введите процент скидки (5-30):",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_promo_choose_period": {
+    "ru": "Выберите период действия скидки:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_promo_choose_segment": {
+    "ru": "Выберите аудиторию:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_promo_preview": {
+    "ru": "📋 <b>Предпросмотр</b>\n\n{preview}\n\n📊 Скидка: {discount}%\n📅 Период: {period}\n👥 Аудитория: {segment}\n\nОтправить?",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_promo_sent": {
+    "ru": "✅ Промо отправлено\n\nДоставлено: {sent}\nОшибок: {failed}",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_promo_title": {
+    "ru": "🎯 <b>Промо-уведомления</b>\n\nВыберите готовый шаблон для рассылки.\nСкидка применяется автоматически при нажатии кнопки.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_referral": {
+    "ru": "👥 Реферальные акции",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_referral_active": {
+    "ru": "✅ Сейчас активна акция x2 кешбэк\nПериод: {start} — {end}",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_referral_cancel_confirm": {
+    "ru": "⚠️ <b>Отменить акцию x2 кешбэк?</b>\n\nАкция #{promo_id}, период: {start} — {end}\n\nМножитель x2 будет снят у всех пользователей.\nЭто действие необратимо.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_referral_cancel_x2": {
+    "ru": "⛔ Отменить акцию x2",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_referral_cancelled": {
+    "ru": "✅ Акция x2 кешбэк #{promo_id} отменена.\n\nМножитель снят у {affected} пользователей.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_referral_start_x2": {
+    "ru": "🔥 Запустить x2 кешбэк",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_referral_title": {
+    "ru": "👥 <b>Реферальные акции</b>\n\nЗапустите x2 кешбэк для привлечения новых пользователей:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_retention": {
+    "ru": "🔄 Удержание и вовлечение",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_retention_choose_segment": {
+    "ru": "Выберите аудиторию для рассылки:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_retention_sent": {
+    "ru": "✅ Уведомление отправлено\n\nДоставлено: {sent}\nОшибок: {failed}",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_retention_title": {
+    "ru": "🔄 <b>Удержание и вовлечение</b>\n\nШаблоны для возврата и удержания пользователей:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_section_title": {
+    "ru": "📣 <b>Центр уведомлений</b>\n\nУправляйте уведомлениями для пользователей:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_sub_title": {
+    "ru": "📋 <b>Автоматические уведомления</b>\n\nЭти уведомления отправляются автоматически:\n\n<b>Триал:</b>\n• За 1 день до окончания — напоминание\n• За 3 часа — скидка 15%\n\n<b>Платная подписка:</b>\n• За 7 дней — продлить\n• За 3 дня — продлить\n• За 1 день — продлить\n• За 3 часа — спецпредложение 15%\n\n<b>Действия:</b>\n• Покупка подписки — уведомление с кнопкой подключения\n• Продление — подтверждение\n• Активация триала — приветствие",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "admin.notif_subscription": {
+    "ru": "📋 Уведомления по подпискам",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bgift_setup.connect_no_key": {
+    "ru": "⚡️ <b>Подключитесь в одно нажатие</b>\n\n🌐 <b>Обход</b> — белые списки РФ, интернет работает в любой точке мира.\n\n⚠️ Не удалось получить ваш ключ обхода. Подождите минуту и нажмите «Назад → Дальше» ещё раз. Если ошибка повторится, напишите в поддержку.",
+    "missing_in": [
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bgift_setup.connect_screen": {
+    "ru": "⚡️ <b>Подключитесь в одно нажатие</b>\n\nДобавьте ключ для полноценной работы.\n\n🌐 <b>Обход</b> — белые списки РФ, интернет работает в любой точке мира.\n\n<b>Ваш ключ обхода:</b>\n<blockquote><code>{sub_url}</code></blockquote>\n<i>Нажмите на ключ, чтобы скопировать.</i>\n\n━━━━━━━━━━━━━━━━━\n<b>📲 Как добавить вручную</b>\n\n<b>В Happ:</b>\n1. Откройте Happ\n2. Нажмите <b>+</b> в правом верхнем углу\n3. Выберите <b>«Добавить из буфера обмена»</b>\n4. Включите соединение переключателем\n\n<blockquote>💡 Кнопка «Добавить ключ» сверху сделает это автоматически — без копирования.</blockquote>",
+    "missing_in": [
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bgift_setup.select_device": {
+    "ru": "📱 <b>Выберите устройство</b>\n\nПодключим обход в две короткие шага. Сначала выберите, на каком устройстве будете пользоваться.",
+    "missing_in": [
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass.buy_title": {
+    "ru": "🌐 <b>Обход белых списков 🇷🇺</b>\n\nДоступ к заблокированным сайтам через новейший протокол обхода.\nОплата только за трафик — без ежемесячных платежей.\n\n<blockquote>📊 Примерный расход:\n├ 15 ГБ — ~1.5 мес.\n├ 25 ГБ — ~2.5 мес.\n├ 45 ГБ — ~4 мес.\n├ 60 ГБ — ~6 мес.\n└ 120 ГБ — ~1 год</blockquote>\n\n💡 Текст и фото — мало. Видео и Reels — больше.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass.buy_title_trial": {
+    "ru": "\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> <b>Бонус:</b> 3 дня бесплатного доступа к основным серверам!",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass.purchase_success": {
+    "ru": "✅ <b>Обход белых списков активирован!</b>\n\n📦 +{gb} ГБ трафика начислено",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass.trial_activated": {
+    "ru": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> <b>Бонус:</b> Пробный период основной подписки (3 дня) активирован!\n\nПо истечении пробного периода обход белых списков продолжит работать.\nОсновную подписку можно приобрести отдельно.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_gift.activated": {
+    "ru": "🎁 <b>Подарок активирован!</b>\n\nВам начислено <b>{gb} ГБ</b> трафика обхода.\n\nГБ уже доступны и работают независимо от срока подписки. Откройте раздел «Включить обход», чтобы использовать их.",
+    "missing_in": [
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_gift.connect_btn": {
+    "ru": "🌐 Подключить Обход",
+    "missing_in": [
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_gift.error_not_found": {
+    "ru": "❌ <b>Гифт-ссылка не найдена.</b>\n\nПроверьте правильность ссылки или обратитесь к отправителю.",
+    "missing_in": [
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_gift.error_remnawave": {
+    "ru": "⚠️ <b>Не удалось начислить ГБ — попробуйте позже.</b>\n\nЕсли проблема повторится, напишите в поддержку.",
+    "missing_in": [
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_setup.add_happ_btn": {
+    "ru": "➕ Добавить обход в Happ",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_setup.add_incy_btn": {
+    "ru": "➕ Добавить обход в Incy",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_setup.manual_btn": {
+    "ru": "🔑 Показать ключ вручную",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_setup.manual_screen_footer": {
+    "ru": "💡 Если ключ не импортировался — вернись назад и попробуй кнопку <b>«➕ Добавить обход»</b>. Она открывает клиент напрямую через deeplink.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_setup.manual_screen_happ_block": {
+    "ru": "📲 <b>Ключ для Happ</b> (crypt4)\n<blockquote expandable><code>{happ_key}</code></blockquote>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_setup.manual_screen_header": {
+    "ru": "🔑 <b>Ключи обхода</b>\n\nТапни по ключу ниже — он <b>скопируется в буфер</b>. Затем открой клиент → кнопка вставки / буфера.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_setup.manual_screen_incy_block": {
+    "ru": "💚 <b>Ключ для Incy</b> (crypt1)\n<blockquote expandable><code>{incy_key}</code></blockquote>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_setup.no_key_yet": {
+    "ru": "⏳ <b>Ключ обхода ещё не готов</b>\n\nОбычно это занимает не более минуты — загляни сюда чуть позже.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "bypass_setup.title": {
+    "ru": "🌐 <b>Установка обхода блокировок</b>\n\nОткрой один из клиентов ниже — установка занимает 30 секунд, ключ уже сгенерирован и закреплён за тобой.\n\n<b>📲 Happ</b> — универсальный, работает на iOS / Android / Mac / Windows.\n<b>💚 Incy</b> — быстрый iOS-клиент с классным UX.\n\n<b>Как подключиться:</b>\n1. Убедись что клиент установлен (если нет — установи из App Store / Play Market).\n2. Нажми <b>«➕ Добавить обход»</b> — Telegram откроет клиент и импортирует ключ автоматически.\n3. Не открылось? Нажми <b>«🔑 Показать ключ вручную»</b>, скопируй ключ и вставь в клиент из буфера.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "combo.purchase_success": {
+    "ru": "✅ <b>Комбо-подписка активирована!</b>\n\n📦 Тариф: <b>Комбо {tariff}</b> · {months} мес.\n🌐 Обход: <b>{gb} ГБ</b> начислено\n\nНажмите «Подключиться» чтобы настроить устройство.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "combo.screen_title": {
+    "ru": "🚀 <b>Комбо-подписка</b>\n\nОсновные сервера + обход белых списков в одном пакете.\nВыберите тариф:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "combo.select_basic": {
+    "ru": "⚡ Комбо Basic",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "combo.select_plus": {
+    "ru": "👑 Комбо Plus",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "combo.tariff_basic": {
+    "ru": "⚡ <b>Комбо Basic</b>\n\n<blockquote>🌐 Основные сервера (безлимит) · до 25 Гбит/с\n🌐 Обход белых списков + трафик в комплекте\n👨‍👩‍👧‍👦 Одна подписка на всю семью — до 10 устройств</blockquote>\n\n📊 <b>Пакет — это ваш личный запас ГБ</b>\n<blockquote>Не сгорает по времени и не привязан к подписке — тратится только когда вы реально пользуетесь серверами с пометкой <b>LTE</b>.</blockquote>\n\n<i>Закончится — пополните, когда удобно</i> ⭐️",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "combo.tariff_plus": {
+    "ru": "👑 <b>Комбо Plus</b>\n\n<blockquote>🌐 Приоритетные сервера (безлимит) · до 75 Гбит/с\n🔄 Резервные каналы · соединение всегда работает\n🌐 Обход белых списков + трафик в комплекте\n👨‍👩‍👧‍👦 Одна подписка на всю семью — до 14 устройств</blockquote>\n\n📊 <b>Пакет — это ваш личный запас ГБ</b>\n<blockquote>Не сгорает по времени и не привязан к подписке — тратится только когда вы реально пользуетесь серверами с пометкой <b>LTE</b>.</blockquote>\n\n<i>Закончится — пополните, когда удобно</i> ⭐️",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "help.contacts_title": {
+    "ru": "📞 <b>Контакты</b>\n\nСвяжитесь с нами по электронной почте:\n\n<blockquote>📧 <b>Техническая поддержка</b>\n<code>support@atlassecure.uk</code>\nПроекты Atlas Secure и QoDev</blockquote>\n\n<blockquote>💼 <b>Отдел продаж</b>\n<code>sales@atlassecure.uk</code>\nИнфраструктурные решения Atlas Secure</blockquote>\n\n<i>Нажмите на адрес, чтобы скопировать.</i>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "help.faq_title": {
+    "ru": "📖 <b>Ответы на частые вопросы</b>\n\nВыберите свой вопрос — покажем короткое решение.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "help.menu_title": {
+    "ru": "❓ <b>Помощь</b>\n\nВыберите подходящий вариант ниже:\n\n<blockquote>📖 <b>Ответы на частые вопросы</b>\nКороткие решения типичных проблем</blockquote>\n\n<blockquote>📲 <b>Инструкции по сервису</b>\nКак настроить VPN на вашем устройстве</blockquote>\n\n<blockquote>📞 <b>Контакты</b>\nПочта поддержки и отдела продаж</blockquote>\n\n<blockquote>💬 <b>Помощь</b>\nНаписать живому оператору в Telegram</blockquote>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "payment.card_pl": {
+    "ru": "Банковская карта",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "payment.intl_pl": {
+    "ru": "🌎 Международные платежи",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "purchase.auto_renewal_success": {
+    "ru": "<tg-emoji emoji-id=\"5456140674028019486\">🔄</tg-emoji> <b>Подписка автоматически продлена</b>\n\n📦 Тариф: {tariff_name}\n<tg-emoji emoji-id=\"5454415424319931791\">⏳</tg-emoji> Срок: {days} дней\n📅 Действует до: {expires_date}\n💳 Списано с баланса: {amount:.2f} ₽\n\nВаш VPN продолжает работать без перерыва.\n\n🛡 Спасибо за доверие Atlas Secure!",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "reminder.paid_1d": {
+    "ru": "<tg-emoji emoji-id=\"5190806721286657692\">🔴</tg-emoji> Подписка заканчивается завтра. Продлите сейчас, чтобы VPN продолжил работать.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "reminder.paid_1d_btn": {
+    "ru": "🔁 Продлить",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "reminder.paid_3d_btn": {
+    "ru": "🔁 Продлить",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "reminder.paid_3h_discount_btn": {
+    "ru": "🔥 Купить со скидкой 15%",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "reminder.paid_3h_special": {
+    "ru": "<tg-emoji emoji-id=\"5190806721286657692\">🚨</tg-emoji> <b>3 часа до отключения</b>\n\nПосле этого VPN перестанет работать. Сайты и приложения вернутся к блокировкам.\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Успейте — <b>скидка 15%</b> на продление. Действует 3 часа.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "reminder.paid_7d": {
+    "ru": "<tg-emoji emoji-id=\"5454415424319931791\">📅</tg-emoji> Подписка заканчивается через 7 дней. Продлите заранее — доступ не прервётся.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "reminder.paid_7d_btn": {
+    "ru": "🔁 Продлить подписку",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "retention.expired_no_renew_btn": {
+    "ru": "🔁 Восстановить подписку",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "setup.btn_done": {
+    "ru": "✅ Готово",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "setup.btn_manual": {
+    "ru": "📋 Установить вручную",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "setup.btn_need_help": {
+    "ru": "💬 Нужна помощь",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "setup.install_app": {
+    "ru": "📲 <b>Осталось скачать приложение</b>\n\nIncy — бесплатное приложение для VPN.\nАльтернатива — Happ.\nНажмите кнопку — откроется магазин приложений.\n\n<blockquote>Уже установлен Happ или Incy? Нажмите «Дальше».</blockquote>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "setup.install_happ_global": {
+    "ru": "📲 Скачать Happ (другой регион)",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "setup.install_happ_ru": {
+    "ru": "📲 Скачать Happ (Россия)",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "setup.key_install_title": {
+    "ru": "⚡️ <b>Подключитесь в одно нажатие</b>\n\nНажмите кнопки ниже — ключи добавятся автоматически.\nДобавьте оба для полноценной работы.\n\n<blockquote>🔑 VPN — основные сервера, весь интернет без блокировок\n🌐 Обход — белые списки РФ, интернет работает в любой точке мира</blockquote>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "setup.next_step": {
+    "ru": "➡️ Дальше",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "setup.qr_app_btn_happ": {
+    "ru": "Happ",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "setup.qr_app_btn_incy": {
+    "ru": "💚 Incy",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "setup.qr_choose_app": {
+    "ru": "📲 <b>Добавить устройство</b>\n\nВыберите приложение, в котором будете подключаться:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "share_discount.activated": {
+    "ru": "🎉 <b>Скидка 30% активирована!</b>\n\nДействует <b>24 часа</b> на тарифы Basic, Plus и Комбо.\nВыбирай тариф и оформляй подписку 👇",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "share_discount.already_claimed": {
+    "ru": "ℹ️ Ты уже активировал эту скидку раньше — повторно использовать её нельзя.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "share_discount.screen": {
+    "ru": "🎁 <b>Подари другу скидку 30%</b>\n\nОтправь ссылку другу — он получит скидку <b>30%</b> на любой тариф (Basic / Plus / Комбо).\n\n⏱ Скидка действует <b>24 часа</b> с момента активации.\n👤 Один человек может активировать скидку только один раз.\n\n<b>Твоя ссылка:</b>\n<blockquote expandable><code>{link}</code></blockquote>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "share_discount.self_blocked": {
+    "ru": "🚫 Нельзя активировать скидку по собственной ссылке — отправь её другу.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "share_discount.send_button": {
+    "ru": "📤 Отправить ссылку другу",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "share_discount.share_text": {
+    "ru": "🎁 Держи скидку 30% на Atlas Secure — действует 24 часа после перехода по ссылке.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.apple_admin": {
+    "ru": "🍎 <b>ПОКУПКА APPLE ID</b>\n\n👤 Покупатель: <code>{buyer_id}</code>\n📛 Username: {buyer_username}\n🌍 Регион: {region}\n💰 Номинал: {nominal}\n💳 Сумма: {price} ₽\n🕐 Дата: {date}\n\n💬 <i>Отправьте код через «Написать пользователю»</i>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.apple_amount_title": {
+    "ru": "🍎 <b>Пополнение Apple ID</b>\n\nРегион: {region}\n\nВыберите номинал пополнения:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.apple_confirm": {
+    "ru": "🍎 <b>Пополнение Apple ID</b>\n\nРегион: {region}\nНоминал: {nominal}\nК оплате: <b>{price:.2f} ₽</b>\n\n<blockquote>Код пополнения будет отправлен в этот чат в течение 15 минут после оплаты.</blockquote>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.apple_success": {
+    "ru": "✅ <b>Оплата прошла успешно!</b>\n\n🍎 Товар: Пополнение Apple ID\n🌍 Регион: {region}\n💰 Номинал: {nominal}\n💳 Сумма: {price} ₽\n\n⏳ Ожидайте получения кода пополнения в течение <b>5–15 минут</b>.\n\nЕсли вы не получили код, напишите нам:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.apple_title": {
+    "ru": "🍎 <b>Пополнение Apple ID</b>\n\nВыберите регион вашего Apple ID:\n\n<blockquote>Не знаете свой регион?\nОткройте <b>Настройки → Apple ID → Медиаматериалы и покупки → Просмотреть</b> — там будет указана страна/регион.</blockquote>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.claude_coming_soon": {
+    "ru": "💪 Собрали все свои суперсилы, чтобы быстрее реализовать",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.steam_admin": {
+    "ru": "🎮 <b>ПОКУПКА STEAM</b>\n\n👤 Покупатель: <code>{buyer_id}</code>\n📛 Username: {buyer_username}\n🎮 Логин Steam: <code>{login}</code>\n💰 Сумма пополнения: {amount} ₽\n💳 Сумма оплаты: {price} ₽\n🕐 Дата: {date}\n\n💬 <i>Пополните Steam-аккаунт и подтвердите пользователю через «Написать пользователю»</i>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.steam_amount_title": {
+    "ru": "🎮 <b>Пополнение Steam</b>\n\nВыберите сумму пополнения (₽):",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.steam_choose_payment": {
+    "ru": "🎮 <b>Пополнение Steam</b>\n\n📥 Сумма на счёт: <b>{amount} ₽</b>\n👤 Логин Steam: <code>{login}</code>\n💳 К оплате: <b>{price} ₽</b> <i>(включая комиссию сервиса {fee} ₽)</i>\n\nВыберите способ оплаты:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.steam_disclaimer": {
+    "ru": "🎮 <b>Пополнение Steam</b>\n\nЭто пополнение доступно только для России и стран СНГ:\n🇷🇺 Российская Федерация\n🇦🇲 Республика Армения\n🇧🇾 Республика Беларусь\n🇰🇿 Республика Казахстан\n🇰🇬 Кыргызская Республика\n🇲🇩 Республика Молдова\n🇹🇯 Республика Таджикистан\n🇹🇲 Туркменистан\n🇺🇿 Республика Узбекистан\n\n<blockquote>Конвертация выполняется по внутреннему курсу Steam. Мы не используем калькулятор валют, чтобы не вводить в заблуждение.</blockquote>",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.steam_disclaimer_ack_btn": {
+    "ru": "✅ Ознакомлен",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.steam_invalid_login": {
+    "ru": "❌ Неверный логин Steam.\n\nЛогин должен содержать 3–32 символа: латинские буквы, цифры, дефис и подчёркивание. Попробуйте ещё раз.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.steam_login_prompt": {
+    "ru": "🎮 <b>Пополнение Steam</b>\n\nСумма пополнения: <b>{amount} ₽</b>\n\nВведите <b>логин</b> вашего аккаунта Steam:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.steam_success": {
+    "ru": "✅ <b>Оплата прошла успешно!</b>\n\n🎮 Товар: Пополнение Steam\n👤 Логин: <code>{login}</code>\n💰 Сумма пополнения: {amount} ₽\n💳 Сумма оплаты: {price} ₽\n\n⏳ Ожидайте зачисления на аккаунт Steam в течение <b>5–15 минут</b>.\n\nЕсли средства не поступили, напишите нам:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "shop.title": {
+    "ru": "<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> <b>Мини-магазинчик</b>\n\nЗдесь можно купить полезные цифровые товары — быстро, без нервов и лишних сложностей.\n\n<blockquote><tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> <b>Telegram Premium</b> — расширьте возможности мессенджера\n<tg-emoji emoji-id=\"5422545633112249830\">🍎</tg-emoji> <b>Пополнение Apple ID</b> — пополните баланс App Store в любом регионе\n<tg-emoji emoji-id=\"5319247469165433798\">🎮</tg-emoji> <b>Пополнить Steam</b> — кошелёк Steam без VPN\n<tg-emoji emoji-id=\"5226639745106330551\">🧠</tg-emoji> <b>Claude Pro/Max</b> <i>(скоро)</i> — самый мощный AI-ассистент для работы и творчества</blockquote>\n\nВыберите что вас интересует:",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "traffic.bypass_activated": {
+    "ru": "✅ <b>Обход блокировок активирован!</b>\n\n📦 +{gb} ГБ трафика начислено\n\n💡 <i>Трафик не сгорает — накапливается между покупками.</i>\n\nОткройте <b>Личный кабинет</b> чтобы получить ключ подключения.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "traffic.bypass_activated_trial": {
+    "ru": "✅ <b>Обход блокировок активирован!</b>\n\n📦 +{gb} ГБ трафика начислено\n\n🎁 <b>Бонус:</b> Пробный период VPN (3 дня) активирован!\n\n💡 <i>Трафик не сгорает — накапливается между покупками.</i>\n\nОткройте <b>Личный кабинет</b> чтобы получить ключ подключения.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "traffic.bypass_provisioning": {
+    "ru": "⏳ Настраиваем обход блокировок...\nНажмите 🔄 через несколько секунд.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "traffic.notify_5gb": {
+    "ru": "<tg-emoji emoji-id=\"5190806721286657692\">📉</tg-emoji> Осталось {remaining} трафика обхода.\n\nРекомендуем пополнить, чтобы обход работал без перебоев.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "traffic.notify_8gb": {
+    "ru": "<tg-emoji emoji-id=\"5456140674028019486\">💡</tg-emoji> Осталось {remaining} трафика обхода.\n\nМожно докупить заранее — трафик не сгорает.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "traffic.trial_upgrade_hint": {
+    "ru": "Купите подписку Basic или Plus, чтобы разблокировать больше ГБ и покупку трафика",
+    "missing_in": [
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "trial.activated_btn_support": {
+    "ru": "💬 Нужна помощь",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "trial.bypass_activated": {
+    "ru": "🛡 <b>Обход белых списков подключён</b>\n\nМы дали <b>500 МБ трафика обхода</b> в подарок — с ним открываются сайты и сервисы, которые фильтруются по белым спискам.\n\nЧтобы начать пользоваться — установи ключ в Happ или Incy нажатием кнопки ниже.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "trial.bypass_activated_btn_help": {
+    "ru": "💬 Нужна помощь",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "trial.bypass_activated_btn_setup": {
+    "ru": "🌐 Включить обход",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "trial.expired_discount_btn": {
+    "ru": "🔥 Купить со скидкой 30%",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "trial.reminder_24h": {
+    "ru": "⏳ <b>Пробный период заканчивается завтра</b>\n\nЗавтра доступ отключится — сайты и приложения вернутся к блокировкам.\n\nОформите подписку сейчас — ключ и настройки сохранятся, ничего не нужно переустанавливать.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "trial.reminder_3h": {
+    "ru": "🔥 <b>3 часа до отключения</b>\n\nПосле этого VPN перестанет работать. Сайты, стриминг, мессенджеры — всё вернётся к блокировкам.\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Успейте — <b>скидка 15%</b> действует до конца триала.",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  },
+  "trial.reminder_3h_discount_btn": {
+    "ru": "🔥 Купить со скидкой 15%",
+    "missing_in": [
+      "en",
+      "de",
+      "ar",
+      "kk",
+      "tj",
+      "uz"
+    ]
+  }
+}

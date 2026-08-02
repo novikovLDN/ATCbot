@@ -50,13 +50,18 @@ def test_missing_placeholder_does_not_raise():
 
 
 def test_database_unavailable_key_has_usable_output():
-    """errors.database_unavailable отсутствует в ru — запасной текст обязателен.
+    """errors.database_unavailable теперь есть во всех семи языках.
 
-    Без него пользователь игр видел строку 'errors.database_unavailable'.
+    Раньше ключа не было нигде: экраны игр держались на запасном тексте,
+    захардкоженном по-английски прямо в вызове, — и русский пользователь
+    читал «Database temporarily unavailable».
     """
-    out = get_text("ru", "errors.database_unavailable", "База данных временно недоступна")
-    assert out == "База данных временно недоступна"
-    assert "errors." not in out
+    for lang in LANGUAGES:
+        out = get_text(lang, "errors.database_unavailable", "База данных временно недоступна")
+        assert "errors." not in out, f"{lang}: пользователю ушёл сырой ключ"
+        assert out != "База данных временно недоступна" or lang == "ru", (
+            f"{lang}: сработал запасной текст вместо словаря"
+        )
 
 
 class TestBuyButtonKeys:

@@ -256,6 +256,7 @@ LANG = {
     'errors.analytics': 'خطأ في تحميل التحليلات',
     'errors.check_logs': 'خطأ. تحقق من السجلات.',
     'errors.dashboard_data': 'خطأ في جلب بيانات لوحة التحكم',
+    'errors.database_unavailable': '⏳ قاعدة البيانات غير متاحة مؤقتاً. حاول مرة أخرى بعد دقيقة.',
     'errors.data_fetch': '❌ خطأ في جلب البيانات: {error}',
     'errors.db_init_stage_warning': '⚠️ قاعدة البيانات لا تزال قيد التهيئة (STAGE). قد تكون بعض الوظائف غير متاحة.',
     'errors.details': 'خطأ في جلب التفاصيل',

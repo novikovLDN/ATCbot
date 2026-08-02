@@ -256,6 +256,7 @@ LANG = {
     'errors.analytics': 'Хато ҳангоми бор кардани аналитика',
     'errors.check_logs': 'Хато. Логҳоро тафтиш кунед.',
     'errors.dashboard_data': 'Хато ҳангоми гирифтани маълумоти панел',
+    'errors.database_unavailable': '⏳ Пойгоҳи додаҳо муваққатан дастрас нест. Пас аз як дақиқа такрор кунед.',
     'errors.data_fetch': '❌ Хато ҳангоми гирифтани маълумот: {error}',
     'errors.db_init_stage_warning': '⚠️ Database is still initializing (STAGE). Some features may be unavailable.',
     'errors.details': 'Хато ҳангоми гирифтани тафсилот',

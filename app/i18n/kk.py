@@ -256,6 +256,7 @@ LANG = {
     'errors.analytics': 'Аналитиканы жүктеу қатесі',
     'errors.check_logs': 'Қате. Логтарды тексеріңіз.',
     'errors.dashboard_data': 'Панель деректерін алу қатесі',
+    'errors.database_unavailable': '⏳ Дерекқор уақытша қолжетімсіз. Бір минуттан кейін қайталап көріңіз.',
     'errors.data_fetch': '❌ Деректерді алу қатесі: {error}',
     'errors.db_init_stage_warning': '⚠️ Database is still initializing (STAGE). Some features may be unavailable.',
     'errors.details': 'Толықтамаларды алу қатесі',

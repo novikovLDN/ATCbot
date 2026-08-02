@@ -256,6 +256,7 @@ LANG = {
     'errors.analytics': 'Analitikani yuklashda xato',
     'errors.check_logs': 'Xato. Loglarni tekshiring.',
     'errors.dashboard_data': "Dashboard ma'lumotlarini olishda xato",
+    'errors.database_unavailable': '⏳ Ma\'lumotlar bazasi vaqtincha mavjud emas. Bir daqiqadan so\'ng qayta urinib ko\'ring.',
     'errors.data_fetch': "❌ Ma'lumotlarni olishda xato: {error}",
     'errors.db_init_stage_warning': "⚠️ Ma'lumotlar bazasi hali ishga tushirilmoqda (STAGE). Ba'zi funksiyalar mavjud bo'lmasligi mumkin.",
     'errors.details': 'Tafsilotlarni olishda xato',
