@@ -142,19 +142,6 @@ from database.subscriptions import (  # noqa: F401
     mark_reminder_flag_sent,
     mark_user_unreachable,
     update_last_reminder_at,
-    get_promo_code,
-    get_active_promo_by_code,
-    has_active_promo,
-    check_promo_code_valid,
-    log_promo_code_usage,
-    get_promo_stats,
-    generate_promo_code,
-    create_promocode_atomic,
-    deactivate_promocode,
-    reactivate_promocode,
-    _consume_promo_in_transaction,
-    validate_promocode_atomic,
-    consume_promocode_atomic,
     is_user_first_purchase,
     get_subscriptions_for_reminders,
     get_admin_stats,
@@ -180,6 +167,23 @@ from database.subscriptions import (  # noqa: F401
     set_combo_flag,
     set_bypass_only_flag,
     ensure_bypass_only_subscription,
+)
+
+# Promo codes: выдача, валидация, атомарное потребление
+from database.promo import (  # noqa: F401
+    get_promo_code,
+    get_active_promo_by_code,
+    has_active_promo,
+    check_promo_code_valid,
+    log_promo_code_usage,
+    get_promo_stats,
+    generate_promo_code,
+    create_promocode_atomic,
+    deactivate_promocode,
+    reactivate_promocode,
+    _consume_promo_in_transaction,
+    validate_promocode_atomic,
+    consume_promocode_atomic,
 )
 
 # Traffic: Remnawave integration, notifications, purchases
