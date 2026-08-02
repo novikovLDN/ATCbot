@@ -128,12 +128,57 @@ def test_trial_defined_in_its_module(name):
     assert hasattr(tq, name)
 
 
+PENDING_NAMES = [
+    "create_pending_balance_topup_purchase",
+    "create_pending_purchase",
+    "get_pending_purchase",
+    "get_pending_purchase_by_id",
+    "cancel_pending_purchases",
+    "update_pending_purchase_invoice_id",
+    "mark_pending_purchase_paid",
+    "has_purchased_proxy",
+    "mark_proxy_purchased",
+]
+
+
+@pytest.mark.parametrize("name", PENDING_NAMES)
+def test_pending_available_via_package(name):
+    import database
+    assert hasattr(database, name)
+
+
+@pytest.mark.parametrize("name", PENDING_NAMES)
+def test_pending_available_via_subscriptions(name):
+    import database.subscriptions as subs
+    assert hasattr(subs, name)
+
+
+def test_finalize_purchase_stays_with_transactions():
+    """finalize_purchase проводит деньги и выдаёт товар — она относится
+    к транзакционной части и не должна была уехать вместе с учётом."""
+    import database.subscriptions as subs
+    import database.pending_purchases as pp
+    assert hasattr(subs, "finalize_purchase")
+    assert not hasattr(pp, "finalize_purchase")
+
+
+def test_purchase_type_constants_moved_with_their_queries():
+    """Перечни типов задают CHECK-констрейнты таблицы pending_purchases,
+    поэтому живут рядом с запросами к ней."""
+    import database.pending_purchases as pp
+    assert "steam" in pp.PURCHASE_TYPES
+    assert "farm_effect" in pp.PURCHASE_TYPES
+    import database.subscriptions as subs
+    assert subs.PURCHASE_TYPES is pp.PURCHASE_TYPES
+
+
 def test_split_modules_import_cleanly():
     """Каждый выделенный модуль обязан импортироваться сам по себе:
     потерянный import внутри переноса иначе всплывёт только в проде."""
     import importlib
     for mod in ("database.promo", "database.referral_analytics",
-                "database.reminders_queries", "database.trials_queries"):
+                "database.reminders_queries", "database.trials_queries",
+                "database.pending_purchases"):
         importlib.import_module(mod)
 
 

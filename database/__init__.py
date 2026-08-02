@@ -134,19 +134,26 @@ from database.subscriptions import (  # noqa: F401
     is_user_first_purchase,
     get_admin_stats,
     calculate_final_price,
+    finalize_purchase,
+    set_combo_flag,
+    set_bypass_only_flag,
+    ensure_bypass_only_subscription,
+)
+
+# Pending purchases: учёт намерения оплатить и его жизненный цикл
+from database.pending_purchases import (  # noqa: F401
     create_pending_balance_topup_purchase,
     create_pending_purchase,
-    has_purchased_proxy,
-    mark_proxy_purchased,
     get_pending_purchase,
     get_pending_purchase_by_id,
     cancel_pending_purchases,
     update_pending_purchase_invoice_id,
     mark_pending_purchase_paid,
-    finalize_purchase,
-    set_combo_flag,
-    set_bypass_only_flag,
-    ensure_bypass_only_subscription,
+    has_purchased_proxy,
+    mark_proxy_purchased,
+    PURCHASE_TYPES,
+    TARIFF_VALUES,
+    TARIFF_PREFIXES,
 )
 
 # Trials: пробный период и персональные спецпредложения
