@@ -423,11 +423,30 @@ def format_referral_notification_text(
     else:
         progress_text = i18n_get_text(language, "referral.cashback_max_level")
 
-    title = i18n_get_text(language, "referral.cashback_title")
+    # action_type подставляется в заголовок и в строку суммы у части языков
+    # (de, ar, kk, tj, uz): «Ваш реферал совершил {покупку}», «Сумма
+    # {покупки}». В ru и en шаблоны его не используют, но передавать
+    # безопасно — лишние аргументы формат игнорирует.
+    #
+    # Раньше он не передавался вовсе, и у этих пяти языков обе строки падали
+    # с KeyError('action_type'): человек видел сырой шаблон с фигурными
+    # скобками вместо суммы и заголовка. Само слово тоже локализуется —
+    # referral.action_purchase / _renewal / _topup, они есть у всех языков.
+    _action_key = {
+        "purchase": "referral.action_purchase",
+        "renewal": "referral.action_renewal",
+        "topup": "referral.action_topup",
+    }.get((action_type or "purchase").strip().lower(), "referral.action_purchase")
+    action_word = i18n_get_text(language, _action_key)
+
+    title = i18n_get_text(
+        language, "referral.cashback_title", action_type=action_word,
+    )
     amount_line = i18n_get_text(
         language,
         "referral.cashback_amount",
-        amount=purchase_amount
+        amount=purchase_amount,
+        action_type=action_word,
     )
 
     notification_text = f"{title}\n\n{amount_line}\n"

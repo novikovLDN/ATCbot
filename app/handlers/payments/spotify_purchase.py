@@ -163,11 +163,21 @@ _TXT_PASSWORD_PROMPT = (
 
 
 def _mask_password(pwd: str) -> str:
+    """Показать пароль как «первый символ • • • последний».
+
+    Результат уходит в HTML-сообщение внутри <code>, поэтому первый и
+    последний символы экранируются. Без этого пароль вида «<script» ломал
+    разметку: Telegram отвечал ошибкой парсинга, и человек вместо экрана
+    подтверждения получал молчание бота. Символы < > & в паролях
+    встречаются — их специально советуют добавлять для стойкости.
+    """
+    from html import escape
+
     if not pwd:
         return "—"
     if len(pwd) <= 2:
         return "•" * len(pwd)
-    return pwd[0] + "•" * (len(pwd) - 2) + pwd[-1]
+    return escape(pwd[0]) + "•" * (len(pwd) - 2) + escape(pwd[-1])
 
 
 # ── Entry: mini_shop → Spotify disclaimer ─────────────────────────────

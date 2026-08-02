@@ -2366,7 +2366,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "i18n",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "_mask_password экранирует первый и последний символы через html.escape — они уходят в <code> и на пароле вроде «<script...» ломали разметку: Telegram отвечал ошибкой парсинга, и человек вместо экрана подтверждения получал молчание бота. Email в тех же экранах безопасен по конструкции: _EMAIL_RE не пропускает < > & вовсе. Тесты: tests/services/test_spotify_password_escaping.py (6 шт.).",
+      "fixed_in": [
+        "app/handlers/payments/spotify_purchase.py",
+        "tests/services/test_spotify_password_escaping.py"
+      ]
     },
     {
       "title": "KeyError('action_type') в уведомлении о кэшбэке для 5 языков",
@@ -2379,7 +2385,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "i18n",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "action_type теперь передаётся и в referral.cashback_title, и в referral.cashback_amount — оба шаблона используют его у de, ar, kk, tj, uz. Слово локализуется через referral.action_purchase/_renewal/_topup (есть у всех семи языков), неизвестный тип действия падает на 'покупка' вместо ошибки. Тест tests/services/test_cashback_notification_locales.py прогоняет все языки × все типы действий и ищет неподставленные плейсхолдеры (35 кейсов).",
+      "fixed_in": [
+        "app/services/notifications/service.py",
+        "tests/services/test_cashback_notification_locales.py"
+      ]
     },
     {
       "title": "276 захардкоженных русских строк в пользовательских экранах — экран «Круг Амбассадоров» локализован на 0%",
