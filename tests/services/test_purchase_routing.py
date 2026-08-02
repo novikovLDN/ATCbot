@@ -71,6 +71,47 @@ class TestClassifyPurchase:
             assert classify({"tariff": tariff}) == "subscription"
 
 
+class TestUnhandledRouteGuard:
+    """Предохранитель против «забыли обработчик».
+
+    Список _ROUTED_PURCHASE_TYPES и ветки обработки — две разные вещи, и они
+    разъезжаются: тип добавляют в список, а ветку написать забывают. Тогда
+    оплата товара уходила бы в финализацию VPN-подписки. Guard в конце
+    process_successful_payment обязан перехватить такой случай ДО вызова
+    finalize_subscription_payment.
+    """
+
+    def _source(self):
+        from pathlib import Path
+        return Path(
+            "app/handlers/payments/payments_messages.py"
+        ).read_text(encoding="utf-8")
+
+    def test_guard_runs_before_subscription_finalization(self):
+        src = self._source()
+        guard = src.index('_route != "subscription"')
+        finalize = src.index("payment_service.finalize_subscription_payment")
+        assert guard < finalize, (
+            "предохранитель должен стоять ДО финализации подписки, "
+            "иначе неопознанный товар всё равно станет VPN-подпиской"
+        )
+
+    def test_guard_logs_critical_and_marks_purchase_paid(self):
+        src = self._source()
+        guard_block = src[src.index('_route != "subscription"'):]
+        guard_block = guard_block[:guard_block.index("payment_service.finalize_subscription_payment")]
+        assert "PURCHASE_ROUTE_UNHANDLED" in guard_block, "нужен искомый маркер в логах"
+        assert "mark_pending_purchase_paid" in guard_block, "факт оплаты нельзя терять"
+        assert "alert_payment_failure" in guard_block, "админ обязан узнать о зависшем заказе"
+
+    def test_every_routed_type_is_either_handled_or_guarded(self, classify):
+        """Каждый тип из списка либо имеет свою ветку, либо ловится guard'ом —
+        третьего (тихая выдача VPN вместо товара) быть не должно."""
+        from app.handlers.payments.payments_messages import _ROUTED_PURCHASE_TYPES
+        for ptype in _ROUTED_PURCHASE_TYPES:
+            assert classify({"purchase_type": ptype}) == ptype != "subscription"
+
+
 @pytest.fixture(scope="module")
 def resolve_amount():
     from app.handlers.payments.payments_messages import resolve_payment_amount_rubles

@@ -1001,6 +1001,45 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         return
 
+    # Предохранитель: всё, что ниже, финализируется как VPN-подписка.
+    #
+    # Каждый товар обязан иметь свою ветку выше и выйти через return. Если
+    # classify_purchase опознал товарный тип, а ни одна ветка его не забрала —
+    # значит тип добавили в _ROUTED_PURCHASE_TYPES и забыли обработчик. Молча
+    # провалиться в подписку тут нельзя: человек заплатил за Spotify или
+    # прокси, а получил бы продление VPN, и заказ не дошёл бы до админа.
+    #
+    # Поэтому: деньги фиксируем (покупка помечается оплаченной, чтобы не
+    # потерять факт платежа), пользователю говорим, что заказ у поддержки,
+    # админу шлём алерт. Ручной разбор дороже автоматики, но дешевле выдачи
+    # чужого товара.
+    _route = classify_purchase(pending_purchase)
+    if _route != "subscription":
+        logger.critical(
+            "PURCHASE_ROUTE_UNHANDLED purchase_id=%s user=%s type=%s amount=%s "
+            "— тип опознан, но обработчика нет; выдача НЕ выполнена, нужен ручной разбор",
+            purchase_id, telegram_id, _route, payment_amount_rubles,
+        )
+        try:
+            await database.mark_pending_purchase_paid(purchase_id)
+        except Exception as e:
+            logger.error("PURCHASE_ROUTE_UNHANDLED_MARK_FAILED purchase_id=%s: %s", purchase_id, e)
+        try:
+            from app.services.admin_alerts import alert_payment_failure
+            await alert_payment_failure(
+                message.bot, "telegram_payment", telegram_id, purchase_id,
+                Exception(f"no handler for purchase_type={_route}"),
+                is_transient=False, amount_rubles=payment_amount_rubles,
+                tariff=pending_purchase.get("tariff"), period_days=None,
+            )
+        except Exception as e:
+            logger.error("PURCHASE_ROUTE_UNHANDLED_ALERT_FAILED purchase_id=%s: %s", purchase_id, e)
+        await message.answer(
+            i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML",
+        )
+        await state.clear()
+        return
+
     # Finalize subscription payment through payment service
     payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
     try:

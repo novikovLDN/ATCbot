@@ -140,10 +140,28 @@ async def process_confirmed_payment(
         expires_at = result.get("expires_at")
         is_balance_topup = result.get("is_balance_topup", False)
         is_traffic_pack = result.get("is_traffic_pack", False)
+        is_gift = bool(result.get("is_gift") and result.get("gift_code"))
 
         # Notification failure must NOT fail the payment — DB is already committed
         try:
-            if is_traffic_pack:
+            if is_gift:
+                # Подарок: finalize_purchase уже создал gift_code, но покупателю
+                # нужна ссылка на подарок, а не «ваша подписка активна».
+                #
+                # Раньше gift сюда попадал и уходил в общий _send_confirmation:
+                # expires_at у подарка нет, поэтому человек получал текст
+                # «Оплата получена! До: N/A» с кнопками подключения VPN, а код
+                # подарка оставался только в базе. Оплата картой в Telegram
+                # (payments_messages.py) обрабатывала подарок правильно —
+                # расходились только вебхуки CryptoBot/Lava/Платеги.
+                await _send_gift_confirmation(
+                    provider=provider,
+                    bot=bot,
+                    telegram_id=telegram_id,
+                    purchase_id=purchase_id,
+                    result=result,
+                )
+            elif is_traffic_pack:
                 await _handle_traffic_pack_confirmation(
                     provider=provider,
                     bot=bot,
@@ -175,7 +193,15 @@ async def process_confirmed_payment(
         # Site sync (fire-and-forget — must not fail the payment)
         try:
             from app.services.site_sync import full_sync_after_payment, is_enabled as site_sync_enabled
-            if site_sync_enabled() and not is_balance_topup and not is_traffic_pack:
+            # Подарок исключён намеренно: подписка покупателя не менялась,
+            # синхронизировать на сайт нечего — иначе ему туда уехал бы
+            # выдуманный «купленный тариф на 30 дней».
+            if (
+                site_sync_enabled()
+                and not is_balance_topup
+                and not is_traffic_pack
+                and not is_gift
+            ):
                 period_days = result.get("period_days", 30)
                 tariff_type = result.get("tariff_type", "basic")
                 asyncio.ensure_future(full_sync_after_payment(
@@ -373,6 +399,43 @@ async def _lookup_purchase_tariff(purchase_id: str) -> tuple:
     except Exception:
         pass
     return None, None
+
+
+async def _send_gift_confirmation(
+    provider: str,
+    bot: Bot,
+    telegram_id: int,
+    purchase_id: str,
+    result: dict,
+) -> None:
+    """Отправить покупателю ссылку на оплаченный подарок.
+
+    Зачем отдельная функция: подарок — единственный тип покупки, где деньги
+    платит один человек, а подписку получает другой. Обычное подтверждение
+    («ваша подписка активна до …») здесь бессмысленно: у подарка нет
+    expires_at, и человеку нужна не кнопка подключения, а ссылка, которую он
+    перешлёт получателю.
+
+    Текст и клавиатуру строит _send_gift_success из gift.py — та же функция,
+    что и при оплате картой в Telegram. Так вебхуки и Telegram Payments не
+    расходятся в том, что видит покупатель.
+    """
+    from app.services.language_service import resolve_user_language
+    from app.handlers.callbacks.gift import _send_gift_success
+
+    language = await resolve_user_language(telegram_id)
+    await _send_gift_success(
+        bot=bot,
+        telegram_id=telegram_id,
+        language=language,
+        gift_code=result["gift_code"],
+        tariff=result.get("gift_tariff") or "basic",
+        period_days=int(result.get("gift_period_days") or 30),
+    )
+    logger.info(
+        "GIFT_PAYMENT_FINALIZED provider=%s purchase_id=%s user=%s code=%s",
+        provider, purchase_id, telegram_id, result["gift_code"],
+    )
 
 
 async def _send_confirmation(

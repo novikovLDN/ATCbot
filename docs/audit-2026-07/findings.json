@@ -1483,7 +1483,13 @@
       },
       "_dom": "notifications",
       "_status": "подтверждено",
-      "_corrected": "P2"
+      "_corrected": "P2",
+      "status": "fixed",
+      "resolution": "В process_confirmed_payment добавлена ветка подарка: если finalize_purchase вернул is_gift+gift_code, покупателю уходит _send_gift_confirmation → _send_gift_success (та же функция, что и при оплате картой в Telegram), а не общее подтверждение подписки с «До: N/A». Подарок исключён из site_sync — подписка покупателя не менялась. Тесты: tests/services/test_gift_webhook.py (3 шт.).",
+      "fixed_in": [
+        "app/services/payments/confirmation.py",
+        "tests/services/test_gift_webhook.py"
+      ]
     },
     {
       "title": "Заказ Spotify, оплаченный картой в Telegram, не обрабатывается: админ не получает заказ",
@@ -1502,7 +1508,13 @@
         "corrected_note": "Два уточнения к формулировке находки. (а) Часть про purchase_type='proxy' неприменима: app/handlers/proxy.py вообще не создаёт Telegram-инвойсов — там только proxy_pay_sbp (:161) и proxy_pay_lava (:219), оба идут через вебхуки, где confirmation.py:98-99 корректно вызывает send_proxy_success. Отсутствие ветки 'proxy' в payments_messages.py дефектом не является. (б) Описанный исход «пользователь получает ошибку errors.subscription_activation» — лишь один из вариантов; по коду finalize_purchase (database/subscriptions.py:4488) при period_days=30 и непустом tariff происходит фактическая провизия Remnawave, т.е. вероятнее пользователь получит чужой продукт — работающую VPN-подписку на 30 дней за деньги, уплаченные за Spotify. Точка «строка 699» — это начало ветки apple_id; собственно провал происходит после ветки traffic_pack на строке 842."
       },
       "_dom": "notifications",
-      "_status": "подтверждено"
+      "_status": "подтверждено",
+      "status": "fixed",
+      "resolution": "Ветка purchase_type='spotify' добавлена в process_successful_payment (mark_pending_purchase_paid + send_spotify_success + уведомление админа). Опознание вынесено в classify_purchase — общий для purchase_type и префикса тарифа. Сверх того добавлен структурный предохранитель: если classify_purchase вернул товарный тип, а ни одна ветка его не забрала, оплата НЕ финализируется как VPN-подписка — логируется PURCHASE_ROUTE_UNHANDLED (critical), покупка помечается оплаченной, админу уходит alert_payment_failure, пользователю — сообщение об обработке. Это закрывает и 'proxy', и любой будущий забытый тип. Тесты: tests/services/test_purchase_routing.py.",
+      "fixed_in": [
+        "app/handlers/payments/payments_messages.py",
+        "tests/services/test_purchase_routing.py"
+      ]
     },
     {
       "title": "Реферальный кешбэк по webhook-оплатам начисляется, но реферер не получает уведомления",
