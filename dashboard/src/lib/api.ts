@@ -698,7 +698,13 @@ export const endpoints = {
       total_paid_days: number;
       admin_grant_days_kept: number;
       proof_payment_ids: number[];
-      fallback_applied: "past_date" | "would_extend" | "no_payments" | null;
+      // "kept_current_would_extend" — пересчёт дал БОЛЬШЕ текущего срока,
+      // поэтому дата осталась прежней (реконсиляция не продлевает доступ).
+      fallback_applied:
+        | "past_date"
+        | "kept_current_would_extend"
+        | "no_payments"
+        | null;
       panel_updated: boolean;
       panel_error: string | null;
       is_bypass_only: boolean;

@@ -266,8 +266,8 @@ function CandidateDetail({ telegram_id }: { telegram_id: number }) {
       const fb =
         data.fallback_applied === "past_date"
           ? " (fallback: расчёт дал прошлое, поставлен NOW+1д)"
-          : data.fallback_applied === "would_extend"
-          ? " (fallback: расчёт дал больше текущего, поставлен NOW+1д)"
+          : data.fallback_applied === "kept_current_would_extend"
+          ? " (расчёт дал больше текущего — срок оставлен без изменений)"
           : data.fallback_applied === "no_payments"
           ? " (нет платежей и admin_grant, поставлен NOW+1д)"
           : "";

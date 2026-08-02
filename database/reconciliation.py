@@ -618,6 +618,43 @@ def _simulate_expiry_from_payments(
 #  3. Fix — apply reconciliation
 # ──────────────────────────────────────────────────────────────────────
 
+def clamp_recomputed_expiry(
+    recomputed: Optional[datetime],
+    old_expires_at: Optional[datetime],
+    now: datetime,
+) -> tuple[datetime, Optional[str]]:
+    """Привести пересчитанную дату окончания к безопасному значению.
+
+    Зачем: пересчёт по платежам (`_simulate_expiry_from_payments`) может дать
+    результат, который нельзя писать в панель как есть. Здесь три ситуации,
+    и во всех реконсиляция обязана только УРЕЗАТЬ лишнее, но никогда не
+    выдавать доступ, которого пользователь не оплачивал, и никогда не резать
+    оплаченный доступ «за компанию».
+
+    Правила:
+      • пересчёт пустой (ни платежей, ни admin_grant) → NOW + 1 день
+        (`no_payments`). Сутки, а не «прямо сейчас», чтобы Remnawave не
+        споткнулся об отрицательный expireAt, а штатный expiry-cleanup
+        через ~24 часа сам перевёл юзера в expired;
+      • пересчёт дал прошлое → NOW + 1 день (`past_date`), причина та же;
+      • пересчёт ДЛИННЕЕ текущей даты → оставляем текущую дату
+        (`kept_current_would_extend`). Раньше здесь тоже ставилось NOW+1д,
+        и оплаченный год превращался в сутки просто потому, что расчёт
+        разошёлся с базой в большую сторону. Продлевать реконсиляция права
+        не имеет, но и отнимать оплаченное — тем более.
+
+    Возвращает `(итоговая_дата, метка_fallback | None)`. Метка уходит в
+    `subscription_reconciliation_log.reason` и в ответ дашборда.
+    """
+    min_new = now + timedelta(days=1)
+    if recomputed is None:
+        return min_new, "no_payments"
+    if recomputed < now:
+        return min_new, "past_date"
+    if old_expires_at and recomputed > old_expires_at:
+        return old_expires_at, "kept_current_would_extend"
+    return recomputed, None
+
 async def apply_reconciliation_fix(
     telegram_id: int,
     admin_telegram_id: int,
@@ -706,21 +743,11 @@ async def apply_reconciliation_fix(
                 counted_for_sim, int(admin_grant_days or 0),
             )
 
-            # Clamp: если счёт даёт None (нет ни платежей, ни грантов),
-            # прошлое ИЛИ длиннее текущего expires_at — ставим NOW + 1 день.
-            # Так Remnawave не сбоит от отрицательного expireAt, и стандартный
-            # expiry-cleanup через ~24ч штатно переведёт юзера в expired.
-            fallback_applied: Optional[str] = None
-            min_new = now + timedelta(days=1)
-            if new_expires_at is None:
-                new_expires_at = min_new
-                fallback_applied = "no_payments"
-            elif new_expires_at < now:
-                new_expires_at = min_new
-                fallback_applied = "past_date"
-            elif old_expires_at and new_expires_at > old_expires_at:
-                new_expires_at = min_new
-                fallback_applied = "would_extend"
+            # Приводим пересчёт к безопасному значению — правила и причины
+            # см. в докстринге clamp_recomputed_expiry.
+            new_expires_at, fallback_applied = clamp_recomputed_expiry(
+                new_expires_at, old_expires_at, now,
+            )
 
             days_removed = (
                 (old_expires_at - new_expires_at).days
@@ -737,10 +764,10 @@ async def apply_reconciliation_fix(
                 log_reason += (
                     " [fallback: past-date computed, clamped to NOW+1d]"
                 )
-            elif fallback_applied == "would_extend":
+            elif fallback_applied == "kept_current_would_extend":
                 log_reason += (
-                    " [fallback: recomputed date longer than current, "
-                    "clamped to NOW+1d]"
+                    " [fallback: пересчёт длиннее текущего — оставлен текущий срок, "
+                    "продление реконсиляцией не выполняется]"
                 )
             elif fallback_applied == "no_payments":
                 log_reason += (

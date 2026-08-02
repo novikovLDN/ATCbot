@@ -496,7 +496,15 @@
       "risk": "высокий",
       "confidence": "high",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Кламп вынесен в чистую функцию database/reconciliation.py:clamp_recomputed_expiry. Ветка «пересчёт длиннее текущей даты» больше не ставит NOW+1д — текущий срок остаётся нетронутым, метка fallback_applied='kept_current_would_extend'. Реконсиляция теперь только урезает лишнее и никогда не режет оплаченный доступ. Обновлены лог-строка, типы и тост в дашборде (api.ts, ReconciliationSection.tsx). Тесты: tests/test_reconciliation_clamp.py (5 шт.).",
+      "fixed_in": [
+        "database/reconciliation.py",
+        "dashboard/src/lib/api.ts",
+        "dashboard/src/components/ReconciliationSection.tsx",
+        "tests/test_reconciliation_clamp.py"
+      ]
     },
     {
       "title": "ActivationNotAllowedError не перехватывается — одна плохая подписка обрывает всю итерацию воркера",
