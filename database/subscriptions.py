@@ -3279,9 +3279,40 @@ async def _finalize_purchase_locked(
                         f"finalize_purchase: FARM_EFFECT_SHIELD [purchase_id={purchase_id}, "
                         f"plot_id={plot_id}, ok={shield_ok}, reason={shield_reason}]"
                     )
-                    # Even on shield_ok=False (plot already harvested, already shielded,
-                    # status no longer growing) we keep the payment recorded — refund
-                    # logic, if needed, can run separately.  PSP webhook must not fail.
+                    # Плёнка не применилась — грядку успели собрать, она уже
+                    # накрыта, статус больше не growing или шторм уже прошёл.
+                    #
+                    # Раньше платёж просто оставался записанным, а «логика
+                    # возврата» существовала только в комментарии: в коде её не
+                    # было. Человек платил через СБП за 10 минут до удара, шторм
+                    # успевал сработать, деньги списывались, плёнки не было, а в
+                    # ответ приходил успех. Дальше — поддержка.
+                    #
+                    # Компенсируем автоматически: зачисляем уплаченное на баланс
+                    # в этой же транзакции. Возврат через PSP невозможен изнутри
+                    # webhook'а, а баланс тратится на что угодно внутри бота и
+                    # выводится (деньги реальные, не игровые — см.
+                    # database/users.py:GAME_EARNING_SOURCES).
+                    refunded_kopecks = 0
+                    if not shield_ok:
+                        refunded_kopecks = round(amount_rubles * 100)
+                        if refunded_kopecks > 0:
+                            await conn.execute(
+                                "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
+                                refunded_kopecks, telegram_id,
+                            )
+                            await conn.execute(
+                                """INSERT INTO balance_transactions
+                                       (user_id, amount, type, source, description)
+                                   VALUES ($1, $2, 'refund', 'farm_shield_refund', $3)""",
+                                telegram_id, refunded_kopecks,
+                                f"Плёнка не применилась ({shield_reason}) — возврат на баланс",
+                            )
+                        logger.warning(
+                            "finalize_purchase: FARM_SHIELD_REFUNDED [purchase_id=%s, user=%s, "
+                            "plot_id=%s, reason=%s, refunded_kopecks=%s]",
+                            purchase_id, telegram_id, plot_id, shield_reason, refunded_kopecks,
+                        )
 
                     return {
                         "success": True,
@@ -3293,6 +3324,10 @@ async def _finalize_purchase_locked(
                         "farm_plot_id": plot_id,
                         "farm_shield_applied": shield_ok,
                         "farm_shield_reason": shield_reason,
+                        # Копейки, вернувшиеся на баланс. Вызывающий код обязан
+                        # сказать об этом пользователю — иначе он увидит только
+                        # списание и пойдёт в поддержку.
+                        "farm_shield_refund_kopecks": refunded_kopecks,
                         "tariff_type": tariff_type,
                     }
 

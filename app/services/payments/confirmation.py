@@ -141,6 +141,7 @@ async def process_confirmed_payment(
         is_balance_topup = result.get("is_balance_topup", False)
         is_traffic_pack = result.get("is_traffic_pack", False)
         is_gift = bool(result.get("is_gift") and result.get("gift_code"))
+        is_farm_effect = bool(result.get("is_farm_effect"))
 
         # Notification failure must NOT fail the payment — DB is already committed
         try:
@@ -155,6 +156,17 @@ async def process_confirmed_payment(
                 # (payments_messages.py) обрабатывала подарок правильно —
                 # расходились только вебхуки CryptoBot/Lava/Платеги.
                 await _send_gift_confirmation(
+                    provider=provider,
+                    bot=bot,
+                    telegram_id=telegram_id,
+                    purchase_id=purchase_id,
+                    result=result,
+                )
+            elif is_farm_effect:
+                # Плёнка от шторма. Отдельная ветка нужна по той же причине,
+                # что и у подарка: у покупки нет expires_at, и общий текст
+                # подтверждения врал бы «Тариф: Basic, До: N/A».
+                await _send_farm_shield_confirmation(
                     provider=provider,
                     bot=bot,
                     telegram_id=telegram_id,
@@ -216,6 +228,7 @@ async def process_confirmed_payment(
                 and not is_balance_topup
                 and not is_traffic_pack
                 and not is_gift
+                and not is_farm_effect
             ):
                 period_days = result.get("period_days", 30)
                 tariff_type = result.get("tariff_type", "basic")
@@ -414,6 +427,64 @@ async def _lookup_purchase_tariff(purchase_id: str) -> tuple:
     except Exception:
         pass
     return None, None
+
+
+async def _send_farm_shield_confirmation(
+    provider: str,
+    bot: Bot,
+    telegram_id: int,
+    purchase_id: str,
+    result: dict,
+) -> None:
+    """Сообщить об исходе покупки плёнки от шторма.
+
+    Два исхода, и оба нужно проговорить вслух:
+
+    • плёнка применилась — просто подтверждаем;
+    • не применилась (грядку успели собрать, она уже накрыта, статус больше
+      не growing, шторм уже прошёл) — finalize_purchase вернул деньги на
+      баланс, и человек обязан это увидеть. Иначе картина у него такая:
+      деньги списаны, плёнки нет, бот отвечает «оплата получена» — и он идёт
+      в поддержку. Именно так и было: ветки для farm_effect здесь не
+      существовало вовсе, и покупатель получал общий текст подписки
+      «Тариф: Basic, До: N/A».
+    """
+    plot_id = result.get("farm_plot_id")
+    plot_label = f"Грядка {int(plot_id) + 1}" if plot_id is not None else "Грядка"
+    refund_kopecks = int(result.get("farm_shield_refund_kopecks") or 0)
+
+    if result.get("farm_shield_applied"):
+        text = (
+            f"🛡 <b>Плёнка установлена</b>\n\n"
+            f"{plot_label} защищена от ближайшего шторма."
+        )
+    elif refund_kopecks > 0:
+        text = (
+            "⚠️ <b>Плёнка не пригодилась</b>\n\n"
+            f"{plot_label} к моменту оплаты уже была собрана или защищена, "
+            "поэтому устанавливать плёнку было не на что.\n\n"
+            f"💰 <b>{refund_kopecks / 100:.2f} ₽</b> вернулись на ваш баланс — "
+            "их можно потратить на подписку, трафик или новую плёнку."
+        )
+    else:
+        text = (
+            "⚠️ <b>Плёнка не установлена</b>\n\n"
+            f"{plot_label} к моменту оплаты уже была собрана или защищена. "
+            "Напишите в поддержку — разберёмся с платежом."
+        )
+
+    try:
+        await bot.send_message(telegram_id, text, parse_mode="HTML")
+    except Exception as send_err:
+        logger.warning(
+            "%s: failed to send farm shield confirmation to user=%s: %s",
+            provider, telegram_id, send_err,
+        )
+    logger.info(
+        "FARM_SHIELD_CONFIRMATION provider=%s purchase_id=%s user=%s applied=%s refund_kopecks=%s",
+        provider, purchase_id, telegram_id,
+        result.get("farm_shield_applied"), refund_kopecks,
+    )
 
 
 async def _send_gift_confirmation(
