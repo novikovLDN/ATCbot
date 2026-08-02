@@ -49,6 +49,15 @@ RENEWAL_WINDOW = timedelta(hours=RENEWAL_WINDOW_HOURS)
 MINIMUM_SAFE_SLEEP_ON_FAILURE = 300  # seconds (half of AUTO_RENEWAL_INTERVAL_SECONDS minimum)
 
 
+class _RollbackUser(Exception):
+    """Отменить обработку одного пользователя, откатив его savepoint.
+
+    Нужна там, где мы уже что-то записали (last_auto_renewal_at), но решили
+    не продлевать: обычный continue закоммитил бы запись и выключил
+    пользователя из автопродления до следующего окна.
+    """
+
+
 async def process_auto_renewals(bot: Bot):
     """
     Обработать автопродление подписок, которые истекают в течение RENEWAL_WINDOW
@@ -112,6 +121,10 @@ async def process_auto_renewals(bot: Bot):
             raise
         try:
             notifications_to_send = []
+            # Алерты админу копим и шлём в фазе B: сеть внутри транзакции
+            # держит строки, взятые SELECT ... FOR UPDATE, заблокированными
+            # на всё время обращения к Telegram.
+            alerts_to_send = []
             async with conn.transaction():
                 try:
                     subscriptions = await conn.fetch(
@@ -151,6 +164,12 @@ async def process_auto_renewals(bot: Bot):
                     subscription = sub_row
                     language = sub_row.get("language", "en")
                     try:
+                      # Вложенная транзакция = SAVEPOINT. Без неё ошибка Postgres
+                      # на одном пользователе переводила соединение в failed-
+                      # состояние: все следующие запросы падали, COMMIT падал, и
+                      # откатывался ВЕСЬ батч до ста подписок — включая уже
+                      # успешно продлённые. Теперь откатывается только виновник.
+                      async with conn.transaction():
                         # КРИТИЧНО: Обновляем last_auto_renewal_at в НАЧАЛЕ транзакции
                         # Это предотвращает обработку одной подписки несколькими воркерами
                         # даже при рестарте или параллельных вызовах
@@ -180,8 +199,12 @@ async def process_auto_renewals(bot: Bot):
                         
                         if not current_sub or not current_sub["auto_renew"]:
                             logger.debug(f"Subscription {telegram_id} no longer has auto_renew enabled, skipping")
-                            # Откатываем транзакцию (last_auto_renewal_at будет откачен)
-                            continue
+                            # Здесь нужен именно откат: last_auto_renewal_at мы уже
+                            # проставили выше, а продления не будет. Обычный continue
+                            # закоммитил бы savepoint и заблокировал пользователя до
+                            # следующего окна. Комментарий обещал откат и раньше, но
+                            # без вложенной транзакции откатывать было нечего.
+                            raise _RollbackUser()
                         
                         # PHASE A: Только DB по conn — без вложенного pool.acquire и без сетевых вызовов
                         last_payment = await database.get_last_approved_payment(telegram_id, conn=conn)
@@ -212,19 +235,28 @@ async def process_auto_renewals(bot: Bot):
                             tariff_type = "basic"
                             period_days = 30
                         
-                        base_price = config.TARIFFS[tariff_type][period_days]["price"]
-                        
-                        is_vip = await database.is_vip_user(telegram_id, conn=conn)
-                        if is_vip:
-                            amount_rubles = round(base_price * 0.70, 2)  # 30% скидка
-                        else:
-                            personal_discount = await database.get_user_discount(telegram_id, conn=conn)
-                            if personal_discount:
-                                discount_percent = personal_discount["discount_percent"]
-                                amount_rubles = round(base_price * (1 - discount_percent / 100), 2)
-                            else:
-                                amount_rubles = float(base_price)
-                        
+                        # Цену считает общий калькулятор, а не своя формула.
+                        #
+                        # Раньше здесь была отдельная лестница скидок: базовая
+                        # цена из config.TARIFFS, вручную -30% для VIP, вручную
+                        # персональная скидка. Она не знала про админские price
+                        # override и глобальную скидку (миграция 069), поэтому
+                        # автопродление списывало не ту сумму, которую человек
+                        # видел на витрине: админ снижал цену — автопродление
+                        # продолжало брать старую.
+                        #
+                        # Промокоды и спецпредложение сознательно не применяются:
+                        # это разовые акции на конкретную покупку, а не свойство
+                        # подписки. Автопродление берёт постоянную цену.
+                        from app.services.subscriptions import service as _sub_service
+                        _price = await _sub_service.calculate_price(
+                            telegram_id=telegram_id,
+                            tariff=tariff_type,
+                            period_days=period_days,
+                        )
+                        amount_rubles = round(_price["final_price_kopecks"] / 100.0, 2)
+
+
                         user_balance_kopecks = subscription.get("balance", 0) or 0
                         balance_rubles = user_balance_kopecks / 100.0
                         
@@ -273,16 +305,17 @@ async def process_auto_renewals(bot: Bot):
                                         f"REFUND_FAILED: user={telegram_id}, amount={amount_rubles} RUB, "
                                         f"reason=UUID_regenerated, refund_returned=False"
                                     )
-                                    from app.services.admin_alerts import alert_payment_failure
-                                    await alert_payment_failure(
-                                        bot, "auto_renewal", telegram_id,
-                                        f"refund_uuid_regen_{telegram_id}",
-                                        RuntimeError(f"Refund failed after UUID regeneration, amount={amount_rubles}"),
-                                        is_transient=False,
-                                        amount_rubles=amount_rubles,
-                                        tariff=tariff_type,
-                                        period_days=period_days,
-                                    )
+                                    alerts_to_send.append({
+                                        "kind": "payment_failure",
+                                        "telegram_id": telegram_id,
+                                        "purchase_id": f"refund_uuid_regen_{telegram_id}",
+                                        "error": RuntimeError(
+                                            f"Refund failed after UUID regeneration, amount={amount_rubles}"
+                                        ),
+                                        "amount_rubles": amount_rubles,
+                                        "tariff": tariff_type,
+                                        "period_days": period_days,
+                                    })
                                 continue
                             
                             subscription_row = await conn.fetchrow(
@@ -309,16 +342,17 @@ async def process_auto_renewals(bot: Bot):
                                         f"REFUND_FAILED: user={telegram_id}, amount={amount_rubles} RUB, "
                                         f"reason=expires_at_None, refund_returned=False"
                                     )
-                                    from app.services.admin_alerts import alert_payment_failure
-                                    await alert_payment_failure(
-                                        bot, "auto_renewal", telegram_id,
-                                        f"refund_renewal_fail_{telegram_id}",
-                                        RuntimeError(f"Refund failed after renewal failure, amount={amount_rubles}"),
-                                        is_transient=False,
-                                        amount_rubles=amount_rubles,
-                                        tariff=tariff_type,
-                                        period_days=period_days,
-                                    )
+                                    alerts_to_send.append({
+                                        "kind": "payment_failure",
+                                        "telegram_id": telegram_id,
+                                        "purchase_id": f"refund_renewal_fail_{telegram_id}",
+                                        "error": RuntimeError(
+                                            f"Refund failed after renewal failure, amount={amount_rubles}"
+                                        ),
+                                        "amount_rubles": amount_rubles,
+                                        "tariff": tariff_type,
+                                        "period_days": period_days,
+                                    })
                                 continue
                             
                             tariff_str = f"{tariff_type}_{period_days}"
@@ -356,6 +390,10 @@ async def process_auto_renewals(bot: Bot):
                                 "expires_at": expires_at,
                                 "duration_days": duration_days,
                                 "amount_rubles": amount_rubles,
+                                # Без этого ключа ветки «Комбо Plus»/«Комбо Basic»
+                                # в тексте уведомления были недостижимы, и
+                                # комбо-подписчик читал про обычный тариф.
+                                "is_combo": bool(subscription.get("is_combo")),
                                 "tariff_type": tariff_type,
                                 "period_days": period_days,
                                 "xray_sync": xray_sync_info,
@@ -365,18 +403,43 @@ async def process_auto_renewals(bot: Bot):
                         else:
                             logger.debug(f"Insufficient balance for auto-renewal: user={telegram_id}, balance={balance_rubles:.2f} RUB, required={amount_rubles:.2f} RUB")
                     
+                    except _RollbackUser:
+                        # Штатный отказ от продления: savepoint откачен, идём дальше.
+                        continue
                     except Exception as e:
                         logger.exception(f"Error processing auto-renewal for user {telegram_id}: {e}")
-                        try:
-                            from app.services.admin_alerts import send_alert
-                            await send_alert(
-                                bot, "payment",
+                        # Алерт откладываем в фазу B: сеть внутри транзакции держит
+                        # заблокированными строки всего батча.
+                        alerts_to_send.append({
+                            "kind": "error",
+                            "telegram_id": telegram_id,
+                            "text": (
                                 f"Auto-renewal processing error\n"
                                 f"User: {telegram_id}\n"
                                 f"Error: {type(e).__name__}: {str(e)[:200]}"
-                            )
-                        except Exception:
-                            pass
+                            ),
+                        })
+
+            # PHASE B: после commit — алерты админу, xray sync и уведомления.
+            # Здесь транзакция уже закрыта, строки разблокированы, поэтому
+            # обращения к Telegram никого не задерживают.
+            for alert in alerts_to_send:
+                try:
+                    if alert["kind"] == "payment_failure":
+                        from app.services.admin_alerts import alert_payment_failure
+                        await alert_payment_failure(
+                            bot, "auto_renewal", alert["telegram_id"],
+                            alert["purchase_id"], alert["error"],
+                            is_transient=False,
+                            amount_rubles=alert["amount_rubles"],
+                            tariff=alert["tariff"],
+                            period_days=alert["period_days"],
+                        )
+                    else:
+                        from app.services.admin_alerts import send_alert
+                        await send_alert(bot, "payment", alert["text"])
+                except Exception as alert_err:
+                    logger.warning("auto_renewal: не удалось отправить алерт: %s", alert_err)
 
             # PHASE B: после commit — xray sync + отправка уведомлений (без финансовых мутаций)
             for item in notifications_to_send:
@@ -416,16 +479,17 @@ async def process_auto_renewals(bot: Bot):
                     else:
                         tariff_label, tariff_emoji = "Basic", "📦"
                     user_lang = await resolve_user_language(item["telegram_id"])
-                    amount_val = item.get("amount", 0)
-                    # amount may be in kopecks (>1000) or rubles
-                    if amount_val > 1000:
-                        amount_val = amount_val / 100
+                    # В payload сумма лежит под ключом amount_rubles и уже в
+                    # рублях. Раньше читался несуществующий ключ "amount", поэтому
+                    # в тексте всегда стоял ноль: «списано 0 ₽». Эвристику
+                    # «больше 1000 — значит копейки» убрали: годовая подписка
+                    # дороже 1000 ₽, и она честную сумму делила на сто.
                     text = i18n.get_text(
                         user_lang, "purchase.auto_renewal_success",
                         tariff_name=f"{tariff_emoji} {tariff_label}",
                         days=item.get("period_days", 30),
                         expires_date=item["expires_str"],
-                        amount=amount_val
+                        amount=item.get("amount_rubles", 0),
                     )
                     keyboard = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu_profile")],

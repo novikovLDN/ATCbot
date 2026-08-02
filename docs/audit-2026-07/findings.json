@@ -2717,7 +2717,13 @@
       "risk": "высокий",
       "confidence": "medium",
       "_dom": "workers",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Обработка каждой подписки обёрнута в conn.transaction() внутри цикла — asyncpg делает это SAVEPOINT'ом, поэтому ошибка на одном пользователе откатывает только его, а не весь батч из ста подписок. Все обращения к Telegram (send_alert, alert_payment_failure — три места) переведены на накопление в alerts_to_send и отправку в фазе B, после коммита: раньше строки, взятые SELECT ... FOR UPDATE, оставались заблокированными на время сетевого запроса. Добавлено исключение _RollbackUser для штатного отказа от продления после записи last_auto_renewal_at — раньше комментарий обещал откат, но обычный continue его не делал. Тесты: tests/services/test_auto_renewal_fixes.py.",
+      "fixed_in": [
+        "auto_renewal.py",
+        "tests/services/test_auto_renewal_fixes.py"
+      ]
     },
     {
       "title": "Уведомление об успешном автопродлении всегда показывает сумму 0",
@@ -2730,7 +2736,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "workers",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Текст уведомления читает item['amount_rubles'] вместо несуществующего 'amount' — раньше человеку всегда приходило «списано 0 ₽». Эвристика «больше 1000 — значит копейки» удалена: годовая подписка дороже 1000 ₽, и она честную сумму делила на сто. Ключ is_combo теперь кладётся в payload из строки подписки, поэтому ветки «Комбо Plus»/«Комбо Basic» стали достижимыми. Тесты: tests/services/test_auto_renewal_fixes.py.",
+      "fixed_in": [
+        "auto_renewal.py",
+        "tests/services/test_auto_renewal_fixes.py"
+      ]
     },
     {
       "title": "Kill switch FEATURE_BACKGROUND_WORKERS_ENABLED останавливает только 4 воркера из 9",
@@ -2984,7 +2996,13 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Своя лестница скидок заменена вызовом app.services.subscriptions.service.calculate_price — теперь автопродление видит админские price override и глобальную скидку (миграция 069), как и витрина. Промокоды и спецпредложение сознательно не применяются: это разовые акции на конкретную покупку, а не свойство подписки; решение зафиксировано комментарием в коде. Тесты: tests/services/test_auto_renewal_fixes.py.",
+      "fixed_in": [
+        "auto_renewal.py",
+        "tests/services/test_auto_renewal_fixes.py"
+      ]
     },
     {
       "title": "handlers.py — 950 из 1072 строк дублируют app/handlers/common/*, снаружи используется одна функция",
@@ -3292,6 +3310,17 @@
       "defect": "У approve_payment_atomic нет ни одного вызывающего: grep даёт только определение и реэкспорт в database/__init__.py. Внутри — своя логика grant_access, синхронизации с Remnawave и публикации payment:approved, дублирующая finalize_purchase. Дублирующийся код расходится с рабочим путём при каждой правке.",
       "failure_scenario": "Разработчик правит финализацию платежа в одном месте из двух и считает задачу закрытой; вторая копия остаётся со старым поведением и однажды снова окажется на пути исполнения.",
       "proposed_action": "Удалить approve_payment_atomic вместе с реэкспортом, предварительно проверив, что ручное подтверждение платежа из админки идёт через finalize_purchase.",
+      "source": "audit-followup"
+    },
+    {
+      "title": "Автопродление комбо-тарифа берёт цену базового и не обновляет bypass-гигабайты",
+      "severity": "P1",
+      "category": "bug",
+      "file": "auto_renewal.py",
+      "line": 234,
+      "defect": "Тариф для продления берётся из last_payment как 'basic'/'plus' + period_days и проверяется по config.TARIFFS. Комбо-тарифы живут в config.COMBO_TARIFFS с другой ценой и своим объёмом bypass-ГБ, но автопродление про них не знает: списывается цена базового тарифа, а bypass-трафик не пополняется вовсе (renew_remnawave_user_bg вызывается без GB).",
+      "failure_scenario": "Подписчик Комбо Plus с автопродлением платит цену обычного Plus и остаётся без обещанных bypass-гигабайтов на новый период. Обнаружится это только в поддержке.",
+      "proposed_action": "Определять комбо по subscriptions.is_combo, брать цену из config.COMBO_TARIFFS через calculate_price с base_price_override_rubles и пополнять bypass-ГБ в фазе B, как это делает обычная покупка комбо.",
       "source": "audit-followup"
     }
   ],
