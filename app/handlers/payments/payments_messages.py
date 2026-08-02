@@ -678,12 +678,21 @@ async def process_successful_payment(message: Message, state: FSMContext):
     is_premium_purchase = pending_purchase.get("purchase_type") == "telegram_premium"
     if is_premium_purchase:
         try:
-            # Send success screen BEFORE marking paid (purchase data still accessible)
+            # Комментарий «send BEFORE marking paid» описывал ложную заботу:
+            # данные покупки уже прочитаны в pending_purchase и доступны после
+            # пометки. Зато при сбое пометки человек и админ получали сообщения,
+            # а покупка оставалась pending — следующий вебхук слал их повторно.
+            if not await database.mark_pending_purchase_paid(purchase_id):
+                logger.info(
+                    "PREMIUM_ALREADY_FINALIZED purchase_id=%s — уведомления пропущены",
+                    purchase_id,
+                )
+                await state.clear()
+                return
             from app.handlers.payments.telegram_premium import send_premium_success
             await send_premium_success(
                 message.bot, telegram_id, purchase_id, pending_purchase,
             )
-            await database.mark_pending_purchase_paid(purchase_id)
             logger.info(
                 "PREMIUM_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
                 purchase_id, telegram_id, payment_amount_rubles,
@@ -707,11 +716,22 @@ async def process_successful_payment(message: Message, state: FSMContext):
     is_stars_purchase = pending_purchase.get("purchase_type") == "telegram_stars"
     if is_stars_purchase:
         try:
+            # Сначала помечаем покупку оплаченной, только потом уведомляем.
+            # mark_pending_purchase_paid возвращает False, если пометка уже
+            # стоит — это и есть защита от повторных уведомлений. При обратном
+            # порядке сбой пометки оставлял покупку в pending, хотя человек и
+            # админ уже получили сообщения, и следующий вебхук слал их заново.
+            if not await database.mark_pending_purchase_paid(purchase_id):
+                logger.info(
+                    "STARS_ALREADY_FINALIZED purchase_id=%s — уведомления пропущены",
+                    purchase_id,
+                )
+                await state.clear()
+                return
             from app.handlers.payments.telegram_stars_purchase import send_stars_success
             await send_stars_success(
                 message.bot, telegram_id, purchase_id, pending_purchase,
             )
-            await database.mark_pending_purchase_paid(purchase_id)
             logger.info(
                 "STARS_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
                 purchase_id, telegram_id, payment_amount_rubles,
@@ -735,11 +755,18 @@ async def process_successful_payment(message: Message, state: FSMContext):
     is_steam_purchase = pending_purchase.get("purchase_type") == "steam"
     if is_steam_purchase:
         try:
+            # Порядок как в ветке Stars: пометка первой, она же защита от дублей.
+            if not await database.mark_pending_purchase_paid(purchase_id):
+                logger.info(
+                    "STEAM_ALREADY_FINALIZED purchase_id=%s — уведомления пропущены",
+                    purchase_id,
+                )
+                await state.clear()
+                return
             from app.handlers.payments.steam_purchase import send_steam_success
             await send_steam_success(
                 message.bot, telegram_id, purchase_id, pending_purchase,
             )
-            await database.mark_pending_purchase_paid(purchase_id)
             logger.info(
                 "STEAM_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
                 purchase_id, telegram_id, payment_amount_rubles,
@@ -766,11 +793,18 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # spotify корректно — расходилась только оплата через Telegram Payments.
     if classify_purchase(pending_purchase) == "spotify":
         try:
+            # Порядок как в остальных товарных ветках: пометка первой.
+            if not await database.mark_pending_purchase_paid(purchase_id):
+                logger.info(
+                    "SPOTIFY_ALREADY_FINALIZED purchase_id=%s — уведомления пропущены",
+                    purchase_id,
+                )
+                await state.clear()
+                return
             from app.handlers.payments.spotify_purchase import send_spotify_success
             await send_spotify_success(
                 message.bot, telegram_id, purchase_id, pending_purchase,
             )
-            await database.mark_pending_purchase_paid(purchase_id)
             logger.info(
                 "SPOTIFY_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
                 purchase_id, telegram_id, payment_amount_rubles,
@@ -799,11 +833,18 @@ async def process_successful_payment(message: Message, state: FSMContext):
             region = tariff_parts[2] if len(tariff_parts) >= 3 else "usa"
             nominal = int(tariff_parts[3]) if len(tariff_parts) >= 4 else 0
 
+            # Порядок как в остальных товарных ветках: пометка первой.
+            if not await database.mark_pending_purchase_paid(purchase_id):
+                logger.info(
+                    "APPLE_ALREADY_FINALIZED purchase_id=%s — уведомления пропущены",
+                    purchase_id,
+                )
+                await state.clear()
+                return
             from app.handlers.callbacks.apple_id import send_apple_id_success
             await send_apple_id_success(
                 message.bot, telegram_id, region, nominal, payment_amount_rubles,
             )
-            await database.mark_pending_purchase_paid(purchase_id)
             logger.info("APPLE_PAYMENT_FINALIZED purchase_id=%s user=%s", purchase_id, telegram_id)
         except Exception as e:
             logger.exception("APPLE_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
