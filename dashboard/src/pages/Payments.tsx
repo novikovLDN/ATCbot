@@ -715,9 +715,16 @@ function ExpandedUser({ telegramId }: { telegramId: number }) {
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 md:grid-cols-4">
         <Pair label="Баланс" value={fmtRub(d.balance_rubles)} />
         <Pair label="VIP" value={d.is_vip ? "да" : "нет"} />
+        {/* Бэкенд отдаёт tariff_display — уже переведённое название вида
+            «Комбо Плюс». Откат на subscription_type оставлен на случай
+            старого ответа без обогащения. */}
         <Pair
           label="Тариф"
-          value={sub ? String(sub.subscription_type ?? "—") : "—"}
+          value={
+            sub
+              ? String(sub.tariff_display ?? sub.subscription_type ?? "—")
+              : "—"
+          }
         />
         <Pair
           label="Истекает"

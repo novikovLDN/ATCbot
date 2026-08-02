@@ -328,7 +328,11 @@ function UserCard({
             label="Тариф"
             value={
               sub
-                ? String((sub as Record<string, unknown>).subscription_type ?? "—")
+                ? String(
+                    (sub as Record<string, unknown>).tariff_display ??
+                      (sub as Record<string, unknown>).subscription_type ??
+                      "—",
+                  )
                 : "—"
             }
           />
@@ -846,13 +850,18 @@ function Actions({
             className="w-full bg-transparent py-2 text-sm text-fg outline-none"
           />
         </label>
+        {/* Комбо — отдельные тарифы, а не галочка к обычной подписке:
+            у них своя цена и свой пакет ГБ обхода. Значения должны
+            совпадать с config.GRANTABLE_TARIFF_TYPES на бэкенде. */}
         <select
           value={tariff}
           onChange={(e) => setTariff(e.target.value)}
           className="input"
         >
-          <option value="basic">Basic</option>
-          <option value="plus">Plus</option>
+          <option value="basic">Базовый</option>
+          <option value="plus">Плюс</option>
+          <option value="combo_basic">Комбо Базовый</option>
+          <option value="combo_plus">Комбо Плюс</option>
         </select>
         <button
           type="button"
