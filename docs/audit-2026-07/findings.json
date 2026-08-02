@@ -1556,7 +1556,14 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "notifications",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "reminder_7d_sent = FALSE и reminder_1d_sent = FALSE добавлены во все пять мест сброса в database/subscriptions.py (два UPDATE при апгрейде/даунгрейде, UPDATE продления, два ON CONFLICT DO UPDATE в grant_access). Добавлена миграция migrations/071_reset_stale_reminder_flags.sql — разовый сброс залипших флагов у действующих подписок, иначе напоминания не заработали бы до следующего продления. Тест tests/services/test_reminder_flag_reset.py проверяет инвариант: где сбрасывается один флаг reminder_*, там сбрасываются все — забыть следующую колонку больше нельзя.",
+      "fixed_in": [
+        "database/subscriptions.py",
+        "migrations/071_reset_stale_reminder_flags.sql",
+        "tests/services/test_reminder_flag_reset.py"
+      ]
     },
     {
       "title": "Все автонапоминания уходят на русском независимо от языка пользователя",

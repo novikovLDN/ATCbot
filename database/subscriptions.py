@@ -1414,7 +1414,8 @@ async def grant_access(
                            SET expires_at = $1, subscription_type = 'plus',
                                status = 'active', source = $2,
                                reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE,
-                               reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, activation_status = 'active'
+                               reminder_3h_sent = FALSE, reminder_6h_sent = FALSE,
+                               reminder_7d_sent = FALSE, reminder_1d_sent = FALSE, activation_status = 'active'
                            WHERE telegram_id = $3""",
                         _to_db_utc(subscription_end), source, telegram_id
                     )
@@ -1489,7 +1490,8 @@ async def grant_access(
                        SET expires_at = $1, subscription_type = 'basic',
                            status = 'active', source = $2,
                            reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE,
-                           reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, activation_status = 'active'
+                           reminder_3h_sent = FALSE, reminder_6h_sent = FALSE,
+                           reminder_7d_sent = FALSE, reminder_1d_sent = FALSE, activation_status = 'active'
                        WHERE telegram_id = $3""",
                     _to_db_utc(subscription_end), source, telegram_id
                 )
@@ -1598,6 +1600,8 @@ async def grant_access(
                                reminder_24h_sent = FALSE,
                                reminder_3h_sent = FALSE,
                                reminder_6h_sent = FALSE,
+                               reminder_7d_sent = FALSE,
+                               reminder_1d_sent = FALSE,
                                activation_status = 'active',
                                is_bypass_only = FALSE
                            WHERE telegram_id = $3""",
@@ -1811,6 +1815,8 @@ async def grant_access(
                            reminder_24h_sent = FALSE,
                            reminder_3h_sent = FALSE,
                            reminder_6h_sent = FALSE,
+                           reminder_7d_sent = FALSE,
+                           reminder_1d_sent = FALSE,
                            admin_grant_days = $4,
                            activated_at = $5,
                            last_bytes = 0,
@@ -2098,6 +2104,15 @@ async def grant_access(
                 f"activation_status={activation_status_value}, subscription_type={subscription_type_value}, country={country}]"
             )
 
+            # Все флаги reminder_* сбрасываются при каждой выдаче/продлении:
+            # они означают «напоминание об окончании ЭТОГО срока уже ушло».
+            # Не сбросить флаг = человек получит напоминание один раз за всю
+            # жизнь, а при следующих продлениях останется без предупреждения.
+            #
+            # reminder_7d_sent и reminder_1d_sent появились позже (миграция
+            # 036) и в сброс не попали — их выставляли в TRUE, а в FALSE не
+            # возвращал никто. Новые колонки в INSERT не перечисляем: DEFAULT
+            # FALSE, а важен именно DO UPDATE ниже.
             await conn.execute(
                 """INSERT INTO subscriptions (
                        telegram_id, uuid, vpn_key, vpn_key_plus, expires_at, status, source,
@@ -2126,6 +2141,8 @@ async def grant_access(
                        reminder_24h_sent = FALSE,
                        reminder_3h_sent = FALSE,
                        reminder_6h_sent = FALSE,
+                       reminder_7d_sent = FALSE,
+                       reminder_1d_sent = FALSE,
                        admin_grant_days = $7,
                        activated_at = COALESCE($8, subscriptions.activated_at),
                        last_bytes = 0,
