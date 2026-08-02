@@ -88,9 +88,37 @@ try:
         import os as _os
         _dist = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))), "dashboard", "dist")
         if _os.path.isdir(_dist):
-            from fastapi.staticfiles import StaticFiles
-            app.mount("/dashboard", StaticFiles(directory=_dist, html=True), name="dashboard-spa")
-            logger.info("DASHBOARD mounted: api+ws+static (dist=%s)", _dist)
+            # Отдача собранного SPA одним маршрутом: существующий файл —
+            # файлом, всё остальное — index.html, дальше роутит React.
+            #
+            # Почему не StaticFiles(html=True), как было раньше: он отдаёт
+            # index.html только для каталогов, а для отсутствующего файла
+            # ищет 404.html и, не найдя, поднимает 404. Роутер дашборда —
+            # BrowserRouter с реальными путями /dashboard/users,
+            # /dashboard/payments и т.д. Переходы внутри приложения работали,
+            # но F5 на любой странице и прямая ссылка из мессенджера давали
+            # 404 — то есть админ не мог открыть раздел по ссылке вообще.
+            #
+            # /dashboard/api и /dashboard/ws подключены выше и сюда не
+            # доходят: у FastAPI побеждает первый совпавший маршрут.
+            from fastapi.responses import FileResponse
+            _index = _os.path.join(_dist, "index.html")
+
+            @app.get("/dashboard", include_in_schema=False)
+            @app.get("/dashboard/{spa_path:path}", include_in_schema=False)
+            async def _dashboard_spa(spa_path: str = ""):
+                candidate = _os.path.normpath(_os.path.join(_dist, spa_path))
+                # normpath + проверка префикса закрывают ../ — наружу из dist
+                # отдать ничего нельзя.
+                if (
+                    spa_path
+                    and candidate.startswith(_dist)
+                    and _os.path.isfile(candidate)
+                ):
+                    return FileResponse(candidate)
+                return FileResponse(_index)
+
+            logger.info("DASHBOARD mounted: api+ws+spa (dist=%s)", _dist)
         else:
             logger.info("DASHBOARD mounted: api+ws only (no dist at %s yet)", _dist)
 except Exception:

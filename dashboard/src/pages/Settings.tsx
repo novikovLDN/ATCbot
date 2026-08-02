@@ -306,6 +306,50 @@ function PushSection() {
       toast.error("Не удалось отправить: " + ((e as Error)?.message ?? "")),
   });
 
+  // Порядок проверок важен. На iPhone PushManager и Notification существуют
+  // только в приложении, добавленном на «экран Домой»: во вкладке Safari и в
+  // встроенном браузере Telegram их нет, и isPushSupported() возвращает false.
+  // Раньше этот случай попадал в ветку «Не поддерживается» с советом «открой
+  // в Safari» — то есть пользователю в Safari советовали открыть в Safari, а
+  // правильная инструкция стояла ниже по коду и на iPhone была недостижима.
+  // Поэтому iOS-случай разбираем ДО общей ветки.
+  if (!supported && iosBlocker) {
+    return (
+      <section className="card p-5">
+        <div className="flex items-start gap-3">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-warning/15 text-warning">
+            <Share className="h-4 w-4" />
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+              Браузерные уведомления
+            </div>
+            <h2 className="text-lg font-semibold text-fg">
+              Нужно установить как приложение
+            </h2>
+            <p className="text-sm text-fg-muted">
+              На iPhone push работает только у приложения с домашнего экрана —
+              это ограничение Apple, обойти его нельзя. Порядок такой:
+            </p>
+            <ol className="list-decimal space-y-1 pl-5 text-sm text-fg-muted">
+              <li>
+                Если дашборд открыт из Telegram — нажми «…» и выбери «Открыть
+                в Safari». Во встроенном браузере установка недоступна.
+              </li>
+              <li>В Safari нажми «Поделиться» → «На экран Домой».</li>
+              <li>Запусти Atlas Admin с домашнего экрана.</li>
+              <li>Вернись на этот экран и нажми «Подключить push».</li>
+            </ol>
+            <p className="text-sm text-fg-muted">
+              Пока push не подключён, важные уведомления приходят в Telegram —
+              они не потеряются.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   if (!supported) {
     return (
       <section className="card p-5">
@@ -319,8 +363,8 @@ function PushSection() {
             </div>
             <h2 className="text-lg font-semibold text-fg">Не поддерживается</h2>
             <p className="mt-1 text-sm text-fg-muted">
-              Этот браузер не умеет push. Открой в Safari (iOS / macOS) или
-              Chrome.
+              Этот браузер не умеет push. Открой дашборд в Safari (iOS / macOS)
+              или Chrome. Уведомления при этом продолжают приходить в Telegram.
             </p>
           </div>
         </div>

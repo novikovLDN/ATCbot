@@ -2028,7 +2028,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "dashboard",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "StaticFiles(html=True) заменён одним маршрутом /dashboard/{path}: существующий файл отдаётся файлом, всё остальное — index.html, дальше роутит React. Обход каталога закрыт normpath + проверкой префикса dist. /dashboard/api и /dashboard/ws объявлены раньше и не перехватываются. Тесты: tests/services/test_dashboard_spa_routing.py (6 шт., включая deep-link, ассеты и traversal).",
+      "fixed_in": [
+        "app/api/__init__.py",
+        "tests/services/test_dashboard_spa_routing.py"
+      ]
     },
     {
       "title": "На iPhone в Safari секция push показывает «Не поддерживается» вместо инструкции «На экран Домой»",
@@ -2041,7 +2047,12 @@
       "risk": "низкий",
       "confidence": "medium",
       "_dom": "dashboard",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "iOS-случай (isPushSupported()==false и iosNeedsHomeScreen()) разбирается ДО общей ветки «не поддерживается»: вместо совета «открой в Safari» человеку в Safari показывается пронумерованная инструкция — открыть в Safari из Telegram, «Поделиться → На экран Домой», запустить иконку, подключить push. Добавлено, что до настройки push уведомления приходят в Telegram (это теперь правда — см. пункт про admin_notifier).",
+      "fixed_in": [
+        "dashboard/src/pages/Settings.tsx"
+      ]
     },
     {
       "title": "Дашборд открывается из бота обычной url-кнопкой — на iOS это встроенный браузер Telegram, где push и установка невозможны",
@@ -2054,7 +2065,12 @@
       "risk": "низкий",
       "confidence": "medium",
       "_dom": "dashboard",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "В сообщение /admin добавлен блок «Чтобы приходили push на iPhone» с тем же маршрутом из четырёх шагов и явным объяснением, что во встроенном браузере Telegram push не подключается — это ограничение Apple, а не баг. Указано, что до настройки push уведомления приходят в Telegram. Технически ничего другого сделать нельзя: Web Push на iOS работает только у приложения с домашнего экрана.",
+      "fixed_in": [
+        "app/handlers/admin/base.py"
+      ]
     },
     {
       "title": "Все PNG-иконки PWA отсутствуют в репозитории",
