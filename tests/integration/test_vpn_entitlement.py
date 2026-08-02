@@ -98,6 +98,10 @@ class TestDuplicateWebhookIdempotency:
                 "tariff": "basic", "period_days": 30, "price_kopecks": 10000,
                 "purchase_type": "subscription"
             })
+            # finalize_purchase берёт advisory-лок на покупку перед работой:
+            # успешный захват возвращает True.
+            conn.fetchval = AsyncMock(return_value=True)
+            conn.execute = AsyncMock(return_value="SELECT 1")
             pool = MagicMock()
             acq = MagicMock()
             acq.__aenter__ = AsyncMock(return_value=conn)

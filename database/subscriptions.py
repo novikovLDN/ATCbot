@@ -2773,16 +2773,62 @@ async def finalize_purchase(
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Pre-fetch with FOR UPDATE SKIP LOCKED to prevent concurrent finalization
-        # SECURITY: Row-level lock ensures only one webhook can process a purchase at a time
+        # Защита от параллельной финализации одной покупки.
+        #
+        # Раньше здесь стоял SELECT ... FOR UPDATE SKIP LOCKED, но выполнялся он
+        # вне транзакции: соединение в режиме autocommit, поэтому блокировка
+        # строки снималась сразу после запроса. Комментарий обещал «только один
+        # вебхук обрабатывает покупку», а на деле два одновременных вебхука
+        # проходили дальше оба.
+        #
+        # Обернуть всю функцию в транзакцию нельзя: ниже идёт создание сущности
+        # в панели (внешний HTTP-вызов), и держать транзакцию открытой на время
+        # сетевого запроса — прямой путь к исчерпанию пула соединений.
+        #
+        # Поэтому берём сессионный advisory-лок по идентификатору покупки. Он
+        # живёт до явного освобождения, не зависит от транзакций и снимается
+        # в finally ниже. Второй вебхук на ту же покупку не получит лок и
+        # завершится с PurchaseLocked — ровно то поведение, которое ожидалось.
+        got_lock = await conn.fetchval(
+            "SELECT pg_try_advisory_lock(hashtext($1))", purchase_id
+        )
+        if not got_lock:
+            error_msg = f"Pending purchase is being finalized concurrently: purchase_id={purchase_id}"
+            logger.warning(f"finalize_purchase: payment_rejected: reason=concurrent_finalization, {error_msg}")
+            raise PurchaseLocked(error_msg)
+
+        try:
+            return await _finalize_purchase_locked(
+                conn, purchase_id, payment_provider, amount_rubles, invoice_id
+            )
+        finally:
+            await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", purchase_id)
+
+
+async def _finalize_purchase_locked(
+    conn,
+    purchase_id: str,
+    payment_provider: str,
+    amount_rubles: float,
+    invoice_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Тело finalize_purchase, выполняемое под advisory-локом покупки.
+
+    Вынесено отдельной функцией, чтобы лок гарантированно освобождался в
+    finally вызывающей стороны при любом исходе, включая исключение.
+    Соединение передаётся снаружи: лок сессионный и должен сниматься на том
+    же соединении, на котором был взят.
+    """
+    from datetime import timedelta
+
+    if True:  # сохраняем исходный уровень вложенности тела функции
         pending_row = await conn.fetchrow(
-            "SELECT * FROM pending_purchases WHERE purchase_id = $1 FOR UPDATE SKIP LOCKED",
+            "SELECT * FROM pending_purchases WHERE purchase_id = $1",
             purchase_id
         )
         if not pending_row:
-            # Could be not found OR locked by another concurrent finalization
-            error_msg = f"Pending purchase not found or locked: purchase_id={purchase_id}"
-            logger.error(f"finalize_purchase: payment_rejected: reason=purchase_not_found_or_locked, {error_msg}")
+            error_msg = f"Pending purchase not found: purchase_id={purchase_id}"
+            logger.error(f"finalize_purchase: payment_rejected: reason=purchase_not_found, {error_msg}")
             raise PurchaseLocked(error_msg)
         pending_purchase = dict(pending_row)
         telegram_id = pending_purchase["telegram_id"]
