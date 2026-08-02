@@ -222,72 +222,202 @@ async def main():
             logger.error(f"Failed to send degraded mode notification: {e}")
         # Продолжаем запуск бота в деградированном режиме
 
-    # ADVISORY_LOCK_FIX: single-instance guard via PostgreSQL (1s max wait to avoid startup delay).
-    # H4 fix: Use try/finally to ensure connection is released on exception
+    # Single-instance guard: advisory-лок в PostgreSQL.
+    #
+    # Зачем функция, а не блок кода. Раньше лок брался ровно один раз — на
+    # старте и только при database.DB_READY. Если бот поднялся в момент, когда
+    # база была недоступна, лок не брался вовсе, а задача восстановления его
+    # не пыталась взять никогда. То есть гарантия «работает одна реплика»
+    # терялась навсегда, и проверка IS_PROD с выходом из процесса тоже не
+    # срабатывала. Две реплики при этом параллельно продлевают подписки и
+    # рассылают уведомления.
+    #
+    # Теперь ту же функцию вызывает retry_db_init сразу после успешного
+    # init_db — до запуска восстановленных воркеров.
     global instance_lock_conn
     instance_lock_conn = None
-    if database.DB_READY:
+
+    async def acquire_instance_lock(reason: str) -> bool:
+        """Взять advisory-лок. True — взят или уже держим.
+
+        В PROD неудача означает, что где-то работает вторая реплика, —
+        завершаем процесс, как и при старте. В остальных окружениях
+        предупреждаем и продолжаем без гарантии.
+        """
+        global instance_lock_conn
+        if instance_lock_conn is not None:
+            return True
+        if not database.DB_READY:
+            logger.warning(
+                "Advisory-лок не взят (%s): БД не готова, single-instance guard выключен", reason,
+            )
+            return False
         pool = await database.get_pool()
         if not pool:
-            logger.critical("DB pool missing; cannot acquire advisory lock. Exiting.")
+            logger.critical("Нет пула БД, advisory-лок взять нельзя (%s). Выходим.", reason)
             sys.exit(1)
+        conn = None
         try:
-            instance_lock_conn = await pool.acquire()
-            await instance_lock_conn.execute("SET lock_timeout = '1000'")
-            await instance_lock_conn.execute("SELECT pg_advisory_lock($1)", ADVISORY_LOCK_KEY)
-            logger.info("Advisory lock acquired")
+            conn = await pool.acquire()
+            # lock_timeout=1s: ждать дольше на старте нельзя, а «занято»
+            # само по себе — ответ (значит, есть вторая реплика).
+            await conn.execute("SET lock_timeout = '1000'")
+            await conn.execute("SELECT pg_advisory_lock($1)", ADVISORY_LOCK_KEY)
+            instance_lock_conn = conn
+            logger.info("Advisory-лок взят (%s)", reason)
+            return True
         except Exception as e:
+            if conn is not None:
+                try:
+                    await pool.release(conn)
+                except Exception:
+                    pass
             if config.IS_PROD:
-                logger.critical("Advisory lock not acquired in PROD — another instance may be running: %s", e)
+                logger.critical(
+                    "Advisory-лок не взят в PROD (%s) — вероятно, работает вторая реплика: %s",
+                    reason, e,
+                )
                 sys.exit(1)
-            logger.warning("Advisory lock not acquired (timeout or error), continuing without single-instance guard: %s", e)
-            if instance_lock_conn:
-                await pool.release(instance_lock_conn)
-                instance_lock_conn = None
-    else:
-        logger.warning("DB not ready; skipping advisory lock (single-instance guard disabled)")
+            logger.warning(
+                "Advisory-лок не взят (%s), продолжаем без single-instance guard: %s", reason, e,
+            )
+            return False
+
+    await acquire_instance_lock("старт")
     
     # Centralized list for graceful shutdown
     background_tasks = []
     
-    # Запуск фоновой задачи для напоминаний (только если БД готова)
-    reminder_task = None
-    if database.DB_READY:
-        reminder_task = asyncio.create_task(reminders.reminders_task(bot))
-        background_tasks.append(reminder_task)
-        logger.info("Reminders task started")
-    else:
-        logger.warning("Reminders task skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для trial-уведомлений (только если БД готова)
-    trial_notifications_task = None
-    if database.DB_READY:
-        trial_notifications_task = asyncio.create_task(trial_notifications.run_trial_scheduler(bot))
-        background_tasks.append(trial_notifications_task)
-        logger.info("Trial notifications scheduler started")
-    else:
-        logger.warning("Trial notifications scheduler skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для уведомлений о ферме (только если БД готова)
-    farm_notifications_task = None
-    if database.DB_READY:
-        farm_notifications_task = asyncio.create_task(farm_notifications.farm_notifications_task(bot))
-        background_tasks.append(farm_notifications_task)
-        logger.info("Farm notifications task started")
-    else:
-        logger.warning("Farm notifications task skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для мониторинга трафика Remnawave (только если БД готова и Remnawave включен)
-    traffic_monitor_task_instance = None
-    if database.DB_READY and config.REMNAWAVE_ENABLED:
-        traffic_monitor_task_instance = asyncio.create_task(traffic_monitor.traffic_monitor_task(bot))
-        background_tasks.append(traffic_monitor_task_instance)
-        logger.info("Traffic monitor task started")
-    else:
-        if not config.REMNAWAVE_ENABLED:
-            logger.info("Traffic monitor task skipped (REMNAWAVE_ENABLED=false)")
-        else:
-            logger.warning("Traffic monitor task skipped (DB not ready)")
+    # ──────────────────────────────────────────────────────────────────
+    #  Фоновые воркеры, зависящие от БД — одна декларативная таблица
+    # ──────────────────────────────────────────────────────────────────
+    #
+    # Зачем таблица вместо десяти одинаковых блоков «если БД готова —
+    # создать задачу». Раньше стартовый код и код восстановления после
+    # падения БД были написаны отдельно, и списки разошлись: при
+    # восстановлении поднимались пять воркеров из девяти. Остальные —
+    # trial-уведомления, ферма, монитор трафика, синхронизация с сайтом —
+    # молчали до перезапуска процесса, и понять это по логам было нельзя:
+    # ошибок нет, просто тишина.
+    #
+    # Теперь список один. Добавляя воркер сюда, вы автоматически получаете
+    # и запуск, и восстановление. Забыть про восстановление невозможно.
+    #
+    # Поля:
+    #   name    — ключ для логов и для проверки «уже запущен».
+    #   enabled — доп. условие поверх DB_READY (фича-флаги, конфиг).
+    #   start   — корутина, возвращающая задачу или None, если воркер
+    #             сам решил не стартовать (например, не настроен).
+    async def _start_site_sync(bot_obj):
+        """Синхронизация с сайтом стартует, только если он настроен."""
+        from app.workers.site_sync_worker import site_sync_worker_task
+        from app.services.site_sync import is_enabled as _site_sync_enabled
+        if not _site_sync_enabled():
+            logger.info("Site sync worker skipped (SITE_API_URL / SITE_BOT_API_KEY не заданы)")
+            return None
+        return asyncio.create_task(site_sync_worker_task(bot_obj))
+
+    async def start_xray_sync_safe(bot_obj):
+        """Xray sync — необязательный воркер, никогда не роняет бота."""
+        if not XRAY_SYNC_AVAILABLE:
+            logger.info("[XRAY_SYNC] модуль недоступен, пропускаем")
+            return None
+        if not config.XRAY_SYNC_ENABLED:
+            logger.info("[XRAY_SYNC] выключен конфигом (XRAY_SYNC_ENABLED=false)")
+            return None
+        if not config.VPN_ENABLED:
+            logger.info("[XRAY_SYNC] VPN выключен, пропускаем")
+            return None
+        return asyncio.create_task(xray_sync.start(bot_obj))
+
+    DB_DEPENDENT_WORKERS = [
+        {
+            "name": "reminders",
+            "enabled": lambda: True,
+            "start": lambda b: asyncio.create_task(reminders.reminders_task(b)),
+        },
+        {
+            "name": "trial_notifications",
+            "enabled": lambda: True,
+            "start": lambda b: asyncio.create_task(trial_notifications.run_trial_scheduler(b)),
+        },
+        {
+            "name": "farm_notifications",
+            "enabled": lambda: True,
+            "start": lambda b: asyncio.create_task(farm_notifications.farm_notifications_task(b)),
+        },
+        {
+            "name": "traffic_monitor",
+            "enabled": lambda: config.REMNAWAVE_ENABLED,
+            "start": lambda b: asyncio.create_task(traffic_monitor.traffic_monitor_task(b)),
+        },
+        {
+            "name": "fast_expiry_cleanup",
+            "enabled": lambda: True,
+            "start": lambda b: asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task(b)),
+        },
+        {
+            "name": "auto_renewal",
+            # Два kill-switch: общий по фоновым воркерам и отдельный по
+            # автопродлению. Читаем флаги в момент запуска, а не на старте
+            # процесса, — при восстановлении они могли измениться.
+            "enabled": lambda: (
+                get_feature_flags().background_workers_enabled
+                and get_feature_flags().auto_renewal_enabled
+            ),
+            "start": lambda b: asyncio.create_task(auto_renewal.auto_renewal_task(b)),
+        },
+        {
+            "name": "activation_worker",
+            "enabled": lambda: True,
+            "start": lambda b: asyncio.create_task(activation_worker.activation_worker_task(b)),
+        },
+        {
+            "name": "site_sync",
+            "enabled": lambda: True,
+            "start": _start_site_sync,
+        },
+        {
+            "name": "xray_sync",
+            "enabled": lambda: True,
+            "start": start_xray_sync_safe,
+        },
+    ]
+
+    # Какие воркеры уже подняты. Ключ есть = второй раз не поднимаем.
+    started_workers: dict = {}
+
+    async def start_db_workers(reason: str) -> None:
+        """Поднять все воркеры из таблицы, которые ещё не запущены.
+
+        Вызывается на старте и после восстановления БД. Ошибка одного
+        воркера не мешает остальным: бот важнее любой фоновой задачи.
+        """
+        if not database.DB_READY:
+            logger.warning("Фоновые воркеры пропущены (%s): БД не готова", reason)
+            return
+        for spec in DB_DEPENDENT_WORKERS:
+            name = spec["name"]
+            if started_workers.get(name) is not None:
+                continue
+            try:
+                if not spec["enabled"]():
+                    logger.info("Воркер %s пропущен (%s): выключен условием", name, reason)
+                    continue
+                task = spec["start"](bot)
+                if asyncio.iscoroutine(task):
+                    task = await task
+                if task is None:
+                    continue
+                started_workers[name] = task
+                background_tasks.append(task)
+                logger.info("Воркер %s запущен (%s)", name, reason)
+            except Exception as e:
+                logger.warning("Воркер %s не запустился (%s): %s", name, reason, e)
+
+    await start_db_workers("старт")
+
+
 
     # Запуск фоновой задачи для health-check
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
@@ -352,14 +482,7 @@ async def main():
     # Пытается восстановить соединение с БД каждые 30 секунд
     # ====================================================================================
     # Переменные для отслеживания восстановленных задач (для db_retry_task)
-    recovered_tasks = {
-        "reminder": None,
-        "fast_cleanup": None,
-        "auto_renewal": None,
-        "activation_worker": None,
-        "xray_sync": None,
-    }
-    
+
     async def retry_db_init():
         """
         Фоновая задача для автоматической повторной инициализации БД
@@ -374,7 +497,6 @@ async def main():
         - Никогда не падает (все исключения обрабатываются)
         - Не блокирует главный event loop
         """
-        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, xray_sync_task, recovered_tasks, background_tasks
         retry_interval = 30  # секунд
         
         # Если БД уже готова, задача не запускается
@@ -411,43 +533,31 @@ async def main():
                         except Exception as e:
                             logger.error(f"Failed to send recovery notification: {e}")
                         
-                        # Запускаем задачи, которые были пропущены при старте
-                        if reminder_task is None and recovered_tasks["reminder"] is None:
-                            t = asyncio.create_task(reminders.reminders_task(bot))
-                            recovered_tasks["reminder"] = t
-                            background_tasks.append(t)
-                            logger.info("Reminders task started (recovered)")
-                        
-                        if fast_cleanup_task is None and recovered_tasks["fast_cleanup"] is None:
-                            t = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task(bot))
-                            recovered_tasks["fast_cleanup"] = t
-                            background_tasks.append(t)
-                            logger.info("Fast expiry cleanup task started (recovered)")
-                        
-                        if auto_renewal_task is None and recovered_tasks["auto_renewal"] is None:
-                            _flags_recovery = get_feature_flags()
-                            if _flags_recovery.background_workers_enabled and _flags_recovery.auto_renewal_enabled:
-                                t = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
-                                recovered_tasks["auto_renewal"] = t
-                                background_tasks.append(t)
-                                logger.info("Auto-renewal task started (recovered)")
-                        
-                        if activation_worker_task is None and recovered_tasks["activation_worker"] is None:
-                            t = asyncio.create_task(activation_worker.activation_worker_task(bot))
-                            recovered_tasks["activation_worker"] = t
-                            background_tasks.append(t)
-                            logger.info("Activation worker task started (recovered)")
-                        
-                        if XRAY_SYNC_AVAILABLE and config.XRAY_SYNC_ENABLED and xray_sync_task is None and recovered_tasks["xray_sync"] is None:
-                            try:
-                                t = await start_xray_sync_safe(bot)
-                                if t:
-                                    recovered_tasks["xray_sync"] = t
-                                    background_tasks.append(t)
-                                    logger.info("Xray sync worker started (recovered)")
-                            except Exception as e:
-                                logger.warning("Xray sync recovery failed: %s", e)
-                        
+                        # Сначала — single-instance лок. Если бот стартовал
+                        # при недоступной БД, лок не брался вовсе, и гарантия
+                        # «одна реплика» терялась навсегда: retry-задача её не
+                        # восстанавливала. Берём здесь, до воркеров, — иначе
+                        # две реплики начнут продлевать подписки параллельно.
+                        await acquire_instance_lock("после восстановления БД")
+
+                        # Воркеры — из той же таблицы, что и на старте.
+                        # Раньше здесь был отдельный список из пяти штук, и
+                        # четыре воркера молчали до перезапуска процесса.
+                        await start_db_workers("после восстановления БД")
+
+                        # Разовая синхронизация реестра автоуведомлений: на
+                        # старте она молча провалилась (БД не было), и админ
+                        # не увидел бы их в дашборде до перезапуска процесса.
+                        try:
+                            from app.services.automated_notifications import sync_registry_to_db
+                            synced = await sync_registry_to_db()
+                            logger.info(
+                                "Реестр автоуведомлений синхронизирован после восстановления: %d",
+                                synced,
+                            )
+                        except Exception as e:
+                            logger.warning("automated_notifications sync failed after recovery: %s", e)
+
                         # Успешно инициализировали БД - выходим из цикла
                         logger.info("DB retry task completed successfully, stopping retry loop")
                         break
@@ -484,78 +594,6 @@ async def main():
     else:
         logger.info("Database already ready, skipping retry task")
     
-    # Запуск фоновой задачи для быстрой очистки истёкших подписок (только если БД готова)
-    fast_cleanup_task = None
-    if database.DB_READY:
-        fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task(bot))
-        background_tasks.append(fast_cleanup_task)
-        logger.info("Fast expiry cleanup task started")
-    else:
-        logger.warning("Fast expiry cleanup task skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для автопродления подписок (только если БД готова И kill switch включён)
-    auto_renewal_task = None
-    _flags = get_feature_flags()
-    if database.DB_READY and _flags.background_workers_enabled and _flags.auto_renewal_enabled:
-        auto_renewal_task = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
-        background_tasks.append(auto_renewal_task)
-        logger.info("Auto-renewal task started")
-    else:
-        if not database.DB_READY:
-            logger.warning("Auto-renewal task skipped (DB not ready)")
-        else:
-            logger.warning(
-                "Auto-renewal task skipped (feature flag: background_workers=%s, auto_renewal=%s)",
-                _flags.background_workers_enabled, _flags.auto_renewal_enabled
-            )
-    
-    # Запуск фоновой задачи для активации отложенных подписок (только если БД готова)
-    activation_worker_task = None
-    if database.DB_READY:
-        activation_worker_task = asyncio.create_task(activation_worker.activation_worker_task(bot))
-        background_tasks.append(activation_worker_task)
-        logger.info("Activation worker task started")
-    else:
-        logger.warning("Activation worker task skipped (DB not ready)")
-
-    # Запуск фоновой задачи для синхронизации с сайтом (каждые 5 минут)
-    site_sync_task = None
-    if database.DB_READY:
-        try:
-            from app.workers.site_sync_worker import site_sync_worker_task
-            from app.services.site_sync import is_enabled as _site_sync_enabled
-            if _site_sync_enabled():
-                site_sync_task = asyncio.create_task(site_sync_worker_task(bot))
-                background_tasks.append(site_sync_task)
-                logger.info("Site sync worker started (interval=5min)")
-            else:
-                logger.info("Site sync worker skipped (SITE_API_URL or SITE_BOT_API_KEY not configured)")
-        except Exception as e:
-            logger.warning("Site sync worker failed to start: %s", e)
-
-    # Xray sync: safe optional background worker (fail-safe, never crashes bot)
-    async def start_xray_sync_safe(bot_obj):
-        if not XRAY_SYNC_AVAILABLE:
-            print("[XRAY_SYNC] module not available, skipping startup")
-            return None
-        if not config.XRAY_SYNC_ENABLED:
-            logger.info("[XRAY_SYNC] disabled by config (XRAY_SYNC_ENABLED=false), skipping")
-            return None
-        if not database.DB_READY or not config.VPN_ENABLED:
-            logger.info("[XRAY_SYNC] DB or VPN not ready, skipping (will start on recovery if enabled)")
-            return None
-        try:
-            task = asyncio.create_task(xray_sync.start(bot_obj))
-            print("[XRAY_SYNC] started successfully")
-            return task
-        except Exception as e:
-            logger.error("[XRAY_SYNC] failed to start: %s", e)
-            return None
-
-    xray_sync_task = None
-    xray_sync_task = await start_xray_sync_safe(bot)
-    if xray_sync_task:
-        background_tasks.append(xray_sync_task)
     
     # Bot initialization complete
     if database.DB_READY:

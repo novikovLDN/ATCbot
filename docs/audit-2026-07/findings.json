@@ -2691,7 +2691,13 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "workers",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Введена единая декларативная таблица DB_DEPENDENT_WORKERS (имя, условие, фабрика) — девять воркеров: reminders, trial_notifications, farm_notifications, traffic_monitor, fast_expiry_cleanup, auto_renewal, activation_worker, site_sync, xray_sync. Её использует и старт, и восстановление после падения БД через общую start_db_workers(reason); ручные create_task из ветки восстановления удалены, состояние держит started_workers. Флаги auto_renewal читаются в момент запуска, а не на старте процесса. Заодно после восстановления выполняется разовая синхронизация реестра автоуведомлений, которая на старте молча проваливалась. main.py стал на 171 строку короче в этой части. Тесты: tests/services/test_worker_recovery_table.py.",
+      "fixed_in": [
+        "main.py",
+        "tests/services/test_worker_recovery_table.py"
+      ]
     },
     {
       "title": "Advisory-лок single-instance не берётся, если БД была недоступна на старте, и не берётся после её восстановления",
@@ -2704,7 +2710,13 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "workers",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Захват advisory-лока вынесен в acquire_instance_lock(reason) и вызывается дважды: на старте и в retry_db_init сразу после успешного init_db — ДО запуска восстановленных воркеров, иначе вторая реплика начнёт продлевать подписки раньше, чем выяснит, что она вторая. Поведение в PROD сохранено: неудача = sys.exit(1). Повторный вызов при уже взятом локе — no-op. Тесты: tests/services/test_worker_recovery_table.py.",
+      "fixed_in": [
+        "main.py",
+        "tests/services/test_worker_recovery_table.py"
+      ]
     },
     {
       "title": "Автопродление всего батча (до 100 подписок) идёт в одной транзакции, а ошибка на одном пользователе отравляет её целиком",
