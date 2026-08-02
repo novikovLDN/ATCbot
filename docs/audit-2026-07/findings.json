@@ -1219,7 +1219,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "games",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Проверка активной подписки вынесена в middleware роутера фермы (app/handlers/farm.py:require_active_subscription) — одна точка на все farm_*-обработчики, включая будущие: посадку, полив, удобрение, сбор, ранний сбор, покупку грядки и щит. Семантика та же, что в боулинге и кубиках (database.get_subscription возвращает строку только при status='active' и expires_at в будущем). Сбой БД не блокирует плательщика — пропускаем дальше, обработчик покажет ошибку сам. Тесты: tests/services/test_farm_subscription_guard.py.",
+      "fixed_in": [
+        "app/handlers/farm.py",
+        "tests/services/test_farm_subscription_guard.py"
+      ]
     },
     {
       "title": "Баланс фермы неотличим от реальных денег и выводится на карту",
@@ -1232,7 +1238,16 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "games",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Введён учёт происхождения денег: database.users.get_balance_breakdown раскладывает баланс на выводимую и игровую части. Правило — любая трата внутри бота (подписка, трафик, товары, щит) сначала съедает игровые деньги, выводы в это списание не входят (иначе один вывод «отмывал» бы следующую порцию фарма). Источники игровых начислений: GAME_EARNING_SOURCES (farm_harvest, farm_early_harvest, farm_storm_auto_harvest). create_withdrawal_request считает разбивку внутри той же транзакции и под тем же advisory-локом, что и списание, и отклоняет заявку сверх выводимой суммы. Пользователю в FSM вывода показывается разбивка с объяснением, админу в карточке заявки — строка «из них игровые». Отдельный кошелёк и миграция схемы не потребовались. Тесты: tests/services/test_game_balance_not_withdrawable.py (6 шт.).",
+      "fixed_in": [
+        "database/users.py",
+        "database/__init__.py",
+        "app/handlers/payments/withdraw_fsm.py",
+        "app/handlers/callbacks/balance_callbacks.py",
+        "tests/services/test_game_balance_not_withdrawable.py"
+      ]
     },
     {
       "title": "Воркер уведомлений перезаписывает грядки устаревшим снимком — урожай можно собрать дважды",

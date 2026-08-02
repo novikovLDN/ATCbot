@@ -464,6 +464,80 @@ async def log_balance_transaction(telegram_id: int, amount: float, transaction_t
 # WITHDRAWAL REQUESTS (Atlas Secure balance withdrawal system)
 # ====================================================================================
 
+# Источники начислений, заработанных в мини-играх. Такие деньги тратить внутри
+# бота можно (подписка, трафик, товары), а выводить на карту — нельзя: иначе
+# ферма превращается в печатный станок реальных денег.
+GAME_EARNING_SOURCES = (
+    "farm_harvest",
+    "farm_early_harvest",
+    "farm_storm_auto_harvest",
+)
+
+
+async def get_balance_breakdown(telegram_id: int, conn=None) -> Dict[str, int]:
+    """Разложить баланс на выводимую и игровую части (в копейках).
+
+    Правило учёта. Деньги на балансе обезличены, поэтому нужно соглашение,
+    из какой «кучи» списываются траты. Берём самое выгодное для пользователя
+    и безопасное для нас: ЛЮБАЯ трата внутри бота (подписка, трафик, товары,
+    щит от шторма) сначала съедает игровые деньги и только потом реальные.
+
+        game_credits — сумма всех начислений из мини-игр
+        internal_spend — сумма всех трат, кроме самих выводов
+        game_locked = max(0, game_credits - internal_spend)
+        withdrawable = max(0, balance - game_locked)
+
+    Почему выводы исключены из internal_spend: вывести игровые деньги нельзя
+    по определению, значит уменьшать ими игровой остаток неверно — иначе
+    один вывод «отмывал» бы следующую порцию фарма.
+
+    Возвращает {"balance", "withdrawable", "game_locked", "game_credits"}.
+    При недоступной БД — нули, вызывающий код обязан это учитывать.
+    """
+    empty = {"balance": 0, "withdrawable": 0, "game_locked": 0, "game_credits": 0}
+
+    async def _query(c) -> Dict[str, int]:
+        row = await c.fetchrow(
+            """SELECT
+                   COALESCE((SELECT balance FROM users WHERE telegram_id = $1), 0)
+                       AS balance,
+                   COALESCE((SELECT SUM(amount) FROM balance_transactions
+                             WHERE user_id = $1 AND amount > 0
+                               AND source = ANY($2::text[])), 0)
+                       AS game_credits,
+                   COALESCE((SELECT SUM(-amount) FROM balance_transactions
+                             WHERE user_id = $1 AND amount < 0
+                               AND COALESCE(type, '') <> 'withdrawal'), 0)
+                       AS internal_spend
+            """,
+            telegram_id, list(GAME_EARNING_SOURCES),
+        )
+        balance = int(row["balance"] or 0)
+        game_credits = int(row["game_credits"] or 0)
+        internal_spend = int(row["internal_spend"] or 0)
+        game_locked = max(0, game_credits - internal_spend)
+        return {
+            "balance": balance,
+            "withdrawable": max(0, balance - game_locked),
+            "game_locked": min(game_locked, max(0, balance)),
+            "game_credits": game_credits,
+        }
+
+    # Готовое соединение приходит из транзакции create_withdrawal_request —
+    # там проверка DB_READY уже пройдена, и своё соединение брать нельзя:
+    # расчёт обязан идти под тем же локом, что и списание.
+    if conn is not None:
+        return await _query(conn)
+    if not _core.DB_READY:
+        logger.warning("DB not ready, get_balance_breakdown skipped")
+        return empty
+    pool = await get_pool()
+    if pool is None:
+        return empty
+    async with pool.acquire() as c:
+        return await _query(c)
+
+
 async def create_withdrawal_request(
     telegram_id: int,
     username: Optional[str],
@@ -509,11 +583,25 @@ async def create_withdrawal_request(
                     return None
                 
                 current = row["balance"]
-                
+
                 if current < amount_kopecks:
                     logger.warning(f"Insufficient balance for withdrawal: user={telegram_id}, balance={current}, amount={amount_kopecks}")
                     return None
-                
+
+                # Игровые деньги выводу не подлежат. Считаем внутри той же
+                # транзакции и под тем же advisory-локом, что и списание, —
+                # иначе между проверкой и списанием можно успеть собрать
+                # урожай и вывести намайненное.
+                breakdown = await get_balance_breakdown(telegram_id, conn=conn)
+                if amount_kopecks > breakdown["withdrawable"]:
+                    logger.warning(
+                        "WITHDRAWAL_REJECTED_GAME_FUNDS user=%s amount=%s "
+                        "balance=%s withdrawable=%s game_locked=%s",
+                        telegram_id, amount_kopecks, current,
+                        breakdown["withdrawable"], breakdown["game_locked"],
+                    )
+                    return None
+
                 # Обновляем баланс (строка уже заблокирована FOR UPDATE)
                 await conn.execute(
                     "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",

@@ -95,9 +95,32 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         await message.answer(i18n_get_text(language, "errors.invalid_amount"), parse_mode="HTML")
         return
 
-    balance = await database.get_user_balance(message.from_user.id)
-    if amount > balance:
-        await message.answer(i18n_get_text(language, "withdraw.insufficient_funds"), parse_mode="HTML")
+    # Проверяем не весь баланс, а выводимую его часть: заработанное в
+    # мини-играх тратится внутри бота, но на карту не выводится (иначе ферма
+    # печатала бы реальные деньги). Разбор правила — в
+    # database.users.get_balance_breakdown.
+    #
+    # Отказ здесь нужен именно с объяснением: create_withdrawal_request и так
+    # отклонит заявку, но пользователь увидел бы только «не удалось» и пошёл
+    # в поддержку, не понимая почему.
+    breakdown = await database.get_balance_breakdown(message.from_user.id)
+    amount_kopecks = int(round(amount * 100))
+    if amount_kopecks > breakdown["withdrawable"]:
+        if breakdown["game_locked"] > 0:
+            await message.answer(
+                "🌾 Часть баланса заработана в мини-играх — такие средства "
+                "можно тратить в боте (подписка, трафик, товары), но нельзя "
+                "выводить на карту.\n\n"
+                f"💰 Всего на балансе: <b>{breakdown['balance'] / 100:.2f} ₽</b>\n"
+                f"🎮 Игровые: <b>{breakdown['game_locked'] / 100:.2f} ₽</b>\n"
+                f"🏦 Доступно к выводу: <b>{breakdown['withdrawable'] / 100:.2f} ₽</b>",
+                parse_mode="HTML",
+            )
+        else:
+            await message.answer(
+                i18n_get_text(language, "withdraw.insufficient_funds"),
+                parse_mode="HTML",
+            )
         return
 
     await state.update_data(withdraw_amount=amount, withdraw_amount_attempts=0)

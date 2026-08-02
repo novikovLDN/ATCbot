@@ -290,10 +290,26 @@ async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMCon
         subscription = await database.get_subscription(telegram_id)
         has_active = is_subscription_active(subscription) if subscription else False
         sub_text = i18n_get_text(language, "profile.status_active") if has_active else i18n_get_text(language, "profile.status_inactive")
+
+        # Разбивка по происхождению денег. Заявку одобряет человек, и он
+        # обязан видеть, сколько на балансе намайнено в мини-играх: сама
+        # заявка такие деньги уже не пропустит, но остаток на балансе всё
+        # равно полезен при разборе спорных случаев.
+        try:
+            breakdown = await database.get_balance_breakdown(telegram_id)
+            game_line = (
+                f"🎮 Из них игровые: {breakdown['game_locked'] / 100:.2f} ₽ "
+                f"(к выводу: {breakdown['withdrawable'] / 100:.2f} ₽)\n"
+            ) if breakdown["game_locked"] > 0 else ""
+        except Exception as breakdown_err:
+            logger.warning("WITHDRAW_BREAKDOWN_FAILED user=%s: %s", telegram_id, breakdown_err)
+            game_line = ""
+
         admin_text = (
             f"💸 Новая заявка на вывод #{wid}\n\n"
             f"👤 Пользователь: @{sanitized_username or '—'} (ID: {telegram_id})\n"
             f"📊 Баланс: {balance:.2f} ₽\n"
+            f"{game_line}"
             f"💰 Сумма: {amount:.2f} ₽\n"
             f"📶 Подписка: {sub_text}\n"
             f"🏦 Реквизиты: {requisites[:200]}"

@@ -50,6 +50,46 @@ from app.handlers.common.utils import safe_edit_text
 router = Router()
 logger = logging.getLogger(__name__)
 
+
+@router.callback_query.middleware()
+async def require_active_subscription(handler, event: CallbackQuery, data: dict):
+    """Пускать на ферму только действующих подписчиков.
+
+    Зачем middleware, а не проверка в каждом обработчике: ферма начисляет
+    реальный баланс (см. шапку модуля), и хендлеров у неё полтора десятка —
+    посадка, полив, удобрение, сбор, ранний сбор, покупка грядки, щит.
+    Забыть проверку в одном из них = неплательщик продолжает майнить деньги.
+    Один вход в роутер закрывает все callback'и разом, включая те, что
+    добавят позже.
+
+    Почему это вообще возможно без проверки: старое сообщение с инлайн-
+    клавиатурой остаётся в чате навсегда. Подписка истекла, была отменена
+    или возвращена — а кнопки «Собрать» в старом экране по-прежнему живые.
+
+    Меню игр и остальные игры проверяют подписку сами (app/handlers/game.py),
+    здесь повторяем ту же семантику: get_subscription возвращает строку
+    только при status='active' и expires_at в будущем.
+    """
+    telegram_id = event.from_user.id if event.from_user else 0
+    try:
+        subscription = await database.get_subscription(telegram_id)
+    except Exception as e:
+        # База недоступна — не наказываем плательщика: пропускаем дальше,
+        # обработчик сам упрётся в ensure_db_ready_callback и покажет ошибку.
+        logger.warning("FARM_GUARD_DB_ERROR user=%s: %s", telegram_id, e)
+        return await handler(event, data)
+
+    if subscription:
+        return await handler(event, data)
+
+    logger.info("FARM_GUARD_BLOCKED user=%s no_active_subscription", telegram_id)
+    await event.answer(
+        "🌾 Ферма доступна только подписчикам.\n"
+        "Оформите подписку, чтобы вернуться к грядкам.",
+        show_alert=True,
+    )
+    return None
+
 # Общие с игровым меню элементы импортируются из game.py: клавиатура возврата,
 # справочник растений, цены грядки и щита. Держать их там правильно — меню игр
 # живёт в game.py и ссылается на те же значения.
