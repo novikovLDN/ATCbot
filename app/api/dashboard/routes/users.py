@@ -1,14 +1,28 @@
-"""
-User lookup + admin actions.
+"""Карточка пользователя и админские действия над ней в веб-дашборде.
 
-Read endpoints just proxy database.* functions. Write endpoints route
-through the SAME atomic helpers the in-bot admin handlers use
-(`admin_grant_access_atomic`, `admin_revoke_access_atomic`, etc.) —
-so audit logs, Remnawave sync, and side effects stay identical no
-matter whether the action comes from a Telegram chat or the web UI.
+ЧТО ЗДЕСЬ ЕСТЬ
+    Поиск пользователей, полная карточка (баланс, подписка, триал, скидки,
+    VIP, кешбэк), выдача и отзыв доступа, смена тарифа, правка баланса.
 
-Bot-only writes (approve_payment_atomic, grant_access, finalize_purchase,
-mark_trial_used) are intentionally NOT exposed here.
+ГЛАВНОЕ ПРАВИЛО ЭТОГО ФАЙЛА
+    Чтение просто проксирует функции database.*. Запись идёт через ТЕ ЖЕ
+    атомарные помощники, которыми пользуются админские обработчики в боте
+    (admin_grant_access_atomic, admin_revoke_access_atomic и другие).
+    Благодаря этому журнал аудита, синхронизация с Remnawave и побочные
+    эффекты одинаковы независимо от того, пришло действие из чата или из
+    веб-интерфейса. Никогда не дублируйте здесь бизнес-логику — вызывайте
+    существующий атомарный помощник.
+
+ЧЕГО ЗДЕСЬ СОЗНАТЕЛЬНО НЕТ
+    Операции, доступные только боту: approve_payment_atomic, grant_access,
+    finalize_purchase, mark_trial_used. Они завязаны на платёжный поток
+    и не должны запускаться из веба.
+
+ТАРИФЫ
+    Название тарифа для человека берётся из app.constants.tariffs, а не
+    собирается здесь: в базе комбо-подписка может храниться двумя способами
+    (subscription_type='combo_plus' либо 'plus' с флагом is_combo), и
+    единая точка перевода избавляет интерфейс от этой двусмысленности.
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -19,6 +33,7 @@ from pydantic import BaseModel, Field, field_validator
 import config
 import database
 from app.api.dashboard.deps import require_admin
+from app.constants import tariffs as tariff_ref
 from app.events import bus
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -60,9 +75,42 @@ async def users_search(
     }
 
 
+def _describe_subscription(subscription: Optional[dict]) -> Optional[dict]:
+    """Дополнить подписку понятным описанием тарифа для интерфейса.
+
+    Зачем: в базе комбо-подписка встречается в двух видах — либо
+    subscription_type='combo_plus', либо 'plus' с отдельным флагом is_combo.
+    Дашборд не должен знать про эту двойственность, поэтому здесь к записи
+    добавляются готовые поля:
+        tariff_display  — «Комбо Плюс» вместо «plus»
+        is_combo        — единый признак независимо от способа хранения
+        base_tariff     — уровень доступа без учёта пакета обхода
+        bypass_gb       — сколько ГБ обхода входит в комбо за этот период
+
+    Исходные поля не меняются: старые потребители продолжают работать.
+    """
+    if not subscription:
+        return subscription
+
+    tariff = subscription.get("subscription_type")
+    legacy_combo_flag = bool(subscription.get("is_combo"))
+    period_days = subscription.get("period_days")
+
+    enriched = dict(subscription)
+    enriched["tariff_display"] = tariff_ref.display_name(tariff, is_combo=legacy_combo_flag)
+    enriched["is_combo"] = tariff_ref.is_combo_tariff(tariff) or legacy_combo_flag
+    enriched["base_tariff"] = tariff_ref.base_tariff_of(tariff)
+    enriched["bypass_gb"] = tariff_ref.combo_bypass_gb(tariff, period_days)
+    return enriched
+
+
 @router.get("/{telegram_id}")
 async def user_detail(telegram_id: int = Path(..., gt=0)):
-    """Full card — user, balance, subscription, discount, vip, trial."""
+    """Полная карточка: пользователь, баланс, подписка, скидки, VIP, триал.
+
+    Подписка проходит через _describe_subscription, поэтому в ответе всегда
+    есть человекочитаемое название тарифа и однозначный признак комбо.
+    """
     try:
         user = await database.get_user(telegram_id)
         if not user:
@@ -78,7 +126,7 @@ async def user_detail(telegram_id: int = Path(..., gt=0)):
         return {
             "user": user,
             "balance_rubles": balance,
-            "subscription": subscription,
+            "subscription": _describe_subscription(subscription),
             "trial": trial,
             "discount": discount,
             "traffic_discount": traffic_discount,
@@ -149,13 +197,21 @@ def _serialize(row: dict) -> dict:
 # ──────────────────────────────────────────────────────────────────────
 
 class GrantRequest(BaseModel):
+    """Ручная выдача доступа админом.
+
+    tariff принимает и комбо-тарифы: администратор должен уметь выдать
+    «Комбо Плюс» так же, как обычную подписку. Раньше проверка опиралась
+    на VALID_SUBSCRIPTION_TYPES, где комбо нет, поэтому выдать его через
+    дашборд было невозможно вовсе.
+    """
+
     days: int = Field(..., gt=0, le=3650)
     tariff: str = Field("basic")
 
     @field_validator("tariff")
     @classmethod
     def _valid_tariff(cls, v: str) -> str:
-        if v not in config.VALID_SUBSCRIPTION_TYPES:
+        if v not in config.GRANTABLE_TARIFF_TYPES:
             raise ValueError(f"invalid tariff: {v}")
         return v
 
@@ -233,12 +289,19 @@ async def user_revoke(
 
 
 class SwitchTariffRequest(BaseModel):
+    """Смена тарифа у действующей подписки.
+
+    Принимает комбо наравне с обычными тарифами: перевести пользователя
+    с «Плюс» на «Комбо Плюс» — обычная админская операция, и запрещать её
+    на уровне валидации не было причин.
+    """
+
     tariff: str = Field(...)
 
     @field_validator("tariff")
     @classmethod
     def _valid_tariff(cls, v: str) -> str:
-        if v not in config.VALID_SUBSCRIPTION_TYPES:
+        if v not in config.GRANTABLE_TARIFF_TYPES:
             raise ValueError(f"invalid tariff: {v}")
         return v
 
