@@ -36,24 +36,30 @@ from app.services import admin_auth
 router = APIRouter()
 
 _JWT_ALG = "HS256"
-# Magic-link is intentionally long-lived: it's a bootstrap link that
-# only does anything when there's no password set (or right after
-# the admin pressed "Восстановить пароль"). Outside those windows
-# it's inert, so giving it a long TTL just saves the admin from
-# re-pressing /admin if they delay setup.
-_MAGIC_TTL_DAYS = 30
+# ВАЖНО: комментарий здесь раньше утверждал, что вне окна установки пароля
+# magic-link «инертен». Это неверно: require_admin принимает его как обычный
+# admin-Bearer, а фронтенд кладёт его в localStorage и шлёт с каждым запросом.
+# То есть ссылка, которая уходит в чат Telegram и остаётся в истории навсегда,
+# давала полный доступ к админскому API на весь срок жизни токена.
+#
+# Срок сокращён с 30 суток до настраиваемого значения (по умолчанию сутки).
+# Полное разделение bootstrap-токена и сессии требует правок фронтенда и
+# относится к подпроекту G.
+_MAGIC_TTL_HOURS = getattr(config, "DASHBOARD_MAGIC_LINK_TTL_HOURS", 24)
 
 
 def issue_login_token(admin_telegram_id: int) -> str:
-    """Sign a long-lived bootstrap token. Called from the /admin
-    bot handler."""
+    """Выдать токен входа в дашборд. Вызывается из обработчика /admin."""
     if not config.JWT_SECRET:
         raise RuntimeError("JWT_SECRET is not configured")
     payload = {
         "sub": str(admin_telegram_id),
         "role": "admin",
+        # purpose позволяет отличать ссылку из чата от других токенов:
+        # без него в логах невозможно понять, чем именно вошли.
+        "purpose": "magic_link",
         "iat": datetime.now(timezone.utc),
-        "exp": datetime.now(timezone.utc) + timedelta(days=_MAGIC_TTL_DAYS),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=_MAGIC_TTL_HOURS),
     }
     return jwt.encode(payload, config.JWT_SECRET, algorithm=_JWT_ALG)
 

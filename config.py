@@ -96,6 +96,13 @@ except ValueError:
 # are silently skipped — bot still works fine without them.
 JWT_SECRET = env("JWT_SECRET")
 DASHBOARD_BASE_URL = env("DASHBOARD_BASE_URL")
+# Срок жизни ссылки входа в дашборд, которую бот присылает в чат. Ссылка
+# остаётся в истории Telegram навсегда, поэтому чем короче срок, тем меньше
+# окно, в течение которого доступом может воспользоваться посторонний.
+try:
+    DASHBOARD_MAGIC_LINK_TTL_HOURS = max(1, int(env("DASHBOARD_MAGIC_LINK_TTL_HOURS") or 24))
+except ValueError:
+    DASHBOARD_MAGIC_LINK_TTL_HOURS = 24
 DASHBOARD_ENABLED = bool(JWT_SECRET and DASHBOARD_BASE_URL)
 if not DASHBOARD_ENABLED:
     _log.info(

@@ -4,6 +4,7 @@
 
 Cookie wins if both are present.
 """
+import logging
 from typing import Optional
 
 from fastapi import Cookie, Depends, HTTPException
@@ -13,6 +14,7 @@ import config
 from app.api.dashboard.auth import verify_token
 from app.services import admin_auth
 
+_log = logging.getLogger(__name__)
 _bearer = HTTPBearer(auto_error=False)
 
 
@@ -39,6 +41,14 @@ async def require_admin(
             raise HTTPException(401, "Invalid subject")
         if not admin_auth.is_admin(sub_id):
             raise HTTPException(403, "Forbidden")
-        return {"sub": sub_id, "role": "admin", "auth": "bearer"}
+        purpose = payload.get("purpose")
+        if purpose == "magic_link":
+            # Ссылка из чата Telegram, используемая как ключ к API. Само по
+            # себе это рабочий сценарий входа, но факт должен быть виден:
+            # ссылка остаётся в истории чата и её мог увидеть кто угодно.
+            _log.info(
+                "DASHBOARD_AUTH_VIA_MAGIC_LINK admin=%s — вход по ссылке из чата", sub_id
+            )
+        return {"sub": sub_id, "role": "admin", "auth": "bearer", "purpose": purpose}
 
     raise HTTPException(401, "Missing bearer token")
