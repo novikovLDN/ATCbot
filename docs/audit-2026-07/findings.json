@@ -39,7 +39,9 @@
       },
       "_dom": "payments",
       "_status": "подтверждено",
-      "_corrected": "P1"
+      "_corrected": "P1",
+      "status": "fixed",
+      "fixed_in": "5393018"
     },
     {
       "title": "Оплата Spotify картой через Telegram Payments уходит в ветку VPN-подписки — деньги списаны, товар не выдан",
