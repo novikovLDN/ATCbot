@@ -4,6 +4,7 @@
 Группа самодостаточная: снаружи ей нужны только пул соединений и helper
 приведения времени.
 """
+import asyncpg
 import logging
 import random
 import string
@@ -14,6 +15,14 @@ import database.core as _core
 from database.core import get_pool, _to_db_utc
 
 logger = logging.getLogger(__name__)
+
+# Условие «промокод годен»: активен, не удалён, не истёк и не исчерпан.
+# Держится одной строкой, потому что повторяется в нескольких запросах.
+_ACTIVE_PROMO_WHERE = (
+    "is_active = true AND deleted_at IS NULL "
+    "AND (expires_at IS NULL OR expires_at > NOW()) "
+    "AND (max_uses IS NULL OR used_count < max_uses)"
+)
 
 
 async def get_promo_code(code: str) -> Optional[Dict[str, Any]]:

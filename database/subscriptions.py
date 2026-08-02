@@ -95,6 +95,7 @@ from database.promo import (  # noqa: F401,E402
     _consume_promo_in_transaction,
     validate_promocode_atomic,
     consume_promocode_atomic,
+    _ACTIVE_PROMO_WHERE,
 )
 
 async def get_pending_payment_by_user(telegram_id: int) -> Optional[Dict[str, Any]]:
@@ -2778,11 +2779,7 @@ async def update_last_reminder_at(subscription_id: int) -> None:
 
 
 # Active promo definition: is_active=true AND deleted_at IS NULL AND expires_at > now() AND used_count < max_uses
-_ACTIVE_PROMO_WHERE = (
-    "is_active = true AND deleted_at IS NULL "
-    "AND (expires_at IS NULL OR expires_at > NOW()) "
-    "AND (max_uses IS NULL OR used_count < max_uses)"
-)
+# _ACTIVE_PROMO_WHERE переехало в database/promo.py вместе с промокодами.
 
 
 async def is_user_first_purchase(telegram_id: int) -> bool:

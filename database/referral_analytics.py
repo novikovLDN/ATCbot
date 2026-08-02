@@ -4,6 +4,7 @@
 тяжёлые агрегирующие запросы. Держать его рядом с денежными транзакциями
 не было причин — их правят по разным поводам и с разной осторожностью.
 """
+import asyncpg
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
