@@ -262,10 +262,14 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             f"error={error_msg}]"
                         )
                     try:
-                        should_mark_failed = (
-                            vpn_api_permanently_disabled and
-                            new_attempts >= MAX_ACTIVATION_ATTEMPTS
-                        )
+                        # Исчерпание попыток — достаточное основание пометить
+                        # активацию проваленной, какой бы ни была причина.
+                        # Раньше требовалось ещё и vpn_api_permanently_disabled,
+                        # то есть при обычной ошибке VPN API (сам VPN включён)
+                        # подписка навсегда оставалась в статусе pending: деньги
+                        # получены, доступ не выдан, финального алерта нет и
+                        # никто об этом не узнаёт.
+                        should_mark_failed = new_attempts >= MAX_ACTIVATION_ATTEMPTS
                         async with acquire_connection(pool, "activation_mark_failed") as conn:
                             await activation_service.mark_activation_failed(
                                 subscription_id=subscription_id,
