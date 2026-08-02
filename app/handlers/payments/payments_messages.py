@@ -134,8 +134,30 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
                 await pre_checkout_query.answer(ok=False, error_message="Invoice expired. Please create a new one.")
                 return
         except Exception as e:
-            logger.error("PRE_CHECKOUT_DB_ERROR purchase_id=%s error=%s", purchase_id, e)
-            # В случае ошибки БД — пропускаем, чтобы не блокировать платёж
+            # Осознанный компромисс: при недоступности базы платёж НЕ блокируем.
+            #
+            # Telegram даёт на ответ 10 секунд, и отказ означает, что человек
+            # не сможет заплатить вообще. Пропустить платёж и разобраться позже
+            # дешевле, чем потерять покупку из-за временного сбоя базы.
+            #
+            # Обратная сторона: successful_payment может не найти покупку, и
+            # тогда деньги списаны, а товар не выдан. Поэтому уровень critical
+            # и отдельный маркер — такие случаи обязаны попадать в разбор,
+            # а не теряться среди обычных ошибок.
+            logger.critical(
+                "PRE_CHECKOUT_DB_ERROR_ALLOWED purchase_id=%s telegram_id=%s error=%s "
+                "— платёж пропущен без проверки покупки, проверьте выдачу вручную",
+                purchase_id, telegram_id, e,
+            )
+            try:
+                from app.services.admin_alerts import alert_payment_failure
+                await alert_payment_failure(
+                    pre_checkout_query.bot, "telegram_payment", telegram_id,
+                    purchase_id, e, is_transient=True,
+                    amount_rubles=log_amount, tariff=None, period_days=None,
+                )
+            except Exception as alert_err:
+                logger.error("PRE_CHECKOUT_ALERT_FAILED: %s", alert_err)
     else:
         purchase_id = payload
 
