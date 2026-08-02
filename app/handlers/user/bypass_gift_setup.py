@@ -41,13 +41,13 @@ logger = logging.getLogger(__name__)
 # imports happen inside callbacks to avoid import cycles at module load.
 
 def _setup_photo(key: str) -> str:
-    from app.handlers.callbacks.navigation import _SETUP_PHOTOS  # type: ignore
+    from app.handlers.callbacks.connect_guide import _SETUP_PHOTOS  # type: ignore
     env_key = "prod" if config.IS_PROD else "stage"
     return _SETUP_PHOTOS.get(key, {}).get(env_key, "")
 
 
 def _device_select_photo() -> str:
-    from app.handlers.callbacks.navigation import _DEVICE_SELECT_PHOTO  # type: ignore
+    from app.handlers.callbacks.connect_guide import _DEVICE_SELECT_PHOTO  # type: ignore
     return _DEVICE_SELECT_PHOTO.get("prod" if config.IS_PROD else "stage", "")
 
 

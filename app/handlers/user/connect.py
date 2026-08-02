@@ -39,7 +39,7 @@ async def cmd_connect(message: Message):
             callback_data="menu_main",
         )],
     ])
-    from app.handlers.callbacks.navigation import _DEVICE_SELECT_PHOTO
+    from app.handlers.callbacks.connect_guide import _DEVICE_SELECT_PHOTO
     _ds_photo = _DEVICE_SELECT_PHOTO.get("prod" if config.IS_PROD else "stage", "")
     if _ds_photo:
         await message.answer_photo(
