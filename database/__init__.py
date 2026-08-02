@@ -137,13 +137,7 @@ from database.subscriptions import (  # noqa: F401
     _calculate_subscription_days,
     approve_payment_atomic,
     get_pending_payments,
-    get_subscriptions_needing_reminder,
-    mark_reminder_sent,
-    mark_reminder_flag_sent,
-    mark_user_unreachable,
-    update_last_reminder_at,
     is_user_first_purchase,
-    get_subscriptions_for_reminders,
     get_admin_stats,
     calculate_final_price,
     set_special_offer,
@@ -162,6 +156,16 @@ from database.subscriptions import (  # noqa: F401
     set_combo_flag,
     set_bypass_only_flag,
     ensure_bypass_only_subscription,
+)
+
+# Reminders: выборки и отметки для напоминаний об истечении подписки
+from database.reminders_queries import (  # noqa: F401
+    get_subscriptions_needing_reminder,
+    mark_reminder_sent,
+    mark_reminder_flag_sent,
+    mark_user_unreachable,
+    update_last_reminder_at,
+    get_subscriptions_for_reminders,
 )
 
 # Referral analytics: отчёты админки по рефералам

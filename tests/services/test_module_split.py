@@ -69,6 +69,43 @@ def test_defined_in_promo_module(name):
     assert hasattr(promo, name)
 
 
+REMINDER_NAMES = [
+    "get_subscriptions_needing_reminder",
+    "mark_reminder_sent",
+    "mark_reminder_flag_sent",
+    "mark_user_unreachable",
+    "update_last_reminder_at",
+    "get_subscriptions_for_reminders",
+]
+
+
+@pytest.mark.parametrize("name", REMINDER_NAMES)
+def test_reminder_available_via_package(name):
+    import database
+    assert hasattr(database, name)
+
+
+@pytest.mark.parametrize("name", REMINDER_NAMES)
+def test_reminder_available_via_subscriptions(name):
+    import database.subscriptions as subs
+    assert hasattr(subs, name)
+
+
+@pytest.mark.parametrize("name", REMINDER_NAMES)
+def test_reminder_defined_in_its_module(name):
+    import database.reminders_queries as rq
+    assert hasattr(rq, name)
+
+
+def test_split_modules_import_cleanly():
+    """Каждый выделенный модуль обязан импортироваться сам по себе:
+    потерянный import внутри переноса иначе всплывёт только в проде."""
+    import importlib
+    for mod in ("database.promo", "database.referral_analytics",
+                "database.reminders_queries"):
+        importlib.import_module(mod)
+
+
 def test_same_object_everywhere():
     """Реэкспорт должен отдавать ту же функцию, а не копию."""
     import database
