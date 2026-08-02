@@ -307,6 +307,46 @@ def test_is_vip_user_accepts_external_connection():
     assert "conn" in inspect.signature(is_vip_user).parameters
 
 
+REFERRAL_NAMES = [
+    "generate_referral_code",
+    "create_user",
+    "get_user_referral_code",
+    "find_user_by_referral_code",
+    "register_referral",
+    "mark_referral_active",
+    "get_referral_stats",
+    "get_referral_cashback_percent",
+    "get_effective_cashback_percent",
+    "calculate_referral_percent",
+    "get_referral_level_info",
+    "get_total_cashback_earned",
+    "calculate_referral_level",
+    "process_referral_reward",
+]
+
+
+@pytest.mark.parametrize("name", REFERRAL_NAMES)
+def test_referrals_available_via_package(name):
+    import database
+    assert hasattr(database, name)
+
+
+@pytest.mark.parametrize("name", REFERRAL_NAMES)
+def test_referrals_available_via_users(name):
+    """Код годами обращался к рефералке через database.users."""
+    import database.users as u
+    assert hasattr(u, name)
+
+
+def test_referral_code_is_deterministic_and_nonempty():
+    """Перенос не должен был изменить сам алгоритм генерации кода:
+    иначе у существующих пользователей поменялись бы их коды."""
+    from database.referrals import generate_referral_code
+    first = generate_referral_code(12345)
+    assert first and generate_referral_code(12345) == first
+    assert generate_referral_code(54321) != first
+
+
 def test_split_modules_import_cleanly():
     """Каждый выделенный модуль обязан импортироваться сам по себе:
     потерянный import внутри переноса иначе всплывёт только в проде."""
@@ -314,7 +354,8 @@ def test_split_modules_import_cleanly():
     for mod in ("database.promo", "database.referral_analytics",
                 "database.reminders_queries", "database.trials_queries",
                 "database.pending_purchases", "database.broadcasts",
-                "database.analytics", "database.discounts"):
+                "database.analytics", "database.discounts",
+                "database.referrals"):
         importlib.import_module(mod)
 
 

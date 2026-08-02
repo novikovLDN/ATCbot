@@ -80,10 +80,16 @@ from database.users import (  # noqa: F401
     reject_withdrawal_request,
     find_user_by_id_or_username,
     search_users_dashboard,
+    update_user_language,
+    update_username,
+)
+
+# Referrals: коды, привязка, уровни, кешбэк
+from database.referrals import (  # noqa: F401
     generate_referral_code,
     create_user,
-    find_user_by_referral_code,
     get_user_referral_code,
+    find_user_by_referral_code,
     register_referral,
     mark_referral_active,
     _mark_referral_active_internal,
@@ -100,8 +106,6 @@ from database.users import (  # noqa: F401
     calculate_referral_level,
     get_referral_statistics,
     process_referral_reward,
-    update_user_language,
-    update_username,
 )
 
 # Subscriptions: payments, subscriptions, trials, access, finalize, promo, reminders
