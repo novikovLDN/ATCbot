@@ -251,11 +251,36 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         ])
     else:
         # === Кнопки для пользователей БЕЗ подписки ===
+        #
+        # Раньше здесь были только «Магазин» и «Помощь». Личный кабинет,
+        # рефералка и настройки добавлялись исключительно в ветке с активной
+        # подпиской — то есть человек без подписки не мог из меню попасть
+        # ни к балансу, ни к своим подаркам, ни к смене языка: всё это живёт
+        # на экране профиля. Пополнить баланс, чтобы потом купить подписку,
+        # он тоже не мог. Обработчики этих экранов работают и без подписки,
+        # недоставало только кнопок.
+        buttons.append([InlineKeyboardButton(
+            text=_strip_lead_emoji(i18n_get_text(language, "main.profile")),
+            callback_data="menu_profile",
+            icon_custom_emoji_id="6019503133288304110",  # 🧑‍💻
+        )])
         buttons.append([
             InlineKeyboardButton(
                 text="Магазин",
                 callback_data="mini_shop",
                 icon_custom_emoji_id="5323510761077636002",  # 🛍
+            ),
+            InlineKeyboardButton(
+                text="Заработать с нами",
+                callback_data="menu_referral",
+                icon_custom_emoji_id="5449601904147440135",  # 👑
+            ),
+        ])
+        buttons.append([
+            InlineKeyboardButton(
+                text="Настройки",
+                callback_data="menu_settings",
+                icon_custom_emoji_id="5350396951407895212",  # ⚙️
             ),
             InlineKeyboardButton(
                 text="Помощь",
@@ -318,13 +343,13 @@ def get_biz_profile_keyboard(language: str) -> InlineKeyboardMarkup:
 def get_biz_control_panel_keyboard(language: str) -> InlineKeyboardMarkup:
     """Клавиатура панели управления для бизнес-подписки."""
     return InlineKeyboardMarkup(inline_keyboard=[
+        # Одна кнопка вместо двух. Раньше «Скопировать логин» и
+        # «Скопировать пароль» читали одно и то же поле vpn_key и
+        # присылали одинаковое сообщение: отдельных логина и пароля у
+        # бизнес-подписки не существует, есть только ссылка подключения.
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_copy_login"),
-            callback_data="biz_copy_login"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_copy_password"),
-            callback_data="biz_copy_password"
+            text=i18n_get_text(language, "biz.btn_copy_link"),
+            callback_data="biz_copy_link"
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_personal_manager"),
@@ -530,22 +555,42 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
 
 
 
-def get_about_keyboard(language: str):
-    """Клавиатура раздела 'О сервисе'"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+def get_about_keyboard(
+    language: str,
+    *,
+    back_to: str = "menu_main",
+    show_privacy: bool = True,
+):
+    """Клавиатура раздела «О сервисе» и экрана политики.
+
+    Два параметра появились из-за двух реальных дефектов:
+
+    • show_privacy=False нужен на экране самой политики. Раньше он рисовался
+      этой же клавиатурой, первой кнопкой которой была ссылка на политику —
+      то есть на текущий экран. safe_edit_text при совпадении текста и
+      разметки выходит досрочно, поэтому нажатие вообще ничего не делало:
+      человек жал кнопку, а бот молчал.
+
+    • back_to нужен, потому что «Назад» уводило в корень. Цепочка
+      Главная → Настройки → Экосистема → О сервисе схлопывалась одним
+      нажатием до главного меню, и вернуться на шаг назад было нельзя.
+      Теперь вызывающий экран сам говорит, кто его родитель.
+    """
+    rows = []
+    if show_privacy:
+        rows.append([InlineKeyboardButton(
             text=i18n_get_text(language, "main.privacy_policy", "privacy_policy"),
-            callback_data="about_privacy"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.our_channel"),
-            url="https://t.me/atlas_secure"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
-        )],
-    ])
+            callback_data="about_privacy",
+        )])
+    rows.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "main.our_channel"),
+        url="https://t.me/atlas_secure",
+    )])
+    rows.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data=back_to,
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_service_status_keyboard(language: str):

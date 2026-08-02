@@ -113,7 +113,13 @@ async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
     title = i18n_get_text(language, "main.about_title")
     text = i18n_get_text(language, "main.about_text", "about_text")
     full_text = f"{title}\n\n{text}"
-    await safe_edit_text(msg, full_text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=bot)
+    # «О сервисе» открывают из экосистемы (Настройки → Экосистема → О сервисе),
+    # поэтому «Назад» возвращает на предыдущий экран, а не в корень.
+    await safe_edit_text(
+        msg, full_text,
+        reply_markup=get_about_keyboard(language, back_to="menu_ecosystem"),
+        parse_mode="HTML", bot=bot,
+    )
 
 
 async def _open_help_screen(event: Union[Message, CallbackQuery], bot: Bot):

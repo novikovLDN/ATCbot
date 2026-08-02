@@ -141,7 +141,10 @@ async def callback_ecosystem(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "main.about"), callback_data="menu_about")],
         [InlineKeyboardButton(text="✍️ Трекер Only", url="https://t.me/ItsOnlyWbot")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+        # Экосистема открывается из настроек — туда и возвращаем. Раньше
+        # «Назад» уводило в корень, и цепочка Главная → Настройки →
+        # Экосистема → О сервисе схлопывалась одним нажатием.
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_settings")],
     ])
     await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
 
@@ -197,22 +200,19 @@ async def callback_biz_control_panel(callback: CallbackQuery):
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
 
 
-@router.callback_query(F.data == "biz_copy_login")
-async def callback_biz_copy_login(callback: CallbackQuery):
-    """📋 Скопировать логин (VPN ключ)"""
-    telegram_id = callback.from_user.id
-    sub = await database.get_subscription(telegram_id)
-    vpn_key = sub.get("vpn_key", "") if sub else ""
-    if vpn_key:
-        await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-        await callback.answer("Скопируйте ссылку выше")
-    else:
-        await callback.answer("Ключ не найден", show_alert=True)
+@router.callback_query(F.data.in_({"biz_copy_link", "biz_copy_login", "biz_copy_password"}))
+async def callback_biz_copy_link(callback: CallbackQuery):
+    """🔗 Прислать ссылку подключения бизнес-подписки отдельным сообщением.
 
+    Один обработчик на три callback_data. Кнопка сейчас одна —
+    biz_copy_link, — но старые сообщения с кнопками «Скопировать логин» и
+    «Скопировать пароль» живут в чатах вечно, и их нажатие должно работать,
+    а не отвечать тишиной.
 
-@router.callback_query(F.data == "biz_copy_password")
-async def callback_biz_copy_password(callback: CallbackQuery):
-    """🔑 Скопировать пароль (VPN ключ Plus)"""
+    Почему кнопок стало меньше: обе старые читали одно и то же поле vpn_key
+    и присылали одинаковый текст. Отдельных логина и пароля у бизнес-
+    подписки не существует — есть ссылка подключения.
+    """
     telegram_id = callback.from_user.id
     sub = await database.get_subscription(telegram_id)
     vpn_key = sub.get("vpn_key", "") if sub else ""
@@ -296,7 +296,18 @@ async def callback_privacy(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
 
     text = i18n_get_text(language, "main.privacy_policy_text", "privacy_policy_text")
-    await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=callback.bot)
+    # show_privacy=False: раньше на экране политики первой кнопкой стояла
+    # ссылка на политику, то есть на текущий экран. safe_edit_text при
+    # совпадении текста и разметки выходит досрочно — человек жал кнопку,
+    # а бот молчал. back_to=menu_settings: сюда попадают из настроек, и
+    # «Назад» должно возвращать туда, а не в корень.
+    await safe_edit_text(
+        callback.message, text,
+        reply_markup=get_about_keyboard(
+            language, back_to="menu_settings", show_privacy=False,
+        ),
+        parse_mode="HTML", bot=callback.bot,
+    )
 
 
 @router.callback_query(F.data == "special_offer_buy")

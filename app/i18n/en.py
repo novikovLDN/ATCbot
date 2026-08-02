@@ -301,6 +301,7 @@ LANG = {
     'get_key.download_v2raytun': "📲 Download V2RayTun",
     'get_key.instruction_text': "📖 <b>Connection Guide</b>\n\nTap the «📲 Set up device» button below and follow all setup steps.\n\nIf something goes wrong — you can always contact support for help.\n\n⸻\n\n👇 Tap the key to copy:",
     'get_key.no_subscription': "❌ You don't have an active subscription.",
+    'setup.no_subscription': '🔑 <b>Nothing to connect yet</b>\n\nYour key appears right after you get a subscription — then this screen installs the app and sets it up in two taps.',
     'setup.connect_ios': "📱 <b>Connect on iOS</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n",
     'setup.connect_android': "🤖 <b>Connect on Android</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n",
     'setup.connect_macos': "🍎 <b>Connect on macOS</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n",
@@ -710,6 +711,7 @@ LANG = {
     # biz
     'biz.btn_connect': '🔗 Connect',
     'biz.btn_control_panel': '🎛 Control Panel',
+    'biz.btn_copy_link': '🔗 Copy connection link',
     'biz.btn_copy_login': '📋 Copy Login',
     'biz.btn_copy_password': '🔑 Copy Password',
     'biz.btn_ecosystem': '🌐 Our Ecosystem',

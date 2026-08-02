@@ -254,7 +254,16 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
                     period_days=period_days,
                     promo_code=promo_code
                 )
-            except Exception:
+            except Exception as e:
+                # Период молча пропадал с экрана покупки: пользователь видел
+                # не весь список тарифов и не понимал, куда делся годовой.
+                # Пропускать всё равно приходится — показать кнопку без цены
+                # нельзя, — но теперь это видно в логах и разбирается.
+                logger.error(
+                    "PRICE_CALC_FAILED tariff=%s period_days=%s user=%s: %s — "
+                    "период не показан на экране покупки",
+                    new_tariff, period_days, telegram_id, e,
+                )
                 continue
 
             base_price_rubles = price_info["base_price_kopecks"] / 100.0

@@ -151,7 +151,12 @@ async def cmd_docs(message: Message):
 
     await message.answer(
         text,
-        reply_markup=get_about_keyboard(language),
+        # Экран политики: ссылки на самого себя быть не должно, см.
+        # get_about_keyboard. Команда /privacy вызывается из любого места,
+        # поэтому «Назад» ведём в настройки — это её штатный родитель.
+        reply_markup=get_about_keyboard(
+            language, back_to="menu_settings", show_privacy=False,
+        ),
         parse_mode="HTML",
         disable_web_page_preview=True,
     )

@@ -262,6 +262,34 @@ async def callback_setup_step2(callback: CallbackQuery):
             if traffic:
                 bypass_url = traffic.get("subscriptionUrl", "") or ""
 
+    # Экран достижим без подписки: menu_help → «Инструкции по сервису» →
+    # выбор устройства → «Дальше». Без ключей все кнопки-диплинки ниже
+    # отваливаются, и человек упирался в экран с одним «Назад» — тупик
+    # вместо инструкции. Показываем честное состояние и путь дальше.
+    if not sub_url and not bypass_url:
+        await safe_edit_text(
+            callback.message,
+            i18n_get_text(
+                language, "setup.no_subscription",
+                "🔑 <b>Пока нечего подключать</b>\n\n"
+                "Ключ появится сразу после оформления подписки — тогда этот "
+                "экран установит приложение и настроит его в два нажатия.",
+            ),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.buy", "Купить подписку"),
+                    callback_data="menu_buy_vpn",
+                )],
+                [InlineKeyboardButton(
+                    text=i18n_get_text(language, "common.back"),
+                    callback_data="connect_instruction",
+                )],
+            ]),
+            parse_mode="HTML",
+            bot=callback.bot,
+        )
+        return
+
     text = i18n_get_text(language, "setup.key_install_title")
 
     buttons = []
