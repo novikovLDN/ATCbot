@@ -949,8 +949,13 @@ function DeleteUserSection({ telegramId }: { telegramId: number }) {
         Полное удаление
       </div>
       <div className="mt-1 text-sm text-fg">
-        Каскадно сотрёт: подписки, платежи, баланс, рефералы, гифты, VIP,
-        скидки — и удалит entity в Remnawave. <b>Это необратимо.</b>
+        Сотрёт: профиль, подписки, рефералов, гифты, VIP, скидки — и удалит
+        entity в Remnawave. <b>Это необратимо.</b>
+      </div>
+      <div className="mt-2 text-sm text-fg-muted">
+        История платежей сохранится: иначе выручка, ARPU и график по дням
+        пересчитались бы задним числом. В журнал запишется, сколько строк и
+        на какую сумму осталось.
       </div>
       <div className="mt-3">
         <div className="mb-1 text-xs text-fg-muted">

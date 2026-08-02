@@ -24,6 +24,10 @@ FILTER = "COALESCE(payment_provider, '') <> 'balance'"
 ENTITLEMENT_QUERIES = (
     "get_user_paid_subscription_history",
     "get_paid_subscription_history_bulk",
+    # Считает, СКОЛЬКО финансовых строк осталось после удаления профиля, —
+    # для записи в audit_log. Здесь нужны все строки пользователя, включая
+    # покупки с баланса: это инвентаризация, а не выручка.
+    "admin_delete_user_complete",
 )
 
 

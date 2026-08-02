@@ -627,9 +627,16 @@ async def user_delete(
     telegram_id: int = Path(..., gt=0),
     admin: dict = Depends(require_admin),
 ):
-    """Cascade-delete a user across all related tables. Irreversible.
-    Routes through admin_delete_user_complete which also cleans up
-    Remnawave entities + writes the audit log."""
+    """Удалить пользователя: персональные данные и доступ. Необратимо.
+
+    Финансовая история (payments, pending_purchases, balance_transactions)
+    сохраняется намеренно — иначе выручка, ARPU, LTV и график по дням
+    пересчитывались бы задним числом после каждого удаления. Подробности и
+    причина — в докстринге database.admin.admin_delete_user_complete.
+
+    Заодно чистит сущность в Remnawave и пишет в audit_log, сколько
+    платёжных строк и на какую сумму осталось.
+    """
     try:
         ok = await database.admin_delete_user_complete(
             telegram_id, int(admin["sub"]),

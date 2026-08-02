@@ -2103,16 +2103,29 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
 
 
 async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -> bool:
-    """Полное удаление пользователя из БД (все данные).
+    """Удаление пользователя из БД с сохранением финансовой истории.
 
-    В одной транзакции:
-    - Удаляет UUID из Xray API (если есть)
-    - Удаляет записи из: promo_usage_logs, user_discounts, vip_users,
-      referral_rewards, referrals, balance_transactions, subscription_history,
-      pending_purchases, payments, subscriptions, broadcast_log, users
+    ЧТО УДАЛЯЕТСЯ
+        Всё, что описывает человека и его доступ: users, subscriptions,
+        promo_usage_logs, user_discounts, vip_users, referrals,
+        referral_rewards, broadcast_log, traffic_purchases,
+        subscription_history. Плюс сущность в панели (вне транзакции).
 
-    Lazy import: _log_audit_event_atomic from database.subscriptions
-    - Записывает событие в audit_log
+    ЧТО ОСТАЁТСЯ И ПОЧЕМУ
+        payments, pending_purchases и balance_transactions НЕ удаляются.
+        Раньше удалялись — и выручка менялась задним числом: удалил админ
+        одного платившего пользователя, и «Общий доход», ARPU, LTV и график
+        по дням пересчитались на других числах. Отчёт за прошлый месяц
+        переставал сходиться сам с собой, а понять причину по логам было
+        нельзя: строк просто больше нет.
+
+        Внешних ключей на users у этих таблиц нет, поэтому строки спокойно
+        живут без пользователя. Персональных данных в них тоже нет — только
+        telegram_id, суммы и тарифы.
+
+        В audit_log записывается, сколько платёжных строк и на какую сумму
+        осталось: это единственный способ потом объяснить, почему у выручки
+        есть telegram_id, которого нет в users.
 
     Args:
         telegram_id: Telegram ID удаляемого пользователя
@@ -2142,25 +2155,48 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
             if sub_row and sub_row.get("uuid"):
                 uuid_to_remove = sub_row["uuid"]
 
-            # Удаляем все связанные данные (порядок важен для FK constraints)
+            # Считаем финансовый след ДО удаления — иначе объяснить
+            # оставшиеся в выручке строки будет нечем.
+            kept = await conn.fetchrow(
+                """SELECT
+                       (SELECT COUNT(*) FROM payments WHERE telegram_id = $1) AS payments_n,
+                       (SELECT COALESCE(SUM(amount), 0) FROM payments
+                         WHERE telegram_id = $1 AND status = 'approved') AS payments_kopecks,
+                       (SELECT COUNT(*) FROM pending_purchases WHERE telegram_id = $1) AS purchases_n,
+                       (SELECT COALESCE(SUM(price_kopecks), 0) FROM pending_purchases
+                         WHERE telegram_id = $1 AND status = 'paid') AS purchases_kopecks,
+                       (SELECT COUNT(*) FROM balance_transactions WHERE user_id = $1) AS balance_n
+                """,
+                telegram_id,
+            )
+
+            # Удаляем персональные данные и доступ.
             await conn.execute("DELETE FROM promo_usage_logs WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM user_discounts WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM vip_users WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM referral_rewards WHERE referrer_id = $1 OR buyer_id = $1", telegram_id)
             await conn.execute("DELETE FROM referrals WHERE referrer_user_id = $1 OR referred_user_id = $1", telegram_id)
-            await conn.execute("DELETE FROM balance_transactions WHERE user_id = $1", telegram_id)
             await conn.execute("DELETE FROM subscription_history WHERE telegram_id = $1", telegram_id)
-            await conn.execute("DELETE FROM pending_purchases WHERE telegram_id = $1", telegram_id)
-            await conn.execute("DELETE FROM payments WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM broadcast_log WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM traffic_purchases WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM subscriptions WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM users WHERE telegram_id = $1", telegram_id)
 
-            # Записываем в audit_log
+            # payments, pending_purchases и balance_transactions остаются
+            # намеренно — см. докстринг. Не добавляйте сюда их удаление:
+            # это молча перепишет уже сданные отчёты по выручке.
+
+            details = (
+                "Удалены персональные данные и доступ. Финансовая история сохранена: "
+                f"payments={int(kept['payments_n'] or 0)} строк на "
+                f"{int(kept['payments_kopecks'] or 0) / 100:.2f} ₽, "
+                f"pending_purchases={int(kept['purchases_n'] or 0)} строк на "
+                f"{int(kept['purchases_kopecks'] or 0) / 100:.2f} ₽, "
+                f"balance_transactions={int(kept['balance_n'] or 0)} строк"
+            ) if kept else "Удалены персональные данные и доступ."
+
             await _log_audit_event_atomic(
-                conn, "admin_delete_user", admin_telegram_id, telegram_id,
-                f"Complete user deletion from DB"
+                conn, "admin_delete_user", admin_telegram_id, telegram_id, details,
             )
 
             logger.info(f"Admin {admin_telegram_id} deleted user {telegram_id} completely from DB")

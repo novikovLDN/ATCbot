@@ -2035,7 +2035,15 @@
       "risk": "высокий",
       "confidence": "high",
       "_dom": "dashboard",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "admin_delete_user_complete больше не удаляет payments, pending_purchases и balance_transactions — внешних ключей на users у них нет, персональных данных тоже (только telegram_id, суммы, тарифы). Удаляются профиль, подписки, рефералы, гифты, VIP, скидки, история подписок, broadcast_log, traffic_purchases и сущность в Remnawave. Перед удалением считается финансовый след и пишется в audit_log: сколько строк и на какую сумму осталось — иначе потом нечем объяснить telegram_id в выручке, которого нет в users. Докстринги функции и HTTP-роута переписаны, текст подтверждения в дашборде исправлен (раньше обещал стереть платежи). Тесты: tests/services/test_user_delete_keeps_financials.py (4 шт.).",
+      "fixed_in": [
+        "database/admin.py",
+        "app/api/dashboard/routes/users.py",
+        "dashboard/src/pages/Users.tsx",
+        "tests/services/test_user_delete_keeps_financials.py"
+      ]
     },
     {
       "title": "Перезагрузка страницы или прямая ссылка на любой раздел дашборда даёт 404",
