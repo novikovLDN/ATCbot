@@ -105,3 +105,51 @@ class TestBuyButtonKeys:
         )
         assert "{" not in out, f"неподставленный плейсхолдер в {lang}: {out}"
         assert "buy.button" not in out, f"вместо текста показан сырой ключ в {lang}"
+
+
+class TestMainScreenKeys:
+    """Экраны главного меню на всех языках.
+
+    Дефект: приветствие без подписки, экран после истечения и экран
+    bypass-only существовали только на русском. Остальным шести языкам
+    get_text отдавал сырой ключ — человек видел строку main.welcome_no_sub
+    вместо текста.
+    """
+
+    KEYS = ("main.welcome", "main.welcome_no_sub",
+            "main.welcome_expired", "main.welcome_bypass")
+
+    @pytest.mark.parametrize("lang", sorted(LANGUAGES))
+    @pytest.mark.parametrize("key", KEYS)
+    def test_key_present(self, lang, key):
+        assert key in LANGUAGES[lang], f"{key} отсутствует в {lang}"
+
+    @pytest.mark.parametrize("lang", sorted(LANGUAGES))
+    @pytest.mark.parametrize("key", KEYS)
+    def test_no_raw_key_shown(self, lang, key):
+        out = get_text(lang, key)
+        assert out != key
+        assert not out.startswith("main."), f"показан сырой ключ в {lang}"
+
+    @pytest.mark.parametrize("lang", sorted(LANGUAGES))
+    @pytest.mark.parametrize("key", KEYS)
+    def test_html_tags_balanced(self, lang, key):
+        """Незакрытый тег ломает всё сообщение: Telegram отклонит его целиком."""
+        out = get_text(lang, key)
+        # Считаем открывающие теги точно: подстрока "<b" совпадает и с
+        # "<blockquote", из-за чего наивный подсчёт даёт ложную тревогу.
+        for tag in ("b", "blockquote", "tg-emoji"):
+            opened = out.count(f"<{tag}>") + out.count(f"<{tag} ")
+            closed = out.count(f"</{tag}>")
+            assert opened == closed, f"{lang}/{key}: тег <{tag}> не закрыт"
+
+    @pytest.mark.parametrize("lang", sorted(LANGUAGES))
+    @pytest.mark.parametrize("key", KEYS)
+    def test_no_unfilled_placeholders(self, lang, key):
+        """У этих ключей нет аргументов — фигурные скобки означают опечатку."""
+        assert "{" not in get_text(lang, key)
+
+    @pytest.mark.parametrize("lang", sorted(LANGUAGES))
+    def test_brand_name_kept(self, lang):
+        """Название продукта не переводится."""
+        assert "Atlas Secure" in get_text(lang, "main.welcome_no_sub")
