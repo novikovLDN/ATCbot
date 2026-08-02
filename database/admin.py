@@ -1725,10 +1725,10 @@ async def get_daily_timeseries(days: int) -> Dict[str, Any]:
             ),
             pay AS (
                 SELECT DATE_TRUNC('day', created_at AT TIME ZONE 'UTC')::date AS day,
-                       COALESCE(SUM(amount), 0)::bigint AS revenue_kopecks,
+                       COALESCE(SUM(price_kopecks), 0)::bigint AS revenue_kopecks,
                        COUNT(*)::int AS payments_count
-                FROM payments
-                WHERE status = 'approved'
+                FROM pending_purchases
+                WHERE status = 'paid'
                   AND created_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
                 GROUP BY 1
             ),
@@ -1798,10 +1798,10 @@ async def get_hourly_timeseries(days: int) -> Dict[str, Any]:
             ),
             pay AS (
                 SELECT EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')::int AS hour,
-                       COALESCE(SUM(amount), 0)::bigint AS revenue_kopecks,
+                       COALESCE(SUM(price_kopecks), 0)::bigint AS revenue_kopecks,
                        COUNT(*)::int AS payments_count
-                FROM payments
-                WHERE status = 'approved'
+                FROM pending_purchases
+                WHERE status = 'paid'
                   AND created_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
                 GROUP BY 1
             ),
@@ -1865,9 +1865,9 @@ async def get_ltv() -> float:
         avg_ltv_kopecks = await conn.fetchval(
             """SELECT COALESCE(AVG(user_total), 0)
                FROM (
-                   SELECT telegram_id, SUM(amount) as user_total
-                   FROM payments
-                   WHERE status = 'approved'
+                   SELECT telegram_id, SUM(price_kopecks) as user_total
+                   FROM pending_purchases
+                   WHERE status = 'paid'
                    GROUP BY telegram_id
                ) as user_ltvs"""
         ) or 0
@@ -1986,9 +1986,9 @@ async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
         end_naive = _to_db_utc(end_date)
         # Доход за день (утвержденные платежи)
         revenue_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(amount), 0) 
-               FROM payments 
-               WHERE status = 'approved' 
+            """SELECT COALESCE(SUM(price_kopecks), 0)
+               FROM pending_purchases
+               WHERE status = 'paid'
                AND created_at >= $1 AND created_at < $2""",
             start_naive, end_naive
         ) or 0
@@ -1997,9 +1997,9 @@ async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
         
         # Количество платежей
         payments_count = await conn.fetchval(
-            """SELECT COUNT(*) 
-               FROM payments 
-               WHERE status = 'approved' 
+            """SELECT COUNT(*)
+               FROM pending_purchases
+               WHERE status = 'paid'
                AND created_at >= $1 AND created_at < $2""",
             start_naive, end_naive
         ) or 0
@@ -2052,9 +2052,9 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
         end_naive = _to_db_utc(end_date)
         # Доход за месяц (утвержденные платежи)
         revenue_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(amount), 0) 
-               FROM payments 
-               WHERE status = 'approved' 
+            """SELECT COALESCE(SUM(price_kopecks), 0)
+               FROM pending_purchases
+               WHERE status = 'paid'
                AND created_at >= $1 AND created_at < $2""",
             start_naive, end_naive
         ) or 0
@@ -2063,9 +2063,9 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
         
         # Количество платежей
         payments_count = await conn.fetchval(
-            """SELECT COUNT(*) 
-               FROM payments 
-               WHERE status = 'approved' 
+            """SELECT COUNT(*)
+               FROM pending_purchases
+               WHERE status = 'paid'
                AND created_at >= $1 AND created_at < $2""",
             start_naive, end_naive
         ) or 0

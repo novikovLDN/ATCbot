@@ -881,15 +881,20 @@ async def get_extended_bot_stats() -> Dict[str, Any]:
             "SELECT COUNT(DISTINCT telegram_id) FROM subscriptions"
         )
 
-        # Revenue (sum of approved payments)
+        # Выручка — из pending_purchases: payments не содержит товары
+        # мини-магазина и двоит деньги при покупке с баланса.
         total_revenue = await conn.fetchval(
-            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved'"
+            "SELECT COALESCE(SUM(price_kopecks), 0) FROM pending_purchases WHERE status = 'paid'"
         ) or 0
 
-        # Revenue last 30 days (MRR estimate)
+        # Выручка за 30 дней (оценка MRR).
+        # created_at в pending_purchases — момент начала оплаты, а не её
+        # подтверждения. Счёт живёт 15-30 минут, поэтому для месячного окна
+        # это корректный ориентир.
         mrr_since = _to_db_utc(now - timedelta(days=30))
         mrr = await conn.fetchval(
-            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved' AND created_at >= $1",
+            "SELECT COALESCE(SUM(price_kopecks), 0) FROM pending_purchases "
+            "WHERE status = 'paid' AND created_at >= $1",
             mrr_since
         ) or 0
 
@@ -939,10 +944,22 @@ async def get_total_revenue() -> float:
     pool = await get_pool()
     async with pool.acquire() as conn:
         # Суммируем все утвержденные платежи
+        # ИСТОЧНИК ИСТИНЫ ПО ВЫРУЧКЕ — pending_purchases, а не payments.
+        #
+        # В payments строка создаётся только внутри finalize_purchase, то есть
+        # для подписок. Товары мини-магазина (Stars, Telegram Premium, Steam,
+        # Spotify, Apple ID, прокси) помечаются оплаченными через
+        # mark_pending_purchase_paid и в payments не попадают вовсе — их выручка
+        # просто отсутствовала в отчётах.
+        #
+        # Вдобавок payments двоил деньги: пополнение баланса писало строку, и
+        # покупка с этого же баланса писала вторую — один рубль считался дважды.
+        #
+        # pending_purchases покрывает оба случая: и подписки, и товары.
         total_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(amount), 0) 
-               FROM payments 
-               WHERE status = 'approved'"""
+            """SELECT COALESCE(SUM(price_kopecks), 0)
+               FROM pending_purchases
+               WHERE status = 'paid'"""
         ) or 0
         
         return total_kopecks / 100.0  # Конвертируем из копеек в рубли
@@ -958,9 +975,9 @@ async def get_paying_users_count() -> int:
     pool = await get_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
-            """SELECT COUNT(DISTINCT telegram_id) 
-               FROM payments 
-               WHERE status = 'approved'"""
+            """SELECT COUNT(DISTINCT telegram_id)
+               FROM pending_purchases
+               WHERE status = 'paid'"""
         ) or 0
         
         return count
@@ -982,9 +999,9 @@ async def get_user_ltv(telegram_id: int) -> float:
     async with pool.acquire() as conn:
         # Суммируем все утвержденные платежи за подписки
         total_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(amount), 0) 
-               FROM payments 
-               WHERE telegram_id = $1 AND status = 'approved'""",
+            """SELECT COALESCE(SUM(price_kopecks), 0)
+               FROM pending_purchases
+               WHERE telegram_id = $1 AND status = 'paid'""",
             telegram_id
         ) or 0
         
@@ -1002,9 +1019,9 @@ async def get_average_ltv() -> float:
     async with pool.acquire() as conn:
         # Получаем LTV для каждого пользователя
         ltv_data = await conn.fetch(
-            """SELECT telegram_id, COALESCE(SUM(amount), 0) as total_payments
-               FROM payments
-               WHERE status = 'approved'
+            """SELECT telegram_id, COALESCE(SUM(price_kopecks), 0) as total_payments
+               FROM pending_purchases
+               WHERE status = 'paid'
                GROUP BY telegram_id"""
         )
         
@@ -1029,19 +1046,31 @@ async def get_arpu() -> float:
     pool = await get_pool()
     async with pool.acquire() as conn:
         # Общий доход (только утвержденные платежи)
+        # ИСТОЧНИК ИСТИНЫ ПО ВЫРУЧКЕ — pending_purchases, а не payments.
+        #
+        # В payments строка создаётся только внутри finalize_purchase, то есть
+        # для подписок. Товары мини-магазина (Stars, Telegram Premium, Steam,
+        # Spotify, Apple ID, прокси) помечаются оплаченными через
+        # mark_pending_purchase_paid и в payments не попадают вовсе — их выручка
+        # просто отсутствовала в отчётах.
+        #
+        # Вдобавок payments двоил деньги: пополнение баланса писало строку, и
+        # покупка с этого же баланса писала вторую — один рубль считался дважды.
+        #
+        # pending_purchases покрывает оба случая: и подписки, и товары.
         total_revenue_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(amount), 0) 
-               FROM payments 
-               WHERE status = 'approved'"""
+            """SELECT COALESCE(SUM(price_kopecks), 0)
+               FROM pending_purchases
+               WHERE status = 'paid'"""
         ) or 0
         
         total_revenue = total_revenue_kopecks / 100.0
         
         # Количество платящих пользователей
         paying_users_count = await conn.fetchval(
-            """SELECT COUNT(DISTINCT telegram_id) 
-               FROM payments 
-               WHERE status = 'approved'"""
+            """SELECT COUNT(DISTINCT telegram_id)
+               FROM pending_purchases
+               WHERE status = 'paid'"""
         ) or 0
         
         # ARPU = общий доход / платящие пользователи
