@@ -20,7 +20,7 @@ subscription flow must never crash because Remnawave is unhappy.
 import asyncio
 import logging
 import uuid as uuid_lib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -94,6 +94,14 @@ class PremiumCreateResult:
     short_uuid: Optional[str] = None  # panel-assigned shortUuid (used to
                                        # rebuild subscription URLs if the
                                        # cached value goes stale).
+    # Приведено ли состояние сущности в панели к тому, что просил вызывающий
+    # (expireAt + status). Значимо только при усыновлении: свежесозданная
+    # сущность рождается уже с нужным expireAt, поэтому по умолчанию True.
+    #
+    # False означает: сущность в панели есть, но живёт со СТАРОЙ датой
+    # окончания. Отдавать такой результат как успех нельзя — человек
+    # заплатит, база запишет новую дату, а доступ умрёт на старой.
+    state_synced: bool = True
 
 
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
@@ -285,8 +293,14 @@ async def create_premium_user_entity(
                 telegram_id, username, (existing.get("uuid") or "")[:8],
             )
             result = _result_from_existing(existing, http_status=200)
-            await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at)
-            return result
+            # Усыновлённая сущность живёт со СВОИМ старым expireAt.
+            # Провал PATCH раньше только писался в лог, а наверх уходил
+            # успех — человек платил, база двигала дату, доступ умирал
+            # на старой. Теперь признак едет с результатом.
+            patched = await _ensure_premium_entity_state(
+                result.panel_uuid, existing, expire_at,
+            )
+            return replace(result, state_synced=patched)
         logger.warning(
             "REMNAWAVE_PREMIUM_USERNAME_TAKEN_UNRELATED: tg=%s username=%s existing_tg=%s",
             telegram_id, username, existing.get("telegramId"),
@@ -346,8 +360,12 @@ async def create_premium_user_entity(
                 telegram_id, (existing.get("uuid") or "")[:8],
             )
             result = _result_from_existing(existing, http_status=409)
-            await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at)
-            return result
+            # То же, что и в ветке preflight выше: без успешного PATCH
+            # у сущности остаётся старая дата окончания.
+            patched = await _ensure_premium_entity_state(
+                result.panel_uuid, existing, expire_at,
+            )
+            return replace(result, state_synced=patched)
         # 409 not from a username race we own — fall through to the
         # forced-UUID retry below (might be uuid conflict).
 

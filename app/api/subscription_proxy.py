@@ -15,23 +15,27 @@ so existing clients keep working during the grace period.
 Endpoints (mounted only when config.SUBSCRIPTION_PROXY_ENABLED is True):
 
     GET /sub/{uuid}        — legacy samopis-style URL
-    GET /api/sub/{token}   — current bot-style URL (id query param ignored)
+    GET /api/sub/{token}   — current bot-style URL (needs ?id={telegram_id})
 
-Resolution order:
+Resolution order for /sub/{uuid}:
     1) Look up the uuid in subscriptions.remnawave_premium_uuid (migrated user).
     2) Look up the uuid in subscriptions.uuid (samopis fallback).
     3) 404 if neither matches.
+
+/api/sub/{token} резолвится иначе: token — это подпись, а не
+идентификатор, см. докстринг обработчика.
 
 Errors are intentionally vague — the panel-issued URL is sensitive and we
 do not want to leak per-user state to scanners.
 """
 from __future__ import annotations
 
+import hmac
 import logging
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Path
+from fastapi import APIRouter, Path, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 
 import config
@@ -130,6 +134,20 @@ async def _resolve(uuid: str) -> Optional[str]:
     return _legacy_fallback_url(uuid)
 
 
+async def _resolve_for_telegram_id(telegram_id: int) -> Optional[str]:
+    """Куда вести человека, которого мы опознали по подписанной ссылке.
+
+    Тот же источник, что и у кнопки «Подключиться» в боте, — иначе старая
+    ссылка и кнопка вели бы в разные места.
+    """
+    try:
+        from app.services.user_subscription_links import get_user_premium_url
+        return (await get_user_premium_url(telegram_id)) or None
+    except Exception as e:
+        logger.warning("SUB_PROXY_PREMIUM_URL_FAIL: tg=%s %s", telegram_id, e)
+        return None
+
+
 @router.get("/sub/{uuid}", include_in_schema=False)
 async def legacy_sub(uuid: str = Path(..., min_length=8, max_length=128)):
     target = await _resolve(uuid)
@@ -140,9 +158,42 @@ async def legacy_sub(uuid: str = Path(..., min_length=8, max_length=128)):
 
 
 @router.get("/api/sub/{token}", include_in_schema=False)
-async def bot_sub(token: str = Path(..., min_length=8, max_length=128)):
-    target = await _resolve(token)
+async def bot_sub(
+    token: str = Path(..., min_length=8, max_length=128),
+    id: Optional[int] = Query(None, gt=0),
+):
+    """Ссылка, которую раздавал сам бот: /api/sub/{token}?id={telegram_id}.
+
+    ЧЕМ ЭТОТ МАРШРУТ ОТЛИЧАЕТСЯ ОТ /sub/{uuid}
+
+        Там в пути стоит UUID — его можно найти в базе. Здесь стоит
+        ПОДПИСЬ: HMAC-SHA256(bot_token, telegram_id), обрезанная до 32
+        символов (vpn_utils.build_sub_url). Она нигде не хранится, и
+        искать её в колонках бессмысленно — раньше маршрут именно это и
+        делал, поэтому не мог отрезолвиться ни разу за всё время: оба
+        поиска промахивались, и запрос уходил в samopis-фолбэк, где
+        такого пути тоже нет.
+
+        Кто пользователь — сообщает параметр id, а токен доказывает, что
+        ссылку выдали мы. Без проверки подписи любой мог бы подставить
+        чужой id и получить чужую ссылку на подписку.
+    """
+    if id is None:
+        # Ссылка без id пришла не от нас: build_sub_url всегда его ставит.
+        logger.info("SUB_PROXY_API_NO_ID: token=%s", token[:8])
+        return JSONResponse({"error": "not_found"}, status_code=404)
+
+    from vpn_utils import generate_sub_token
+
+    expected = generate_sub_token(config.BOT_TOKEN, id)
+    # Сравнение постоянного времени: обычное != утекает длину совпавшего
+    # префикса и позволяет подбирать подпись по одному символу.
+    if not hmac.compare_digest(expected, token):
+        logger.warning("SUB_PROXY_API_BAD_TOKEN: id=%s token=%s", id, token[:8])
+        return JSONResponse({"error": "not_found"}, status_code=404)
+
+    target = await _resolve_for_telegram_id(id)
     if target:
-        logger.info("SUB_PROXY_REDIRECT_API: token=%s -> %s", token[:8], target.split("?")[0])
+        logger.info("SUB_PROXY_REDIRECT_API: id=%s -> %s", id, target.split("?")[0])
         return RedirectResponse(target, status_code=302)
     return JSONResponse({"error": "not_found"}, status_code=404)

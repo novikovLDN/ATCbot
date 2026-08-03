@@ -171,6 +171,19 @@ async def provision_subscription(
         )
         if not result.ok:
             raise RuntimeError(f"premium provision failed: status={result.status} error={result.error}")
+        # Сущность нашлась в панели и была усыновлена, но привести её
+        # expireAt к оплаченной дате не удалось. Считать это успехом
+        # нельзя: база запишет новую дату, бот пришлёт ключ, а доступ
+        # отключится на СТАРОЙ дате — человек заплатил и не получил
+        # оплаченного, причём узнает об этом не сразу.
+        #
+        # Бросаем — наверху grant_access повторит провижининг (MAX_VPN_RETRIES),
+        # и повторный PATCH пройдёт, если панель просто моргнула.
+        if not result.state_synced:
+            raise RuntimeError(
+                f"premium adopted but expireAt not applied: tg={telegram_id} "
+                f"uuid={(result.panel_uuid or '')[:8]} status={result.status}"
+            )
         premium_panel_uuid = result.panel_uuid
         premium_sub_url = result.subscription_url
         try:

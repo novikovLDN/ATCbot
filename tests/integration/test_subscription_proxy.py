@@ -118,22 +118,63 @@ def test_legacy_sub_returns_404_when_unknown_and_no_legacy_base():
     assert resp.status_code == 404
 
 
-def test_api_sub_route_redirects_migrated_user():
-    """Cached sub_url takes the API path zero round-trips."""
-    panel_mock = AsyncMock()
-    with patch.object(subscription_proxy, "remnawave_api") as api_mock, \
-         patch("database.get_subscription_by_premium_uuid",
-               new=AsyncMock(return_value=_migrated_row())), \
-         patch("database.get_subscription_by_samopis_uuid",
-               new=AsyncMock(return_value=None)), \
-         patch("database.set_remnawave_premium_sub_url", new=AsyncMock()):
-        api_mock.get_user = panel_mock
+# ──────────────────────────────────────────────────────────────────────
+#  /api/sub/{token} — ссылка, которую раздавал сам бот
+# ──────────────────────────────────────────────────────────────────────
+#
+# В пути здесь стоит не UUID, а ПОДПИСЬ: HMAC-SHA256(bot_token,
+# telegram_id), обрезанная до 32 символов. Она нигде не хранится, поэтому
+# маршрут раньше не мог отрезолвиться ни разу: искал подпись в колонках
+# с UUID, оба поиска промахивались, и запрос уходил в samopis-фолбэк, где
+# такого пути тоже нет. Кто пользователь — говорит ?id=, подпись это
+# подтверждает.
+
+
+def _valid_token(telegram_id: int) -> str:
+    from vpn_utils import generate_sub_token
+    return generate_sub_token(subscription_proxy.config.BOT_TOKEN, telegram_id)
+
+
+def test_api_sub_redirects_user_with_valid_signature():
+    with patch("app.services.user_subscription_links.get_user_premium_url",
+               new=AsyncMock(return_value=PANEL_SUB_URL)):
         client = TestClient(_app())
-        resp = client.get(f"/api/sub/{PANEL_UUID}?id=42", follow_redirects=False)
+        resp = client.get(
+            f"/api/sub/{_valid_token(42)}?id=42", follow_redirects=False,
+        )
 
     assert resp.status_code == 302
     assert resp.headers["location"] == PANEL_SUB_URL
-    panel_mock.assert_not_called()
+
+
+def test_api_sub_rejects_forged_signature():
+    """Иначе достаточно подставить чужой id, чтобы получить чужую ссылку."""
+    resolver = AsyncMock(return_value=PANEL_SUB_URL)
+    with patch("app.services.user_subscription_links.get_user_premium_url", new=resolver):
+        client = TestClient(_app())
+        resp = client.get(
+            f"/api/sub/{_valid_token(42)}?id=43", follow_redirects=False,
+        )
+
+    assert resp.status_code == 404
+    resolver.assert_not_called()  # до резолва дойти было нельзя
+
+
+def test_api_sub_without_id_is_not_found():
+    """build_sub_url всегда ставит id — ссылка без него не наша."""
+    client = TestClient(_app())
+    resp = client.get(f"/api/sub/{_valid_token(42)}", follow_redirects=False)
+    assert resp.status_code == 404
+
+
+def test_api_sub_404_when_user_has_no_url_yet():
+    with patch("app.services.user_subscription_links.get_user_premium_url",
+               new=AsyncMock(return_value="")):
+        client = TestClient(_app())
+        resp = client.get(
+            f"/api/sub/{_valid_token(42)}?id=42", follow_redirects=False,
+        )
+    assert resp.status_code == 404
 
 
 def test_legacy_sub_returns_404_when_panel_lookup_returns_no_url():

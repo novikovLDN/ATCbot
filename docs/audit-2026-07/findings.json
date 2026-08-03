@@ -643,7 +643,14 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "В PremiumCreateResult добавлено поле state_synced (по умолчанию True: свежесозданная сущность рождается с нужным expireAt, патчить нечего). Обе ветки усыновления — preflight и POST-409 — теперь берут результат _ensure_premium_entity_state и отдают его наверх через dataclasses.replace.\nprovision_subscription на state_synced=False бросает RuntimeError, попадая в существующий retry-цикл MAX_VPN_RETRIES в grant_access: моргнувшая панель на второй попытке отвечает нормально, а при устойчивом отказе покупка не засчитывается вовсе — это лучше, чем засчитать её со старой датой окончания.\nПокрыто tests/services/test_premium_adopt_state.py: признак едет с результатом при обоих исходах PATCH, provision останавливается, retry-цикл ловит исключение.",
+      "fixed_in": [
+        "app/services/remnawave_premium.py",
+        "app/services/purchase_flow.py",
+        "tests/services/test_premium_adopt_state.py"
+      ]
     },
     {
       "title": "provision_subscription возвращает requested_uuid независимо от того, принял ли его панель",
@@ -685,7 +692,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Маршрут /api/sub/{token} переписан под то, чем токен на самом деле является: это HMAC-подпись telegram_id, а не идентификатор в БД, поэтому искать её в колонках с UUID было бессмысленно — оба поиска промахивались всегда.\nТеперь обработчик принимает ?id={telegram_id} (его и ставит build_sub_url), пересчитывает подпись и сравнивает через hmac.compare_digest — обычное != утекает длину совпавшего префикса и позволяет подбирать подпись посимвольно. Без id или с чужой подписью — 404, до резолва дело не доходит.\nРезолв идёт через тот же get_user_premium_url, что и кнопка «Подключиться» в боте: иначе старая ссылка и кнопка вели бы в разные места.\nТесты: подпись валидна → 302, подделана → 404 и резолвер не вызван, без id → 404, у человека ещё нет ссылки → 404.",
+      "fixed_in": [
+        "app/api/subscription_proxy.py",
+        "tests/integration/test_subscription_proxy.py"
+      ]
     },
     {
       "title": "reissue_vpn_key_atomic держит соединение пула и session-lock во время HTTP к панели",
