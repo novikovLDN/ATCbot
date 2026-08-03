@@ -1242,6 +1242,13 @@ async def get_daily_timeseries(days: int) -> Dict[str, Any]:
     'balance' это внутреннее движение денег (покупка с баланса), они уже
     посчитаны в момент пополнения. См. REVENUE_EXTERNAL_ONLY_SQL в
     database/analytics.py.
+
+    Запись `col AT TIME ZONE 'Europe/Moscow'` рассчитана на TIMESTAMPTZ:
+    pending_purchases.created_at и subscriptions.activated_at перевели
+    миграцией 024, users.created_at — миграцией 025. Если кто-то заведёт
+    здесь колонку без зоны, та же запись сдвинет сутки на три часа и
+    ничего при этом не сломает — расхождение заметят по цифрам, не по
+    ошибке.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:

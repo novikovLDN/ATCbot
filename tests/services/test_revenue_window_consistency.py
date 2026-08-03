@@ -18,6 +18,7 @@
 открывалась ни в боте, ни в дашборде.
 """
 import inspect
+import re
 
 import pytest
 
@@ -76,13 +77,17 @@ def conn(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_daily_chart_cuts_days_in_moscow(conn):
-    """График режет сутки по Москве — как и тайл «сегодня (МСК)»."""
+    """Каждая серия графика режет сутки по Москве — как и тайл «сегодня».
+
+    Проверяем ВСЕ DATE_TRUNC('day', ...) в запросе: достаточно одной
+    серии, оставшейся в UTC, чтобы точки на одном X разъехались.
+    """
     await admin_mod.get_daily_timeseries(30)
     sql = "\n".join(conn.sql)
-    assert "Europe/Moscow" in sql
-    assert "AT TIME ZONE 'UTC'" not in sql, (
-        "остался UTC-cast: последняя точка графика снова разойдётся с тайлом"
-    )
+    buckets = re.findall(r"DATE_TRUNC\(\s*'day',(.*?)\)::date", sql, re.S)
+    assert buckets, "не нашли ни одной посуточной группировки"
+    for expr in buckets:
+        assert "Europe/Moscow" in expr, f"сутки режутся не по Москве: {expr.strip()}"
 
 
 @pytest.mark.asyncio
