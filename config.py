@@ -417,7 +417,6 @@ if not VPN_ENABLED:
     _log.info("ARCH_MODE: API_ONLY_VLESS_GENERATION (REALITY + XTLS Vision)")
 
 # Xray sync worker: sync DB subscriptions to Xray (default false for production safety)
-XRAY_SYNC_ENABLED = env("XRAY_SYNC_ENABLED", default="false").lower() == "true"
 
 # Bot uses ONLY XRAY_API_URL and XRAY_API_KEY.
 # Port, SNI, public key, short id, fingerprint belong to API server only.

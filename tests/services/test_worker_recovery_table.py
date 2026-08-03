@@ -36,13 +36,16 @@ def test_workers_are_declared_once(source):
 
 
 def test_all_known_workers_are_in_the_table(source):
-    """Список из аудита: девять воркеров, зависящих от БД."""
+    """Список воркеров, зависящих от БД."""
     table = source[source.index("DB_DEPENDENT_WORKERS = ["):]
     table = table[: table.index("\n    ]")]
+    # Восемь воркеров. Девятым был xray_sync — удалён вместе с веткой xray:
+    # он вхолостую обходил всех активных пользователей, вызывая функции,
+    # ставшие заглушками после перехода на Remnawave.
     for name in (
         "reminders", "trial_notifications", "farm_notifications",
         "traffic_monitor", "fast_expiry_cleanup", "auto_renewal",
-        "activation_worker", "site_sync", "xray_sync",
+        "activation_worker", "site_sync",
     ):
         assert f'"name": "{name}"' in table, f"воркер {name} выпал из таблицы"
 

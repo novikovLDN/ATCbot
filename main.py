@@ -36,13 +36,6 @@ import trial_notifications
 import activation_worker
 from app.workers import farm_notifications
 from app.workers import traffic_monitor
-try:
-    import xray_sync
-    XRAY_SYNC_AVAILABLE = True
-except Exception as e:
-    XRAY_SYNC_AVAILABLE = False
-    xray_sync = None
-    print(f"[XRAY_SYNC] disabled: {e}")
 
 # ====================================================================================
 # STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
@@ -317,19 +310,6 @@ async def main():
             return None
         return asyncio.create_task(site_sync_worker_task(bot_obj))
 
-    async def start_xray_sync_safe(bot_obj):
-        """Xray sync — необязательный воркер, никогда не роняет бота."""
-        if not XRAY_SYNC_AVAILABLE:
-            logger.info("[XRAY_SYNC] модуль недоступен, пропускаем")
-            return None
-        if not config.XRAY_SYNC_ENABLED:
-            logger.info("[XRAY_SYNC] выключен конфигом (XRAY_SYNC_ENABLED=false)")
-            return None
-        if not config.VPN_ENABLED:
-            logger.info("[XRAY_SYNC] VPN выключен, пропускаем")
-            return None
-        return asyncio.create_task(xray_sync.start(bot_obj))
-
     DB_DEPENDENT_WORKERS = [
         {
             "name": "reminders",
@@ -376,11 +356,6 @@ async def main():
             "name": "site_sync",
             "enabled": lambda: True,
             "start": _start_site_sync,
-        },
-        {
-            "name": "xray_sync",
-            "enabled": lambda: True,
-            "start": start_xray_sync_safe,
         },
     ]
 

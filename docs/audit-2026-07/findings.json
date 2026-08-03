@@ -569,7 +569,15 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "xray_sync.py удалён. Воркер каждые 5 минут обходил всех активных пользователей и звал ensure_user_in_xray, которая после перехода на Remnawave сводится к no-op, а health-check против выведенного из эксплуатации хоста проваливался всегда — то есть цикл крутился вхолостую постоянно. Снят флаг XRAY_SYNC_ENABLED, из main.py убраны блок импорта, фабрика start_xray_sync_safe и запись в таблице воркеров (осталось восемь).",
+      "fixed_in": [
+        "xray_sync.py",
+        "main.py",
+        "config.py",
+        "tests/services/test_worker_recovery_table.py"
+      ]
     },
     {
       "title": "app/services/vpn/service.py: remove_uuid_if_needed возвращает True, ничего не удалив",
@@ -611,7 +619,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Проверено: upgrade_vless_user и remove_plus_inbound уже удалены при чистке vpn_utils (951 → 397 строк). Тест tests/test_vpn_utils_noop_cutover.py явно проверяет их отсутствие (hasattr == False) и проходит. В коде остались только комментарии, объясняющие, почему этот путь выпилен."
     },
     {
       "title": "Провал _ensure_premium_entity_state игнорируется — покупка засчитывается со старым expireAt",
@@ -709,7 +719,9 @@
       "risk": "высокий",
       "confidence": "high",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "partially_fixed",
+      "resolution": "Удалены: xray_api/ (main.py 816 строк, README, requirements, .env.example), scripts/full_xray_resync.py, systemd/vpn-api.service, xray_sync.py, флаг XRAY_SYNC_ENABLED и вся обвязка в main.py. Ранее в рамках других пунктов удалены app/services/vpn_client.py и переопределён VPN_ENABLED через REMNAWAVE_ENABLED. ОСТАЛОСЬ (вынесено отдельным пунктом): цепочка ensure_user_in_xray → add/update_vless_user внутри vpn_utils.py и ключ renewal_xray_sync_after_commit, который grant_access отдаёт, а auto_renewal исполняет в фазе B. Она протянута через выдачу доступа и продление, поэтому требует отдельного аккуратного прохода, а не удаления заодно."
     },
     {
       "title": "Инвентарь удаления: тесты и миграции, затрагиваемые выпиливанием xray",
@@ -723,7 +735,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "tests/test_vpn_utils_noop_cutover.py оставлен и актуален: он проверяет, что заглушки не ходят по HTTP и что мёртвые функции отсутствуют — это ровно тот инвариант, который нужен после cut-over. Проверка `cfg.PURCHASE_FLOW_REMNAWAVE is True` из него ушла вместе с удалением флага. TestOrphanPreventionOnDBFailure переписан ранее под компенсацию через remnawave_api.delete_user (см. tests/services/test_orphan_cleanup.py)."
     },
     {
       "title": "Мёртвые символы VPN-домена: исключения, алерт, хелперы, импорт",
@@ -3281,7 +3295,9 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "partially_fixed",
+      "resolution": "См. пункт 44: артефакты ветки xray удалены, осталась только цепочка ensure_user_in_xray внутри vpn_utils — вынесена отдельным пунктом."
     },
     {
       "title": "Четыре реализации проверки «я админ» плюс 203 инлайновых сравнения с ADMIN_TELEGRAM_ID",
@@ -3484,6 +3500,17 @@
         "app/api/__init__.py",
         "tests/services/test_dashboard_spa_routing.py"
       ]
+    },
+    {
+      "title": "Остаток ветки xray: ensure_user_in_xray и renewal_xray_sync_after_commit протянуты через выдачу доступа",
+      "severity": "P2",
+      "category": "dead-code",
+      "file": "vpn_utils.py",
+      "line": 180,
+      "defect": "После удаления xray_sync.py и xray_api/ в дереве осталась цепочка: grant_access кладёт в результат ключ renewal_xray_sync_after_commit, auto_renewal и purchase_flow исполняют его в фазе B через vpn_utils.ensure_user_in_xray, а та ведёт в add_vless_user/update_vless_user — заглушки после перехода на Remnawave. Код выполняется, ничего не делает и создаёт впечатление работающей синхронизации.",
+      "failure_scenario": "Разработчик видит вызов синхронизации после продления, считает её рабочей и строит на ней диагностику проблемы с доступом — а она no-op с самого cut-over.",
+      "proposed_action": "Пройти цепочку целиком: убрать ключ renewal_xray_sync_after_commit из grant_access, обработку в auto_renewal (фаза B) и purchase_flow, затем удалить ensure_user_in_xray и заглушки add/update/remove_vless_user из vpn_utils. Делать отдельным проходом с тестами: это трогает выдачу доступа и продление.",
+      "source": "audit-followup"
     }
   ],
   "refuted": [
