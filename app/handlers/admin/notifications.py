@@ -328,11 +328,23 @@ async def callback_promo_send(callback: CallbackQuery, state: FSMContext, bot: B
                         await asyncio.sleep(e.retry_after + 1)
                         await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode="HTML")
                         sent_count += 1
-                    except Exception:
+                    except Exception as send_err:
+                        # Причина обязана попадать в лог: без неё нельзя
+                        # отличить «человек заблокировал бота» от битого
+                        # HTML или невалидного premium-эмодзи, то есть от
+                        # нашей ошибки, которая ломает рассылку всем.
                         failed_count += 1
+                        logger.warning(
+                            "NOTIFY_SEND_FAILED user=%s: %s: %s",
+                            user_id, type(send_err).__name__, send_err,
+                        )
                 await asyncio.sleep(0.05)
-            except Exception:
+            except Exception as loop_err:
                 failed_count += 1
+                logger.warning(
+                    "NOTIFY_USER_FAILED user=%s: %s: %s",
+                    user_id, type(loop_err).__name__, loop_err,
+                )
 
         result_text = i18n_get_text(language, "admin.notif_promo_sent", sent=sent_count, failed=failed_count)
         await safe_edit_text(
@@ -502,11 +514,23 @@ async def callback_retention_send(callback: CallbackQuery, state: FSMContext, bo
                         await asyncio.sleep(e.retry_after + 1)
                         await bot.send_message(user_id, text, reply_markup=reply_markup, parse_mode="HTML")
                         sent_count += 1
-                    except Exception:
+                    except Exception as send_err:
+                        # Причина обязана попадать в лог: без неё нельзя
+                        # отличить «человек заблокировал бота» от битого
+                        # HTML или невалидного premium-эмодзи, то есть от
+                        # нашей ошибки, которая ломает рассылку всем.
                         failed_count += 1
+                        logger.warning(
+                            "NOTIFY_SEND_FAILED user=%s: %s: %s",
+                            user_id, type(send_err).__name__, send_err,
+                        )
                 await asyncio.sleep(0.05)
-            except Exception:
+            except Exception as loop_err:
                 failed_count += 1
+                logger.warning(
+                    "NOTIFY_USER_FAILED user=%s: %s: %s",
+                    user_id, type(loop_err).__name__, loop_err,
+                )
 
         result_text = i18n_get_text(language, "admin.notif_retention_sent", sent=sent_count, failed=failed_count)
         await safe_edit_text(
@@ -732,6 +756,9 @@ async def _send_x2_cashback_notifications(
     end_date_str = ends_at.strftime("%d.%m")
     semaphore = asyncio.Semaphore(_NOTIFY_CONCURRENCY)
     sent_count = 0
+    # Счётчика неудач здесь не было вовсе: админ видел «Отправлено N/M»
+    # и не понимал, куда делись остальные — в ошибку или в фильтр.
+    failed_count = 0
 
     try:
         bot_info = await bot.get_me()
@@ -765,19 +792,36 @@ async def _send_x2_cashback_notifications(
                         try:
                             await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode="HTML")
                             sent_count += 1
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
+                        except Exception as retry_err:
+                            failed_count += 1
+                            logger.warning(
+                                "NOTIFY_RETRY_FAILED user=%s: %s: %s",
+                                user_id, type(retry_err).__name__, retry_err,
+                            )
+                    except Exception as send_err:
+                        # Раньше здесь счётчик неудач даже не увеличивался:
+                        # админ видел «Отправлено N/M» и не понимал, куда
+                        # делись остальные.
+                        failed_count += 1
+                        logger.warning(
+                            "NOTIFY_SEND_FAILED user=%s: %s: %s",
+                            user_id, type(send_err).__name__, send_err,
+                        )
                 await asyncio.sleep(_NOTIFY_DELAY)
-            except Exception:
-                pass
+            except Exception as loop_err:
+                failed_count += 1
+                logger.warning(
+                    "NOTIFY_USER_FAILED user=%s: %s: %s",
+                    user_id, type(loop_err).__name__, loop_err,
+                )
 
         # Notify admin about completion
         try:
             await bot.send_message(
                 admin_chat_id,
-                f"✅ Рассылка x2 кешбэк завершена\n\n📤 Отправлено: {sent_count}/{len(user_ids)}",
+                f"✅ Рассылка x2 кешбэк завершена\n\n"
+                f"📤 Отправлено: {sent_count}/{len(user_ids)}\n"
+                f"⚠️ Не доставлено: {failed_count}",
                 parse_mode="HTML",
             )
         except Exception:
