@@ -13,6 +13,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import config
 import database
 from app.services import remnawave_api
+from app.core.feature_flags import background_workers_paused
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 
@@ -123,6 +124,11 @@ async def traffic_monitor_task(bot: Bot) -> None:
     await asyncio.sleep(30)  # Initial delay
 
     while True:
+        # Аварийный рубильник фоновых воркеров. Проверяем внутри цикла:
+        # флаг читается из окружения и может смениться без рестарта.
+        if background_workers_paused("traffic_monitor"):
+            await asyncio.sleep(300)
+            continue
         try:
             if not database.DB_READY or not config.REMNAWAVE_ENABLED:
                 await asyncio.sleep(INTERVAL_SECONDS)

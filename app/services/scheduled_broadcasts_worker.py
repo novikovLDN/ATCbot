@@ -14,6 +14,7 @@ scheduled_at и деактивирует, если once или вышли за e
 from __future__ import annotations
 
 import asyncio
+from app.core.feature_flags import background_workers_paused
 import logging
 from typing import Any, Dict
 
@@ -150,6 +151,11 @@ async def run_scheduled_broadcasts_worker(bot: Bot) -> None:
         POLL_INTERVAL_SECONDS, MAX_BATCH_PER_TICK,
     )
     while True:
+        # Аварийный рубильник фоновых воркеров. Проверяем внутри цикла:
+        # флаг читается из окружения и может смениться без рестарта.
+        if background_workers_paused("scheduled_broadcasts"):
+            await asyncio.sleep(60)
+            continue
         try:
             import database
             due = await database.fetch_due_scheduled(limit=MAX_BATCH_PER_TICK)

@@ -14,6 +14,7 @@ import time
 
 import database
 from app.services.site_sync import sync_balance, sync_referrals, is_enabled
+from app.core.feature_flags import background_workers_paused
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,11 @@ async def site_sync_worker_task(bot=None):
     logger.info("site_sync_worker started (interval=%ds)", SYNC_INTERVAL)
 
     while True:
+        # Аварийный рубильник фоновых воркеров. Проверяем внутри цикла:
+        # флаг читается из окружения и может смениться без рестарта.
+        if background_workers_paused("site_sync"):
+            await asyncio.sleep(300)
+            continue
         try:
             await asyncio.sleep(SYNC_INTERVAL)
 

@@ -9,6 +9,7 @@ import database
 import config
 from app import i18n
 from app.services.language_service import resolve_user_language
+from app.core.feature_flags import background_workers_paused
 from app.services.notifications import service as notification_service
 from app.services.notifications.service import ReminderType
 from app.utils.telegram_safe import safe_send_message
@@ -327,6 +328,11 @@ async def reminders_task(bot: Bot):
 
     iteration_number = 0
     while True:
+        # Аварийный рубильник фоновых воркеров. Проверяем внутри цикла:
+        # флаг читается из окружения и может смениться без рестарта.
+        if background_workers_paused("reminders"):
+            await asyncio.sleep(60)
+            continue
         iteration_number += 1
         iteration_start_time = time.time()
         

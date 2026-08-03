@@ -12,23 +12,24 @@ from app.utils.logging_helpers import (
     log_worker_iteration_end,
     classify_error,
 )
+from app.core.feature_flags import background_workers_paused
 
 logger = logging.getLogger(__name__)
 
 # Import PLANT_TYPES - try importing from app.handlers.game
 # If circular import occurs, we'll use fallback
-try:
-    from app.handlers.game import PLANT_TYPES
-except ImportError:
-    # Fallback: define PLANT_TYPES here if import fails
-    PLANT_TYPES = {
-        "tomato":    {"emoji": "🍅", "name": "Томаты",   "days": 3,  "reward": 500},
-        "potato":    {"emoji": "🥔", "name": "Картофель","days": 5,  "reward": 1000},
-        "carrot":    {"emoji": "🥕", "name": "Морковь",  "days": 7,  "reward": 1000},
-        "cactus":    {"emoji": "🌵", "name": "Кактус",   "days": 10, "reward": 1500},
-        "apple":     {"emoji": "🍏", "name": "Яблоня",   "days": 8,  "reward": 1500},
-        "lavender":  {"emoji": "💜", "name": "Лаванда",  "days": 6,  "reward": 2000},
-    }
+# Справочник культур — единственный источник, app/handlers/game.py.
+#
+# Раньше здесь лежала запасная копия «на случай, если импорт не удастся».
+# Она устарела: шесть культур из пятнадцати и старые награды (помидор 500
+# вместо 400, картофель 1000 вместо 800, лаванда 2000 вместо 1500). Эта же
+# таблица подставлялась в исполнение шторма, то есть при сбое импорта
+# воркер молча начислял бы неверные деньги и не знал про девять культур.
+#
+# Запасной копии быть не должно: если импорт не удался, это поломка сборки,
+# а не штатная ситуация. Пусть падает громко на старте, а не тихо считает
+# чужие числа в проде.
+from app.handlers.game import PLANT_TYPES
 
 
 async def farm_notifications_iteration(bot: Bot):
@@ -37,87 +38,100 @@ async def farm_notifications_iteration(bot: Bot):
     now = datetime.now(timezone.utc)
     
     for user in users:
-        telegram_id = user["telegram_id"]
-        farm_plots = user["farm_plots"]
+        # telegram_id читаем ДО try: он нужен обработчику ошибки, чтобы
+        # написать в лог, на ком именно споткнулись.
+        telegram_id = user.get("telegram_id") if hasattr(user, "get") else user["telegram_id"]
+        # Сбой на одном пользователе не должен обрывать рассылку остальным.
+        # Битый элемент farm_plots (нет ключа status, мусор в ready_at)
+        # раньше выбрасывал исключение наружу, и все, кто в списке дальше,
+        # оставались без уведомлений — молча, до следующего прохода.
+        try:
+            farm_plots = user["farm_plots"]
         
-        # Parse JSONB if needed
-        if isinstance(farm_plots, str):
-            farm_plots = json.loads(farm_plots)
-        elif farm_plots is None:
-            continue
+            # Parse JSONB if needed
+            if isinstance(farm_plots, str):
+                farm_plots = json.loads(farm_plots)
+            elif farm_plots is None:
+                continue
         
-        for plot in farm_plots:
-            if plot["status"] not in ("growing", "ready"):
-                continue
+            for plot in farm_plots:
+                if plot["status"] not in ("growing", "ready"):
+                    continue
             
-            plant_type = plot.get("plant_type")
-            if not plant_type or plant_type not in PLANT_TYPES:
-                continue
+                plant_type = plot.get("plant_type")
+                if not plant_type or plant_type not in PLANT_TYPES:
+                    continue
             
-            plant_name = PLANT_TYPES[plant_type]["name"]
-            ready_at = datetime.fromisoformat(plot["ready_at"]) if plot.get("ready_at") else None
-            dead_at = datetime.fromisoformat(plot["dead_at"]) if plot.get("dead_at") else None
+                plant_name = PLANT_TYPES[plant_type]["name"]
+                ready_at = datetime.fromisoformat(plot["ready_at"]) if plot.get("ready_at") else None
+                dead_at = datetime.fromisoformat(plot["dead_at"]) if plot.get("dead_at") else None
             
-            # A: Ready notification
-            planted_at_snapshot = plot.get("planted_at")
+                # A: Ready notification
+                planted_at_snapshot = plot.get("planted_at")
 
-            if ready_at and now >= ready_at and not plot.get("notified_ready"):
-                plot["status"] = "ready"
-                # Флаг ставится точечно, а не перезаписью всего массива:
-                # пока идёт рассылка, пользователь может собрать урожай, и
-                # запись устаревшего снимка затёрла бы его действие.
-                await database.mark_plot_notified(
-                    telegram_id, int(plot.get("plot_id", -1)), "notified_ready",
-                    expected_planted_at=planted_at_snapshot,
-                )
-                try:
-                    await bot.send_message(
-                        telegram_id,
-                        f"🌾 Ваши <b>{plant_name}</b> созрели!\n"
-                        f"Заходите скорее собирать урожай, пока он не испортился 🌻",
-                        parse_mode="HTML"
+                if ready_at and now >= ready_at and not plot.get("notified_ready"):
+                    plot["status"] = "ready"
+                    # Флаг ставится точечно, а не перезаписью всего массива:
+                    # пока идёт рассылка, пользователь может собрать урожай, и
+                    # запись устаревшего снимка затёрла бы его действие.
+                    await database.mark_plot_notified(
+                        telegram_id, int(plot.get("plot_id", -1)), "notified_ready",
+                        expected_planted_at=planted_at_snapshot,
                     )
-                except Exception as e:
-                    logger.warning(f"Failed to send farm ready notification to {telegram_id}: {e}")
+                    try:
+                        await bot.send_message(
+                            telegram_id,
+                            f"🌾 Ваши <b>{plant_name}</b> созрели!\n"
+                            f"Заходите скорее собирать урожай, пока он не испортился 🌻",
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to send farm ready notification to {telegram_id}: {e}")
             
-            # B: 12h warning
-            if dead_at and now >= (dead_at - timedelta(hours=12)) and not plot.get("notified_12h"):
-                # Флаг ставится точечно, а не перезаписью всего массива:
-                # пока идёт рассылка, пользователь может собрать урожай, и
-                # запись устаревшего снимка затёрла бы его действие.
-                await database.mark_plot_notified(
-                    telegram_id, int(plot.get("plot_id", -1)), "notified_12h",
-                    expected_planted_at=planted_at_snapshot,
-                )
-                try:
-                    await bot.send_message(
-                        telegram_id,
-                        f"⚠️ Не забудьте собрать <b>{plant_name}</b>!\n"
-                        f"У вас осталось ~12 часов до того, как урожай сгниёт 🕐",
-                        parse_mode="HTML"
+                # B: 12h warning
+                if dead_at and now >= (dead_at - timedelta(hours=12)) and not plot.get("notified_12h"):
+                    # Флаг ставится точечно, а не перезаписью всего массива:
+                    # пока идёт рассылка, пользователь может собрать урожай, и
+                    # запись устаревшего снимка затёрла бы его действие.
+                    await database.mark_plot_notified(
+                        telegram_id, int(plot.get("plot_id", -1)), "notified_12h",
+                        expected_planted_at=planted_at_snapshot,
                     )
-                except Exception as e:
-                    logger.warning(f"Failed to send farm 12h warning to {telegram_id}: {e}")
+                    try:
+                        await bot.send_message(
+                            telegram_id,
+                            f"⚠️ Не забудьте собрать <b>{plant_name}</b>!\n"
+                            f"У вас осталось ~12 часов до того, как урожай сгниёт 🕐",
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to send farm 12h warning to {telegram_id}: {e}")
             
-            # C: Dead notification
-            if dead_at and now >= dead_at and not plot.get("notified_dead"):
-                plot["status"] = "dead"
-                # Флаг ставится точечно, а не перезаписью всего массива:
-                # пока идёт рассылка, пользователь может собрать урожай, и
-                # запись устаревшего снимка затёрла бы его действие.
-                await database.mark_plot_notified(
-                    telegram_id, int(plot.get("plot_id", -1)), "notified_dead",
-                    expected_planted_at=planted_at_snapshot,
-                )
-                try:
-                    await bot.send_message(
-                        telegram_id,
-                        f"💀 Ваши <b>{plant_name}</b> сгнили — вы не успели собрать урожай 😢\n"
-                        f"Зайдите на ферму, чтобы убрать погибшее растение.",
-                        parse_mode="HTML"
+                # C: Dead notification
+                if dead_at and now >= dead_at and not plot.get("notified_dead"):
+                    plot["status"] = "dead"
+                    # Флаг ставится точечно, а не перезаписью всего массива:
+                    # пока идёт рассылка, пользователь может собрать урожай, и
+                    # запись устаревшего снимка затёрла бы его действие.
+                    await database.mark_plot_notified(
+                        telegram_id, int(plot.get("plot_id", -1)), "notified_dead",
+                        expected_planted_at=planted_at_snapshot,
                     )
-                except Exception as e:
-                    logger.warning(f"Failed to send farm dead notification to {telegram_id}: {e}")
+                    try:
+                        await bot.send_message(
+                            telegram_id,
+                            f"💀 Ваши <b>{plant_name}</b> сгнили — вы не успели собрать урожай 😢\n"
+                            f"Зайдите на ферму, чтобы убрать погибшее растение.",
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to send farm dead notification to {telegram_id}: {e}")
+        except Exception as e:
+            logger.exception(
+                "FARM_NOTIFY_USER_FAILED user=%s: %s — пропускаем, остальные продолжают",
+                telegram_id, e,
+            )
+            continue
         
         # save_farm_plots здесь больше не вызывается: он записывал весь массив
         # целиком и затирал изменения, сделанные пользователем во время рассылки.
@@ -269,6 +283,11 @@ async def farm_notifications_task(bot: Bot):
 
     iteration_number = 0
     while True:
+        # Аварийный рубильник фоновых воркеров. Проверяем внутри цикла:
+        # флаг читается из окружения и может смениться без рестарта.
+        if background_workers_paused("farm_notifications"):
+            await asyncio.sleep(300)
+            continue
         iteration_number += 1
         iteration_start_time = time.time()
         

@@ -306,6 +306,23 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         if "message is not modified" not in str(e):
             raise
 
+    # Закрываем «часики» на кнопке здесь, в конце успешного пути.
+    #
+    # Раньше обработчики отвечали пустым callback.answer() в самом начале —
+    # «чтобы кнопка не крутилась». Telegram учитывает только ПЕРВЫЙ ответ на
+    # callback_query, поэтому все последующие содержательные алерты («Урожай
+    # собран! +400 ₽», «Вы уже удобряли сегодня») не показывались вообще.
+    # Человек нажимал и не понимал, случилось что-нибудь или нет.
+    #
+    # Теперь ранних ответов нет: успешный путь отвечает отсюда, а путь с
+    # отказом — своим алертом. В обоих случаях ответ ровно один.
+    try:
+        await callback.answer()
+    except Exception:
+        # Callback мог устареть (прошло больше таймаута Telegram) — экран
+        # уже перерисован, и это не повод считать действие неудачным.
+        pass
+
 
 @router.callback_query(F.data == "game_farm")
 async def callback_game_farm(callback: CallbackQuery):
@@ -334,8 +351,6 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
     """Show plant selection screen"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-
-    await callback.answer()
 
     # During an announced storm planting is disabled to prevent the
     # replant + early-harvest loop and to keep the rule simple for players.
@@ -372,8 +387,6 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
     """Plant a seed"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-
-    await callback.answer()
 
     # Server-side gate — must match the farm_choose_ guard.  A user could
     # otherwise hand-craft farm_plant_<plot>_<type> to bypass the menu hide.
@@ -443,8 +456,6 @@ async def callback_farm_water(callback: CallbackQuery, state: FSMContext):
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
     
-    await callback.answer()
-    
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     plot_id = int(callback.data.split("_")[-1])
@@ -493,8 +504,6 @@ async def callback_farm_fert(callback: CallbackQuery, state: FSMContext):
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
     
-    await callback.answer()
-    
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     plot_id = int(callback.data.split("_")[-1])
@@ -542,8 +551,6 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
     """Harvest a ready plant"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    
-    await callback.answer()
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -610,8 +617,6 @@ async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
     """Remove dead plant - show confirmation"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    
-    await callback.answer()
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -680,8 +685,6 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
     
-    await callback.answer()
-    
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     
@@ -727,8 +730,6 @@ async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
     """Show confirmation dialog for digging up a plant"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    
-    await callback.answer()
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -783,8 +784,6 @@ async def callback_farm_dig_confirm(callback: CallbackQuery, state: FSMContext):
     """Confirm and execute digging up a plant"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    
-    await callback.answer()
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -861,7 +860,6 @@ async def callback_farm_shield(callback: CallbackQuery):
     """🛡 Накрыть — pay via balance if enough, else show Lava/SBP screen."""
     if not await ensure_db_ready_callback(callback):
         return
-    await callback.answer()
     telegram_id = callback.from_user.id
 
     storm = await _get_imminent_storm()
@@ -915,6 +913,13 @@ async def callback_farm_shield(callback: CallbackQuery):
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
+
+    # Экран показан — гасим «часики». Ответ ровно один: пути с отказом
+    # выше уже ответили своим алертом и вышли (см. _render_farm).
+    try:
+        await callback.answer()
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("farm_shield_lava:"))
@@ -970,7 +975,6 @@ async def callback_farm_shield_lava(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
         ])
         await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
-        await callback.answer()
     except Exception as e:
         logger.exception("FARM_SHIELD_LAVA_ERROR user=%s plot=%s: %s", telegram_id, plot_id, e)
         await callback.answer("Ошибка создания платежа.", show_alert=True)
@@ -1028,7 +1032,6 @@ async def callback_farm_shield_sbp(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
         ])
         await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
-        await callback.answer()
     except Exception as e:
         logger.exception("FARM_SHIELD_SBP_ERROR user=%s plot=%s: %s", telegram_id, plot_id, e)
         await callback.answer("Ошибка создания платежа.", show_alert=True)
@@ -1039,7 +1042,6 @@ async def callback_farm_early_harvest(callback: CallbackQuery):
     """🚜 Собрать незрелым — credits 50% of plant reward, frees the plot."""
     if not await ensure_db_ready_callback(callback):
         return
-    await callback.answer()
     telegram_id = callback.from_user.id
 
     storm = await _get_imminent_storm()
