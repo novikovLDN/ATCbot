@@ -2,6 +2,10 @@
 """kk strings."""
 
 LANG = {
+    'units.minutes': 'минут',
+    'units.hours': 'сағат',
+    'units.days': 'күн',
+    'admin.user_granted_access': '✅ Сізге {value} {unit} қолжетімділік берілді\n\nКілт: {vpn_key}\nЖарамды: {date} дейін',
     'admin.access_denied': 'Қатысушы құқықтары жеткіліксіз',
     'admin.access_revoked': '✅ Қатысу тоқтатылды',
     'admin.action_without_notification': 'Әрекет хабарлаусыз орындалды.',

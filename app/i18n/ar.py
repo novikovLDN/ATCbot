@@ -2,6 +2,10 @@
 """ar strings."""
 
 LANG = {
+    'units.minutes': 'دقيقة',
+    'units.hours': 'ساعة',
+    'units.days': 'يوم',
+    'admin.user_granted_access': '✅ تم منحك وصولاً لمدة {value} {unit}\n\nالمفتاح: {vpn_key}\nصالح حتى: {date}',
     'admin.access_denied': 'صلاحيات الوصول غير كافية',
     'admin.access_revoked': '✅ تم إلغاء الوصول',
     'admin.action_without_notification': 'تم تنفيذ الإجراء دون إشعار.',

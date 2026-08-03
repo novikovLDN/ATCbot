@@ -2,6 +2,10 @@
 """uz strings."""
 
 LANG = {
+    'units.minutes': 'daqiqa',
+    'units.hours': 'soat',
+    'units.days': 'kun',
+    'admin.user_granted_access': '✅ Sizga {value} {unit} kirish berildi\n\nKalit: {vpn_key}\nAmal qiladi: {date} gacha',
     'admin.access_denied': 'Kirish huquqi yetarli emas',
     'admin.access_revoked': '✅ Ruxsat bekor qilindi',
     'admin.action_without_notification': 'Harakat xabarsiz bajarildi.',

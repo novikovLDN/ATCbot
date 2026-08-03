@@ -1033,14 +1033,19 @@ async def callback_admin_chat_start(callback: CallbackQuery, state: FSMContext):
         return
     await callback.answer()
     await state.set_state(AdminChat.waiting_for_user_id)
-    await safe_edit_text(
-        callback.message,
+    # Отправляем НОВЫМ сообщением, а не правкой текущего.
+    #
+    # Кнопка «💬 Написать пользователю» висит в том числе под уведомлениями
+    # о заказах Spotify, Apple ID и Steam — там же, где лежат email, пароль
+    # и кнопка «Выполнено». Редактирование затирало всё это: админ нажимал
+    # «написать», терял данные заказа и не мог его выдать.
+    await callback.message.answer(
         "💬 <b>Написать пользователю</b>\n\n"
         "Введите Telegram ID или @username пользователя:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:main")],
         ]),
-        bot=callback.bot,
+        parse_mode="HTML",
     )
 
 

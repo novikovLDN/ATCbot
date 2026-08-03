@@ -2,6 +2,10 @@
 """de strings."""
 
 LANG = {
+    'units.minutes': 'Minuten',
+    'units.hours': 'Stunden',
+    'units.days': 'Tage',
+    'admin.user_granted_access': '✅ Ihnen wurde Zugang für {value} {unit} gewährt\n\nSchlüssel: {vpn_key}\nGültig bis: {date}',
     'admin.access_denied': 'Unzureichende Zugriffsrechte',
     'admin.access_revoked': '✅ Zugang entzogen',
     'admin.action_without_notification': 'Aktion ohne Benachrichtigung ausgeführt.',

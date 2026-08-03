@@ -712,26 +712,54 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
             except Exception:
                 pass
 
-            text = f"✅ Доступ выдан на {duration_value} {unit_text}"
+            # Уведомление пользователю отправляем ДО отчёта админу, чтобы
+            # отчёт говорил о факте, а не о намерении.
+            #
+            # Раньше строка «Пользователь уведомлён» добавлялась по одному
+            # флагу notify_user, а сама отправка шла ниже под условием
+            # `notify_user and vpn_key`. При пустом ключе (активация ещё в
+            # процессе) уведомление не уходило вовсе, а админ читал, что
+            # человек предупреждён, — и не перезванивал ему.
+            notified = False
+            notify_skip_reason = None
             if notify_user:
+                if not vpn_key:
+                    notify_skip_reason = "ключ ещё не выдан (активация в процессе)"
+                else:
+                    import admin_notifications
+                    # Текст на языке ПОЛУЧАТЕЛЯ, а не на русском: раньше
+                    # уведомление собиралось русской f-строкой независимо от
+                    # того, каким языком человек пользуется.
+                    user_language = await resolve_user_language(user_id)
+                    unit_label = i18n_get_text(
+                        user_language, f"units.{duration_unit}", unit_text,
+                    )
+                    user_text = i18n_get_text(
+                        user_language, "admin.user_granted_access",
+                        value=duration_value,
+                        unit=unit_label,
+                        vpn_key=f"<code>{vpn_key}</code>",
+                        date=expires_str,
+                    )
+                    notified = bool(await admin_notifications.send_user_notification(
+                        bot=bot,
+                        user_id=user_id,
+                        message=user_text,
+                        notification_type="admin_grant_custom",
+                        parse_mode="HTML",
+                    ))
+                    if not notified:
+                        notify_skip_reason = "отправка не удалась (бот заблокирован?)"
+
+            text = f"✅ Доступ выдан на {duration_value} {unit_text}"
+            if notified:
                 text += "\nПользователь уведомлён."
+            elif notify_user:
+                text += f"\n⚠️ Уведомление НЕ отправлено: {notify_skip_reason}."
             else:
                 text += "\nДействие выполнено без уведомления."
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
-            
-            # PART 6: Notify user if flag is True
-            if notify_user and vpn_key:
-                import admin_notifications
-                vpn_key_html = f"<code>{vpn_key}</code>" if vpn_key else "⏳ Активация в процессе"
-                user_text = f"✅ Вам выдан доступ на {duration_value} {unit_text}\n\nКлюч: {vpn_key_html}\nДействителен до: {expires_str}"
-                # Use unified notification service
-                await admin_notifications.send_user_notification(
-                    bot=bot,
-                    user_id=user_id,
-                    message=user_text,
-                    notification_type="admin_grant_custom",
-                    parse_mode="HTML"
-                )
+
             
             # PART 6: Audit log
             await database._log_audit_event_atomic_standalone(

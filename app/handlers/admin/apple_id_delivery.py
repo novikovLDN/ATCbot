@@ -248,6 +248,29 @@ async def cb_confirm(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
+    # Сверяем покупателя из кнопки с тем, для кого готовился текст.
+    #
+    # buyer_id приходит из callback_data, а сам текст — из FSM, и FSM у
+    # админа один на чат. Сценарий: начал выдачу по заказу A, прислал ключ
+    # (превью A в FSM), не подтвердил, начал заказ B и прислал ключ B —
+    # превью перезаписалось. Нажатие на старую кнопку «Подтвердить» под
+    # заказом A отправило бы покупателю A ЧУЖОЙ ключ от заказа B.
+    # Кнопки живут в чате вечно, так что сценарий не гипотетический.
+    prepared_for = int(data.get("buyer_id") or 0)
+    if prepared_for and prepared_for != buyer_id:
+        logger.warning(
+            "APPLE_KEY_BUYER_MISMATCH button_buyer=%s prepared_for=%s — отправка отменена",
+            buyer_id, prepared_for,
+        )
+        await callback.message.answer(
+            f"⚠️ Эта кнопка — от заказа покупателя <code>{buyer_id}</code>, "
+            f"а подготовленный ключ предназначен <code>{prepared_for}</code>.\n\n"
+            "Отправка отменена, чтобы ключ не ушёл не тому. "
+            "Нажми «Отправить ключ» в нужном заказе заново.",
+            parse_mode="HTML",
+        )
+        return
+
     try:
         await callback.bot.send_message(
             chat_id=buyer_id, text=text, parse_mode="HTML",

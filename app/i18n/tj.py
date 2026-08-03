@@ -2,6 +2,10 @@
 """tj strings."""
 
 LANG = {
+    'units.minutes': 'дақиқа',
+    'units.hours': 'соат',
+    'units.days': 'рӯз',
+    'admin.user_granted_access': '✅ Ба шумо барои {value} {unit} дастрасӣ дода шуд\n\nКалид: {vpn_key}\nЭътибор то: {date}',
     'admin.access_denied': 'Ҳуқуқи дастрасӣ кофӣ нест',
     'admin.access_revoked': '✅ Дастрасӣ бекор карда шуд',
     'admin.action_without_notification': 'Амал без огоҳӣ анҷом дода шуд.',

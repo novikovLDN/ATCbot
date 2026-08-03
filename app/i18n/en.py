@@ -2,6 +2,10 @@
 """en strings."""
 
 LANG = {
+    'units.minutes': 'minutes',
+    'units.hours': 'hours',
+    'units.days': 'days',
+    'admin.user_granted_access': '✅ You have been granted access for {value} {unit}\n\nKey: {vpn_key}\nValid until: {date}',
     'admin.access_denied': "Insufficient access rights",
     'admin.access_revoked': "✅ Access revoked",
     'admin.action_without_notification': "Action completed without notification.",

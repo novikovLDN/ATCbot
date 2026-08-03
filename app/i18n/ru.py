@@ -2,6 +2,10 @@
 """Russian (ru) strings. Canonical language."""
 
 LANG = {
+    'units.minutes': 'минут',
+    'units.hours': 'часов',
+    'units.days': 'дней',
+    'admin.user_granted_access': '✅ Вам выдан доступ на {value} {unit}\n\nКлюч: {vpn_key}\nДействителен до: {date}',
     'admin.access_denied': "Недостаточно прав доступа",
     'admin.access_revoked': "✅ Доступ отозван",
     'admin.action_without_notification': "Действие выполнено без уведомления.",
