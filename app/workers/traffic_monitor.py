@@ -5,6 +5,8 @@ Runs every 5 minutes. Gated by REMNAWAVE_ENABLED and DB_READY.
 """
 import asyncio
 import logging
+import os
+import time
 from typing import Optional
 
 from aiogram import Bot
@@ -20,6 +22,10 @@ from app.services.language_service import resolve_user_language
 logger = logging.getLogger(__name__)
 
 INTERVAL_SECONDS = 300  # 5 minutes
+
+# Потолок на один проход. Меньше интервала, чтобы проходы не наезжали
+# друг на друга: следующий не должен стартовать, пока идёт предыдущий.
+MAX_ITERATION_SECONDS = int(os.getenv("TRAFFIC_MONITOR_MAX_ITERATION_SECONDS", "240"))
 
 
 def _format_bytes(b: int) -> str:
@@ -106,16 +112,47 @@ async def _send_traffic_notification(
 
 
 async def traffic_monitor_iteration(bot: Bot) -> None:
-    """Single iteration: check all active Remnawave users."""
+    """Один проход: проверить остаток трафика у активных пользователей.
+
+    ПОЧЕМУ ЗДЕСЬ ЛИМИТ ПО ВРЕМЕНИ
+
+        На каждого человека идёт запрос к панели плюс пауза 0.2 секунды
+        под её лимиты — то есть проход по десяти тысячам записей займёт
+        больше получаса. Интервал воркера — пять минут, и без ограничения
+        проходы начали бы накладываться друг на друга: каждый следующий
+        стартует, пока предыдущий ещё идёт.
+
+        Дойдя до лимита, честно записываем, сколько успели. Следующий
+        проход начнётся с начала списка — по остатку трафика это не
+        страшно: у тех, кого не успели проверить, порог никуда не денется,
+        а уведомление всё равно однократное (флаг в базе).
+    """
     users = await database.get_active_remnawave_users()
     if not users:
         return
 
+    started = time.monotonic()
+    checked = 0
+
     for user in users:
+        if time.monotonic() - started > MAX_ITERATION_SECONDS:
+            logger.warning(
+                "TRAFFIC_MONITOR_ITERATION_CAPPED: проверено %s из %s за %.0f с — "
+                "остальные попадут в следующий проход",
+                checked, len(users), MAX_ITERATION_SECONDS,
+            )
+            break
+
         telegram_id = user["telegram_id"]
         rmn_uuid = user["remnawave_uuid"]
         await _check_user_traffic(bot, telegram_id, rmn_uuid)
+        checked += 1
         await asyncio.sleep(0.2)  # Rate limit API calls
+
+    logger.info(
+        "TRAFFIC_MONITOR_ITERATION_DONE: проверено %s из %s за %.0f с",
+        checked, len(users), time.monotonic() - started,
+    )
 
 
 async def traffic_monitor_task(bot: Bot) -> None:

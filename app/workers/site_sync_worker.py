@@ -10,6 +10,7 @@ Skips if site sync is not configured.
 """
 import asyncio
 import logging
+import os
 import time
 
 import database
@@ -19,8 +20,19 @@ from app.core.feature_flags import background_workers_paused
 logger = logging.getLogger(__name__)
 
 SYNC_INTERVAL = 5 * 60  # 5 minutes
-SYNC_CONCURRENCY = 5  # max concurrent API calls
 SYNC_USER_DELAY = 0.5  # delay between users to avoid rate limiting
+
+# Потолок на один проход, меньше интервала: проходы не должны наезжать
+# друг на друга.
+#
+# Арифметика: 500 человек × (два запроса к сайту + пауза 0.5 с) — это уже
+# больше четырёх минут при мгновенных ответах. Стоит сайту начать отвечать
+# медленнее, и проход перестаёт укладываться в интервал.
+#
+# SYNC_CONCURRENCY здесь раньше был объявлен, но нигде не использовался:
+# цикл строго последовательный. Убран, чтобы не обещать параллельность,
+# которой нет.
+MAX_ITERATION_SECONDS = int(os.getenv("SITE_SYNC_MAX_ITERATION_SECONDS", "240"))
 
 
 async def site_sync_worker_task(bot=None):
@@ -58,7 +70,19 @@ async def site_sync_worker_task(bot=None):
 
             synced = 0
             errors = 0
+            skipped = 0
             for row in rows:
+                if time.monotonic() - start_time > MAX_ITERATION_SECONDS:
+                    # Не успели — остальные попадут в следующий проход.
+                    # Синхронизация идемпотентна, терять нечего.
+                    skipped = len(rows) - synced - errors
+                    logger.warning(
+                        "SITE_SYNC_ITERATION_CAPPED: успели %s из %s за %s с, "
+                        "остальные в следующий проход",
+                        synced + errors, len(rows), MAX_ITERATION_SECONDS,
+                    )
+                    break
+
                 telegram_id = row["telegram_id"]
                 try:
                     await sync_balance(telegram_id)
@@ -71,7 +95,10 @@ async def site_sync_worker_task(bot=None):
                 await asyncio.sleep(SYNC_USER_DELAY)
 
             duration_ms = (time.monotonic() - start_time) * 1000
-            logger.info("SITE_SYNC_ITERATION_END: synced=%d errors=%d duration=%.0fms", synced, errors, duration_ms)
+            logger.info(
+                "SITE_SYNC_ITERATION_END: synced=%d errors=%d skipped=%d duration=%.0fms",
+                synced, errors, skipped, duration_ms,
+            )
 
         except asyncio.CancelledError:
             logger.info("site_sync_worker cancelled (shutdown)")

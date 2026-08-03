@@ -193,12 +193,42 @@ class TestExpiredSubscriptionRemoved:
     def test_success_audit_is_written_once_and_after_the_update(self):
         """Раньше vpn_expire/success писался дважды: до проверки и после."""
         src = self._source()
-        successes = [
-            i for i in range(len(src))
-            if src.startswith('action="vpn_expire"', i)
-        ]
-        assert len(successes) == 1, (
-            f"записей vpn_expire стало {len(successes)} — вернулся преждевременный аудит"
+        writes = src.count("_log_vpn_lifecycle_audit_async(")
+        assert writes == 1, (
+            f"записей в журнал жизненного цикла стало {writes} — "
+            f"вернулся преждевременный аудит"
+        )
+        assert 'action="vpn_expire"' not in src, (
+            "действие снова захардкожено — оно должно зависеть от ветки"
+        )
+        assert "action=audit_action" in src
+
+    def test_bypass_transition_is_not_logged_as_an_expiry(self):
+        """Переход в bypass-only — не истечение.
+
+        Строка остаётся активной, expires_at уезжает на десять лет вперёд,
+        человек продолжает пользоваться обходом. Запись «подписка истекла и
+        UUID удалён» вела разбор инцидента не туда: искали истёкшую
+        подписку, а она активна.
+        """
+        src = self._source()
+        block = src[src.index('if update_result == "UPDATE 1":'):]
+        block = block[: block.index("_log_vpn_lifecycle_audit_async")]
+
+        assert "if has_remnawave:" in block, "ветки аудита не разведены"
+        assert "vpn_bypass_transition" in block, "у перехода в обход нет своего действия"
+        assert "uuid_bypass_transition" in block, "у перехода в обход нет своего события"
+
+
+    def test_premium_is_disabled_in_both_branches(self):
+        """Платный доступ снят и там, и там — premium гасим в обоих случаях."""
+        src = self._source()
+        block = src[src.index('if update_result == "UPDATE 1":'):]
+        flag = block.index("disable_premium_after_commit = True")
+        branch = block.index("if has_remnawave:")
+        assert flag < branch, (
+            "флаг отключения premium попал внутрь одной из веток — "
+            "во второй доступ останется"
         )
 
 

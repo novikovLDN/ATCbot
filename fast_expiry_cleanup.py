@@ -337,35 +337,71 @@ async def fast_expiry_cleanup_task(bot=None):
                                                                 telegram_id, uuid
                                                             )
                                                         if update_result == "UPDATE 1":
-                                                            # Подписка действительно закрыта — можно гасить
-                                                            # premium в панели. До этой строки дойти нельзя,
-                                                            # если человек успел продлиться (SKIP_RENEWED выше).
+                                                            # Платный доступ снят в обоих случаях, значит
+                                                            # premium в панели надо погасить. До этой строки
+                                                            # нельзя дойти, если человек успел продлиться
+                                                            # (SKIP_RENEWED выше).
                                                             disable_premium_after_commit = True
-                                                            logger.info(
-                                                                f"cleanup: SUBSCRIPTION_EXPIRED [user={telegram_id}, uuid={uuid_preview}, "
-                                                                f"expires_at={expires_at.isoformat()}]"
-                                                            )
+
+                                                            # А вот ЧТО ИМЕННО произошло — разное, и в аудите
+                                                            # это должно читаться по-разному.
+                                                            #
+                                                            # Раньше здесь для обеих веток писалось «подписка
+                                                            # истекла и UUID удалён». Для перехода в
+                                                            # bypass-only это неправда: строка остаётся
+                                                            # активной, expires_at уезжает на десять лет
+                                                            # вперёд, человек продолжает пользоваться обходом.
+                                                            # Разбор инцидента по такому журналу вёл не туда:
+                                                            # искали истёкшую подписку, а она активна.
+                                                            if has_remnawave:
+                                                                audit_action = "vpn_bypass_transition"
+                                                                audit_details = (
+                                                                    f"Платная подписка закончилась, остался обход. "
+                                                                    f"expires_at={expires_at.isoformat()}"
+                                                                )
+                                                                audit_event = "uuid_bypass_transition"
+                                                                audit_event_details = (
+                                                                    f"Переход в bypass-only, снят UUID {uuid_preview}, "
+                                                                    f"expired_at={expires_at.isoformat()}"
+                                                                )
+                                                            else:
+                                                                logger.info(
+                                                                    f"cleanup: SUBSCRIPTION_EXPIRED [user={telegram_id}, uuid={uuid_preview}, "
+                                                                    f"expires_at={expires_at.isoformat()}]"
+                                                                )
+                                                                audit_action = "vpn_expire"
+                                                                audit_details = (
+                                                                    f"Subscription expired and UUID removed, "
+                                                                    f"expires_at={expires_at.isoformat()}"
+                                                                )
+                                                                audit_event = "uuid_fast_deleted"
+                                                                audit_event_details = (
+                                                                    f"Fast-deleted expired UUID {uuid_preview}, "
+                                                                    f"expired_at={expires_at.isoformat()}"
+                                                                )
+
                                                             import config
                                                             await database._log_audit_event_atomic(
                                                                 conn,
-                                                                "uuid_fast_deleted",
+                                                                audit_event,
                                                                 config.ADMIN_TELEGRAM_ID,
                                                                 telegram_id,
-                                                                f"Fast-deleted expired UUID {uuid_preview}, expired_at={expires_at.isoformat()}"
+                                                                audit_event_details,
                                                             )
                                                             try:
                                                                 await database._log_vpn_lifecycle_audit_async(
-                                                                    action="vpn_expire",
+                                                                    action=audit_action,
                                                                     telegram_id=telegram_id,
                                                                     uuid=uuid,
                                                                     source="auto-expiry",
                                                                     result="success",
-                                                                    details=f"Subscription expired and UUID removed, expires_at={expires_at.isoformat()}"
+                                                                    details=audit_details,
                                                                 )
                                                             except Exception as e:
                                                                 logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")
                                                             logger.info(
                                                                 f"cleanup: SUCCESS [user={telegram_id}, uuid={uuid_preview}, "
+                                                                f"mode={'bypass_only' if has_remnawave else 'expired'}, "
                                                                 f"expires_at={expires_at.isoformat()}]"
                                                             )
                                                         else:
