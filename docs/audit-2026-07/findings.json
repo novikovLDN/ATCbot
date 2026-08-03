@@ -714,7 +714,13 @@
       "risk": "средний",
       "confidence": "medium",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Выбран первый из двух вариантов: честное «ключ ещё выдаётся» вместо заведомо нерабочей ссылки. get_user_primary_subscription_url возвращает пустую строку, если премиум-сущность создать не удалось, и пишет предупреждение PRIMARY_SUB_URL_UNAVAILABLE.\nВключать subscription_proxy смысла не было: он резолвит через тот же get_user_premium_url, а до фолбэка мы доходим ровно потому, что ссылки нет.\nПроверены все пять вызывающих (connect_guide ×4, subscription.py): каждый либо проверяет `if not sub_url`, либо подставляет значение в текст, где оно не используется ни в одном языке (отдельная находка про trial.activated). Экран «Пока нечего подключать» с путём дальше уже существовал.\nОбёртка _legacy_sub_url удалена — вызывающих не осталось; сама build_sub_url оставлена в vpn_utils как определение формата, который проверяет subscription_proxy. Упоминания в админских хендлерах (reissue.py, access.py) неактуальны: эти модули удалены вместе с админской панелью в боте.\nШапка модуля переписана: она описывала переезд с samopis, а не то, что модуль делает сейчас.",
+      "fixed_in": [
+        "app/services/user_subscription_links.py",
+        "tests/services/test_user_subscription_links.py"
+      ]
     },
     {
       "title": "Эндпоинт /api/sub/{token} в subscription_proxy не может отрезолвиться в принципе",

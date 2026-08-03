@@ -409,24 +409,27 @@ async def test_primary_url_uses_remnawave_when_premium_url_present(monkeypatch):
     _patch_db(monkeypatch, rows=[
         _Row(remnawave_premium_uuid="u", remnawave_premium_sub_url="https://rmnw/sub/p"),
     ])
-    with _patch_config(), \
-         patch.object(user_subscription_links, "_legacy_sub_url",
-                      MagicMock(return_value="https://atlassecure.ru/api/sub/legacy")):
+    with _patch_config():
         url = await user_subscription_links.get_user_primary_subscription_url(42)
     assert url == "https://rmnw/sub/p"
 
 
 @pytest.mark.asyncio
-async def test_primary_url_falls_back_to_legacy_only_when_provision_fails(monkeypatch):
-    """Lazy provision fails → only then we fall back to legacy URL."""
+async def test_primary_url_is_empty_when_provision_fails(monkeypatch):
+    """Ссылки нет — говорим это честно, а не подсовываем нерабочую.
+
+    Здесь возвращалась samopis-ссылка через _legacy_sub_url. Обслуживать
+    её может только subscription_proxy, а он по умолчанию выключен: человек
+    получал кнопку «Подключиться» с заведомо мёртвой ссылкой и решал, что
+    купил неработающий ключ. Пустая строка заставляет вызывающих показать
+    «ключ ещё выдаётся» — что и происходит на самом деле.
+    """
     _patch_db(monkeypatch, rows=[None, None, None, None])
     with _patch_config(), \
          patch.object(user_subscription_links, "_try_lazy_provision_entities",
-                      AsyncMock(return_value={"created_premium": False, "created_bypass": False})), \
-         patch.object(user_subscription_links, "_legacy_sub_url",
-                      MagicMock(return_value="https://atlassecure.ru/api/sub/legacy")):
+                      AsyncMock(return_value={"created_premium": False, "created_bypass": False})):
         url = await user_subscription_links.get_user_primary_subscription_url(42)
-    assert url == "https://atlassecure.ru/api/sub/legacy"
+    assert url == ""
 
 
 @pytest.mark.asyncio
@@ -438,8 +441,6 @@ async def test_primary_url_lazy_provisions_then_returns_remnawave(monkeypatch):
     ])
     with _patch_config(), \
          patch.object(user_subscription_links, "_try_lazy_provision_entities",
-                      AsyncMock(return_value={"created_premium": True, "created_bypass": True})), \
-         patch.object(user_subscription_links, "_legacy_sub_url",
-                      MagicMock(return_value="https://atlassecure.ru/api/sub/legacy")):
+                      AsyncMock(return_value={"created_premium": True, "created_bypass": True})):
         url = await user_subscription_links.get_user_primary_subscription_url(42)
     assert url == "https://rmnw/sub/new"

@@ -1,33 +1,35 @@
-"""
-Helpers that return the right subscription URL for a Telegram user
-*depending on whether the bot has cut over to the Remnawave-only flow*.
+"""Куда вести кнопки «Подключиться» и «Скопировать ключ».
 
-Why this exists: the legacy `vpn_utils.build_sub_url` is synchronous
-and always returns the samopis-style URL
-`https://atlassecure.ru/api/sub/{token}?id={id}`.  After the Task 2
-cut-over we want the bot's
-"Подключиться" buttons / copy-key blocks to surface the Remnawave-
-issued URL instead — but the legacy helper has too many sync call
-sites to flip in one go.
+ЧТО ЗДЕСЬ
 
-So we add async wrappers that:
-  1. Read the cached `remnawave_premium_sub_url` /
-     `remnawave_bypass_sub_url` from `subscriptions` (populated by
-     Task 1 migration + Task 2 purchase flow).
-  2. Live panel fallback via `remnawave_api.get_user(uuid)` when the
-     cache column was never populated for some reason (status drift,
-     legacy migration before column 046 existed, …) — back-fills the
-     cache on success.
-  3. LAZY PROVISION: when a user has an active subscription with a
-     samopis uuid but NO premium entity at all (trial users + any
-     edge case the migration script missed), provision one on the
-     fly so the link is finally a real Remnawave URL.  Per-process
-     dedup lock prevents duplicate creation under concurrent clicks.
-  4. Fall back to `build_sub_url(telegram_id)` only as a last resort
-     (legacy URL → handled by `subscription_proxy` if enabled).
+    Ссылку на подписку выдаёт панель Remnawave. Модуль отвечает на один
+    вопрос — какая ссылка сейчас у этого человека, — и умеет чинить
+    ситуацию, когда её нет:
 
-These helpers never raise — they always return *some* URL the bot can
-render.
+      1. кэш в subscriptions (remnawave_premium_sub_url /
+         remnawave_bypass_sub_url);
+      2. живой запрос к панели, если кэш пуст (старые записи, дрейф
+         статуса) — с записью результата обратно в кэш;
+      3. ленивое создание сущности, если у человека активная подписка,
+         а сущности в панели нет вовсе: триальщики и всё, что пропустил
+         переезд с samopis. Замок на telegram_id не даёт создать две
+         сущности при двух быстрых нажатиях подряд;
+      4. пустая строка, если ссылки так и нет.
+
+ПОЧЕМУ ПУСТАЯ СТРОКА, А НЕ ССЫЛКА СТАРОГО ФОРМАТА
+
+    Четвёртым шагом раньше возвращалась самописная ссылка
+    /api/sub/{подпись}?id=. Обслуживать её может только
+    app/api/subscription_proxy.py, а он по умолчанию выключен: человек
+    получал кнопку «Подключиться» с заведомо мёртвой ссылкой и решал,
+    что купил неработающий ключ.
+
+    Пустую строку вызывающие проверяют и показывают «ключ ещё
+    выдаётся» — что соответствует действительности: сущность создастся
+    при следующей попытке.
+
+Функции отсюда не бросают исключений: экран должен отрисоваться в любом
+случае.
 """
 from __future__ import annotations
 
@@ -44,12 +46,6 @@ logger = logging.getLogger(__name__)
 # from racing to create two premium entities for the same user.  Locks are
 # cheap and short-lived; we never bother to GC them.
 _lazy_provision_locks: dict[int, asyncio.Lock] = {}
-
-
-def _legacy_sub_url(telegram_id: int) -> str:
-    """Fallback to the existing samopis-style URL. Sync so it always works."""
-    from vpn_utils import build_sub_url
-    return build_sub_url(telegram_id)
 
 
 async def get_user_premium_url(telegram_id: int) -> Optional[str]:
@@ -325,18 +321,31 @@ async def get_user_bypass_url(telegram_id: int) -> Optional[str]:
 
 
 async def get_user_primary_subscription_url(telegram_id: int) -> str:
-    """Return the URL the bot's "Подключиться" / copy-key buttons should
-    point at for this user.
+    """Куда должны вести кнопки «Подключиться» и «Скопировать ключ».
 
-    Resolution order:
-      1. Cached / live Remnawave premium URL.
-      2. Lazy-provision both entities for an active user that somehow
-         doesn't have them yet (trial / pre-Task-2 edge cases) — then
-         re-query premium.
-      3. Legacy samopis URL via `vpn_utils.build_sub_url`.
+    Порядок:
+      1. Ссылка премиум-сущности из Remnawave (из кэша или живая).
+      2. Ленивое создание сущностей для активного пользователя, у
+         которого их почему-то нет (триал, старые записи), — и повторный
+         запрос ссылки.
+      3. Пустая строка.
 
-    Always returns a non-empty string so handlers can render it without
-    a None-check.
+    ПОЧЕМУ ПУСТАЯ СТРОКА, А НЕ ССЫЛКА СТАРОГО ФОРМАТА
+
+        Третьим шагом здесь возвращалась samopis-ссылка через
+        _legacy_sub_url. Обслуживать её может только subscription_proxy,
+        а он по умолчанию выключен — то есть человек, у которого не
+        получилось создать премиум-сущность (панель недоступна, имя занято
+        чужой записью), получал кнопку «Подключиться» с заведомо
+        нерабочей ссылкой и решал, что купил неработающий ключ.
+
+        Даже с включённым прокси толку нет: он резолвит через тот же
+        get_user_premium_url, а сюда мы попали ровно потому, что ссылки
+        нет.
+
+        Пустая строка — честный ответ. Вызывающие её проверяют и
+        показывают «ключ ещё выдаётся», что соответствует
+        действительности: сущность создастся при следующей попытке.
     """
     premium = await get_user_premium_url(telegram_id)
     if premium:
@@ -348,7 +357,12 @@ async def get_user_primary_subscription_url(telegram_id: int) -> str:
         if premium:
             return premium
 
-    return _legacy_sub_url(telegram_id)
+    logger.warning(
+        "PRIMARY_SUB_URL_UNAVAILABLE tg=%s — премиум-сущность не создана, "
+        "показываем «ключ выдаётся» вместо нерабочей ссылки",
+        telegram_id,
+    )
+    return ""
 
 
 __all__ = [
