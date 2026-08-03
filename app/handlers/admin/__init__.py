@@ -11,6 +11,9 @@ from .stats import admin_stats_router
 from .broadcast_gifts import admin_broadcast_gifts_router
 from .referral_screens import admin_referral_router
 from .access import admin_access_router
+from .access_grant import admin_grant_router
+from .access_switch import admin_switch_router
+from .access_revoke import admin_revoke_router
 from .finance import admin_finance_router
 from .reissue import admin_reissue_router
 from .broadcast import admin_broadcast_router
@@ -41,6 +44,9 @@ router.include_router(admin_stats_router)
 router.include_router(admin_broadcast_gifts_router)
 router.include_router(admin_referral_router)
 router.include_router(admin_access_router)
+router.include_router(admin_grant_router)
+router.include_router(admin_switch_router)
+router.include_router(admin_revoke_router)
 router.include_router(admin_finance_router)
 router.include_router(admin_reissue_router)
 router.include_router(admin_broadcast_router)

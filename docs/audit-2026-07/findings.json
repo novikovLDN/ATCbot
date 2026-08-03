@@ -3549,6 +3549,28 @@
       "failure_scenario": "Разработчик видит вызов синхронизации после продления, считает её рабочей и строит на ней диагностику проблемы с доступом — а она no-op с самого cut-over.",
       "proposed_action": "Пройти цепочку целиком: убрать ключ renewal_xray_sync_after_commit из grant_access, обработку в auto_renewal (фаза B) и purchase_flow, затем удалить ensure_user_in_xray и заглушки add/update/remove_vless_user из vpn_utils. Делать отдельным проходом с тестами: это трогает выдачу доступа и продление.",
       "source": "audit-followup"
+    },
+    {
+      "title": "Разбивка app/handlers/admin/access.py (2283 строки) по ответственностям",
+      "severity": "P2",
+      "category": "refactor",
+      "file": "app/handlers/admin/access.py",
+      "line": 1,
+      "defect": "Файл смешивал четыре разные обязанности: поиск пользователя, выдача доступа, смена тарифа, отзыв/удаление. Самая рискованная часть — выдача, меняющая оплаченный доступ, — тонула среди поиска и истории, и правку одной обязанности приходилось делать посреди трёх других.",
+      "failure_scenario": "Правка экрана выдачи задевает соседний сценарий отзыва, потому что они лежат в одном файле и делят импорты; ревью такого диффа не показывает, что именно изменилось по смыслу.",
+      "proposed_action": "Сделано.",
+      "source": "audit-followup",
+      "status": "fixed",
+      "resolution": "Разрезан на пять модулей: access.py (поиск, карточка, история, ключи — 604 строки), access_grant.py (выдача доступа, 1006), access_switch.py (смена тарифа, 161), access_revoke.py (отзыв, VIP, перевыпуск, удаление, 515), _user_card.py (общая карточка, 145). Карточка вынесена отдельно, потому что её показывают три модуля — иначе они тянули бы друг друга по кругу. Каждый модуль получил свой роутер, подключённый в app/handlers/admin/__init__.py, и русскую инструкцию в шапке. Проверка целостности: все 39 регистраций обработчиков сверены до и после (потерь и лишнего нет), плюс проверено, что каждый обработчик действительно виден диспетчеру — забытый include_router не даёт ошибки, кнопка просто молчит. Тесты: tests/services/test_access_split.py (9 шт.).",
+      "fixed_in": [
+        "app/handlers/admin/access.py",
+        "app/handlers/admin/access_grant.py",
+        "app/handlers/admin/access_switch.py",
+        "app/handlers/admin/access_revoke.py",
+        "app/handlers/admin/_user_card.py",
+        "app/handlers/admin/__init__.py",
+        "tests/services/test_access_split.py"
+      ]
     }
   ],
   "refuted": [
