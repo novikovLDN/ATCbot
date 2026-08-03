@@ -26,6 +26,26 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_SECONDS = 60          # раз в минуту
 MAX_BATCH_PER_TICK = 5              # не больше N задач за один tick
 
+# Запущенные рассылки. Держать ссылку обязательно: event loop хранит на
+# таски только слабые ссылки, и без этого сборщик мусора вправе убить
+# рассылку на середине — она оборвётся без ошибки, дойдя до части людей.
+_running_broadcasts: set[asyncio.Task] = set()
+
+
+def _on_broadcast_done(task: asyncio.Task) -> None:
+    """Снять ссылку и не потерять исключение."""
+    _running_broadcasts.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("SCHED_BROADCAST_TASK_FAILED: %s", exc, exc_info=exc)
+
+
+def running_broadcast_tasks() -> set:
+    """Незавершённые рассылки — чтобы main.py дождался их при остановке."""
+    return set(_running_broadcasts)
+
 
 async def _dispatch_one(bot: Bot, sched: Dict[str, Any]) -> None:
     """Запустить одно задание — создать broadcast + отправить."""
@@ -112,7 +132,12 @@ async def _dispatch_one(bot: Bot, sched: Dict[str, Any]) -> None:
 
     # Отдельным таском, чтобы не блокировать полинг: send_broadcast может
     # длиться минуты для большой аудитории.
-    asyncio.create_task(send_broadcast(
+    #
+    # Ссылку на таск ОБЯЗАТЕЛЬНО держим сами. Event loop хранит на таски
+    # только слабые ссылки: без этого сборщик мусора вправе убить рассылку
+    # на середине, и она просто оборвётся — без ошибки, с частью
+    # получателей. Снимаем ссылку в done-callback.
+    task = asyncio.create_task(send_broadcast(
         bot=bot,
         broadcast_id=broadcast_id,
         user_ids=list(user_ids),
@@ -122,6 +147,8 @@ async def _dispatch_one(bot: Bot, sched: Dict[str, Any]) -> None:
         animation_file_id=sched.get("animation_file_id"),
         admin_telegram_id=int(sched["created_by"]),
     ))
+    _running_broadcasts.add(task)
+    task.add_done_callback(_on_broadcast_done)
 
     bus.publish({
         "type": "broadcast:created",
@@ -158,6 +185,15 @@ async def run_scheduled_broadcasts_worker(bot: Bot) -> None:
             continue
         try:
             import database
+
+            # База может быть ещё не поднята (старт) или временно недоступна
+            # (переподключение). Тик без неё бессмысленен, а попытка даёт
+            # трейсбек раз в минуту — шум, за которым теряются настоящие
+            # ошибки.
+            if not database.DB_READY:
+                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                continue
+
             due = await database.fetch_due_scheduled(limit=MAX_BATCH_PER_TICK)
             for sched in due:
                 try:

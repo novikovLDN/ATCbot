@@ -3923,6 +3923,23 @@
         "tests/services/test_dashboard_grant_notify.py",
         "tests/services/test_payments_split.py"
       ]
+    },
+    {
+      "title": "Кнопки спецпредложений в рассылках не работали ни у кого, кроме админа",
+      "severity": "P1",
+      "category": "bug",
+      "file": "app/handlers/callbacks/broadcast_offers.py",
+      "line": 1,
+      "source": "regression-check",
+      "defect": "Экраны спецпредложений (подарок на месяц, на три месяца, год со скидкой 40%, «вскрытие» скидки, покупка ГБ со скидкой) лежали в app/handlers/admin/broadcast_gifts.py — рядом с мастером создания рассылки, но по сути это пользовательские экраны: кнопки приходят человеку в рассылке, которую отправляет дашборд. Когда на админский раздел повесили middleware «только администратор», она накрыла и их. Затем админский раздел удалили целиком, и обработчики исчезли вместе с ним.",
+      "failure_scenario": "Рассылка уходит аудитории, человек жмёт «🎁 Купить со скидкой» — ничего не происходит. Ни ошибки, ни ответа: middleware молча возвращает None, а после удаления модуля кнопку просто некому обработать. Задеты шесть кнопок из конструктора рассылок дашборда: broadcast_promo_buy, broadcast_promo_traffic, broadcast_gift_reveal, broadcast_gift_1m, broadcast_gift_3m, broadcast_gift_1y_40.",
+      "status": "fixed",
+      "resolution": "Найдено сверкой набора зарегистрированных обработчиков с состоянием до сессии: из 413 колбэков пропал 151, и все, кроме этих, оказались админскими.\nМодуль восстановлен как app/handlers/callbacks/broadcast_offers.py (1025 строк) — в пользовательском разделе, без админской middleware. Из него вырезан callback_gift_reveal_percent_select: выбор процента при СОЗДАНИИ рассылки — часть мастера, который живёт в дашборде со своим списком процентов.\nПроверено, что все 11 callback_data из _build_reply_markup дашборда имеют обработчики. Тест tests/services/test_broadcast_buttons_reachable.py разбирает конструктор кнопок дашборда и требует обработчик для каждой; отдельно проверяет, что раздел не админский и роутер подключён.\nЗаодно проверено, нет ли других пользовательских кнопок под админской проверкой: единственное совпадение — декоративный noop, и он выигрывает в пользовательском роутере, потому что callbacks_router подключён раньше admin_router.",
+      "fixed_in": [
+        "app/handlers/callbacks/broadcast_offers.py",
+        "app/handlers/callbacks/__init__.py",
+        "tests/services/test_broadcast_buttons_reachable.py"
+      ]
     }
   ],
   "refuted": [
