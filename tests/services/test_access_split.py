@@ -115,3 +115,69 @@ def test_split_actually_reduced_the_file():
     for name in MODULES:
         n = len((ADMIN / name).read_text(encoding="utf-8").split("\n"))
         assert n < 1100, f"{name}: {n} строк — разбивка не достигла цели"
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  Разбивка платёжных экранов
+# ──────────────────────────────────────────────────────────────────────
+#
+# app/handlers/callbacks/payments_callbacks.py был на 1686 строк и держал
+# в одном файле три разные вещи: списание с внутреннего баланса (единственное
+# место, где деньги уходят прямо здесь), выставление инвойсов у пяти внешних
+# провайдеров и пополнение баланса. Разрезан на pay_balance / pay_external /
+# topup плюс общий _invoice_cleanup.
+
+PAYMENT_MODULES = [
+    "pay_balance.py",
+    "pay_external.py",
+    "topup.py",
+    "_invoice_cleanup.py",
+]
+
+PAYMENT_HANDLERS = {
+    "callback_pay_balance",
+    "callback_pay_card", "callback_pay_stars", "callback_pay_card_pl",
+    "callback_pay_intl_pl", "callback_pay_sbp", "callback_pay_crypto",
+    "callback_pay_lava", "callback_pay_tariff_card",
+    "callback_topup_sbp", "callback_topup_lava", "callback_topup_card",
+}
+
+
+def test_no_payment_handler_was_lost():
+    found = set()
+    for name in PAYMENT_MODULES:
+        tree = ast.parse((Path("app/handlers/callbacks") / name).read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.decorator_list:
+                found.add(node.name)
+    missing = PAYMENT_HANDLERS - found
+    assert not missing, f"платёжные обработчики пропали: {sorted(missing)}"
+
+
+def test_every_payment_handler_is_registered():
+    """Кнопка оплаты, потерявшая роутер, просто молчит — без ошибки."""
+    from app.handlers.callbacks import router
+
+    registered = set()
+
+    def walk(r):
+        for h in list(r.callback_query.handlers) + list(r.message.handlers):
+            registered.add(getattr(h.callback, "__name__", ""))
+        for sub in r.sub_routers:
+            walk(sub)
+
+    walk(router)
+    missing = PAYMENT_HANDLERS - registered
+    assert not missing, f"объявлены, но не подключены: {sorted(missing)}"
+
+
+def test_invoice_cleanup_has_no_siblings_imports():
+    """Общий хелпер не должен тянуть платёжные экраны — иначе кольцо."""
+    src = (Path("app/handlers/callbacks") / "_invoice_cleanup.py").read_text(encoding="utf-8")
+    for sibling in ("pay_balance", "pay_external", "topup", "balance_callbacks"):
+        assert f"import {sibling}" not in src and f"{sibling} import" not in src
+
+
+def test_old_payments_module_is_gone():
+    """Файл удалён целиком: всё его содержимое переехало."""
+    assert not Path("app/handlers/callbacks/payments_callbacks.py").exists()

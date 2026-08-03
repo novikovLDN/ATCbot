@@ -79,7 +79,8 @@ def test_all_call_sites_pass_language():
     files = [
         Path("reminders.py"),
         Path("trial_notifications.py"),
-        Path("app/handlers/callbacks/payments_callbacks.py"),
+        Path("app/handlers/callbacks/pay_balance.py"),
+        Path("app/handlers/callbacks/pay_external.py"),
     ]
     offenders = []
     for f in files:

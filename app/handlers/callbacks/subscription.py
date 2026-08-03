@@ -449,7 +449,7 @@ async def callback_renewal_pay(callback: CallbackQuery):
             prices=prices
         )
         await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
-        from app.handlers.callbacks.payments_callbacks import _schedule_invoice_deletion
+        from app.handlers.callbacks._invoice_cleanup import _schedule_invoice_deletion
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
         await callback.answer()
     except Exception as e:

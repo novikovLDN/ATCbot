@@ -3571,6 +3571,28 @@
         "app/handlers/admin/__init__.py",
         "tests/services/test_access_split.py"
       ]
+    },
+    {
+      "title": "Разбивка app/handlers/callbacks/payments_callbacks.py (1686 строк) по ответственностям",
+      "severity": "P2",
+      "category": "refactor",
+      "file": "app/handlers/callbacks/payments_callbacks.py",
+      "line": 1,
+      "defect": "Один файл держал три разные вещи: списание с внутреннего баланса (единственное место, где деньги уходят прямо здесь, 434 строки в одной функции), выставление инвойсов у пяти внешних провайдеров и пополнение баланса. Правку одной части приходилось делать посреди двух других.",
+      "failure_scenario": "Правка экрана оплаты картой задевает списание с баланса, потому что они делят импорты и соседние строки; ревью диффа не показывает, что затронуто денежное ядро.",
+      "proposed_action": "Сделано.",
+      "source": "audit-followup",
+      "status": "fixed",
+      "resolution": "Разрезан на четыре модуля: pay_balance.py (оплата с баланса, 491 строка), pay_external.py (карта, Stars, Платега, CryptoBot, Lava, 1031), topup.py (пополнение, 262) и _invoice_cleanup.py (автоудаление инвойса, 30). Хелпер удаления вынесен отдельно, потому что им пользуются все три группы плюс balance_callbacks — без своего модуля они тянули бы друг друга по кругу. Исходный файл удалён целиком: в нём не осталось ни одной функции. Каждый модуль получил свой роутер в app/handlers/callbacks/__init__.py и русскую инструкцию в шапке. Проверка целостности: все 12 регистраций сверены до и после (потерь и лишнего нет), плюс проверено, что каждый обработчик виден диспетчеру. Тесты дописаны в tests/services/test_access_split.py (13 шт. суммарно).",
+      "fixed_in": [
+        "app/handlers/callbacks/pay_balance.py",
+        "app/handlers/callbacks/pay_external.py",
+        "app/handlers/callbacks/topup.py",
+        "app/handlers/callbacks/_invoice_cleanup.py",
+        "app/handlers/callbacks/__init__.py",
+        "app/handlers/callbacks/balance_callbacks.py",
+        "tests/services/test_access_split.py"
+      ]
     }
   ],
   "refuted": [

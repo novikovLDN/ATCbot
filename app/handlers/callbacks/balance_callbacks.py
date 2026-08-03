@@ -51,10 +51,10 @@ from app.handlers.common.states import TopUpStates, WithdrawStates, PurchaseStat
 balance_router = Router()
 logger = logging.getLogger(__name__)
 
-# Планировщик удаления инвойса общий с модулем оплат: инвойс живёт
-# ограниченное время, и после истечения сообщение убирается, чтобы
-# пользователь не оплатил протухшую ссылку.
-from app.handlers.callbacks.payments_callbacks import (  # noqa: E402
+# Планировщик удаления инвойса общий со всеми платёжными экранами: инвойс
+# живёт ограниченное время, и после истечения сообщение убирается, чтобы
+# пользователь не нажал на протухшую кнопку оплаты.
+from app.handlers.callbacks._invoice_cleanup import (  # noqa: E402
     _schedule_invoice_deletion,
 )
 
