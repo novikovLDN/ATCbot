@@ -34,10 +34,16 @@ def test_apple_delivery_verifies_the_buyer():
 
 
 def test_admin_chat_does_not_overwrite_the_order_card():
-    """Иначе вместе с сообщением исчезают email, пароль и кнопка выдачи."""
-    src = Path("app/handlers/admin/base.py").read_text(encoding="utf-8")
-    block = src[src.index("async def callback_admin_chat_start"):]
-    block = block[: block.index("@admin_base_router", 10)]
+    """Иначе вместе с сообщением исчезают email, пароль и кнопка выдачи.
+
+    Ищем обработчик по всему админскому разделу, а не в конкретном файле:
+    он уже переезжал при разбивке base.py, и привязка к имени файла
+    ломает тест на ровном месте.
+    """
+    import inspect
+    from app.handlers.admin import chat
+
+    block = inspect.getsource(chat.callback_admin_chat_start)
     assert "safe_edit_text" not in block, (
         "экран чата снова правит сообщение, под которым висела кнопка"
     )

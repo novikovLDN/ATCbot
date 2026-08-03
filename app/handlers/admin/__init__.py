@@ -2,8 +2,11 @@
 
 ЧТО ЗДЕСЬ ОСТАЛОСЬ И ПОЧЕМУ
 
-    base.py               вход /admin, ссылка на дашборд, сброс пароля и
-                          переписка с пользователем;
+    base.py               вход /admin, ссылка на дашборд, сброс пароля;
+    chat.py               переписка админа с пользователем;
+    system.py             здоровье системы, обслуживание, тестовые уведомления;
+    reissue.py            перевыпуск VPN-ключей (сейчас без кнопок в UI);
+    promocodes.py         мастер промокода (недоведён, см. докстринг файла);
     stats.py              статистика;
     apple_id_delivery.py  выдача оплаченного заказа Apple ID;
     spotify_delivery.py   выдача оплаченного заказа Spotify;
@@ -38,7 +41,14 @@ import logging
 
 from aiogram import Router
 
+# base.py был на 1167 строк и держал пять несвязанных разделов сразу.
+# Разрезан по обязанностям; каждый кусок обязан быть подключён ниже —
+# забытый include_router не даёт ошибки, кнопка просто молчит.
 from .base import admin_base_router
+from .chat import admin_chat_router
+from .system import admin_system_router
+from .reissue import admin_reissue_router
+from .promocodes import admin_promocodes_router
 from .stats import admin_stats_router
 from .bonus import admin_bonus_router
 from .traffic_admin import admin_traffic_router
@@ -52,6 +62,10 @@ _admin_logger = logging.getLogger(__name__)
 router = Router()
 
 router.include_router(admin_base_router)
+router.include_router(admin_chat_router)
+router.include_router(admin_system_router)
+router.include_router(admin_reissue_router)
+router.include_router(admin_promocodes_router)
 router.include_router(admin_stats_router)
 router.include_router(admin_bonus_router)
 router.include_router(admin_traffic_router)
