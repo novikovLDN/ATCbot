@@ -128,7 +128,55 @@ async def process_confirmed_payment(
                     from app.handlers.payments.spotify_purchase import send_spotify_success
                     await send_spotify_success(bot, telegram_id, purchase_id, pending)
             except Exception as notif_err:
-                logger.error(f"{provider} webhook: notification failed for {_purchase_type}: {notif_err}")
+                # ЗДЕСЬ ТЕРЯЛСЯ ЗАКАЗ.
+                #
+                # Товар уже оплачен и помечен оплаченным. Уведомление
+                # несёт две вещи: подтверждение покупателю и карточку
+                # заказа админу с кнопкой выдачи. Если оно не ушло —
+                # Telegram отдал 5xx, таймаут, что угодно, — покупатель
+                # не увидел подтверждения, а админ не узнал о заказе.
+                #
+                # Повторный вебхук не спасал: mark_pending_purchase_paid
+                # вернёт False, и ветка отправки будет пропущена как
+                # дубль. Заказ оставался виден только прямым запросом в
+                # pending_purchases, и никакого сигнала не приходило.
+                #
+                # Поэтому: громкий алерт админу отдельным каналом. Он не
+                # заменяет карточку заказа, но даёт человеку знать, что
+                # заказ есть и его надо достать руками.
+                logger.error(
+                    f"{provider} webhook: notification failed for {_purchase_type}: {notif_err}",
+                    exc_info=True,
+                )
+                try:
+                    from app.services.admin_alerts import send_alert
+                    await send_alert(
+                        bot, "payment",
+                        (
+                            f"⚠️ Заказ оплачен, но уведомление не ушло\n\n"
+                            f"Тип: {_purchase_type}\n"
+                            f"Тариф: {_tariff or '—'}\n"
+                            f"Покупатель: {telegram_id}\n"
+                            f"purchase_id: {purchase_id}\n"
+                            f"Сумма: {amount_rubles:.2f} ₽\n"
+                            f"Провайдер: {provider}\n"
+                            f"Ошибка: {type(notif_err).__name__}: {str(notif_err)[:200]}\n\n"
+                            f"Покупатель не получил подтверждения, карточка заказа "
+                            f"не пришла. Заказ нужно выдать вручную."
+                        ),
+                        force=True,
+                    )
+                except Exception as alert_err:
+                    logger.critical(
+                        "%s webhook: ORDER_LOST purchase_id=%s type=%s user=%s — "
+                        "не удалось ни уведомить, ни поднять алерт: %s",
+                        provider, purchase_id, _purchase_type, telegram_id, alert_err,
+                    )
+                return {
+                    "status": "ok",
+                    "purchase_id": purchase_id,
+                    "notification_failed": True,
+                }
 
             return {"status": "ok", "purchase_id": purchase_id}
 
