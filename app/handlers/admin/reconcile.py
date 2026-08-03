@@ -18,6 +18,15 @@ from app.services import remnawave_api, remnawave_premium
 from app.handlers.admin.keyboards import get_admin_back_keyboard
 from app.handlers.common.utils import safe_edit_text
 
+# Общая арифметика сверок: «проиграть историю покупок → дата окончания»
+# и разбор дат панели. Раньше эти функции были скопированы в каждый
+# из четырёх экранов сверки — см. app/handlers/admin/_audit_base.py.
+from app.handlers.admin._audit_base import (
+    compute_real_end as _compute_real_end,
+    parse_panel_dt as _parse_panel_dt,
+    iso_z as _iso_z,
+)
+
 admin_reconcile_router = Router()
 logger = logging.getLogger(__name__)
 
@@ -37,22 +46,6 @@ _last_mismatches: dict[int, list] = {}
 # get a cheap PATCH, missing-entity ones need a full re-provision.
 _REASON_DATE = "date_mismatch"
 _REASON_MISSING = "missing_on_panel"
-
-
-def _parse_rmn_dt(value) -> "datetime | None":
-    """Parse a Remnawave ISO-8601 expireAt string into a UTC-aware datetime."""
-    if not value:
-        return None
-    try:
-        s = str(value).strip()
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except Exception:
-        return None
 
 
 async def _scan_mismatches(progress: "dict | None" = None) -> "tuple[int, list]":
@@ -136,7 +129,7 @@ async def _scan_mismatches(progress: "dict | None" = None) -> "tuple[int, list]"
                 "tariff": tariff,
             })
             continue
-        rmn_expires = _parse_rmn_dt(rmn_user.get("expireAt"))
+        rmn_expires = _parse_panel_dt(rmn_user.get("expireAt"))
         if rmn_expires is None:
             mismatches.append({
                 "telegram_id": telegram_id,

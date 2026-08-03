@@ -60,6 +60,15 @@ import database
 from app.handlers.admin.keyboards import get_admin_back_keyboard
 from app.handlers.common.utils import safe_edit_text
 
+# Общая арифметика сверок: «проиграть историю покупок → дата окончания»
+# и разбор дат панели. Раньше эти функции были скопированы в каждый
+# из четырёх экранов сверки — см. app/handlers/admin/_audit_base.py.
+from app.handlers.admin._audit_base import (
+    compute_real_end as _compute_real_end,
+    parse_panel_dt as _parse_panel_dt,
+    iso_z as _iso_z,
+)
+
 admin_audit_db_dates_router = Router()
 logger = logging.getLogger(__name__)
 
@@ -74,22 +83,6 @@ _MAX_SCAN = 100_000
 
 # In-memory state of the running audit per admin id.
 _audits: dict[int, dict] = {}
-
-
-def _compute_real_end(rows: list) -> Optional[datetime]:
-    end: Optional[datetime] = None
-    for row in rows:
-        created = row["created_at"]
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        days = int(row["period_days"] or 0)
-        if days <= 0:
-            continue
-        if end is None or created >= end:
-            end = created + timedelta(days=days)
-        else:
-            end = end + timedelta(days=days)
-    return end
 
 
 async def _audit_worker(admin_id: int):

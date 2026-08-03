@@ -46,6 +46,15 @@ from app.services import remnawave_api, remnawave_premium
 from app.handlers.admin.keyboards import get_admin_back_keyboard
 from app.handlers.common.utils import safe_edit_text
 
+# Общая арифметика сверок: «проиграть историю покупок → дата окончания»
+# и разбор дат панели. Раньше эти функции были скопированы в каждый
+# из четырёх экранов сверки — см. app/handlers/admin/_audit_base.py.
+from app.handlers.admin._audit_base import (
+    compute_real_end as _compute_real_end,
+    parse_panel_dt as _parse_panel_dt,
+    iso_z as _iso_z,
+)
+
 admin_audit_subs_router = Router()
 logger = logging.getLogger(__name__)
 
@@ -70,42 +79,6 @@ _MAX_SCAN = 100_000
 #              "error": str | None,
 #              "task": asyncio.Task | None}
 _audits: dict[int, dict] = {}
-
-
-def _parse_panel_dt(value) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        s = str(value).strip()
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except Exception:
-        return None
-
-
-def _compute_real_end(rows: list) -> Optional[datetime]:
-    """Replay paid records to derive the user's expected last end date.
-
-    Each row has {created_at, period_days}. Renewal stacking respected.
-    Returns None if no rows.
-    """
-    end: Optional[datetime] = None
-    for row in rows:
-        created = row["created_at"]
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        days = int(row["period_days"] or 0)
-        if days <= 0:
-            continue
-        if end is None or created >= end:
-            end = created + timedelta(days=days)
-        else:
-            end = end + timedelta(days=days)
-    return end
 
 
 async def _audit_worker(admin_id: int):
@@ -610,9 +583,6 @@ async def _fix_worker(admin_id: int, actionable: list):
     target_squad = getattr(
         config, "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID", None,
     ) or None
-
-    def _iso_z(dt) -> str:
-        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     async def _fix_behind(rec):
         """PATCH expireAt to expected_end. Strict username check."""

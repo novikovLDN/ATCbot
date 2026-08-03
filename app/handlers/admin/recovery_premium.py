@@ -39,6 +39,15 @@ from app.services import remnawave_api, remnawave_premium
 from app.handlers.admin.keyboards import get_admin_back_keyboard
 from app.handlers.common.utils import safe_edit_text
 
+# Общая арифметика сверок: «проиграть историю покупок → дата окончания»
+# и разбор дат панели. Раньше эти функции были скопированы в каждый
+# из четырёх экранов сверки — см. app/handlers/admin/_audit_base.py.
+from app.handlers.admin._audit_base import (
+    compute_real_end as _compute_real_end,
+    parse_panel_dt as _parse_panel_dt,
+    iso_z as _iso_z,
+)
+
 admin_premium_recovery_router = Router()
 logger = logging.getLogger(__name__)
 
@@ -68,47 +77,6 @@ _MAX_SCAN = 100_000
 # Per-admin scan result, feeds the "Apply" button. Lost on bot restart —
 # that's fine, just rescan.
 _last_plan: dict[int, list] = {}
-
-
-def _parse_rmn_dt(value) -> "datetime | None":
-    """Parse a Remnawave ISO-8601 expireAt string into UTC datetime."""
-    if not value:
-        return None
-    try:
-        s = str(value).strip()
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except Exception:
-        return None
-
-
-def _compute_real_end(history: list) -> "datetime | None":
-    """Replay paid subscription purchases to derive the user's real end.
-
-    Respects renewal stacking: if a renewal arrives while the previous
-    period is still running, its days are added to the existing end;
-    otherwise the new period starts at created_at.
-
-    Returns None if there's no paid history at all (i.e. user never had
-    a real paid premium subscription).
-    """
-    end: "datetime | None" = None
-    for row in history:
-        created = row["created_at"]
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        days = int(row["period_days"] or 0)
-        if days <= 0:
-            continue
-        if end is None or created >= end:
-            end = created + timedelta(days=days)
-        else:
-            end = end + timedelta(days=days)
-    return end
 
 
 async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
@@ -404,9 +372,6 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
     external_squad = getattr(
         config, "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID", None,
     ) or None
-
-    def _iso_z(dt) -> str:
-        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     async def _fix_one(p: dict) -> bool:
         async with sem:

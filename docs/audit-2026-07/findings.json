@@ -3282,7 +3282,17 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "partially_fixed",
+      "resolution": "Общее ядро вынесено в app/handlers/admin/_audit_base.py: compute_real_end (правило продления — то же, что в grant_access), parse_panel_dt и iso_z. Из четырёх экранов сверки удалены дословные копии: три копии _compute_real_end, четыре копии разбора даты панели и две вложенные копии _iso_z — 97 строк. Функция считает деньги в днях доступа: правка в одной копии оставляла три другие со старым поведением, и два админских экрана начинали показывать разные ответы про одного пользователя. Поведение проверено на равенство со старыми копиями и закреплено 18 тестами (tests/services/test_audit_base.py), включая запрет на возврат собственных копий. ОСТАЛОСЬ: общий каркас воркера с прогресс-сообщением и _format_report с параметром колонок — там модули действительно расходятся (разные наборы колонок и callback-имён), и объединение требует отдельного прохода с проверкой каждого экрана в боте.",
+      "fixed_in": [
+        "app/handlers/admin/_audit_base.py",
+        "app/handlers/admin/audit_subs.py",
+        "app/handlers/admin/audit_db_dates.py",
+        "app/handlers/admin/recovery_premium.py",
+        "app/handlers/admin/reconcile.py",
+        "tests/services/test_audit_base.py"
+      ]
     },
     {
       "title": "Ветка xray (xray_sync.py, xray_api/, scripts/full_xray_resync.py) держится в дереве, но по решению владельца мертва",
