@@ -42,11 +42,28 @@ async def dashboard_ws(
         if tg is not None and admin_auth.is_admin(tg):
             authorized = True
 
-    # 2) JWT in query (legacy / bootstrap)
+    # 2) JWT в query (legacy / bootstrap)
+    #
+    # Проверка обязана совпадать с deps.require_admin: там разбирается sub и
+    # вызывается admin_auth.is_admin. Здесь раньше смотрели только подпись и
+    # payload['role'] == 'admin' — то есть любой токен с такой ролью пускали
+    # к живой ленте событий, не проверяя, что его владелец действительно
+    # текущий администратор. Токен живёт 30 дней и переживает logout: тот
+    # отзывает куку, а ссылку с токеном — нет.
     if not authorized and token:
         payload = verify_token(token)
         if payload and payload.get("role") == "admin":
-            authorized = True
+            try:
+                sub_id = int(payload["sub"])
+            except (TypeError, ValueError, KeyError):
+                sub_id = None
+            if sub_id is not None and admin_auth.is_admin(sub_id):
+                authorized = True
+            else:
+                logger.warning(
+                    "WS_AUTH_REJECTED sub=%s — токен валиден, но владелец не админ",
+                    payload.get("sub"),
+                )
 
     if not authorized:
         await websocket.close(code=4001)

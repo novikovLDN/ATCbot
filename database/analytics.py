@@ -965,6 +965,13 @@ async def get_extended_bot_stats() -> Dict[str, Any]:
         return {
             "total_users": total_users or 0,
             "active_subs": active_subs or 0,
+            # Дашборд читает active_subscriptions в трёх местах
+            # (Dashboard.tsx: карточка «Активных с триалами» и подсказка к
+            # ней). Такого ключа здесь не было, поэтому карточка всегда
+            # оставалась пустой, а fallback в stats.py превращался в None.
+            # Отдаём оба имени: старое остаётся для существующих
+            # потребителей, новое — то, что реально запрашивает фронт.
+            "active_subscriptions": active_subs or 0,
             "expired_subs": expired_subs or 0,
             "total_trial": total_trial or 0,
             "trial_rate": trial_rate,
@@ -1055,11 +1062,14 @@ async def get_user_ltv(telegram_id: int) -> float:
 
 
 async def get_average_ltv() -> float:
-    """
-    Получить средний LTV по всем пользователям
-    
+    """LTV — средняя выручка на одного ПЛАТЯЩЕГО пользователя.
+
+    Считается как среднее суммы покупок по каждому, кто хоть раз заплатил.
+    Пользователи без покупок в знаменатель не входят — этим LTV и отличается
+    от ARPU (см. get_arpu): та же выручка, но делённая на всю базу.
+
     Returns:
-        Средний LTV в рублях
+        Средний LTV в рублях.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -1081,13 +1091,27 @@ async def get_average_ltv() -> float:
 
 
 async def get_arpu() -> float:
-    """
-    Получить ARPU (Average Revenue Per User)
-    
-    ARPU = общий доход / количество платящих пользователей
-    
+    """ARPU — средняя выручка на ОДНОГО ЗАРЕГИСТРИРОВАННОГО пользователя.
+
+    ARPU = выручка / все пользователи бота.
+
+    Почему именно так. Раньше здесь стояло «выручка / платящие», и это
+    алгебраически ровно то же самое, что считает get_average_ltv:
+    SUM(всё) / COUNT(платящих) против AVG(SUM по каждому платящему). На
+    дашборде рисовались две карточки — «ARPU · на юзера» и «LTV · средний»,
+    — которые ВСЕГДА показывали одно и то же число. Две одинаковые цифры
+    под разными названиями хуже, чем одна: по ним принимают решения,
+    считая, что видят разные срезы.
+
+    Теперь метрики отвечают на разные вопросы:
+        ARPU (здесь)      сколько приносит средний зарегистрированный —
+                          показывает, насколько хорошо мы конвертируем базу;
+        LTV (get_average_ltv) сколько приносит средний ПЛАТЯЩИЙ —
+                          показывает ценность клиента.
+    Отношение ARPU/LTV и есть конверсия базы в платящих.
+
     Returns:
-        ARPU в рублях
+        ARPU в рублях.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -1112,17 +1136,11 @@ async def get_arpu() -> float:
         
         total_revenue = total_revenue_kopecks / 100.0
         
-        # Количество платящих пользователей
-        paying_users_count = await conn.fetchval(
-            """SELECT COUNT(DISTINCT telegram_id)
-               FROM pending_purchases
-               WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'"""
-        ) or 0
-        
-        # ARPU = общий доход / платящие пользователи
-        arpu = total_revenue / paying_users_count if paying_users_count > 0 else 0.0
-        
-        return arpu
+        # Знаменатель — ВСЕ зарегистрированные, а не платящие: иначе
+        # получается то же число, что у LTV (см. докстринг).
+        total_users = await conn.fetchval("SELECT COUNT(*) FROM users") or 0
+
+        return total_revenue / total_users if total_users > 0 else 0.0
 
 
 # ── Bypass-overwrite audit & recovery ──────────────────────────────

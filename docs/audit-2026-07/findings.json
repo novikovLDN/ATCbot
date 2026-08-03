@@ -2218,7 +2218,14 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "dashboard",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "ARPU переопределён как выручка / ВСЕ зарегистрированные пользователи; LTV остаётся выручкой на платящего. Раньше обе метрики считались как выручка/платящие — алгебраически одно и то же, и две карточки дашборда всегда показывали одинаковое число. Теперь они отвечают на разные вопросы, а их отношение и есть конверсия базы в платящих. Подписи карточек исправлены: «на всю базу» и «на платящего» вместо неверного «на юзера». Определения записаны в докстрингах рядом с кодом.",
+      "fixed_in": [
+        "database/analytics.py",
+        "dashboard/src/pages/Dashboard.tsx",
+        "tests/services/test_dashboard_metrics.py"
+      ]
     },
     {
       "title": "«Доход сегодня» и дневной график выручки считаются по разным таблицам и не сходятся",
@@ -2244,7 +2251,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "dashboard",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "get_extended_bot_stats отдаёт ключ active_subscriptions рядом со старым active_subs. Фронт читает именно active_subscriptions в трёх местах (карточка «Активных с триалами» и подсказка к ней), поэтому карточка всегда пустовала, а fallback в stats.py превращался в None. Старое имя сохранено для существующих потребителей.",
+      "fixed_in": [
+        "database/analytics.py",
+        "tests/services/test_dashboard_metrics.py"
+      ]
     },
     {
       "title": "WebSocket принимает JWT без проверки, что subject — действующий админ",
@@ -2257,7 +2270,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "dashboard",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Авторизация WebSocket по JWT приведена к тому же виду, что в deps.require_admin: разбирается sub и вызывается admin_auth.is_admin. Раньше проверялись только подпись и payload['role']=='admin' — токен с такой ролью пускали к живой ленте событий, не проверяя, что владелец действительно текущий администратор. Токен живёт 30 дней и переживает logout: тот отзывает куку, а ссылку с токеном — нет. Отказ логируется маркером WS_AUTH_REJECTED.",
+      "fixed_in": [
+        "app/api/dashboard/ws.py",
+        "tests/services/test_dashboard_metrics.py"
+      ]
     },
     {
       "title": "После установки на домашний экран iOS сессия теряется, а bootstrap-setup одноразовый",

@@ -464,16 +464,20 @@ export function Dashboard() {
               loading={revenue.isLoading}
               accent
             />
+            {/* Две разные метрики, а не одна под двумя названиями:
+                ARPU делит выручку на ВСЮ базу, LTV — только на платящих.
+                Раньше обе считались как выручка/платящие и всегда
+                показывали одинаковое число. */}
             <KpiCard
               label="ARPU"
               value={fmtRub(revenue.data?.arpu_rubles)}
-              sub="на юзера"
+              sub="на всю базу"
               loading={revenue.isLoading}
             />
             <KpiCard
               label="LTV"
               value={fmtRub(revenue.data?.avg_ltv_rubles)}
-              sub="средний"
+              sub="на платящего"
               loading={revenue.isLoading}
             />
             <KpiCard
