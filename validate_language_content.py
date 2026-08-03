@@ -20,6 +20,17 @@ EN_CODE = "en"
 # Keys that intentionally contain Cyrillic (native language names in selector)
 CYRILLIC_ALLOWED_KEYS = frozenset({"lang.button_ru", "lang.button_kk", "lang.button_tj"})
 
+# Языки, для которых кириллица в значении — это действительно косяк
+# (недопереведённая русская строка).
+#
+# kk и tj сюда НЕ входят: казахский и таджикский пишутся кириллицей,
+# это их родная письменность. Раньше проверка их не исключала и
+# выдавала больше тысячи «нарушений» на совершенно корректных строках
+# («Мақұлдау», «Қатысушы құқықтары жеткіліксіз»). Скрипт из-за этого
+# всегда заканчивался VALIDATION FAILED, реальные расхождения ключей
+# тонули в шуме, и как гейт в CI его подключить было нельзя.
+CYRILLIC_CHECK_LANGS = frozenset({"en", "de", "ar", "uz"})
+
 # Languages to check for English bleed (de, kk, ar, uz, tj only; exclude ru, en)
 ENGLISH_BLEED_CHECK_LANGS = frozenset({"de", "kk", "ar", "uz", "tj"})
 
@@ -81,12 +92,13 @@ def validate_keys(languages: dict[str, dict]) -> tuple[dict[str, list], dict[str
 
 def detect_cyrillic(languages: dict[str, dict]) -> list[tuple[str, str, str]]:
     """
-    Report Cyrillic in non-ru files (excluding lang.button_* native names).
+    Report Cyrillic in latin/arabic-script languages only (see
+    CYRILLIC_CHECK_LANGS), excluding lang.button_* native names.
     Returns list of (lang_code, key, value_preview).
     """
     violations = []
     for code, lang_dict in languages.items():
-        if code == RU_CODE:
+        if code not in CYRILLIC_CHECK_LANGS:
             continue
         for key, value in lang_dict.items():
             if key in CYRILLIC_ALLOWED_KEYS:
@@ -178,7 +190,8 @@ def main() -> int:
 
     # --- SECTION: Cyrillic violations ---
     print("\n" + "=" * 60)
-    print("SECTION: Cyrillic violations (Cyrillic outside ru.py)")
+    checked = ", ".join(sorted(CYRILLIC_CHECK_LANGS))
+    print(f"SECTION: Cyrillic violations (checked: {checked}; kk/tj пишутся кириллицей)")
     print("=" * 60)
     cyrillic_violations = detect_cyrillic(languages)
     if cyrillic_violations:
@@ -187,7 +200,7 @@ def main() -> int:
             print(f"\n{code}.py :: {key}")
             print(f"  Value: {preview}")
     else:
-        print("OK — No Cyrillic outside ru.py.")
+        print(f"OK — No Cyrillic in {checked}.")
 
     # --- SECTION: English bleed ---
     print("\n" + "=" * 60)

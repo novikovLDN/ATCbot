@@ -20,6 +20,14 @@
     бота во время шторма было невыгодно. Спастись можно щитом или ранним
     сбором — оба действия требуют присутствия.
 
+ЯЗЫК ИНТЕРФЕЙСА
+    Здесь не должно остаться ни одной русской строки в коде. Раньше вся
+    ферма была собрана из литералов, и пользователь с любым из шести
+    остальных языков получал русский экран целиком, а следом — русские пуши
+    про шторм. Тексты живут в app/i18n под ключами farm.*, названия культур —
+    farm.plant_<ключ>. PLANT_TYPES остаётся справочником механики: имена в
+    нём русские и на экран напрямую не попадают, для этого есть _plant_name.
+
 ЧТО ЛЕГКО СЛОМАТЬ
     Награды растений и цена щита заданы в копейках. Любая новая механика,
     выдающая ценность, обязана проходить через месячный потолок
@@ -83,9 +91,9 @@ async def require_active_subscription(handler, event: CallbackQuery, data: dict)
         return await handler(event, data)
 
     logger.info("FARM_GUARD_BLOCKED user=%s no_active_subscription", telegram_id)
+    language = await resolve_user_language(telegram_id)
     await event.answer(
-        "🌾 Ферма доступна только подписчикам.\n"
-        "Оформите подписку, чтобы вернуться к грядкам.",
+        i18n_get_text(language, "farm.paywall"),
         show_alert=True,
     )
     return None
@@ -110,6 +118,103 @@ from app.handlers.game import (  # noqa: E402
 # без единой ошибки в интерфейсе. Через это окно перестаём считать его
 # действующим: лучше пропустить одно событие, чем заблокировать игру.
 STORM_STALE_AFTER_HOURS = 6
+
+
+# Сколько времени должно оставаться до шторма, чтобы имело смысл выставлять
+# счёт на плёнку.
+#
+# Оплата картой или через СБП — это уход на страницу платёжки, ввод реквизитов
+# и ожидание вебхука; на практике от нажатия «Картой» до применения щита
+# проходят единицы минут, а при задержке провайдера — десятки. Если до удара
+# осталась минута, деньги уйдут, а плёнка гарантированно опоздает: шторм
+# отработает раньше вебхука и грядка погибнет. Оплату с баланса это не
+# касается — она мгновенная и остаётся доступной до самого удара.
+SHIELD_INVOICE_MIN_LEAD_MINUTES = 30
+
+
+# Максимальная доля времени роста, которую можно снять поливом и удобрением.
+#
+# Без потолка уход снимал 8 часов за каждые 24 часа реального времени, то есть
+# треть срока: дуб созревал за 24 дня вместо 32, а пассивный доход фермы рос в
+# полтора раза мимо всех расчётов баланса.
+FARM_BOOST_MAX_FRACTION = 0.20
+
+
+def _plant_name(language: str, plant_key) -> str:
+    """Название культуры на языке пользователя.
+
+    В PLANT_TYPES имена лежат по-русски — это справочник механики, а не
+    словарь интерфейса. Ключ собирается конкатенацией (а не f-строкой),
+    чтобы проверка ключей по исходникам видела префикс farm.plant_.
+    """
+    fallback = (PLANT_TYPES.get(plant_key) or {}).get("name", "")
+    if not plant_key:
+        return fallback
+    key = "farm.plant_" + str(plant_key)
+    text = i18n_get_text(language, key, fallback)
+    # Пустой запасной текст get_text не считает запасным и возвращает сам
+    # ключ. Для культуры, которой нет в справочнике (битые данные, старый
+    # сорт), человек увидел бы на грядке строку «farm.plant_xxx».
+    return "" if text == key else text
+
+
+def _storm_seconds_left(storm) -> float:
+    """Сколько секунд осталось до удара шторма (может быть отрицательным)."""
+    scheduled_at = storm.get("scheduled_at")
+    if scheduled_at is None:
+        return 0.0
+    if scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+    return (scheduled_at - datetime.now(timezone.utc)).total_seconds()
+
+
+def _invoice_can_arrive_in_time(storm) -> bool:
+    """Успеет ли внешний платёж за плёнку дойти до удара шторма.
+
+    См. SHIELD_INVOICE_MIN_LEAD_MINUTES: продавать плёнку, которая заведомо
+    не применится, нельзя — это спор о деньгах, а не игровая механика.
+    """
+    return _storm_seconds_left(storm) >= SHIELD_INVOICE_MIN_LEAD_MINUTES * 60
+
+
+def _apply_growth_boost(plot: dict, hours: int) -> bool:
+    """Ускорить созревание на hours часов, но не больше общего потолка.
+
+    Что чинится. Полив (−6 ч) и удобрение (−2 ч) просто вычитали время из
+    ready_at без нижней границы, а dead_at оставался на месте. Отсюда две
+    беды: срок роста сжимался на треть (мимо расчёта экономики фермы) и окно
+    сбора растягивалось с положенных 24 часов на всё накопленное ускорение.
+
+    Теперь суммарное ускорение ограничено долей FARM_BOOST_MAX_FRACTION от
+    исходного времени роста, а dead_at едет ровно на столько же, на сколько
+    ready_at, — окно сбора всегда остаётся 24-часовым.
+
+    Возвращает False, если лимит ускорения уже выбран (менять нечего).
+    """
+    ready_at = datetime.fromisoformat(plot["ready_at"])
+    plant = PLANT_TYPES.get(plot.get("plant_type")) or {}
+    grow_seconds = int(plant.get("days", 0)) * 86400
+    planted_at_raw = plot.get("planted_at")
+
+    if grow_seconds <= 0 or not planted_at_raw:
+        # Культуры нет в справочнике или грядка старого формата без
+        # planted_at: посчитать потолок не от чего. Награды у такой грядки
+        # тоже нет (reward берётся из того же справочника), поэтому просто
+        # применяем ускорение как раньше — но dead_at двигаем.
+        speedup = timedelta(hours=hours)
+    else:
+        base_ready = datetime.fromisoformat(planted_at_raw) + timedelta(seconds=grow_seconds)
+        used_seconds = (base_ready - ready_at).total_seconds()
+        allowance = grow_seconds * FARM_BOOST_MAX_FRACTION - used_seconds
+        if allowance <= 0:
+            return False
+        speedup = timedelta(seconds=min(hours * 3600, allowance))
+
+    plot["ready_at"] = (ready_at - speedup).isoformat()
+    dead_at_raw = plot.get("dead_at")
+    if dead_at_raw:
+        plot["dead_at"] = (datetime.fromisoformat(dead_at_raw) - speedup).isoformat()
+    return True
 
 
 async def _get_imminent_storm():
@@ -173,16 +278,12 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
         eta = scheduled_at - now
         eta_h = max(0, int(eta.total_seconds() // 3600))
-        storm_banner = (
-            f"⛈ <b>Надвигается шторм!</b> До удара ≈ {eta_h} ч\n"
-            f"Растущие грядки без плёнки погибнут.\n"
-            f"🚫 <b>Посадка новых растений недоступна до конца шторма.</b>\n"
-        )
+        storm_banner = i18n_get_text(language, "farm.storm_banner", hours=eta_h)
     else:
         storm_banner = None
 
     # Build text (plot 0 always visible; plots 1-8 only if purchased, i.e. plot_id < plot_count)
-    lines = ["🌾 <b>Ваша ферма</b>\n"]
+    lines = [i18n_get_text(language, "farm.title") + "\n"]
     if storm_banner:
         lines.append(storm_banner)
     for plot in farm_plots:
@@ -193,21 +294,31 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         pt = plot.get("plant_type")
         plant = PLANT_TYPES.get(pt, {}) if pt else {}
         
+        name = _plant_name(language, pt)
+
         if status == "empty":
-            lines.append(f"Грядка {i+1}: ⬜ Пусто")
+            lines.append(i18n_get_text(language, "farm.plot_empty", num=i + 1))
         elif status == "growing":
             ready_at = datetime.fromisoformat(plot["ready_at"])
             remaining = ready_at - now
             days = remaining.days
             hours = remaining.seconds // 3600
+            # Значок щита клеим к названию: отдельного плейсхолдера в ключе
+            # нет, а вводить его — значит трогать перевод во всех 7 языках.
             shield_mark = " 🛡" if plot.get("storm_shielded") else ""
-            lines.append(f"Грядка {i+1}: 🌱 {plant.get('name','')}{shield_mark} — осталось {days}д {hours}ч")
+            lines.append(i18n_get_text(
+                language, "farm.plot_growing",
+                num=i + 1, name=f"{name}{shield_mark}", days=days, hours=hours,
+            ))
         elif status == "ready":
-            lines.append(f"Грядка {i+1}: {plant.get('emoji','🌿')} {plant.get('name','')} — ✅ Готово к сбору!")
+            lines.append(i18n_get_text(
+                language, "farm.plot_ready",
+                num=i + 1, emoji=plant.get("emoji", "🌿"), name=name,
+            ))
         elif status == "dead":
-            lines.append(f"Грядка {i+1}: ☠️ {plant.get('name','')} — сгнило")
-    
-    lines.append(f"\n💰 Баланс: {balance/100:.2f} ₽")
+            lines.append(i18n_get_text(language, "farm.plot_dead", num=i + 1, name=name))
+
+    lines.append(i18n_get_text(language, "farm.balance", balance=balance / 100))
     text = "\n".join(lines)
     
     # Build keyboard (same visibility: plot_id < plot_count)
@@ -223,12 +334,12 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         if status == "empty":
             if storm_active:
                 buttons.append([InlineKeyboardButton(
-                    text=f"🚫 Грядка {i+1}: посадка во время шторма недоступна",
+                    text=i18n_get_text(language, "farm.button_plant_storm_blocked", num=i + 1),
                     callback_data="farm_noop"
                 )])
             else:
                 buttons.append([InlineKeyboardButton(
-                    text=f"🌱 Посадить на грядку {i+1}",
+                    text=i18n_get_text(language, "farm.button_plant", num=i + 1),
                     callback_data=f"farm_choose_{i}"
                 )])
         elif status == "growing":
@@ -240,11 +351,15 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
                 shield_cost_rub = shield_cost_kopecks // 100
                 half_reward_rub = int(plant.get("reward", 0)) // 200  # half of reward, in RUB
                 buttons.append([InlineKeyboardButton(
-                    text=f"🛡 Накрыть #{i+1} — {shield_cost_rub} ₽",
+                    text=i18n_get_text(
+                        language, "farm.button_shield", num=i + 1, price=shield_cost_rub,
+                    ),
                     callback_data=f"farm_shield:{i}"
                 )])
                 buttons.append([InlineKeyboardButton(
-                    text=f"🚜 Собрать незрелым #{i+1} — +{half_reward_rub} ₽",
+                    text=i18n_get_text(
+                        language, "farm.button_early", num=i + 1, reward=half_reward_rub,
+                    ),
                     callback_data=f"farm_early:{i}"
                 )])
 
@@ -256,24 +371,34 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             can_fert = not fert_used or (now - datetime.fromisoformat(fert_used)).total_seconds() >= 86400
 
             if can_water:
-                row.append(InlineKeyboardButton(text=f"💧 Полить #{i+1}", callback_data=f"farm_water_{i}"))
+                row.append(InlineKeyboardButton(
+                    text=i18n_get_text(language, "farm.button_water", num=i + 1),
+                    callback_data=f"farm_water_{i}",
+                ))
             if can_fert:
-                row.append(InlineKeyboardButton(text=f"🌿 Удобрить #{i+1}", callback_data=f"farm_fert_{i}"))
+                row.append(InlineKeyboardButton(
+                    text=i18n_get_text(language, "farm.button_fertilize", num=i + 1),
+                    callback_data=f"farm_fert_{i}",
+                ))
             if row:
                 buttons.append(row)
             # Always show dig button for growing plots
             buttons.append([InlineKeyboardButton(
-                text=f"⛏ Выкопать #{i+1}",
+                text=i18n_get_text(language, "farm.button_dig", num=i + 1),
                 callback_data=f"farm_dig_{i}"
             )])
         elif status == "ready":
             buttons.append([InlineKeyboardButton(
-                text=f"🌾 Собрать {plant.get('emoji','')} #{i+1} (+{plant.get('reward',0)//100} ₽)",
+                text=i18n_get_text(
+                    language, "farm.button_harvest",
+                    emoji=plant.get("emoji", ""), num=i + 1,
+                    reward=plant.get("reward", 0) // 100,
+                ),
                 callback_data=f"farm_harvest_{i}"
             )])
         elif status == "dead":
             buttons.append([InlineKeyboardButton(
-                text=f"☠️ Убрать #{i+1}",
+                text=i18n_get_text(language, "farm.button_remove", num=i + 1),
                 callback_data=f"farm_remove_{i}"
             )])
     
@@ -284,20 +409,29 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         remaining = FARM_MAX_PLOTS - plot_count
         if balance >= price:
             buttons.append([InlineKeyboardButton(
-                text=f"➕ Купить грядку — {price_rub} ₽ (осталось мест: {remaining})",
+                text=i18n_get_text(
+                    language, "farm.button_buy_plot_slots",
+                    price=price_rub, slots=remaining,
+                ),
                 callback_data="farm_buy_plot"
             )])
         else:
             buttons.append([InlineKeyboardButton(
-                text=f"➕ Грядка (нужно {price_rub} ₽, осталось мест: {remaining})",
+                text=i18n_get_text(
+                    language, "farm.button_buy_plot_slots_disabled",
+                    price=price_rub, slots=remaining,
+                ),
                 callback_data="farm_noop"
             )])
-    
+
     buttons.append([InlineKeyboardButton(
-        text="📖 Инструкция",
+        text=i18n_get_text(language, "farm.button_guide"),
         url="https://telegra.ph/Instrukciya-Ferma-02-20"
     )])
-    buttons.append([InlineKeyboardButton(text="🔙 К играм", callback_data="games_menu")])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "farm.back_to_games"),
+        callback_data="games_menu",
+    )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     
     try:
@@ -352,31 +486,37 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
 
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
     # During an announced storm planting is disabled to prevent the
     # replant + early-harvest loop and to keep the rule simple for players.
     if await _get_imminent_storm() is not None:
         await callback.answer(
-            "🚫 Идёт шторм — посадка временно недоступна. "
-            "После шторма можно будет сажать снова.",
+            i18n_get_text(language, "farm.storm_planting_blocked"),
             show_alert=True,
         )
         return
 
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
     plot_id = int(callback.data.split("_")[-1])
-    
+
     buttons = []
     for key, plant in PLANT_TYPES.items():
         buttons.append([InlineKeyboardButton(
-            text=f"{plant['emoji']} {plant['name']} — {plant['days']} дн. → +{plant['reward']//100} ₽",
+            text=i18n_get_text(
+                language, "farm.plant_info",
+                emoji=plant["emoji"], name=_plant_name(language, key),
+                days=plant["days"], reward=plant["reward"] // 100,
+            ),
             callback_data=f"farm_plant_{plot_id}_{key}"
         )])
-    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="game_farm")])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "farm.back"), callback_data="game_farm",
+    )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    
+
     await safe_edit_text(callback.message,
-        f"🌱 <b>Выберите растение для грядки {plot_id+1}:</b>",
+        i18n_get_text(language, "farm.choose_plant_title", num=plot_id + 1),
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -388,24 +528,26 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
 
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
     # Server-side gate — must match the farm_choose_ guard.  A user could
     # otherwise hand-craft farm_plant_<plot>_<type> to bypass the menu hide.
     if await _get_imminent_storm() is not None:
         await callback.answer(
-            "🚫 Идёт шторм — посадка временно недоступна.",
+            i18n_get_text(language, "farm.storm_planting_blocked"),
             show_alert=True,
         )
         return
 
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
     parts = callback.data.split("_")
     plot_id = int(parts[2])
     plant_type = parts[3]
-    
+
     if plant_type not in PLANT_TYPES:
-        await callback.answer("Неизвестный тип растения", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.error_unknown_plant"), show_alert=True,
+        )
         return
     
     pool = await database.get_pool()
@@ -427,9 +569,11 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
             break
     
     if not plot or plot["status"] != "empty":
-        await callback.answer("Грядка недоступна", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.error_plot_unavailable"), show_alert=True,
+        )
         return
-    
+
     now = datetime.now(timezone.utc)
     grow_seconds = PLANT_TYPES[plant_type]["days"] * 86400
     ready_at = now + timedelta(seconds=grow_seconds)
@@ -478,22 +622,31 @@ async def callback_farm_water(callback: CallbackQuery, state: FSMContext):
             break
     
     if not plot or plot["status"] != "growing":
-        await callback.answer("Грядка недоступна", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.error_plot_unavailable"), show_alert=True,
+        )
         return
-    
+
     now = datetime.now(timezone.utc)
     water_used = plot.get("water_used_at")
     if water_used:
         water_time = datetime.fromisoformat(water_used)
         if (now - water_time).total_seconds() < 86400:
-            await callback.answer("Вы уже поливали сегодня!", show_alert=True)
+            await callback.answer(
+                i18n_get_text(language, "farm.error_already_watered"), show_alert=True,
+            )
             return
-    
-    # Reduce ready_at by 6 hours
-    ready_at = datetime.fromisoformat(plot["ready_at"])
-    plot["ready_at"] = (ready_at - timedelta(hours=6)).isoformat()
+
+    # Полив снимает 6 часов, но общий потолок ускорения считает _apply_growth_boost.
+    # Если лимит выбран — суточный кулдаун не сжигаем: человек не виноват, что
+    # растение уже на пределе, пусть попробует на другой грядке.
+    if not _apply_growth_boost(plot, hours=6):
+        await callback.answer(
+            i18n_get_text(language, "farm.error_boost_limit"), show_alert=True,
+        )
+        return
     plot["water_used_at"] = now.isoformat()
-    
+
     await database.save_farm_plots(telegram_id, farm_plots)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
 
@@ -526,22 +679,29 @@ async def callback_farm_fert(callback: CallbackQuery, state: FSMContext):
             break
     
     if not plot or plot["status"] != "growing":
-        await callback.answer("Грядка недоступна", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.error_plot_unavailable"), show_alert=True,
+        )
         return
-    
+
     now = datetime.now(timezone.utc)
     fert_used = plot.get("fertilizer_used_at")
     if fert_used:
         fert_time = datetime.fromisoformat(fert_used)
         if (now - fert_time).total_seconds() < 86400:
-            await callback.answer("Вы уже удобряли сегодня!", show_alert=True)
+            await callback.answer(
+                i18n_get_text(language, "farm.error_already_fertilized"), show_alert=True,
+            )
             return
-    
-    # Reduce ready_at by 2 hours
-    ready_at = datetime.fromisoformat(plot["ready_at"])
-    plot["ready_at"] = (ready_at - timedelta(hours=2)).isoformat()
+
+    # Удобрение снимает 2 часа — тот же общий потолок, что и у полива.
+    if not _apply_growth_boost(plot, hours=2):
+        await callback.answer(
+            i18n_get_text(language, "farm.error_boost_limit"), show_alert=True,
+        )
+        return
     plot["fertilizer_used_at"] = now.isoformat()
-    
+
     await database.save_farm_plots(telegram_id, farm_plots)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
 
@@ -574,9 +734,11 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
             break
     
     if not plot or plot["status"] != "ready":
-        await callback.answer("Растение не готово к сбору", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.error_not_ready"), show_alert=True,
+        )
         return
-    
+
     plant_type = plot.get("plant_type")
     plant = PLANT_TYPES.get(plant_type, {})
     reward_kopecks = plant.get("reward", 0)
@@ -596,20 +758,27 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
     if not success:
         if reason == "plot_wrong_status":
             # Сюда попадает второй клик по той же грядке — это не ошибка.
-            await callback.answer("Эта грядка уже собрана", show_alert=True)
+            await callback.answer(
+                i18n_get_text(language, "farm.error_already_harvested"), show_alert=True,
+            )
         else:
             logger.warning(
                 "FARM_HARVEST_FAILED user=%s plot=%s reason=%s",
                 telegram_id, plot_id, reason,
             )
-            await callback.answer("Ошибка при начислении награды", show_alert=True)
+            await callback.answer(
+                i18n_get_text(language, "farm.error_harvest_failed"), show_alert=True,
+            )
         return
 
     # Refresh balance
     farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
 
-    await callback.answer(f"🌾 Урожай собран! +{reward_rubles:.0f} ₽", show_alert=True)
+    await callback.answer(
+        i18n_get_text(language, "farm.harvest_success", reward=f"{reward_rubles:.0f}"),
+        show_alert=True,
+    )
 
 
 @router.callback_query(F.data.startswith("farm_remove_"))
@@ -663,17 +832,17 @@ async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
     # Show confirmation dialog
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="✅ Да, убрать",
+            text=i18n_get_text(language, "farm.remove_yes"),
             callback_data=f"farm_remove_confirm_{plot_id}"
         )],
         [InlineKeyboardButton(
-            text="❌ Нет",
+            text=i18n_get_text(language, "farm.remove_no"),
             callback_data="farm_noop"
         )]
     ])
-    
+
     await safe_edit_text(callback.message,
-        "Хотите убрать погибшее растение?",
+        i18n_get_text(language, "farm.remove_confirm"),
         reply_markup=keyboard,
         parse_mode="HTML",
     )
@@ -707,12 +876,15 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
         description=f"Покупка грядки за {FARM_PLOT_PRICE_KOPECKS // 100} ₽",
     )
     if not ok:
+        # Отказ объясняем текстом, а не молчанием: «максимум грядок» и
+        # «не хватает денег» — разные истории для человека.
         messages = {
-            "max_plots_reached": "Максимальное количество грядок достигнуто",
-            "insufficient_balance": "Недостаточно средств",
+            "max_plots_reached": "farm.max_plots_reached",
+            "insufficient_balance": "farm.insufficient_funds",
         }
         await callback.answer(
-            messages.get(reason, "Не удалось купить грядку"), show_alert=True
+            i18n_get_text(language, messages.get(reason, "farm.buy_plot_error")),
+            show_alert=True,
         )
         if reason not in messages:
             logger.warning(
@@ -748,32 +920,29 @@ async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
     plot = next((p for p in farm_plots if p["plot_id"] == plot_id), None)
     
     if not plot or plot["status"] != "growing":
-        await callback.answer("❌ Растение недоступно для выкапывания", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.dig_unavailable"), show_alert=True,
+        )
         return
-    
-    plant_type = plot.get("plant_type", "")
-    plant = PLANT_TYPES.get(plant_type, {})
-    plant_name = plant.get("name", "растение")
-    
+
+    plant_name = _plant_name(language, plot.get("plant_type", ""))
+
     # Show confirmation with inline keyboard
     confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="⛏ Да, выкопать",
+                text=i18n_get_text(language, "farm.dig_yes"),
                 callback_data=f"farm_dig_confirm_{plot_id}"
             ),
             InlineKeyboardButton(
-                text="❌ Нет",
+                text=i18n_get_text(language, "farm.remove_no"),
                 callback_data="game_farm"
             )
         ]
     ])
-    
+
     await safe_edit_text(callback.message,
-        f"⛏ <b>Выкопать растение?</b>\n\n"
-        f"Вы хотите выкопать <b>{plant_name}</b> на грядке {plot_id+1}?\n\n"
-        f"⚠️ Растение будет уничтожено без награды.\n"
-        f"Грядка станет пустой и можно будет посадить новое растение.",
+        i18n_get_text(language, "farm.dig_confirm", name=plant_name, num=plot_id + 1),
         reply_markup=confirm_keyboard,
         parse_mode="HTML"
     )
@@ -802,7 +971,9 @@ async def callback_farm_dig_confirm(callback: CallbackQuery, state: FSMContext):
     plot = next((p for p in farm_plots if p["plot_id"] == plot_id), None)
     
     if not plot:
-        await callback.answer("❌ Грядка не найдена", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.error_plot_not_found"), show_alert=True,
+        )
         return
     
     # Reset plot to empty
@@ -818,7 +989,9 @@ async def callback_farm_dig_confirm(callback: CallbackQuery, state: FSMContext):
     plot["fertilizer_used_at"] = None
     
     await database.save_farm_plots(telegram_id, farm_plots)
-    await callback.answer("⛏ Растение выкопано! Грядка свободна.", show_alert=True)
+    await callback.answer(
+        i18n_get_text(language, "farm.dig_success"), show_alert=True,
+    )
     await _render_farm(callback, pool, farm_plots=farm_plots, 
                        plot_count=plot_count, balance=balance)
 
@@ -855,16 +1028,48 @@ async def _find_growing_plot(telegram_id: int, plot_id: int):
     return farm_plots, plot_count, balance, target
 
 
+async def _shield_invoice_allowed(callback, language: str, telegram_id: int, plot_id: int) -> bool:
+    """Можно ли сейчас выставлять счёт на плёнку. Отказ объясняет сам.
+
+    Проверка повторяется перед каждым созданием счёта, а не только на экране
+    выбора оплаты: сообщение с кнопками «Картой»/«СБП» остаётся в чате и через
+    час, когда шторм уже на пороге или прошёл.
+    """
+    storm = await _get_imminent_storm()
+    if storm is None:
+        await callback.answer(
+            i18n_get_text(language, "farm.shield_no_storm"), show_alert=True,
+        )
+        return False
+    if not _invoice_can_arrive_in_time(storm):
+        logger.info(
+            "FARM_SHIELD_TOO_LATE user=%s plot=%s seconds_left=%.0f",
+            telegram_id, plot_id, _storm_seconds_left(storm),
+        )
+        await callback.answer(
+            i18n_get_text(
+                language, "farm.shield_invoice_too_late",
+                minutes=SHIELD_INVOICE_MIN_LEAD_MINUTES,
+            ),
+            show_alert=True,
+        )
+        return False
+    return True
+
+
 @router.callback_query(F.data.startswith("farm_shield:"))
 async def callback_farm_shield(callback: CallbackQuery):
     """🛡 Накрыть — pay via balance if enough, else show Lava/SBP screen."""
     if not await ensure_db_ready_callback(callback):
         return
     telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
 
     storm = await _get_imminent_storm()
     if storm is None:
-        await callback.answer("Шторм уже прошёл или ещё не объявлен.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.shield_no_storm"), show_alert=True,
+        )
         return
 
     plot_id = _parse_plot_id(callback.data, "farm_shield")
@@ -872,10 +1077,14 @@ async def callback_farm_shield(callback: CallbackQuery):
         return
     farm_plots, plot_count, balance, plot = await _find_growing_plot(telegram_id, plot_id)
     if plot is None:
-        await callback.answer("Грядка больше не растёт.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.shield_plot_not_growing"), show_alert=True,
+        )
         return
     if plot.get("storm_shielded"):
-        await callback.answer("Грядка уже накрыта.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.shield_already"), show_alert=True,
+        )
         return
 
     plant = PLANT_TYPES.get(plot.get("plant_type"), {})
@@ -887,26 +1096,67 @@ async def callback_farm_shield(callback: CallbackQuery):
             telegram_id, plot_id, shield_cost, deduct_balance=True,
         )
         if ok:
-            await callback.answer(f"🛡 Грядка накрыта (−{shield_cost_rub} ₽)", show_alert=True)
+            await callback.answer(
+                i18n_get_text(language, "farm.shield_applied", price=shield_cost_rub),
+                show_alert=True,
+            )
         else:
-            await callback.answer(f"Не удалось накрыть: {reason}", show_alert=True)
+            # Внутреннюю причину отказа показывать человеку нечего — она
+            # техническая ("plot_not_growing"), да ещё и по-английски.
+            logger.info(
+                "FARM_SHIELD_BALANCE_FAILED user=%s plot=%s reason=%s",
+                telegram_id, plot_id, reason,
+            )
+            await callback.answer(
+                i18n_get_text(language, "farm.shield_failed"), show_alert=True,
+            )
         pool = await database.get_pool()
         await _render_farm(callback, pool)
         return
 
-    # Balance not enough → payment screen
-    need_rub = (shield_cost - balance) / 100.0
-    text = (
-        f"🛡 <b>Накрытие грядки {plot_id + 1}</b>\n\n"
-        f"Растение: {plant.get('emoji','')} {plant.get('name','')}\n"
-        f"Цена плёнки: <b>{shield_cost_rub} ₽</b>\n"
-        f"На балансе: {balance / 100:.2f} ₽ (не хватает {need_rub:.2f} ₽)\n\n"
-        f"Выберите способ оплаты:"
+    # Денег на балансе не хватает — остаётся внешняя оплата. Но если до удара
+    # меньше SHIELD_INVOICE_MIN_LEAD_MINUTES, счёт выставлять нельзя: платёж
+    # не успеет дойти, грядка погибнет, а деньги уже уйдут — и дальше это
+    # разбирает поддержка вручную.
+    if not _invoice_can_arrive_in_time(storm):
+        logger.info(
+            "FARM_SHIELD_TOO_LATE user=%s plot=%s seconds_left=%.0f",
+            telegram_id, plot_id, _storm_seconds_left(storm),
+        )
+        await callback.answer(
+            i18n_get_text(
+                language, "farm.shield_invoice_too_late",
+                minutes=SHIELD_INVOICE_MIN_LEAD_MINUTES,
+            ),
+            show_alert=True,
+        )
+        return
+
+    # Экран оплаты. Счёт всегда на ПОЛНУЮ стоимость плёнки: комбинированной
+    # оплаты (баланс + карта) в проекте нет, а баланс при внешнем платеже не
+    # трогается. Раньше здесь писали «не хватает N ₽», человек жал «Картой» и
+    # получал счёт на всю сумму — прямой повод для спора о деньгах.
+    text = i18n_get_text(
+        language, "farm.shield_payment_title",
+        num=plot_id + 1,
+        emoji=plant.get("emoji", ""),
+        name=_plant_name(language, plot.get("plant_type")),
+        price=shield_cost_rub,
+        balance=f"{balance / 100:.2f}",
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Картой", callback_data=f"farm_shield_lava:{plot_id}")],
-        [InlineKeyboardButton(text="📲 СБП", callback_data=f"farm_shield_sbp:{plot_id}")],
-        [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "farm.pay_card"),
+            callback_data=f"farm_shield_lava:{plot_id}",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "farm.pay_sbp"),
+            callback_data=f"farm_shield_sbp:{plot_id}",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "farm.back_to_farm"),
+            callback_data="game_farm",
+        )],
     ])
     try:
         await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
@@ -928,20 +1178,29 @@ async def callback_farm_shield_lava(callback: CallbackQuery):
     if not await ensure_db_ready_callback(callback):
         return
     telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
 
     plot_id = _parse_plot_id(callback.data, "farm_shield_lava")
     if plot_id < 0:
         return
+    # Экран оплаты живёт в чате и после того, как ситуация изменилась, —
+    # проверяем запас времени ещё раз, уже перед выставлением счёта.
+    if not await _shield_invoice_allowed(callback, language, telegram_id, plot_id):
+        return
     _, _, _, plot = await _find_growing_plot(telegram_id, plot_id)
     if plot is None:
-        await callback.answer("Грядка больше не растёт.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.shield_plot_not_growing"), show_alert=True,
+        )
         return
     plant = PLANT_TYPES.get(plot.get("plant_type"), {})
     shield_cost = storm_shield_price_kopecks(int(plant.get("reward", 0)))
 
     import lava_service
     if not lava_service.is_enabled():
-        await callback.answer("Оплата картой временно недоступна.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.pay_card_unavailable"), show_alert=True,
+        )
         return
 
     try:
@@ -956,7 +1215,9 @@ async def callback_farm_shield_lava(callback: CallbackQuery):
         invoice = await lava_service.create_invoice(
             amount_rubles=shield_cost / 100.0,
             purchase_id=purchase_id,
-            comment=f"Atlas Secure — Накрытие грядки {plot_id + 1}",
+            comment=i18n_get_text(
+                language, "farm.shield_invoice_comment", num=plot_id + 1,
+            ),
         )
         invoice_id = invoice["invoice_id"]
         payment_url = invoice["payment_url"]
@@ -965,19 +1226,23 @@ async def callback_farm_shield_lava(callback: CallbackQuery):
         except Exception as e:
             logger.error("Failed to save Lava invoice_id: %s", e)
 
-        text = (
-            f"💳 <b>Оплата накрытия грядки</b>\n\n"
-            f"Сумма: {shield_cost // 100} ₽\n\n"
-            f"После оплаты грядка накроется автоматически."
+        text = i18n_get_text(
+            language, "farm.shield_lava_invoice", amount=shield_cost // 100,
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Перейти к оплате", url=payment_url)],
-            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "farm.shield_lava_button"), url=payment_url,
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "farm.back_to_farm"), callback_data="game_farm",
+            )],
         ])
         await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
         logger.exception("FARM_SHIELD_LAVA_ERROR user=%s plot=%s: %s", telegram_id, plot_id, e)
-        await callback.answer("Ошибка создания платежа.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.pay_error"), show_alert=True,
+        )
 
 
 @router.callback_query(F.data.startswith("farm_shield_sbp:"))
@@ -986,20 +1251,28 @@ async def callback_farm_shield_sbp(callback: CallbackQuery):
     if not await ensure_db_ready_callback(callback):
         return
     telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
 
     plot_id = _parse_plot_id(callback.data, "farm_shield_sbp")
     if plot_id < 0:
         return
+    # См. комментарий в оплате картой: запас времени проверяем и здесь.
+    if not await _shield_invoice_allowed(callback, language, telegram_id, plot_id):
+        return
     _, _, _, plot = await _find_growing_plot(telegram_id, plot_id)
     if plot is None:
-        await callback.answer("Грядка больше не растёт.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.shield_plot_not_growing"), show_alert=True,
+        )
         return
     plant = PLANT_TYPES.get(plot.get("plant_type"), {})
     shield_cost = storm_shield_price_kopecks(int(plant.get("reward", 0)))
 
     import platega_service
     if not platega_service.is_enabled():
-        await callback.answer("СБП временно недоступен.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.pay_sbp_unavailable"), show_alert=True,
+        )
         return
 
     try:
@@ -1014,7 +1287,9 @@ async def callback_farm_shield_sbp(callback: CallbackQuery):
         )
         tx = await platega_service.create_transaction(
             amount_rubles=sbp_kopecks / 100.0,
-            description=f"Atlas Secure — Накрытие грядки {plot_id + 1}",
+            description=i18n_get_text(
+                language, "farm.shield_invoice_comment", num=plot_id + 1,
+            ),
             purchase_id=purchase_id,
         )
         try:
@@ -1022,19 +1297,24 @@ async def callback_farm_shield_sbp(callback: CallbackQuery):
         except Exception as e:
             logger.error("Failed to save SBP tx_id: %s", e)
 
-        text = (
-            f"📲 <b>СБП — накрытие грядки</b>\n\n"
-            f"Сумма с учётом наценки: {sbp_kopecks / 100:.2f} ₽\n\n"
-            f"После оплаты грядка накроется автоматически."
+        text = i18n_get_text(
+            language, "farm.shield_sbp_invoice", amount=f"{sbp_kopecks / 100:.2f}",
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📲 Оплатить через СБП", url=tx["redirect_url"])],
-            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "farm.shield_sbp_button"),
+                url=tx["redirect_url"],
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "farm.back_to_farm"), callback_data="game_farm",
+            )],
         ])
         await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
         logger.exception("FARM_SHIELD_SBP_ERROR user=%s plot=%s: %s", telegram_id, plot_id, e)
-        await callback.answer("Ошибка создания платежа.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.pay_error"), show_alert=True,
+        )
 
 
 @router.callback_query(F.data.startswith("farm_early:"))
@@ -1043,10 +1323,13 @@ async def callback_farm_early_harvest(callback: CallbackQuery):
     if not await ensure_db_ready_callback(callback):
         return
     telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
 
     storm = await _get_imminent_storm()
     if storm is None:
-        await callback.answer("Ранний сбор доступен только во время шторма.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.early_no_storm"), show_alert=True,
+        )
         return
 
     plot_id = _parse_plot_id(callback.data, "farm_early")
@@ -1054,13 +1337,17 @@ async def callback_farm_early_harvest(callback: CallbackQuery):
         return
     farm_plots, plot_count, balance, plot = await _find_growing_plot(telegram_id, plot_id)
     if plot is None:
-        await callback.answer("Грядка больше не растёт.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.shield_plot_not_growing"), show_alert=True,
+        )
         return
 
     plant = PLANT_TYPES.get(plot.get("plant_type"), {})
     half_reward_kopecks = int(plant.get("reward", 0)) // 2
     if half_reward_kopecks <= 0:
-        await callback.answer("Ранний сбор недоступен для этого растения.", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "farm.early_unavailable"), show_alert=True,
+        )
         return
 
     # Сброс грядки и начисление — одной транзакцией под advisory-локом, иначе
@@ -1075,17 +1362,24 @@ async def callback_farm_early_harvest(callback: CallbackQuery):
     )
     if not ok:
         if reason == "plot_wrong_status":
-            await callback.answer("Эта грядка уже собрана", show_alert=True)
+            await callback.answer(
+                i18n_get_text(language, "farm.error_already_harvested"), show_alert=True,
+            )
         else:
             logger.warning(
                 "FARM_EARLY_HARVEST_FAILED user=%s plot=%s reason=%s",
                 telegram_id, plot_id, reason,
             )
-            await callback.answer("Не удалось зачислить награду.", show_alert=True)
+            await callback.answer(
+                i18n_get_text(language, "farm.early_failed"), show_alert=True,
+            )
         return
 
     await callback.answer(
-        f"🚜 Собрано {plant.get('emoji','')} незрелым: +{half_reward_kopecks // 100} ₽",
+        i18n_get_text(
+            language, "farm.early_success",
+            emoji=plant.get("emoji", ""), reward=half_reward_kopecks // 100,
+        ),
         show_alert=True,
     )
     pool = await database.get_pool()

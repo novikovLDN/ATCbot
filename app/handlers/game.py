@@ -115,17 +115,15 @@ async def callback_games_menu(callback: CallbackQuery):
 
     telegram_id = callback.from_user.id
     subscription = await database.get_subscription(telegram_id)
+    language = await resolve_user_language(telegram_id)
     if not subscription:
         await callback.answer(
-            "🎮 Игровой клуб доступен только для подписчиков!\n"
-            "Оформите подписку и получите доступ ко всем играм 🎯",
+            i18n_get_text(language, "games.menu_paywall"),
             show_alert=True,
         )
         return
 
     await callback.answer()
-
-    language = await resolve_user_language(telegram_id)
 
     text = i18n_get_text(language, "games.menu_title")
 
@@ -240,7 +238,9 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                     "GAME_BOWL [user=%s] cooldown_race_blocked — параллельный клик уже занял попытку",
                     telegram_id,
                 )
-                await callback.answer("Игра уже запущена, подождите", show_alert=True)
+                await callback.answer(
+                    i18n_get_text(language, "games.race_blocked"), show_alert=True,
+                )
                 return
 
         dice_message = await bot.send_dice(chat_id=chat_id, emoji="🎳")
@@ -415,7 +415,9 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                     "GAME_DICE [user=%s] cooldown_race_blocked — параллельный клик уже занял попытку",
                     telegram_id,
                 )
-                await callback.answer("Игра уже запущена, подождите", show_alert=True)
+                await callback.answer(
+                    i18n_get_text(language, "games.race_blocked"), show_alert=True,
+                )
                 return
 
         dice_message = await bot.send_dice(chat_id=chat_id, emoji="🎲")

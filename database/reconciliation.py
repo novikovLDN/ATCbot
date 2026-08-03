@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
@@ -42,6 +43,95 @@ _EIGHT_YEARS = timedelta(days=365 * 8)
 
 # Max parallel Remnawave API calls when cross-checking candidate panel dates.
 _PANEL_FETCH_CONCURRENCY = 8
+
+# ── Кэш полного скана панели ──────────────────────────────────────────
+# get_all_users листает Remnawave страницами по 1000; на проде это ~358k
+# сущностей, то есть сотни HTTP-запросов и десятки секунд. Экран «Сверка»
+# дёргает скан на КАЖДОЕ открытие, поэтому пара обновлений страницы
+# подряд превращалась в шторм запросов к панели (вплоть до rate-limit) и
+# залипание воркера FastAPI.
+#
+# Кэшируем не сырой список пользователей (он огромный), а уже отфильтрованных
+# кандидатов — их единицы. Порог «8 лет» за время жизни кэша сдвигается на
+# минуты, поэтому пересчитывать cutoff чаще бессмысленно.
+#
+# В памяти процесса, без таблицы: фоновой задачи с записью в БД тут быть не
+# должно — это изменение схемы.
+_PANEL_SCAN_TTL_SECONDS = 600  # 10 минут
+_panel_scan_cache: Optional[Tuple[float, List[Dict[str, Any]]]] = None
+# Лок, чтобы N одновременных запросов дашборда не запустили N полных сканов:
+# первый идёт в панель, остальные ждут и разбирают готовый результат.
+_panel_scan_lock = asyncio.Lock()
+
+
+def invalidate_panel_scan_cache() -> None:
+    """Сбросить кэш скана панели.
+
+    Вызывается после успешного патча expireAt: без сброса админ жмёт
+    «Исправить», обновляет экран и видит того же человека в кандидатах —
+    выглядит как «кнопка не сработала».
+    """
+    global _panel_scan_cache
+    _panel_scan_cache = None
+
+
+async def _scan_panel_for_over_issuance(
+    cutoff: datetime,
+    force_refresh: bool = False,
+) -> Optional[List[Dict[str, Any]]]:
+    """Список премиум-сущностей панели с expireAt > cutoff, с кэшем на TTL.
+
+    Возвращает None, если панель недоступна (вызывающий обязан отличать это
+    от пустого списка — иначе «панель легла» покажется как «всё чисто»).
+    Неудачный скан не кэшируется.
+    """
+    global _panel_scan_cache
+
+    async with _panel_scan_lock:
+        cached = _panel_scan_cache
+        if not force_refresh and cached is not None:
+            stored_at, rows = cached
+            if (time.monotonic() - stored_at) < _PANEL_SCAN_TTL_SECONDS:
+                logger.debug(
+                    "find_over_issuance_candidates: panel scan cache hit (%d rows)",
+                    len(rows),
+                )
+                return rows
+
+        from app.services import remnawave_api
+        all_users = await remnawave_api.get_all_users()
+        if all_users is None:
+            return None
+
+        over_from_panel: List[Dict[str, Any]] = []
+        for u in all_users:
+            username = (u.get("username") or "").strip()
+            m = _PREMIUM_USERNAME_RE.match(username)
+            if not m:
+                continue
+            try:
+                tg_id = int(m.group(1))
+            except (ValueError, TypeError):
+                continue
+            panel_expires_at = _parse_remnawave_dt(u.get("expireAt"))
+            if not panel_expires_at or panel_expires_at <= cutoff:
+                continue
+            over_from_panel.append({
+                "telegram_id": tg_id,
+                "panel_username": username,
+                "panel_expires_at": panel_expires_at,
+                "panel_uuid": u.get("uuid"),
+                "panel_status": u.get("status"),
+            })
+
+        over_from_panel.sort(key=lambda x: x["panel_expires_at"], reverse=True)
+        _panel_scan_cache = (time.monotonic(), over_from_panel)
+        logger.info(
+            "find_over_issuance_candidates: panel scanned, %d entities, "
+            "%d over cutoff (cached for %ds)",
+            len(all_users), len(over_from_panel), _PANEL_SCAN_TTL_SECONDS,
+        )
+        return over_from_panel
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -172,7 +262,10 @@ def _parse_remnawave_dt(raw) -> Optional[datetime]:
     return dt
 
 
-async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]]:
+async def find_over_issuance_candidates(
+    limit: int = 200,
+    force_refresh: bool = False,
+) -> List[Dict[str, Any]]:
     """List users whose Remnawave premium entity (`tg_{telegram_id}_premium`)
     has expireAt > NOW + 8 years.
 
@@ -194,15 +287,14 @@ async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]
     now = datetime.now(timezone.utc)
     cutoff = now + _EIGHT_YEARS
 
-    # ── Step 1: scan the Remnawave panel ──────────────────────────────
+    # ── Step 1: scan the Remnawave panel (кэш на _PANEL_SCAN_TTL_SECONDS) ──
     try:
-        from app.services import remnawave_api
+        over_from_panel = await _scan_panel_for_over_issuance(cutoff, force_refresh)
     except Exception as e:
-        logger.error("find_over_issuance_candidates: remnawave_api import failed: %s", e)
-        return []
+        logger.error("find_over_issuance_candidates: panel scan failed: %s", e)
+        over_from_panel = None
 
-    all_users = await remnawave_api.get_all_users()
-    if all_users is None:
+    if over_from_panel is None:
         # Cannot list — fail loudly with a marker row so the dashboard
         # renders a warning rather than an empty list masquerading as OK.
         logger.error(
@@ -225,31 +317,11 @@ async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]
             "panel_unreachable": True,
         }]
 
-    over_from_panel: List[Dict[str, Any]] = []
-    for u in all_users:
-        username = (u.get("username") or "").strip()
-        m = _PREMIUM_USERNAME_RE.match(username)
-        if not m:
-            continue
-        try:
-            tg_id = int(m.group(1))
-        except (ValueError, TypeError):
-            continue
-        panel_expires_at = _parse_remnawave_dt(u.get("expireAt"))
-        if not panel_expires_at or panel_expires_at <= cutoff:
-            continue
-        over_from_panel.append({
-            "telegram_id": tg_id,
-            "panel_username": username,
-            "panel_expires_at": panel_expires_at,
-            "panel_uuid": u.get("uuid"),
-            "panel_status": u.get("status"),
-        })
-
     if not over_from_panel:
         return []
 
-    over_from_panel.sort(key=lambda x: x["panel_expires_at"], reverse=True)
+    # Скан отдаёт уже отсортированный список (самые подозрительные сверху);
+    # режем локальной копией, чтобы не подрезать список в кэше.
     over_from_panel = over_from_panel[:limit]
 
     # ── Step 2: enrich with bot-DB (subscriptions + users) ────────────
@@ -794,6 +866,10 @@ async def apply_reconciliation_fix(
         )
         if not panel_updated:
             panel_error = "renew_premium_user returned False"
+        else:
+            # Панель изменилась — кэшированный список кандидатов протух.
+            # Иначе после «Исправить» человек ещё до 10 минут висит в списке.
+            invalidate_panel_scan_cache()
     except Exception as e:
         panel_error = f"{type(e).__name__}: {e}"
         logger.exception(
@@ -997,6 +1073,7 @@ def _serialize(row) -> Dict[str, Any]:
 
 __all__ = [
     "find_over_issuance_candidates",
+    "invalidate_panel_scan_cache",
     "get_reconciliation_detail",
     "apply_reconciliation_fix",
     "list_reconciliation_log",

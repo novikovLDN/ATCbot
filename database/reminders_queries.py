@@ -172,12 +172,53 @@ async def update_last_reminder_at(subscription_id: int) -> None:
 
 # Active promo definition: is_active=true AND deleted_at IS NULL AND expires_at > now() AND used_count < max_uses
 
-async def get_subscriptions_for_reminders() -> list:
-    """Получить все активные подписки, которым нужно отправить напоминания
+# Окна воркера напоминаний по умолчанию: (часов до конца, допуск, флаг).
+# Держатся синхронно с app/services/notifications/service.py — оттуда же их
+# передаёт reminders.py с учётом настроек дашборда. Значения-дубли тут только
+# на случай вызова без аргументов (тесты, ручные проверки): импортировать
+# сервисный слой из database нельзя, он сам импортирует database.
+DEFAULT_REMINDER_WINDOWS = (
+    (24 * 7, 12.0, "reminder_7d_sent"),
+    (24 * 3, 6.0, "reminder_3d_sent"),
+    (24.0, 2.0, "reminder_1d_sent"),
+    (3.0, 1.0, "reminder_3h_sent"),
+    (6.0, 0.5, "reminder_6h_sent"),    # админский грант на сутки
+    (24.0, 1.0, "reminder_24h_sent"),  # админский грант на неделю
+)
 
-    Filters out users with is_reachable = FALSE (blocked/chat not found).
-    Falls back to legacy query if is_reachable column not yet present (migration 014).
-    Returns список подписок с информацией о типе (админ-доступ или оплаченный тариф)
+# Сколько строк готовы отдать за один проход. Верхняя граница нужна, чтобы
+# при аномалии (например, админ выставил допуск в 1000 часов) воркер не
+# вытянул полбазы и не упёрся в свой таймаут.
+_REMINDER_BATCH_SIZE = 500
+_REMINDER_MAX_ROWS = 20000
+
+
+async def get_subscriptions_for_reminders(
+    windows=None,
+    batch_size: int = _REMINDER_BATCH_SIZE,
+    max_rows: int = _REMINDER_MAX_ROWS,
+) -> list:
+    """Кандидаты на напоминание — отбор в SQL, чтение батчами.
+
+    ЧТО БЫЛО. Запрос тянул ВСЕ строки с expires_at > now, без лимита, с
+    коррелированным подзапросом к subscription_history на каждую. Сюда же
+    попадали bypass-only строки с датой «сейчас + 10 лет» и триальные, которых
+    обслуживает отдельный воркер. Итерация в reminders.py обёрнута в
+    asyncio.wait_for(120s); на базе в десятки тысяч подписок она в него не
+    укладывалась, срабатывал WORKER_TIMEOUT, и цикл отменялся. Из-за
+    ORDER BY expires_at ASC хвост выборки — это ровно кандидаты на
+    напоминание за 7 дней, то есть они не получали письма систематически, а в
+    логах виднелось только «iteration cancelled».
+
+    ЧТО ТЕПЕРЬ. Окна (7д/3д/1д/3ч + админские 6ч/24ч) и невыставленные флаги
+    проверяются в SQL, bypass-only и триалы отсекаются там же, строки читаются
+    страницами по `batch_size` с курсором по id — соединение пула берётся на
+    каждый батч отдельно и не удерживается на весь проход.
+
+    `windows` — список (часов до конца, допуск в часах, имя флага). Передаётся
+    воркером из настроек дашборда, чтобы выборка не разъезжалась с
+    should_send_reminder. Имя флага сверяется с whitelist: оно уходит в текст
+    запроса, параметром колонку не подставить.
     """
     # Защита от работы с неинициализированной БД
     if not _core.DB_READY:
@@ -187,29 +228,93 @@ async def get_subscriptions_for_reminders() -> list:
     if pool is None:
         logger.warning("Pool is None, get_subscriptions_for_reminders skipped")
         return []
-    async with pool.acquire() as conn:
-        now = datetime.now(timezone.utc)
-        query_with_reachable = """
-            SELECT s.*,
-                   (SELECT action_type FROM subscription_history
-                    WHERE telegram_id = s.telegram_id
-                    ORDER BY created_at DESC LIMIT 1) as last_action_type
-            FROM subscriptions s
-            JOIN users u ON s.telegram_id = u.telegram_id
-            WHERE s.expires_at > $1
-            AND COALESCE(u.is_reachable, TRUE) = TRUE
-            ORDER BY s.expires_at ASC"""
-        fallback_query = """
-            SELECT s.*,
-                   (SELECT action_type FROM subscription_history
-                    WHERE telegram_id = s.telegram_id
-                    ORDER BY created_at DESC LIMIT 1) as last_action_type
-            FROM subscriptions s
-            WHERE s.expires_at > $1
-            ORDER BY s.expires_at ASC"""
-        try:
-            rows = await conn.fetch(query_with_reachable, _to_db_utc(now))
-        except asyncpg.UndefinedColumnError:
-            logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, fallback to legacy query")
-            rows = await conn.fetch(fallback_query, _to_db_utc(now))
-        return [_normalize_subscription_row(row) for row in rows]
+
+    now = datetime.now(timezone.utc)
+    params: List[Any] = [_to_db_utc(now)]
+    window_terms: List[str] = []
+    for before_hours, tolerance_hours, flag in (windows or DEFAULT_REMINDER_WINDOWS):
+        if flag not in _ALLOWED_REMINDER_FLAGS:
+            raise ValueError(
+                f"Invalid reminder flag '{flag}'. Allowed: {sorted(_ALLOWED_REMINDER_FLAGS)}"
+            )
+        lower = now + timedelta(hours=float(before_hours) - float(tolerance_hours))
+        upper = now + timedelta(hours=float(before_hours) + float(tolerance_hours))
+        params.append(_to_db_utc(lower))
+        lower_idx = len(params)
+        params.append(_to_db_utc(upper))
+        upper_idx = len(params)
+        window_terms.append(
+            f"(s.expires_at BETWEEN ${lower_idx} AND ${upper_idx} "
+            f"AND COALESCE(s.{flag}, FALSE) = FALSE)"
+        )
+    if not window_terms:
+        return []
+
+    cursor_idx = len(params) + 1
+    limit_idx = len(params) + 2
+    params.extend([0, int(batch_size)])
+
+    window_clause = " OR ".join(window_terms)
+    history_column = (
+        "(SELECT action_type FROM subscription_history\n"
+        "              WHERE telegram_id = s.telegram_id\n"
+        "              ORDER BY created_at DESC LIMIT 1) AS last_action_type"
+    )
+    # Полный вариант: живой чат (is_reachable) + отсев bypass-only.
+    query_full = f"""
+        SELECT s.*, {history_column}
+        FROM subscriptions s
+        JOIN users u ON s.telegram_id = u.telegram_id
+        WHERE s.expires_at > $1
+          AND COALESCE(u.is_reachable, TRUE) = TRUE
+          AND COALESCE(s.is_bypass_only, FALSE) = FALSE
+          AND LOWER(COALESCE(s.source, '')) <> 'trial'
+          AND LOWER(COALESCE(s.subscription_type, '')) <> 'trial'
+          AND ({window_clause})
+          AND s.id > ${cursor_idx}
+        ORDER BY s.id
+        LIMIT ${limit_idx}"""
+    # Запасной — для схемы без is_reachable / is_bypass_only (миграция 014 и
+    # более поздние). Триалы отсекаются и здесь: двойные уведомления «пробный
+    # период заканчивается» + «подписка заканчивается» уже ловили на проде.
+    query_fallback = f"""
+        SELECT s.*, {history_column}
+        FROM subscriptions s
+        WHERE s.expires_at > $1
+          AND LOWER(COALESCE(s.source, '')) <> 'trial'
+          AND LOWER(COALESCE(s.subscription_type, '')) <> 'trial'
+          AND ({window_clause})
+          AND s.id > ${cursor_idx}
+        ORDER BY s.id
+        LIMIT ${limit_idx}"""
+
+    query = query_full
+    out: list = []
+    last_id = 0
+    while True:
+        params[cursor_idx - 1] = last_id
+        async with pool.acquire() as conn:
+            try:
+                rows = await conn.fetch(query, *params)
+            except asyncpg.UndefinedColumnError:
+                if query is query_fallback:
+                    raise
+                logger.warning(
+                    "DB_SCHEMA_OUTDATED: is_reachable/is_bypass_only missing, "
+                    "fallback to legacy reminder query"
+                )
+                query = query_fallback
+                rows = await conn.fetch(query, *params)
+        if not rows:
+            break
+        out.extend(_normalize_subscription_row(row) for row in rows)
+        last_id = rows[-1]["id"]
+        if len(rows) < batch_size:
+            break
+        if len(out) >= max_rows:
+            logger.warning(
+                "get_subscriptions_for_reminders: достигнут потолок %d строк — "
+                "остаток обслужим следующим проходом", max_rows,
+            )
+            break
+    return out

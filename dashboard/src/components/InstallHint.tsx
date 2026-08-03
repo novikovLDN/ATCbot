@@ -25,7 +25,11 @@ function isIosSafari(): boolean {
   return /Safari/i.test(ua);
 }
 
-function isStandalone(): boolean {
+/** Запущены ли мы как установленное приложение (иконка с домашнего
+ * экрана), а не во вкладке браузера. Экспортируется, потому что от
+ * этого зависит текст на экране входа: у установленного приложения своё
+ * хранилище, сессия из браузера туда не переносится. */
+export function isStandalone(): boolean {
   if (typeof window === "undefined") return false;
   // iOS legacy
   if ((window.navigator as any).standalone) return true;

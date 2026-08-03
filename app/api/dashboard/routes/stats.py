@@ -48,8 +48,8 @@ async def stats_overview():
       bypass-only и biz-тарифов: только те, кто прямо сейчас платит за VPN.
 
     • business_metrics — approval_rate_percent, avg_subscription_lifetime_days,
-      avg_renewals_per_user, avg_payment_approval_time_seconds. Фронт читает
-      их из overview в шести местах (Dashboard.tsx), а сюда они не клались
+      avg_renewals_per_user. Фронт читает
+      их из overview в нескольких местах (Dashboard.tsx), а сюда они не клались
       вовсе: get_extended_bot_stats такого ключа не возвращает, и шесть KPI
       на главной всегда показывали «—». Отдельный /stats/business существует,
       но дашборд его не вызывал.
@@ -77,8 +77,11 @@ async def stats_overview():
 
 @router.get("/business")
 async def stats_business():
-    """avg_payment_approval_time_seconds, avg_subscription_lifetime_days,
-    avg_renewals_per_user, approval_rate_percent."""
+    """avg_subscription_lifetime_days, avg_renewals_per_user,
+    approval_rate_percent.
+
+    «Время апрува» отсюда убрано: считать его не из чего — подробности
+    в докстринге database.analytics.get_business_metrics."""
     try:
         return await database.get_business_metrics()
     except Exception as e:

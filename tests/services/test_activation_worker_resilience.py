@@ -49,7 +49,13 @@ def test_exceptions_imported():
         assert hasattr(aw, name), f"{name} не импортирован в модуль"
 
 
-def test_loop_continues_with_sleep():
-    """После обработки записи цикл засыпает и берёт следующую."""
+def test_loop_yields_and_takes_the_next_record():
+    """После обработки записи цикл отдаёт управление и берёт следующую.
+
+    Раньше здесь стоял безусловный sleep(0.5) на каждую подписку — он и был
+    потолком в ~30 активаций за виток. Теперь пауза платится только за
+    отправленное сообщение, а в остальных случаях идёт cooperative_yield.
+    """
     src = _loop_src()
-    assert "await asyncio.sleep(0.5)" in src
+    assert "await cooperative_yield()" in src
+    assert "NOTIFICATION_PAUSE_SECONDS" in src

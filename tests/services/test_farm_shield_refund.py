@@ -32,7 +32,12 @@ async def test_webhook_tells_user_about_refund(monkeypatch):
         "farm_shield_reason": "plot_not_growing",
         "farm_shield_refund_kopecks": 5000,
     })
+    # Выдача идёт через сервисный слой, а он держит собственную ссылку на
+    # database. Подменяем в обоих модулях: иначе обёртка пойдёт в настоящую
+    # базу, которой в тестах нет.
     monkeypatch.setattr(confirmation, "database", fake_db)
+    from app.services.subscriptions import service as _subscription_service
+    monkeypatch.setattr(_subscription_service, "database", fake_db)
     monkeypatch.setattr(
         "app.services.site_sync.is_enabled", lambda: False, raising=False,
     )
@@ -68,7 +73,12 @@ async def test_webhook_confirms_applied_shield(monkeypatch):
         "farm_shield_applied": True, "farm_shield_reason": None,
         "farm_shield_refund_kopecks": 0,
     })
+    # Выдача идёт через сервисный слой, а он держит собственную ссылку на
+    # database. Подменяем в обоих модулях: иначе обёртка пойдёт в настоящую
+    # базу, которой в тестах нет.
     monkeypatch.setattr(confirmation, "database", fake_db)
+    from app.services.subscriptions import service as _subscription_service
+    monkeypatch.setattr(_subscription_service, "database", fake_db)
     monkeypatch.setattr(
         "app.services.site_sync.is_enabled", lambda: False, raising=False,
     )

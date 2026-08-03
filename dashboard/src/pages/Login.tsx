@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
 import { isPasskeySupported, loginWithPasskey } from "@/lib/passkey";
+import { isStandalone } from "@/components/InstallHint";
 import { Spinner } from "@/components/Spinner";
 
 const SUCCESS_ANIM_MS = 1150;
@@ -241,6 +242,28 @@ export function Login({ onDone }: { onDone: () => void }) {
             </button>
           </form>
 
+          {/* Отдельная подсказка для установленного приложения.
+              Админ, который только что добавил иконку на домашний экран,
+              видит форму логина и думает, что его «разлогинило». На самом
+              деле у приложения с домашнего экрана своё хранилище: ни куки
+              сессии, ни токена из браузера в нём нет. Без этой строки
+              экран выглядит как поломка. */}
+          {isStandalone() && (
+            <div className="mt-6 rounded-xl border border-accent/30 bg-accent/5 p-3">
+              <div className="flex items-start gap-3">
+                <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border bg-bg-card text-accent">
+                  <Fingerprint className="h-4 w-4" />
+                </div>
+                <div className="text-xs text-fg-muted">
+                  Это приложение с домашнего экрана — у него отдельное
+                  хранилище, сессия из браузера сюда не переносится.
+                  Войди один раз паролем (или ключом устройства) — дальше
+                  приложение будет помнить вход само.
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="mt-6 rounded-xl border border-border bg-bg-elevated/60 p-3">
             <div className="flex items-start gap-3">
               <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border bg-bg-card text-fg-muted">
@@ -252,7 +275,9 @@ export function Login({ onDone }: { onDone: () => void }) {
                   /admin
                 </code>{" "}
                 и нажми <b className="text-fg">«Сбросить пароль»</b>.
-                Дальше открой magic-ссылку и придумай новый.
+                Дальше открой magic-ссылку и придумай новый. Учти: сброс
+                удаляет и все ключи устройства — Face ID придётся заводить
+                заново на каждом устройстве.
               </div>
             </div>
           </div>

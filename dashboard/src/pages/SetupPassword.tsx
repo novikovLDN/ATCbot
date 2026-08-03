@@ -1,6 +1,16 @@
 import { useState } from "react";
-import { ShieldCheck, Bot, Lock, User, Eye, EyeOff } from "lucide-react";
+import {
+  ShieldCheck,
+  Bot,
+  Lock,
+  User,
+  Eye,
+  EyeOff,
+  Fingerprint,
+  Smartphone,
+} from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
+import { isPasskeySupported, registerPasskey } from "@/lib/passkey";
 import { Spinner } from "@/components/Spinner";
 
 export function SetupPassword({ bootstrapToken, onDone }: {
@@ -13,6 +23,17 @@ export function SetupPassword({ bootstrapToken, onDone }: {
   const [showPwd, setShowPwd] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Второй шаг мастера — предложение завести ключ устройства.
+  // Почему он вообще нужен: иконка на домашнем экране iOS получает своё,
+  // отдельное хранилище. Ни кука сессии, ни токен из localStorage туда
+  // не переезжают — установленное приложение стартует с формы логина.
+  // Пройти первичную настройку заново нельзя (сервер отвечает 409
+  // already_setup, и это правильно: иначе magic-ссылка, навсегда
+  // оставшаяся в переписке, давала бы захват аккаунта). Остаётся либо
+  // помнить пароль, либо сбрасывать его через бота — а сброс заодно
+  // сносит все passkey. Поэтому ключ устройства предлагаем сразу, пока
+  // сессия свежая: он переживает установку на домашний экран.
+  const [step, setStep] = useState<"form" | "passkey">("form");
 
   const usernameOk = /^[a-zA-Z0-9._-]{3,40}$/.test(username);
   const passwordOk = password.length >= 8;
@@ -30,7 +51,14 @@ export function SetupPassword({ bootstrapToken, onDone }: {
         password,
         bootstrap_token: bootstrapToken,
       });
-      onDone();
+      // Сессия уже есть (setup её выдаёт), значит регистрация passkey
+      // пройдёт прямо сейчас. Если браузер WebAuthn не умеет — шагу
+      // взяться неоткуда, идём дальше.
+      if (isPasskeySupported()) {
+        setStep("passkey");
+      } else {
+        onDone();
+      }
     } catch (e: unknown) {
       const ae = e as ApiError;
       if (ae?.status === 409) {
@@ -44,6 +72,10 @@ export function SetupPassword({ bootstrapToken, onDone }: {
       setBusy(false);
     }
   };
+
+  if (step === "passkey") {
+    return <PasskeyStep onDone={onDone} />;
+  }
 
   return (
     <div className="grid min-h-full place-items-center px-6 py-12">
@@ -61,6 +93,15 @@ export function SetupPassword({ bootstrapToken, onDone }: {
             Придумай <b>логин</b> и <b>пароль</b>. После сохранения этим
             логином/паролем будут открываться все будущие визиты — даже на
             этом же устройстве через 5 дней, когда сессия истечёт.
+          </p>
+          <p className="mt-2 text-sm text-fg-muted">
+            Запиши пароль в менеджер паролей.{" "}
+            <b className="text-fg">
+              Иконка на домашнем экране — это отдельное приложение
+            </b>
+            : сессия из браузера туда не переезжает, и при первом запуске
+            она спросит логин с паролем. Сбросить пароль можно только
+            через бота, и сброс удалит все ключи устройства.
           </p>
 
           <form onSubmit={submit} className="mt-6 space-y-3">
@@ -144,6 +185,93 @@ export function SetupPassword({ bootstrapToken, onDone }: {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Шаг «заведи ключ устройства» сразу после установки пароля.
+ *
+ * Нужен из-за поведения iOS: приложение с домашнего экрана не видит ни
+ * куки, ни localStorage браузера, в котором проходила настройка. Без
+ * passkey единственный вход туда — пароль по памяти, а забытый пароль
+ * лечится только сбросом из бота, который сносит и passkey тоже.
+ * Ключ, заведённый здесь, работает в обоих контекстах.
+ */
+function PasskeyStep({ onDone }: { onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const add = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await registerPasskey("Первое устройство");
+      onDone();
+    } catch (e: unknown) {
+      const ae = e as ApiError;
+      // Отмена диалога Face ID — не ошибка, просто ничего не делаем.
+      setErr(ae?.detail === "cancelled" ? null : (ae?.detail ?? "Не удалось добавить ключ"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="grid min-h-full place-items-center px-6 py-12">
+      <div className="card relative w-full max-w-md overflow-hidden p-8 animate-slide-up">
+        <div className="pointer-events-none absolute -top-32 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full bg-accent/15 blur-3xl" />
+        <div className="relative">
+          <div className="mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-accent to-secondary text-white shadow-glow">
+            <Fingerprint className="h-5 w-5" strokeWidth={2.5} />
+          </div>
+
+          <h1 className="text-2xl font-semibold tracking-tight text-fg">
+            Аккаунт создан. Добавь Face ID?
+          </h1>
+          <p className="mt-2 text-sm text-fg-muted">
+            Ключ устройства работает и в браузере, и в приложении с
+            домашнего экрана — вводить пароль больше не придётся.
+          </p>
+
+          <div className="mt-5 rounded-xl border border-border bg-bg-subtle/50 p-3">
+            <div className="flex items-start gap-3">
+              <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
+                <Smartphone className="h-4 w-4" />
+              </div>
+              <div className="text-xs text-fg-muted">
+                Установишь дашборд на домашний экран — он откроется как
+                отдельное приложение и попросит войти заново: сессия из
+                браузера туда не переносится. Ключ устройства — способ не
+                упереться в форму логина с забытым паролем.
+              </div>
+            </div>
+          </div>
+
+          {err && (
+            <div className="mt-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+              {err}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={add}
+            disabled={busy}
+            className="btn-primary mt-5 w-full"
+          >
+            {busy ? <Spinner /> : <Fingerprint className="h-3.5 w-3.5" />}
+            Добавить Face ID / Touch ID
+          </button>
+          <button
+            type="button"
+            onClick={onDone}
+            disabled={busy}
+            className="mt-2 w-full rounded-xl px-4 py-2 text-xs text-fg-muted hover:text-fg"
+          >
+            Позже — я помню пароль
+          </button>
         </div>
       </div>
     </div>

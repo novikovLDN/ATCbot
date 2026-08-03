@@ -114,23 +114,51 @@ def get_tariff_1_month_keyboard(language: str) -> InlineKeyboardMarkup:
 
 
 
+async def _load_paid_reminder_trigger_configs() -> dict:
+    """Прочитать окна напоминаний из дашборда — один раз на проход.
+
+    Раньше окна были зашиты в should_send_reminder, и тумблеры
+    before_expiry_hours / tolerance_hours в дашборде ни на что не влияли.
+    Читаем здесь, а не внутри цикла: конфигов всего четыре, а подписок могут
+    быть десятки тысяч — на пользователя это лишний поход в базу.
+
+    Ошибка чтения не должна ронять проход: возвращаем то, что успели, а
+    should_send_reminder на недостающих ключах отработает на дефолтах.
+    """
+    from app.services.automated_notifications import get_trigger_config
+    out: dict = {}
+    for key in notification_service.PAID_REMINDER_NOTIFICATION_KEYS.values():
+        try:
+            out[key] = await get_trigger_config(key) or {}
+        except Exception as e:
+            logger.warning("reminders: trigger_config read failed key=%s: %s", key, e)
+    return out
+
+
 async def send_smart_reminders(bot: Bot):
     """Отправить умные напоминания пользователям (старая логика для совместимости)"""
     try:
-        subscriptions = await database.get_subscriptions_for_reminders()
-        
+        # Сначала конфиг окон, потом выборка: отбор кандидатов в SQL идёт по
+        # тем же числам, по которым потом решает should_send_reminder.
+        trigger_configs = await _load_paid_reminder_trigger_configs()
+        subscriptions = await database.get_subscriptions_for_reminders(
+            windows=notification_service.reminder_query_windows(trigger_configs),
+        )
+
         if not subscriptions:
             return
-        
+
         logger.info("Found %d subscriptions for reminders check", len(subscriptions))
-        
+
         for subscription in subscriptions:
             telegram_id = subscription["telegram_id"]
-            
+
             try:
                 # Use notification service to determine if reminder should be sent
-                decision = notification_service.should_send_reminder(subscription)
-                
+                decision = notification_service.should_send_reminder(
+                    subscription, trigger_configs=trigger_configs,
+                )
+
                 if not decision.should_send:
                     # Skip this subscription (already sent, not in time window, etc.)
                     if decision.reason:
@@ -230,10 +258,10 @@ async def send_smart_reminders(bot: Bot):
                 # Пример: reminder_7d + segment_filter='paid_expires_in_7d'
                 # → отправится только тем, у кого сейчас платная активна.
                 if notif_key:
-                    from app.services.automated_notifications import (
-                        get_trigger_config, is_user_in_segment,
-                    )
-                    _tcfg = await get_trigger_config(notif_key) or {}
+                    from app.services.automated_notifications import is_user_in_segment
+                    # Конфиг уже прочитан один раз выше — второй поход в базу
+                    # на каждого пользователя не нужен.
+                    _tcfg = trigger_configs.get(notif_key) or {}
                     _seg = str(_tcfg.get("segment_filter") or "").strip()
                     if _seg and not await is_user_in_segment(telegram_id, _seg):
                         # Пропускаем на этом цикле — юзер может войти в сегмент

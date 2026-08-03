@@ -1,8 +1,10 @@
 """Модуль для активации отложенных VPN подписок"""
 import asyncio
+import html
 import logging
 import os
 import random
+import re
 import time
 from datetime import datetime, timezone
 from aiogram import Bot
@@ -33,9 +35,62 @@ from app.core.pool_monitor import acquire_connection
 
 logger = logging.getLogger(__name__)
 
-# Event loop protection: max iteration time (prevents 300s blocking)
-MAX_ITERATION_SECONDS = int(os.getenv("ACTIVATION_WORKER_MAX_ITERATION_SECONDS", "15"))
+# Потолок времени на одну итерацию — защита event loop от долгой блокировки.
+#
+# Было 15 с. Вместе с безусловным sleep(0.5) на каждый элемент это давало
+# около 30 активаций за итерацию и не больше ~360 в час: очередь из 500
+# оплаченных подписок разгребалась полтора часа. Sleep убран (см. ниже),
+# бюджет поднят до 60 с — он по-прежнему втрое меньше внешнего
+# asyncio.wait_for(..., timeout=120) вокруг итерации, так что раньше сработает
+# именно этот мягкий выход с логом, а не жёсткая отмена задачи.
+MAX_ITERATION_SECONDS = int(os.getenv("ACTIVATION_WORKER_MAX_ITERATION_SECONDS", "60"))
+
+# Пауза после отправки сообщения пользователю. Нужна только из-за лимита
+# Telegram (20 сообщений в секунду) и потому платится ТОЛЬКО когда сообщение
+# действительно ушло — а не на каждой подписке очереди.
+NOTIFICATION_PAUSE_SECONDS = 0.05
+
+# Сколько подписок берём за виток. Было жёстко 50 — при интервале в 5 минут
+# это потолок 600 активаций в час независимо от того, как быстро работает
+# панель. Столько же строк, сколько раньше, при затыке просто не успеет
+# обработаться, и остаток уйдёт в следующий виток (лог ACTIVATION_QUEUE_BACKLOG).
+ACTIVATION_BATCH_LIMIT = int(os.getenv("ACTIVATION_BATCH_LIMIT", "200"))
+
 _worker_lock = asyncio.Lock()
+
+# Разметка Markdown в ключах admin.activation_error_*: **жирный** и `код`.
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_MD_CODE_RE = re.compile(r"`([^`]+)`")
+
+
+def _admin_line(lang: str, key: str, **values) -> str:
+    """Собрать строку админского алерта об ошибке активации в HTML.
+
+    Ключи admin.activation_error_* писались под Markdown. Разметку переводим
+    в HTML на СЫРОМ шаблоне — до подстановки значений, а сами значения
+    экранируем через html.escape.
+
+    Порядок здесь и есть суть фикса. Текст исключения сплошь и рядом содержит
+    обратную кавычку, звёздочку или подчёркивание ('connect_timeout',
+    'field *uuid* invalid'). Раньше всё это уезжало в Telegram с
+    parse_mode="Markdown" как есть: разметка ломалась, Telegram отвечал
+    BadRequest, safe_send_message молча возвращал None — и админ не узнавал,
+    что оплаченная подписка окончательно помечена failed. Деньги получены,
+    доступ не выдан, никакого сигнала.
+    """
+    template = i18n.get_text(lang, key)
+    template = _MD_BOLD_RE.sub(r"<b>\1</b>", template)
+    template = _MD_CODE_RE.sub(r"<code>\1</code>", template)
+    if not values:
+        return template
+    safe_values = {name: html.escape(str(value)) for name, value in values.items()}
+    try:
+        return template.format(**safe_values)
+    except (KeyError, IndexError, ValueError):
+        # Опечатка в плейсхолдере перевода не должна съедать весь алерт:
+        # лучше строка с фигурными скобками, чем молчание.
+        logger.warning("ADMIN_ALERT_TEMPLATE_BROKEN key=%s lang=%s", key, lang)
+        return template
 
 # Конфигурация интервала проверки активации (по умолчанию 5 минут)
 ACTIVATION_INTERVAL_SECONDS = int(os.getenv("ACTIVATION_INTERVAL_SECONDS", "300"))  # 5 минут
@@ -106,7 +161,7 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
         async with acquire_connection(pool, "activation_fetch_pending") as conn:
             pending_subscriptions = await activation_service.get_pending_subscriptions(
                 max_attempts=MAX_ACTIVATION_ATTEMPTS,
-                limit=50,
+                limit=ACTIVATION_BATCH_LIMIT,
                 conn=conn
             )
             pending_for_notification = await activation_service.get_pending_for_notification(
@@ -132,13 +187,17 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
         logger.info(f"Found {len(pending_subscriptions)} pending activations to process")
         iteration_start = time.monotonic()
 
-        for i, pending_sub in enumerate(pending_subscriptions):
-            if i > 0 and i % 50 == 0:
-                await cooperative_yield()
+        for pending_sub in pending_subscriptions:
+            # Раньше здесь был отдельный cooperative_yield каждые 50 записей.
+            # Теперь управление отдаётся в конце каждого витка, так что
+            # промежуточная страховка не нужна.
             if time.monotonic() - iteration_start > MAX_ITERATION_SECONDS:
                 logger.warning("Activation worker iteration time limit reached, breaking early")
                 break
             items_processed += 1
+            # Ушло ли в этой записи сообщение в Telegram. От этого зависит,
+            # платим ли мы паузу в конце витка (см. NOTIFICATION_PAUSE_SECONDS).
+            telegram_message_sent = False
             telegram_id = pending_sub.telegram_id
             subscription_id = pending_sub.subscription_id
             current_attempts = pending_sub.activation_attempts
@@ -222,10 +281,14 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 "Нажмите кнопку ниже чтобы подключить устройство."
                             )
                             keyboard = get_connect_keyboard()
-                            await safe_send_message(
+                            sent = await safe_send_message(
                                 bot, telegram_id, text,
                                 reply_markup=keyboard, parse_mode="HTML"
                             )
+                            # Пауза Telegram платится только за доставленное
+                            # сообщение: у заблокировавшего бота пользователя
+                            # ждать нечего.
+                            telegram_message_sent = sent is not None
                             logger.info(
                                 f"ACTIVATION_NOTIFICATION_SENT [subscription_id={subscription_id}, user={telegram_id}]"
                             )
@@ -282,24 +345,29 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 admin_lang = "ru"
                                 from datetime import datetime, timezone as _tz
                                 _now_str = datetime.now(_tz.utc).strftime("%d.%m.%Y %H:%M UTC")
-                                _tariff_line = f"\nТариф: {pending_sub.subscription_type or 'N/A'}"
+                                # Текст ошибки режем: в него попадают ответы
+                                # HTTP-клиентов целиком, а у Telegram лимит 4096.
+                                _error_text = error_msg[:500]
+                                _tariff = html.escape(str(pending_sub.subscription_type or "N/A"))
+                                _tariff_line = f"\nТариф: {_tariff}"
                                 _amount_line = f"\nСумма: {pending_sub.amount_rubles} RUB" if pending_sub.amount_rubles else ""
                                 _period_line = f"\nСрок: {pending_sub.period_days} дн." if pending_sub.period_days else ""
                                 admin_message = (
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_title')}\n\n"
+                                    f"{_admin_line(admin_lang, 'admin.activation_error_title')}\n\n"
                                     f"Дата: {_now_str}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_subscription_id', subscription_id=subscription_id)}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_user', telegram_id=telegram_id)}"
+                                    f"{_admin_line(admin_lang, 'admin.activation_error_subscription_id', subscription_id=subscription_id)}\n"
+                                    f"{_admin_line(admin_lang, 'admin.activation_error_user', telegram_id=telegram_id)}"
                                     f"{_tariff_line}{_amount_line}{_period_line}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_attempts', attempts=new_attempts, max_attempts=MAX_ACTIVATION_ATTEMPTS)}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_error', error_msg=error_msg)}\n\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_status')}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_action')}"
+                                    f"{_admin_line(admin_lang, 'admin.activation_error_attempts', attempts=new_attempts, max_attempts=MAX_ACTIVATION_ATTEMPTS)}\n"
+                                    f"{_admin_line(admin_lang, 'admin.activation_error_error', error_msg=_error_text)}\n\n"
+                                    f"{_admin_line(admin_lang, 'admin.activation_error_status')}\n"
+                                    f"{_admin_line(admin_lang, 'admin.activation_error_action')}"
                                 )
                                 if await safe_send_message(
                                     bot, config.ADMIN_TELEGRAM_ID,
-                                    admin_message, parse_mode="Markdown"
+                                    admin_message, parse_mode="HTML"
                                 ):
+                                    telegram_message_sent = True
                                     logger.info(
                                         f"Admin notification sent: Activation failed for subscription {subscription_id}"
                                     )
@@ -376,8 +444,34 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                         subscription_id, telegram_id, e,
                     )
 
-            # Connection released before sleep — no conn held during asyncio.sleep
-            await asyncio.sleep(0.5)
+            # Раньше здесь стоял безусловный await asyncio.sleep(0.5) на каждую
+            # подписку. Он ни от чего не защищал: обращение к панели и так
+            # последовательное, а сообщение уходит далеко не каждой записи.
+            # Зато вместе с бюджетом итерации он и был тем самым потолком
+            # ~30 активаций за виток.
+            #
+            # Теперь платим только за реально отправленное сообщение (лимит
+            # Telegram), а в остальных случаях просто отдаём управление циклу
+            # событий, чтобы длинная очередь не держала loop.
+            if telegram_message_sent:
+                await asyncio.sleep(NOTIFICATION_PAUSE_SECONDS)
+            else:
+                await cooperative_yield()
+
+        if items_processed < len(pending_subscriptions):
+            # Очередь не разобрана до конца — это и есть сигнал «не успеваем».
+            # Без него всплеск покупок виден только по жалобам пользователей.
+            logger.warning(
+                "ACTIVATION_QUEUE_BACKLOG processed=%s of=%s — очередь не разобрана за итерацию",
+                items_processed, len(pending_subscriptions),
+            )
+        log_event(
+            logger,
+            component="worker",
+            operation="activation_queue_depth",
+            outcome="success",
+            reason=f"fetched={len(pending_subscriptions)} processed={items_processed}",
+        )
 
         return (items_processed, outcome)
     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:

@@ -67,9 +67,14 @@ def test_recovery_does_not_hand_roll_worker_starts(source):
 
 
 def test_instance_lock_is_a_reusable_function(source):
+    # Точное число вызовов больше не показатель: к старту и восстановлению
+    # добавилась периодическая проверка лока, которая тоже его перезахватывает.
+    # Проверяем то, ради чего тест писался: обе точки идут через одну функцию.
     assert "async def acquire_instance_lock(" in source
-    assert source.count("await acquire_instance_lock(") == 2, (
-        "лок берётся не в обоих местах (старт + восстановление)"
+    assert 'await acquire_instance_lock("старт")' in source, "на старте лок не берётся"
+    recovery = source[source.index("async def retry_db_init"):]
+    assert "await acquire_instance_lock(" in recovery, (
+        "при восстановлении БД лок не берётся — гарантия «одна реплика» теряется"
     )
 
 

@@ -149,6 +149,10 @@ async def provision_subscription(
     existing_premium_uuid = await database.get_remnawave_premium_uuid(telegram_id)
     premium_sub_url: Optional[str] = None
     premium_panel_uuid: Optional[str] = existing_premium_uuid
+    # Приняла ли панель наш форсированный vlessUuid. Значимо только для
+    # ветки create — при продлении create не вызывается вообще, и связь
+    # requested_uuid ↔ панель ничем не подтверждена.
+    forced_uuid_accepted = False
 
     if existing_premium_uuid:
         # Renewal: PATCH expireAt.  Bypass entity is handled below independently.
@@ -186,6 +190,7 @@ async def provision_subscription(
             )
         premium_panel_uuid = result.panel_uuid
         premium_sub_url = result.subscription_url
+        forced_uuid_accepted = bool(result.forced_uuid_accepted)
         try:
             await database.set_remnawave_premium_uuid_and_url(
                 telegram_id,
@@ -200,16 +205,66 @@ async def provision_subscription(
             )
             raise
 
-    if not premium_sub_url:
-        # Cache miss after a renewal — back-fill from panel one time.
+    # ── Какой uuid уедет в subscriptions.uuid ────────────────────────
+    # Раньше отсюда всегда возвращался requested_uuid — тот, который мы
+    # ПОПРОСИЛИ у панели. Панель может его не принять (400/422 → повторный
+    # POST уже без uuid), а в ветке усыновления (recovered=True) у найденной
+    # сущности вообще свой vlessUuid. В обоих случаях в subscriptions.uuid
+    # оседал идентификатор, которого нет ни в одном инбаунде: поиск по нему
+    # (legacy-ветка app/api/subscription_proxy.py, database/traffic.py) и
+    # любая сверка база↔панель молча ничего не находили.
+    #
+    # Правило:
+    #   • есть легаси-uuid (samopis) — оставляем его. Он вшит в старые VLESS
+    #     ссылки, которые у людей на руках; подменить его панельным значением
+    #     значит сломать резолв /sub/<uuid>. Расхождение с панелью здесь
+    #     принимаем осознанно — старые ссылки дороже.
+    #   • панель подтвердила форс — requested_uuid И ЕСТЬ панельный vlessUuid.
+    #   • иначе — спрашиваем панель и пишем её фактический vlessUuid.
+    #
+    # Занулять поле нельзя: grant_access считает пустой uuid отказом
+    # провижининга и уводит оплаченную покупку в retry, а на subscriptions.uuid
+    # висит частичный UNIQUE-индекс (миграция 024) — пустые строки схлопнутся
+    # на второй же записи.
+    need_panel_lookup = (not premium_sub_url) or (
+        not forced_uuid_accepted and not legacy_uuid
+    )
+    panel_entity: Optional[dict] = None
+    if need_panel_lookup and premium_panel_uuid:
         try:
             from app.services import remnawave_api
-            entity = await remnawave_api.get_user(premium_panel_uuid or "")
-            premium_sub_url = (entity or {}).get("subscriptionUrl") or ""
-            if premium_sub_url:
-                await database.set_remnawave_premium_sub_url(telegram_id, premium_sub_url)
+            panel_entity = await remnawave_api.get_user(premium_panel_uuid)
         except Exception as e:
-            logger.warning("PURCHASE_FLOW: premium url back-fill failed tg=%s %s", telegram_id, e)
+            logger.warning(
+                "PURCHASE_FLOW: panel lookup failed tg=%s %s", telegram_id, e,
+            )
+
+    if not premium_sub_url:
+        # Кэш пуст после продления — один раз доливаем ссылку из панели.
+        premium_sub_url = (panel_entity or {}).get("subscriptionUrl") or ""
+        if premium_sub_url:
+            try:
+                await database.set_remnawave_premium_sub_url(telegram_id, premium_sub_url)
+            except Exception as e:
+                logger.warning(
+                    "PURCHASE_FLOW: premium url back-fill failed tg=%s %s", telegram_id, e,
+                )
+
+    connection_uuid = requested_uuid
+    if not legacy_uuid and not forced_uuid_accepted:
+        panel_vless = (panel_entity or {}).get("vlessUuid")
+        if _looks_like_uuid(panel_vless):
+            connection_uuid = panel_vless
+        else:
+            # Панель недоступна или не отдала vlessUuid. Ронять покупку из-за
+            # справочного поля нельзя, поэтому пишем запрошенный uuid, но
+            # оставляем маркер: по нему видно, что связь с панелью по этому
+            # полю не подтверждена.
+            logger.warning(
+                "PURCHASE_FLOW_UUID_UNVERIFIED: tg=%s panel_uuid=%s requested=%s — "
+                "панель не подтвердила vlessUuid, пишем запрошенный",
+                telegram_id, (premium_panel_uuid or "")[:8], requested_uuid[:8],
+            )
 
     # ── Bypass entity ────────────────────────────────────────────────
     bypass_bytes = _bypass_bytes_for(tariff, period_days, is_trial)
@@ -282,9 +337,9 @@ async def provision_subscription(
     )
 
     return {
-        # legacy uuid lives in subscriptions.uuid; the connection uuid that
-        # ended up in the panel may differ if forced-uuid was rejected.
-        "uuid": requested_uuid,
+        # Уезжает в subscriptions.uuid. Это либо исторический samopis-uuid,
+        # либо фактический vlessUuid панели — см. блок выбора выше.
+        "uuid": connection_uuid,
         "vless_url": premium_sub_url or "",
         "vless_url_plus": bypass_sub_url,
         "subscription_type": tariff or "basic",

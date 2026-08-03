@@ -2,10 +2,10 @@
 API module — HTTP endpoints for webhooks and health.
 """
 import logging
+from typing import Optional
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from app.api import telegram_webhook
 from app.api import payment_webhook
 from app.api import deeplink_redirect
@@ -17,16 +17,38 @@ logger = logging.getLogger(__name__)
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
-class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
-    """SECURITY: Reject requests with body larger than max_size (DDoS protection).
+class _BodyTooLarge(Exception):
+    """Тело запроса перевалило за лимит прямо во время чтения.
 
-    Path-aware: the dashboard broadcast photo-upload endpoint legitimately
-    accepts up to 10 MB images (handler enforces its own 10 MB check at
-    `app/api/dashboard/routes/broadcasts.py:upload_photo`). Cutting it at
-    1 MB here used to fire 413 before the request even reached the
-    handler. Other endpoints (Telegram webhook, payment webhooks,
-    dashboard JSON APIs) stay on the 1 MB default — there's no
-    legitimate reason for any of them to exceed it.
+    Бросается из обёртки receive и ловится в самом middleware — наружу
+    из ASGI-стека не уходит.
+    """
+
+
+class RequestSizeLimitMiddleware:
+    """SECURITY: рубит слишком большие тела запросов (защита от OOM).
+
+    Path-aware: загрузка фото для рассылки честно принимает до 10 МБ
+    (`app/api/dashboard/routes/broadcasts.py:upload_photo`), всем
+    остальным — Telegram-вебхуку, вебхукам платёжек, JSON-ручкам
+    дашборда — хватает 1 МБ.
+
+    ПОЧЕМУ ЭТО НЕ BaseHTTPMiddleware С ПРОВЕРКОЙ Content-Length.
+    Раньше middleware смотрел только заголовок Content-Length. Клиент,
+    который шлёт тело с `Transfer-Encoding: chunked`, этот заголовок не
+    отправляет вовсе — проверка тихо пропускала запрос любого размера.
+    Дальше upload_photo делал `await file.read()` целиком в память, и
+    один chunked-POST на сотни мегабайт раздувал процесс. Процесс тут
+    один на всё: вместе с дашбордом ляжет и бот, и приём вебхуков
+    Telegram.
+
+    Поэтому считаем реально пришедшие байты в обёртке над `receive` и
+    обрываем запрос, как только сумма превысила лимит. Больше лимита в
+    память не попадёт независимо от заголовков. Content-Length, если он
+    есть, проверяем заранее — это дешевле, чем тянуть тело.
+
+    Написано как «голый» ASGI-класс, а не BaseHTTPMiddleware, потому что
+    подменить канал receive у запроса можно только на этом уровне.
     """
 
     # Per-prefix exceptions: prefix → max bytes. First match wins.
@@ -35,7 +57,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     )
 
     def __init__(self, app, max_size: int = 1 * 1024 * 1024):
-        super().__init__(app)
+        self.app = app
         self.max_size = max_size
 
     def _limit_for(self, path: str) -> int:
@@ -44,16 +66,73 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
                 return lim
         return self.max_size
 
-    async def dispatch(self, request: Request, call_next):
-        content_length = request.headers.get("content-length")
-        if content_length:
+    @staticmethod
+    def _content_length(scope) -> Optional[bytes]:
+        for name, value in scope.get("headers") or ():
+            if name == b"content-length":
+                return value
+        return None
+
+    @staticmethod
+    async def _reject(send, status: int, text: bytes) -> None:
+        await send({
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                (b"content-type", b"text/plain; charset=utf-8"),
+                (b"content-length", str(len(text)).encode()),
+            ],
+        })
+        await send({"type": "http.response.body", "body": text})
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        limit = self._limit_for(scope.get("path", ""))
+
+        declared = self._content_length(scope)
+        if declared is not None:
             try:
-                lim = self._limit_for(request.url.path)
-                if int(content_length) > lim:
-                    return Response(status_code=413, content="Request body too large")
-            except (ValueError, TypeError):
-                return Response(status_code=400, content="Invalid Content-Length")
-        return await call_next(request)
+                if int(declared) > limit:
+                    await self._reject(send, 413, b"Request body too large")
+                    return
+            except (TypeError, ValueError):
+                await self._reject(send, 400, b"Invalid Content-Length")
+                return
+
+        received = 0
+        # Ответ уже мог начаться — тогда 413 отправлять поздно, заголовки
+        # ушли. Такое возможно только если обработчик начал отвечать, не
+        # дочитав тело; тогда пробрасываем ошибку наверх.
+        started = False
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body") or b"")
+                if received > limit:
+                    raise _BodyTooLarge()
+            return message
+
+        async def watched_send(message):
+            nonlocal started
+            if message.get("type") == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, watched_send)
+        except _BodyTooLarge:
+            logger.warning(
+                "REQUEST_BODY_TOO_LARGE path=%s limit=%d received>%d",
+                scope.get("path", ""), limit, limit,
+            )
+            if started:
+                raise
+            await self._reject(send, 413, b"Request body too large")
 
 
 app.add_middleware(RequestSizeLimitMiddleware, max_size=1 * 1024 * 1024)

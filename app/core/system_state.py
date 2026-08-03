@@ -12,13 +12,27 @@ Characteristics:
 - No config/environment access
 - Typed and deterministic
 
-STEP 1.1 - RUNTIME GUARDRAILS:
-- SystemState is a READ-ONLY snapshot of system health
-- SystemState is constructed centrally (healthcheck / health_server)
-- SystemState is NEVER mutated by runtime code
-- SystemState is used for awareness only, NOT for control flow
-- Handlers read SystemState but do NOT block based on it
-- Workers read SystemState at iteration start to decide skip/continue
+ГДЕ ЭТО РЕАЛЬНО ИСПОЛЬЗУЕТСЯ (и где нет):
+- Админ-дашборд (app/handlers/admin/base.py) — светофор и список проблем.
+  Это основной и единственный потребитель recalculate_from_runtime.
+- Обработчики оплаты и триала пишут в лог пометку [DEGRADED], но НЕ блокируют
+  на её основании ни одного действия.
+- Фоновые воркеры SystemState НЕ читают. Их управляющий контур другой:
+  database.DB_READY плюс feature-флаги (app/core/feature_flags). Он проще,
+  проверяется в каждой итерации и им можно управлять из окружения на живую.
+
+Раньше в этом месте было написано «Workers read SystemState at iteration start
+to decide skip/continue». Ни один воркер этого не делал никогда. Утверждение
+опаснее его отсутствия: при разборе инцидента по нему делают вывод, что
+жёлтый статус vpn_api остановил активации, — а активации всё это время шли.
+Второй контур принятия решений заводить не стали намеренно: два источника
+правды о том, работать воркеру или нет, расходятся при первой же нештатной
+ситуации. SystemState — витрина состояния, а не рубильник.
+
+Остальные правила:
+- SystemState — снимок только для чтения
+- SystemState никогда не мутируется рантаймом
+- Обработчики читают SystemState, но не блокируются по нему
 """
 
 from dataclasses import dataclass
@@ -380,23 +394,20 @@ def create_default_system_state() -> SystemState:
 
 def recalculate_from_runtime() -> SystemState:
     """
-    PART B.2 / PART C.3: Recalculate SystemState from current runtime state.
-    
-    Called after:
-    - init_db() success
-    - retry success
-    - on startup if DB_READY=True
-    
-    PART C.3: Expected state with missing XRAY_API:
+    Пересчитать SystemState по текущему состоянию процесса.
+
+    Вызывается админ-дашбордом при каждом открытии экрана здоровья. Дешёвая
+    синхронная функция: читает флаг БД и конфиг панели, в сеть не ходит.
+
+    Ожидаемый результат при ненастроенной панели:
     - database = healthy
     - payments = healthy
     - vpn_api = degraded
-    - system_state = DEGRADED (NOT UNAVAILABLE)
-    
-    NOTE: Now async because VPN API health-check is async.
-    
+    - система в целом = DEGRADED (не UNAVAILABLE): продажи идут, выдача ключей
+      откладывается в очередь pending
+
     Returns:
-        SystemState reflecting current runtime health
+        SystemState, отражающий текущее состояние процесса
     """
     from datetime import datetime, timezone
     import config
@@ -419,16 +430,22 @@ def recalculate_from_runtime() -> SystemState:
             last_checked_at=now
         )
     
-    # VPN API: проверка конфигурации (sync fallback)
-    # Реальный health-check выполняется в healthcheck.py (async)
+    # VPN: смотрим на Remnawave — единственную панель выдачи.
+    #
+    # Раньше здесь читались XRAY_API_URL и XRAY_API_KEY. Ветка xray снята,
+    # эти переменные в окружении больше не заполняются, поэтому дашборд
+    # показывал бы вечный жёлтый vpn_api при полностью исправной выдаче.
+    # Жёлтый, который горит всегда, перестают замечать — и он скрывает
+    # настоящую поломку панели.
     try:
-        if not config.XRAY_API_URL or not config.XRAY_API_KEY:
+        if not config.REMNAWAVE_ENABLED:
             vpn_component = degraded_component(
-                error="XRAY_API_URL or XRAY_API_KEY not configured (non-critical)",
+                error="Remnawave не настроен (REMNAWAVE_API_URL / REMNAWAVE_API_TOKEN)",
                 last_checked_at=now
             )
         else:
-            # Конфигурация есть - считаем healthy (реальный health-check в healthcheck.py)
+            # Конфигурация есть. Реальную доступность панели здесь не
+            # проверяем: функция синхронная и вызывается из отрисовки экрана.
             vpn_component = healthy_component(last_checked_at=now)
     except Exception as e:
         vpn_component = degraded_component(

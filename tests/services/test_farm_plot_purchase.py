@@ -67,6 +67,14 @@ class TestHandler:
             assert not code, f"{call} остался отдельным запросом"
 
     def test_refusals_shown_to_user(self):
+        """Отказ обязан быть объяснён, причём на языке пользователя.
+
+        Тексты переехали в i18n (ферма была захардкожена по-русски при семи
+        поддерживаемых языках), поэтому проверяем ключи, а не литералы.
+        """
+        from app.i18n import LANGUAGES
+
         src = inspect.getsource(farm_handlers.callback_farm_buy_plot)
-        assert "Максимальное количество грядок" in src
-        assert "Недостаточно средств" in src
+        for key in ("farm.max_plots_reached", "farm.insufficient_funds", "farm.buy_plot_error"):
+            assert key in src, f"причина отказа {key} не показывается"
+            assert key in LANGUAGES["ru"], f"ключа {key} нет в словаре"

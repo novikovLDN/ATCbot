@@ -1,0 +1,3933 @@
+{
+  "_about": "Ключи kk.py и tj.py, где вместо перевода стоит английский текст. Переводы намеренно НЕ придуманы: файл нужен, чтобы отдать список живому переводчику как есть. Поле current — что стоит сейчас, en/ru — исходники.",
+  "_reasons": {
+    "identical_to_english": "значение дословно совпадает с en.py",
+    "latin_script_only": "в значении есть латиница и ни одной кириллической буквы, хотя казахский и таджикский пишутся кириллицей"
+  },
+  "_excluded": "lang.button_* — родные названия языков в селекторе одинаковы во всех словарях специально; пустые значения.",
+  "_generated": "2026-08-03",
+  "_counts": {
+    "kk": 326,
+    "tj": 326
+  },
+  "_totals": {
+    "kk_dict_size": 879,
+    "tj_dict_size": 879
+  },
+  "kk": {
+    "admin.activation_error_attempts": {
+      "current": "Attempts: {attempts}/{max_attempts}",
+      "en": "Attempts: {attempts}/{max_attempts}",
+      "ru": "Попыток: {attempts}/{max_attempts}",
+      "reason": "identical_to_english"
+    },
+    "admin.activation_error_title": {
+      "current": "⚠️ **VPN SUBSCRIPTION ACTIVATION ERROR**",
+      "en": "⚠️ **VPN SUBSCRIPTION ACTIVATION ERROR**",
+      "ru": "⚠️ **ОШИБКА АКТИВАЦИИ VPN ПОДПИСКИ**",
+      "reason": "identical_to_english"
+    },
+    "admin.activation_error_user": {
+      "current": "User: `{telegram_id}`",
+      "en": "User: `{telegram_id}`",
+      "ru": "Пользователь: `{telegram_id}`",
+      "reason": "identical_to_english"
+    },
+    "admin.analytics": {
+      "current": "💰 Analytics",
+      "en": "💰 Analytics",
+      "ru": "💰 Аналитика",
+      "reason": "identical_to_english"
+    },
+    "admin.audit": {
+      "current": "📜 Audit",
+      "en": "📜 Audit",
+      "ru": "📜 Аудит",
+      "reason": "identical_to_english"
+    },
+    "admin.audit_empty": {
+      "current": "📜 Audit\n\nAudit is empty. No actions recorded.",
+      "en": "📜 Audit\n\nAudit is empty. No actions recorded.",
+      "ru": "📜 Аудит\n\nАудит пуст. Действий не зафиксировано.",
+      "reason": "identical_to_english"
+    },
+    "admin.back": {
+      "current": "🔙 Back",
+      "en": "🔙 Back",
+      "ru": "🔙 Назад",
+      "reason": "identical_to_english"
+    },
+    "admin.back_to_analytics": {
+      "current": "🔙 Back to Analytics",
+      "en": "🔙 Back to Analytics",
+      "ru": "🔙 Назад к аналитике",
+      "reason": "identical_to_english"
+    },
+    "admin.back_to_broadcast": {
+      "current": "🔙 Back",
+      "en": "🔙 Back",
+      "ru": "🔙 Назад",
+      "reason": "identical_to_english"
+    },
+    "admin.back_to_keys": {
+      "current": "🔙 Back",
+      "en": "🔙 Back",
+      "ru": "🔙 Назад",
+      "reason": "identical_to_english"
+    },
+    "admin.back_to_stats": {
+      "current": "🔙 Back to Stats",
+      "en": "🔙 Back to Stats",
+      "ru": "🔙 Назад к статистике",
+      "reason": "identical_to_english"
+    },
+    "admin.broadcast": {
+      "current": "📣 Notifications",
+      "en": "📣 Notifications",
+      "ru": "📣 Уведомления",
+      "reason": "identical_to_english"
+    },
+    "admin.cancel": {
+      "current": "🔙 Cancel",
+      "en": "🔙 Cancel",
+      "ru": "🔙 Отмена",
+      "reason": "identical_to_english"
+    },
+    "admin.confirm": {
+      "current": "✅ Confirm",
+      "en": "✅ Confirm",
+      "ru": "✅ Подтвердить",
+      "reason": "identical_to_english"
+    },
+    "admin.copy_key": {
+      "current": "📋 Copy Key",
+      "en": "📋 Copy Key",
+      "ru": "📋 Скопировать ключ",
+      "reason": "identical_to_english"
+    },
+    "admin.create_discount": {
+      "current": "🎯 Create Discount",
+      "en": "🎯 Create Discount",
+      "ru": "🎯 Назначить скидку",
+      "reason": "identical_to_english"
+    },
+    "admin.credit_balance_prompt": {
+      "current": "💰 Grant balance\n\nEnter Telegram ID or username:",
+      "en": "💰 Grant balance\n\nEnter Telegram ID or username:",
+      "ru": "💰 Выдать средства\n\nВведите Telegram ID или username пользователя:",
+      "reason": "identical_to_english"
+    },
+    "admin.credit_balance_user_prompt": {
+      "current": "💰 Grant balance\n\nUser: {user_id}\n\nEnter amount in rubles:",
+      "en": "💰 Grant balance\n\nUser: {user_id}\n\nEnter amount in rubles:",
+      "ru": "💰 Выдать средства\n\nПользователь: {user_id}\n\nВведите сумму в рублях:",
+      "reason": "identical_to_english"
+    },
+    "admin.credit_positive_sum": {
+      "current": "❌ Amount must be positive.\n\nEnter amount in rubles:",
+      "en": "❌ Amount must be positive.\n\nEnter amount in rubles:",
+      "ru": "❌ Сумма должна быть положительным числом.\n\nВведите сумму в рублях:",
+      "reason": "identical_to_english"
+    },
+    "admin.credit_sum_format": {
+      "current": "❌ Invalid amount format.\n\nEnter number (e.g. 500 or 100.50):",
+      "en": "❌ Invalid amount format.\n\nEnter number (e.g. 500 or 100.50):",
+      "ru": "❌ Неверный формат суммы.\n\nВведите число (например: 500 или 100.50):",
+      "reason": "identical_to_english"
+    },
+    "admin.dashboard": {
+      "current": "📊 Admin Dashboard",
+      "en": "📊 Admin Dashboard",
+      "ru": "📊 Admin Dashboard",
+      "reason": "identical_to_english"
+    },
+    "admin.dashboard_title": {
+      "current": "🛠 Atlas Secure · Admin Dashboard\n\nSelect an action:",
+      "en": "🛠 Atlas Secure · Admin Dashboard\n\nSelect an action:",
+      "ru": "🛠 Atlas Secure · Admin Dashboard\n\nВыберите действие:",
+      "reason": "identical_to_english"
+    },
+    "admin.db_connection_failed": {
+      "current": "❌ Failed to connect to database",
+      "en": "❌ Failed to connect to database",
+      "ru": "❌ Не удалось подключиться к базе данных",
+      "reason": "identical_to_english"
+    },
+    "admin.db_unavailable": {
+      "current": "❌ Database unavailable",
+      "en": "❌ Database unavailable",
+      "ru": "❌ База данных недоступна",
+      "reason": "identical_to_english"
+    },
+    "admin.degraded_mode": {
+      "current": "⚠️ **BOT RUNNING IN DEGRADED MODE**\n\nDatabase is unavailable.\n\n• Bot is running and responding to commands\n• Critical operations are blocked\n• Users receive temporary unavailability messages\n\nBot will automatically retry DB connection every 30 seconds.\n\nCheck:\n• PostgreSQL availability\n• DATABASE_URL correctness\n• Network settings",
+      "en": "⚠️ **BOT RUNNING IN DEGRADED MODE**\n\nDatabase is unavailable.\n\n• Bot is running and responding to commands\n• Critical operations are blocked\n• Users receive temporary unavailability messages\n\nBot will automatically retry DB connection every 30 seconds.\n\nCheck:\n• PostgreSQL availability\n• DATABASE_URL correctness\n• Network settings",
+      "ru": "⚠️ **БОТ РАБОТАЕТ В ДЕГРАДИРОВАННОМ РЕЖИМЕ**\n\nБаза данных недоступна.\n\n• Бот запущен и отвечает на команды\n• Критические операции блокируются\n• Пользователи получают сообщения о временной недоступности\n\nБот будет автоматически пытаться восстановить соединение с БД каждые 30 секунд.\n\nПроверьте:\n• Доступность PostgreSQL\n• Правильность DATABASE_URL\n• Сетевые настройки",
+      "reason": "identical_to_english"
+    },
+    "admin.delete_discount": {
+      "current": "❌ Delete Discount",
+      "en": "❌ Delete Discount",
+      "ru": "❌ Удалить скидку",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_already_exists": {
+      "current": "❌ User already has {percent}% discount.\n\nRemove existing discount first.",
+      "en": "❌ User already has {percent}% discount.\n\nRemove existing discount first.",
+      "ru": "❌ У пользователя уже есть персональная скидка {percent}%.\n\nСначала удалите существующую скидку.",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_assign_days_prompt": {
+      "current": "🎯 Assign discount\n\nEnter days validity (or 0 for unlimited):",
+      "en": "🎯 Assign discount\n\nEnter days validity (or 0 for unlimited):",
+      "ru": "🎯 Назначить скидку\n\nВведите количество дней действия скидки (или 0 для бессрочной):",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_assign_prompt": {
+      "current": "🎯 Assign discount\n\nEnter discount percent (1 to 99):",
+      "en": "🎯 Assign discount\n\nEnter discount percent (1 to 99):",
+      "ru": "🎯 Назначить скидку\n\nВведите процент скидки (число от 1 до 99):",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_created": {
+      "current": "✅ Personal discount {percent}% assigned\n\nValid until: {expires}",
+      "en": "✅ Personal discount {percent}% assigned\n\nValid until: {expires}",
+      "ru": "✅ Персональная скидка {percent}% назначена\n\nСрок действия: {expires}",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_not_found": {
+      "current": "❌ Discount not found or already removed",
+      "en": "❌ Discount not found or already removed",
+      "ru": "❌ Скидка не найдена или уже удалена",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_removed": {
+      "current": "✅ Personal discount removed",
+      "en": "✅ Personal discount removed",
+      "ru": "✅ Персональная скидка удалена",
+      "reason": "identical_to_english"
+    },
+    "admin.enter_number": {
+      "current": "❌ Enter a number",
+      "en": "❌ Enter a number",
+      "ru": "❌ Введите число",
+      "reason": "identical_to_english"
+    },
+    "admin.enter_positive_number": {
+      "current": "❌ Enter a positive number",
+      "en": "❌ Enter a positive number",
+      "ru": "❌ Введите положительное число",
+      "reason": "identical_to_english"
+    },
+    "admin.export": {
+      "current": "📤 Export Data",
+      "en": "📤 Export Data",
+      "ru": "📤 Экспорт данных",
+      "reason": "identical_to_english"
+    },
+    "admin.export_file_sent": {
+      "current": "✅ File sent",
+      "en": "✅ File sent",
+      "ru": "✅ Файл отправлен",
+      "reason": "identical_to_english"
+    },
+    "admin.export_prompt": {
+      "current": "📤 Export Data\n\nSelect export type:",
+      "en": "📤 Export Data\n\nSelect export type:",
+      "ru": "📤 Экспорт данных\n\nВыберите тип данных для экспорта:",
+      "reason": "identical_to_english"
+    },
+    "admin.export_users": {
+      "current": "👥 Users",
+      "en": "👥 Users",
+      "ru": "👥 Пользователи",
+      "reason": "identical_to_english"
+    },
+    "admin.forward": {
+      "current": "➡️ Forward",
+      "en": "➡️ Forward",
+      "ru": "➡️ Вперёд",
+      "reason": "identical_to_english"
+    },
+    "admin.go_to_instruction": {
+      "current": "🔌 Go to Instruction",
+      "en": "🔌 Go to Instruction",
+      "ru": "🔌 Перейти к инструкции",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_1_year": {
+      "current": "🗓 Grant 1 year",
+      "en": "🗓 Grant 1 year",
+      "ru": "🗓 Выдать доступ на 1 год",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_access_error": {
+      "current": "❌ Grant access error: {error}",
+      "en": "❌ Grant access error: {error}",
+      "ru": "❌ Ошибка выдачи доступа: {error}",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_custom": {
+      "current": "⚙️ Custom (days/hours/minutes)",
+      "en": "⚙️ Custom (days/hours/minutes)",
+      "ru": "⚙️ Настроить (дни/часы/минуты)",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_days_1": {
+      "current": "1 day",
+      "en": "1 day",
+      "ru": "1 день",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_fail_no_keys": {
+      "current": "❌ No free VPN keys available",
+      "en": "❌ No free VPN keys available",
+      "ru": "❌ Нет свободных VPN-ключей",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_minutes_10": {
+      "current": "⏱ 10 minutes",
+      "en": "⏱ 10 minutes",
+      "ru": "⏱ Доступ на 10 минут",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_unit_days": {
+      "current": "📅 Days",
+      "en": "📅 Days",
+      "ru": "📅 Дни",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_unit_hours": {
+      "current": "🕐 Hours",
+      "en": "🕐 Hours",
+      "ru": "🕐 Часы",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_unit_minutes": {
+      "current": "⏱ Minutes",
+      "en": "⏱ Minutes",
+      "ru": "⏱ Минуты",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_user_notification": {
+      "current": "✅ You have been granted access to Atlas Secure for {days} days.\nVPN key: {sub_url}\nExpires: {date}",
+      "en": "✅ You have been granted access to Atlas Secure for {days} days.\nVPN key: {sub_url}\nExpires: {date}",
+      "ru": "✅ Вам предоставлен доступ к Atlas Secure на {days} дней.\nСсылка подписки: {sub_url}\nСрок действия: до {date}",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_vip": {
+      "current": "👑 Grant VIP",
+      "en": "👑 Grant VIP",
+      "ru": "👑 Выдать VIP",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_disable": {
+      "current": "❌ Disable",
+      "en": "❌ Disable",
+      "ru": "❌ Выключить",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_edit": {
+      "current": "📝 Edit Text",
+      "en": "📝 Edit Text",
+      "ru": "📝 Изменить текст",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_edit_text": {
+      "current": "📝 Edit text",
+      "en": "📝 Edit text",
+      "ru": "📝 Изменить текст",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_enable": {
+      "current": "✅ Enable",
+      "en": "✅ Enable",
+      "ru": "✅ Включить",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_status_off": {
+      "current": "⚪ Incident mode off",
+      "en": "⚪ Incident mode off",
+      "ru": "⚪ Режим инцидента выключен",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_status_on": {
+      "current": "🟢 Incident mode active",
+      "en": "🟢 Incident mode active",
+      "ru": "🟢 Режим инцидента активен",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_text_prompt": {
+      "current": "Enter incident text (or send /cancel to cancel):",
+      "en": "Enter incident text (or send /cancel to cancel):",
+      "ru": "Введите текст инцидента (или отправьте /cancel для отмены):",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_title": {
+      "current": "🚨 Incident",
+      "en": "🚨 Incident",
+      "ru": "🚨 Инцидент",
+      "reason": "identical_to_english"
+    },
+    "admin.keys": {
+      "current": "🔑 VPN Keys",
+      "en": "🔑 VPN Keys",
+      "ru": "🔑 VPN-ключи",
+      "reason": "identical_to_english"
+    },
+    "admin.metrics": {
+      "current": "📈 Metrics",
+      "en": "📈 Metrics",
+      "ru": "📈 Метрики",
+      "reason": "identical_to_english"
+    },
+    "admin.next_page": {
+      "current": "➡️ Next",
+      "en": "➡️ Next",
+      "ru": "➡️ Следующие",
+      "reason": "identical_to_english"
+    },
+    "admin.no_active_subscription": {
+      "current": "❌ User has no active subscription",
+      "en": "❌ User has no active subscription",
+      "ru": "❌ У пользователя нет активной подписки",
+      "reason": "identical_to_english"
+    },
+    "admin.no_active_subscriptions_reissue": {
+      "current": "❌ No active subscriptions for reissue",
+      "en": "❌ No active subscriptions for reissue",
+      "ru": "❌ Нет активных подписок для перевыпуска",
+      "reason": "identical_to_english"
+    },
+    "admin.notify_no": {
+      "current": "🔕 No",
+      "en": "🔕 No",
+      "ru": "🔕 Нет",
+      "reason": "identical_to_english"
+    },
+    "admin.notify_yes": {
+      "current": "🔔 Yes",
+      "en": "🔔 Yes",
+      "ru": "🔔 Да",
+      "reason": "identical_to_english"
+    },
+    "admin.operation_cancelled": {
+      "current": "❌ Operation cancelled",
+      "en": "❌ Operation cancelled",
+      "ru": "❌ Операция отменена",
+      "reason": "identical_to_english"
+    },
+    "admin.payment_notification": {
+      "current": "💰 New payment\nUser: @{username}\nTelegram ID: {telegram_id}\nTariff: {tariff} months\nPrice: {price} ₽",
+      "en": "💰 New payment\nUser: @{username}\nTelegram ID: {telegram_id}\nTariff: {tariff} months\nPrice: {price} ₽",
+      "ru": "💰 Новая оплата\nПользователь: @{username}\nTelegram ID: {telegram_id}\nТариф: {tariff} месяцев\nСтоимость: {price} ₽",
+      "reason": "identical_to_english"
+    },
+    "admin.pending_activations_title": {
+      "current": "⚠️ **PENDING VPN ACTIVATIONS**\n",
+      "en": "⚠️ **PENDING VPN ACTIVATIONS**\n",
+      "ru": "⚠️ **ОТЛОЖЕННЫЕ АКТИВАЦИИ VPN**\n",
+      "reason": "identical_to_english"
+    },
+    "admin.pending_activations_top": {
+      "current": "\n**Top 5 oldest:**\n",
+      "en": "\n**Top 5 oldest:**\n",
+      "ru": "\n**Топ-5 старейших:**\n",
+      "reason": "identical_to_english"
+    },
+    "admin.pending_activations_total": {
+      "current": "Total pending subscriptions: **{count}**\n",
+      "en": "Total pending subscriptions: **{count}**\n",
+      "ru": "Всего pending подписок: **{count}**\n",
+      "reason": "identical_to_english"
+    },
+    "admin.prev": {
+      "current": "⬅️ Back",
+      "en": "⬅️ Back",
+      "ru": "⬅️ Назад",
+      "reason": "identical_to_english"
+    },
+    "admin.promo_stats": {
+      "current": "📊 Promo Stats",
+      "en": "📊 Promo Stats",
+      "ru": "📊 Статистика промокодов",
+      "reason": "identical_to_english"
+    },
+    "admin.recovered": {
+      "current": "✅ **SERVICE RESTORED**\n\nDatabase is available again.\n\n• Bot is fully operational\n• All operations restored\n• Background tasks running",
+      "en": "✅ **SERVICE RESTORED**\n\nDatabase is available again.\n\n• Bot is fully operational\n• All operations restored\n• Background tasks running",
+      "ru": "✅ **СЛУЖБА ВОССТАНОВЛЕНА**\n\nБаза данных стала доступна.\n\n• Бот работает в полнофункциональном режиме\n• Все операции восстановлены\n• Фоновые задачи запущены",
+      "reason": "identical_to_english"
+    },
+    "admin.referral_history": {
+      "current": "📋 Rewards History",
+      "en": "📋 Rewards History",
+      "ru": "📋 История начислений",
+      "reason": "identical_to_english"
+    },
+    "admin.referral_stats": {
+      "current": "🤝 Referral Stats",
+      "en": "🤝 Referral Stats",
+      "ru": "🤝 Реферальная статистика",
+      "reason": "identical_to_english"
+    },
+    "admin.referral_top": {
+      "current": "📈 Top Referrers",
+      "en": "📈 Top Referrers",
+      "ru": "📈 Топ рефереров",
+      "reason": "identical_to_english"
+    },
+    "admin.refresh": {
+      "current": "🔄 Refresh",
+      "en": "🔄 Refresh",
+      "ru": "🔄 Обновить",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_all_keys": {
+      "current": "🔄 Reissue All Keys",
+      "en": "🔄 Reissue All Keys",
+      "ru": "🔄 Перевыпустить все ключи",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_for_user": {
+      "current": "👤 Reissue for User",
+      "en": "👤 Reissue for User",
+      "ru": "👤 Перевыпустить для пользователя",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_invalid_id": {
+      "current": "Invalid telegram_id format. Use number.",
+      "en": "Invalid telegram_id format. Use number.",
+      "ru": "Неверный формат telegram_id. Используйте число.",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_key": {
+      "current": "🔁 Reissue Key",
+      "en": "🔁 Reissue Key",
+      "ru": "🔁 Перевыпустить ключ",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_usage": {
+      "current": "Usage: /reissue_key <telegram_id>",
+      "en": "Usage: /reissue_key <telegram_id>",
+      "ru": "Использование: /reissue_key <telegram_id>",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_user_notification": {
+      "current": "🔐 VPN key updated\n\nYour VPN connection key has been updated.\n\n🔑 <b>New key:</b>\n<code>{sub_url}</code>\n\nUse this key in your VPN app.\n\nThe old key is no longer valid.",
+      "en": "🔐 VPN key updated\n\nYour VPN connection key has been updated.\n\n🔑 <b>New key:</b>\n<code>{sub_url}</code>\n\nUse this key in your VPN app.\n\nThe old key is no longer valid.",
+      "ru": "🔐 Обновление VPN-ключа\n\nВаш VPN-ключ обновлён администратором\nи переведён на новую версию сервера.\n\nДля корректной работы:\n— удалите старый ключ из VPN-приложения\n— добавьте новую ссылку подписки\n\nСсылка подписки:\n\n{sub_url}\n\nОбновление необходимо для сохранения\nстабильности и производительности соединения.",
+      "reason": "identical_to_english"
+    },
+    "admin.revoke_confirm_text": {
+      "current": "❌ Revoke access\n\nNotify user?",
+      "en": "❌ Revoke access\n\nNotify user?",
+      "ru": "❌ Лишить доступа\n\nУведомить пользователя?",
+      "reason": "identical_to_english"
+    },
+    "admin.revoke_fail_no_sub": {
+      "current": "❌ User has no active subscription",
+      "en": "❌ User has no active subscription",
+      "ru": "❌ У пользователя нет активной подписки",
+      "reason": "identical_to_english"
+    },
+    "admin.revoke_user_notification": {
+      "current": "⛔ Your access to Atlas Secure has been revoked by the administrator.",
+      "en": "⛔ Your access to Atlas Secure has been revoked by the administrator.",
+      "ru": "⛔ Ваш доступ к Atlas Secure был отозван администратором.",
+      "reason": "identical_to_english"
+    },
+    "admin.revoke_vip": {
+      "current": "❌ Revoke VIP",
+      "en": "❌ Revoke VIP",
+      "ru": "❌ Снять VIP",
+      "reason": "identical_to_english"
+    },
+    "admin.search": {
+      "current": "🔍 Search",
+      "en": "🔍 Search",
+      "ru": "🔍 Поиск",
+      "reason": "identical_to_english"
+    },
+    "admin.send": {
+      "current": "✅ Send",
+      "en": "✅ Send",
+      "ru": "✅ Отправить",
+      "reason": "identical_to_english"
+    },
+    "admin.sort_by_cashback": {
+      "current": "💰 By Cashback",
+      "en": "💰 By Cashback",
+      "ru": "💰 По кешбэку",
+      "reason": "identical_to_english"
+    },
+    "admin.sort_by_invited": {
+      "current": "👥 By Invites",
+      "en": "👥 By Invites",
+      "ru": "👥 По приглашениям",
+      "reason": "identical_to_english"
+    },
+    "admin.sort_by_revenue": {
+      "current": "📈 By Revenue",
+      "en": "📈 By Revenue",
+      "ru": "📈 По доходу",
+      "reason": "identical_to_english"
+    },
+    "admin.stats": {
+      "current": "📊 Statistics",
+      "en": "📊 Statistics",
+      "ru": "📊 Статистика",
+      "reason": "identical_to_english"
+    },
+    "admin.system": {
+      "current": "🚨 System",
+      "en": "🚨 System",
+      "ru": "🚨 Система",
+      "reason": "identical_to_english"
+    },
+    "admin.test_first_purchase": {
+      "current": "💰 Test First Purchase Notification",
+      "en": "💰 Test First Purchase Notification",
+      "ru": "💰 Тест уведомления о первой покупке",
+      "reason": "identical_to_english"
+    },
+    "admin.test_menu": {
+      "current": "🧪 Tests",
+      "en": "🧪 Tests",
+      "ru": "🧪 Тесты",
+      "reason": "identical_to_english"
+    },
+    "admin.test_reminders": {
+      "current": "⏰ Test Reminders",
+      "en": "⏰ Test Reminders",
+      "ru": "⏰ Тест напоминаний",
+      "reason": "identical_to_english"
+    },
+    "admin.user": {
+      "current": "👤 User",
+      "en": "👤 User",
+      "ru": "👤 Пользователь",
+      "reason": "identical_to_english"
+    },
+    "admin.user_not_found": {
+      "current": "❌ User not found",
+      "en": "❌ User not found",
+      "ru": "❌ Пользователь не найден",
+      "reason": "identical_to_english"
+    },
+    "admin.user_prompt_enter_id": {
+      "current": "👤 User\n\nEnter Telegram ID or username:",
+      "en": "👤 User\n\nEnter Telegram ID or username:",
+      "ru": "👤 Пользователь\n\nВведите Telegram ID или username пользователя:",
+      "reason": "identical_to_english"
+    },
+    "admin.vip_granted": {
+      "current": "✅ VIP status granted",
+      "en": "✅ VIP status granted",
+      "ru": "✅ VIP-статус выдан",
+      "reason": "identical_to_english"
+    },
+    "admin.vip_not_found": {
+      "current": "❌ VIP status not found or already revoked",
+      "en": "❌ VIP status not found or already revoked",
+      "ru": "❌ VIP-статус не найден или уже снят",
+      "reason": "identical_to_english"
+    },
+    "admin.vip_revoked": {
+      "current": "✅ VIP status revoked",
+      "en": "✅ VIP status revoked",
+      "ru": "✅ VIP-статус снят",
+      "reason": "identical_to_english"
+    },
+    "broadcast._ab_stats": {
+      "current": "📊 A/B Stats",
+      "en": "📊 A/B Stats",
+      "ru": "📊 A/B статистика",
+      "reason": "identical_to_english"
+    },
+    "broadcast._ab_stats_empty": {
+      "current": "📊 A/B Statistics\n\nNo A/B tests found.",
+      "en": "📊 A/B Statistics\n\nNo A/B tests found.",
+      "ru": "📊 A/B статистика\n\nA/B тестов не найдено.",
+      "reason": "identical_to_english"
+    },
+    "broadcast._ab_stats_select": {
+      "current": "📊 A/B Statistics\n\nSelect notification to view statistics:",
+      "en": "📊 A/B Statistics\n\nSelect notification to view statistics:",
+      "ru": "📊 A/B статистика\n\nВыберите уведомление для просмотра статистики:",
+      "reason": "identical_to_english"
+    },
+    "broadcast._ab_test": {
+      "current": "🔬 A/B Test",
+      "en": "🔬 A/B Test",
+      "ru": "🔬 A/B тест",
+      "reason": "identical_to_english"
+    },
+    "broadcast._confirm_send": {
+      "current": "✅ Send",
+      "en": "✅ Send",
+      "ru": "✅ Отправить",
+      "reason": "identical_to_english"
+    },
+    "broadcast._create": {
+      "current": "➕ Create Notification",
+      "en": "➕ Create Notification",
+      "ru": "➕ Создать уведомление",
+      "reason": "identical_to_english"
+    },
+    "broadcast._normal": {
+      "current": "📝 Normal Notification",
+      "en": "📝 Normal Notification",
+      "ru": "📝 Обычное уведомление",
+      "reason": "identical_to_english"
+    },
+    "broadcast._preview_confirm": {
+      "current": "📋 Notification preview:\n\n{preview}\n\nConfirm send:",
+      "en": "📋 Notification preview:\n\n{preview}\n\nConfirm send:",
+      "ru": "📋 Предпросмотр уведомления:\n\n{preview}\n\nПодтвердите отправку:",
+      "reason": "identical_to_english"
+    },
+    "broadcast._report_partial": {
+      "current": "⚠️ Broadcast completed with errors.\n\nTotal: {total}\nSuccess: {sent}\nFailed: {failed}\n\nFailed users:\n{failed_list}\n\n📝 ID: {broadcast_id}",
+      "en": "⚠️ Broadcast completed with errors.\n\nTotal: {total}\nSuccess: {sent}\nFailed: {failed}\n\nFailed users:\n{failed_list}\n\n📝 ID: {broadcast_id}",
+      "ru": "⚠️ Broadcast completed with errors.\n\nTotal: {total}\nSuccess: {sent}\nFailed: {failed}\n\nFailed users:\n{failed_list}\n\n📝 ID: {broadcast_id}",
+      "reason": "identical_to_english"
+    },
+    "broadcast._report_success": {
+      "current": "✅ Broadcast completed.\n\nTotal: {total}\nSuccess: {sent}\nFailed: 0\n\n📝 ID: {broadcast_id}",
+      "en": "✅ Broadcast completed.\n\nTotal: {total}\nSuccess: {sent}\nFailed: 0\n\n📝 ID: {broadcast_id}",
+      "ru": "✅ Broadcast completed.\n\nTotal: {total}\nSuccess: {sent}\nFailed: 0\n\n📝 ID: {broadcast_id}",
+      "reason": "identical_to_english"
+    },
+    "broadcast._section_title": {
+      "current": "📣 Notifications\n\nSelect action:",
+      "en": "📣 Notifications\n\nSelect action:",
+      "ru": "📣 Уведомления\n\nВыберите действие:",
+      "reason": "identical_to_english"
+    },
+    "broadcast._segment_all": {
+      "current": "🌍 All Users",
+      "en": "🌍 All Users",
+      "ru": "🌍 Все пользователи",
+      "reason": "identical_to_english"
+    },
+    "broadcast._sending": {
+      "current": "📤 Sending notification...\n\nUsers: {total}\nPlease wait.",
+      "en": "📤 Sending notification...\n\nUsers: {total}\nPlease wait.",
+      "ru": "📤 Отправка уведомления...\n\nПользователей: {total}\nОжидайте завершения.",
+      "reason": "identical_to_english"
+    },
+    "broadcast._type_info": {
+      "current": "ℹ️ Information",
+      "en": "ℹ️ Information",
+      "ru": "ℹ️ Информация",
+      "reason": "identical_to_english"
+    },
+    "broadcast._type_maintenance": {
+      "current": "🔧 Maintenance",
+      "en": "🔧 Maintenance",
+      "ru": "🔧 Технические работы",
+      "reason": "identical_to_english"
+    },
+    "broadcast._type_promo": {
+      "current": "🎯 Promo",
+      "en": "🎯 Promo",
+      "ru": "🎯 Промо",
+      "reason": "identical_to_english"
+    },
+    "broadcast._type_security": {
+      "current": "🔒 Security",
+      "en": "🔒 Security",
+      "ru": "🔒 Безопасность",
+      "reason": "identical_to_english"
+    },
+    "buy.back_to_tariffs": {
+      "current": "← Back",
+      "en": "← Back",
+      "ru": "← Назад",
+      "reason": "identical_to_english"
+    },
+    "buy.button_price": {
+      "current": "{price} ₽ — {period}",
+      "en": "{price} ₽ — {period}",
+      "ru": "{period} — {price} ₽",
+      "reason": "identical_to_english"
+    },
+    "buy.button_price_badge": {
+      "current": "{price} ₽ — {period} {badge}",
+      "en": "{price} ₽ — {period} {badge}",
+      "ru": "{period} — {price} ₽ {badge}",
+      "reason": "identical_to_english"
+    },
+    "buy.button_price_discount": {
+      "current": "{base} ₽ → {final} ₽ — {period}",
+      "en": "{base} ₽ → {final} ₽ — {period}",
+      "ru": "{period} — {base} → {final} ₽",
+      "reason": "identical_to_english"
+    },
+    "buy.button_price_discount_badge": {
+      "current": "{base} ₽ → {final} ₽ — {period} {badge}",
+      "en": "{base} ₽ → {final} ₽ — {period} {badge}",
+      "ru": "{period} — {base} → {final} ₽ {badge}",
+      "reason": "identical_to_english"
+    },
+    "buy.corporate_back": {
+      "current": "◀️ Back",
+      "en": "◀️ Back",
+      "ru": "◀️ Назад",
+      "reason": "identical_to_english"
+    },
+    "buy.corporate_confirm": {
+      "current": "✅ Confirm",
+      "en": "✅ Confirm",
+      "ru": "✅ Подтвердить",
+      "reason": "identical_to_english"
+    },
+    "buy.enter_promo": {
+      "current": "🎟 Enter promo code",
+      "en": "🎟 Enter promo code",
+      "ru": "🎟 Ввести промокод",
+      "reason": "identical_to_english"
+    },
+    "buy.enter_promo_button": {
+      "current": "🎟 Enter promo code",
+      "en": "🎟 Enter promo code",
+      "ru": "🎟 Ввести промокод",
+      "reason": "identical_to_english"
+    },
+    "buy.invoice_description": {
+      "current": "Atlas Secure VPN {tariff_name} tariff, {months}-month subscription",
+      "en": "Atlas Secure VPN {tariff_name} tariff, {months}-month subscription",
+      "ru": "Atlas Secure VPN тариф {tariff_name}, подписка {months} мес.",
+      "reason": "identical_to_english"
+    },
+    "buy.period_2_4": {
+      "current": "{months} months",
+      "en": "{months} months",
+      "ru": "{months} мес",
+      "reason": "identical_to_english"
+    },
+    "buy.period_5_plus": {
+      "current": "{months} months",
+      "en": "{months} months",
+      "ru": "{months} мес",
+      "reason": "identical_to_english"
+    },
+    "buy.promo_applied": {
+      "current": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price.",
+      "en": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price.",
+      "ru": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Промокод применён. Скидка уже учтена в цене.",
+      "reason": "identical_to_english"
+    },
+    "buy.promo_applied_with_ttl": {
+      "current": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price. Valid for {minutes} more min.",
+      "en": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price. Valid for {minutes} more min.",
+      "ru": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Промокод применён. Скидка уже учтена в цене. Действителен ещё {minutes} мин.",
+      "reason": "identical_to_english"
+    },
+    "buy.select_basic_button": {
+      "current": "⚡️ Select Basic",
+      "en": "⚡️ Select Basic",
+      "ru": "⚡️ Выбрать Basic",
+      "reason": "identical_to_english"
+    },
+    "buy.select_plus_button": {
+      "current": "👑 Select Plus",
+      "en": "👑 Select Plus",
+      "ru": "👑 Выбрать Plus",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_basic_selected": {
+      "current": "🔐 Basic tariff selected\nWhat period are you interested in?",
+      "en": "🔐 Basic tariff selected\nWhat period are you interested in?",
+      "ru": "⚡ <b>Basic</b> — выберите срок",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_button_1": {
+      "current": "1 month · For trial · 149 ₽",
+      "en": "1 month · For trial · 149 ₽",
+      "ru": "1 месяц · Для знакомства · 149 ₽",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_button_12": {
+      "current": "12 months · Don't think about access · 899 ₽",
+      "en": "12 months · Don't think about access · 899 ₽",
+      "ru": "12 месяцев · Не думать о доступе · 899 ₽",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_button_3": {
+      "current": "3 months · Most popular · 399 ₽ ⭐",
+      "en": "3 months · Most popular · 399 ₽ ⭐",
+      "ru": "3 месяца · Чаще всего выбирают · 399 ₽ ⭐",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_label_basic": {
+      "current": "🪙 Basic",
+      "en": "🪙 Basic",
+      "ru": "🪙 Basic",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_label_plus": {
+      "current": "👑 Plus",
+      "en": "👑 Plus",
+      "ru": "👑 Plus",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_plus_selected": {
+      "current": "🔐 Plus tariff selected\nWhat period are you interested in?",
+      "en": "🔐 Plus tariff selected\nWhat period are you interested in?",
+      "ru": "👑 <b>Plus</b> — выберите срок",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_select_basic_button": {
+      "current": "⚡️ Select Basic",
+      "en": "⚡️ Select Basic",
+      "ru": "⚡️ Выбрать Basic",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_select_plus_button": {
+      "current": "👑 Select Plus",
+      "en": "👑 Select Plus",
+      "ru": "👑 Выбрать Plus",
+      "reason": "identical_to_english"
+    },
+    "common.back": {
+      "current": "← Back",
+      "en": "Back",
+      "ru": "Назад",
+      "reason": "latin_script_only"
+    },
+    "common.cancel": {
+      "current": "❌ Cancel",
+      "en": "❌ Cancel",
+      "ru": "❌ Отмена",
+      "reason": "identical_to_english"
+    },
+    "common.go_to_connection": {
+      "current": "🔌 Go to Connection",
+      "en": "🔌 Go to Connection",
+      "ru": "🔌 Перейти к подключению",
+      "reason": "identical_to_english"
+    },
+    "errors.db_init_stage_warning": {
+      "current": "⚠️ Database is still initializing (STAGE). Some features may be unavailable.",
+      "en": "⚠️ Database is still initializing (STAGE). Some features may be unavailable.",
+      "ru": "⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны.",
+      "reason": "identical_to_english"
+    },
+    "errors.discount_too_low": {
+      "current": "Amount after discount is below minimum for card payment (64 ₽).\nPlease select another tariff.",
+      "en": "Amount after discount is below minimum for card payment (64 ₽).\nPlease select another tariff.",
+      "ru": "Сумма после скидки ниже минимальной для оплаты картой (64 ₽).\nПожалуйста, выберите другой тариф.",
+      "reason": "identical_to_english"
+    },
+    "errors.payment_min_amount": {
+      "current": "Amount after discount is below minimum for card payment (64 ₽).\nPlease select another tariff.",
+      "en": "Amount after discount is below minimum for card payment (64 ₽).\nPlease select another tariff.",
+      "ru": "Сумма после скидки ниже минимальной для оплаты картой (64 ₽).\nПожалуйста, выберите другой тариф.",
+      "reason": "identical_to_english"
+    },
+    "errors.session_expired": {
+      "current": "⏳ Session expired. Please try again.",
+      "en": "⏳ Session expired. Please try again.",
+      "ru": "⏳ Сессия устарела. Пожалуйста, попробуйте ещё раз.",
+      "reason": "identical_to_english"
+    },
+    "errors.start_command": {
+      "current": "Please start with /start command",
+      "en": "Please start with /start command",
+      "ru": "Пожалуйста, начните с команды /start",
+      "reason": "identical_to_english"
+    },
+    "errors.try_later": {
+      "current": "⚠️ An error occurred. Please try again later.",
+      "en": "⚠️ An error occurred. Please try again later.",
+      "ru": "⚠️ Произошла ошибка. Попробуйте позже.",
+      "reason": "identical_to_english"
+    },
+    "farm.back_to_farm": {
+      "current": "🔙 To the farm",
+      "en": "🔙 To the farm",
+      "ru": "🔙 На ферму",
+      "reason": "identical_to_english"
+    },
+    "farm.button_buy_plot_slots": {
+      "current": "➕ Buy a plot — {price} ₽ ({slots} left)",
+      "en": "➕ Buy a plot — {price} ₽ ({slots} left)",
+      "ru": "➕ Купить грядку — {price} ₽ (осталось мест: {slots})",
+      "reason": "identical_to_english"
+    },
+    "farm.button_buy_plot_slots_disabled": {
+      "current": "➕ Plot (need {price} ₽, {slots} left)",
+      "en": "➕ Plot (need {price} ₽, {slots} left)",
+      "ru": "➕ Грядка (нужно {price} ₽, осталось мест: {slots})",
+      "reason": "identical_to_english"
+    },
+    "farm.button_dig": {
+      "current": "⛏ Dig up #{num}",
+      "en": "⛏ Dig up #{num}",
+      "ru": "⛏ Выкопать #{num}",
+      "reason": "identical_to_english"
+    },
+    "farm.button_early": {
+      "current": "🚜 Harvest #{num} unripe — +{reward} ₽",
+      "en": "🚜 Harvest #{num} unripe — +{reward} ₽",
+      "ru": "🚜 Собрать незрелым #{num} — +{reward} ₽",
+      "reason": "identical_to_english"
+    },
+    "farm.button_guide": {
+      "current": "📖 Guide",
+      "en": "📖 Guide",
+      "ru": "📖 Инструкция",
+      "reason": "identical_to_english"
+    },
+    "farm.button_plant_storm_blocked": {
+      "current": "🚫 Plot {num}: planting is closed during a storm",
+      "en": "🚫 Plot {num}: planting is closed during a storm",
+      "ru": "🚫 Грядка {num}: посадка во время шторма недоступна",
+      "reason": "identical_to_english"
+    },
+    "farm.button_shield": {
+      "current": "🛡 Cover #{num} — {price} ₽",
+      "en": "🛡 Cover #{num} — {price} ₽",
+      "ru": "🛡 Накрыть #{num} — {price} ₽",
+      "reason": "identical_to_english"
+    },
+    "farm.dig_confirm": {
+      "current": "⛏ <b>Dig up the plant?</b>\n\nDo you want to dig up <b>{name}</b> on plot {num}?\n\n⚠️ The plant will be destroyed with no reward.\nThe plot becomes empty and you can plant something new.",
+      "en": "⛏ <b>Dig up the plant?</b>\n\nDo you want to dig up <b>{name}</b> on plot {num}?\n\n⚠️ The plant will be destroyed with no reward.\nThe plot becomes empty and you can plant something new.",
+      "ru": "⛏ <b>Выкопать растение?</b>\n\nВы хотите выкопать <b>{name}</b> на грядке {num}?\n\n⚠️ Растение будет уничтожено без награды.\nГрядка станет пустой и можно будет посадить новое растение.",
+      "reason": "identical_to_english"
+    },
+    "farm.dig_success": {
+      "current": "⛏ Plant dug up! The plot is free.",
+      "en": "⛏ Plant dug up! The plot is free.",
+      "ru": "⛏ Растение выкопано! Грядка свободна.",
+      "reason": "identical_to_english"
+    },
+    "farm.dig_unavailable": {
+      "current": "❌ This plant cannot be dug up",
+      "en": "❌ This plant cannot be dug up",
+      "ru": "❌ Растение недоступно для выкапывания",
+      "reason": "identical_to_english"
+    },
+    "farm.dig_yes": {
+      "current": "⛏ Yes, dig up",
+      "en": "⛏ Yes, dig up",
+      "ru": "⛏ Да, выкопать",
+      "reason": "identical_to_english"
+    },
+    "farm.early_failed": {
+      "current": "Could not credit the reward.",
+      "en": "Could not credit the reward.",
+      "ru": "Не удалось зачислить награду.",
+      "reason": "identical_to_english"
+    },
+    "farm.early_no_storm": {
+      "current": "Early harvest is only available during a storm.",
+      "en": "Early harvest is only available during a storm.",
+      "ru": "Ранний сбор доступен только во время шторма.",
+      "reason": "identical_to_english"
+    },
+    "farm.early_success": {
+      "current": "🚜 Harvested {emoji} unripe: +{reward} ₽",
+      "en": "🚜 Harvested {emoji} unripe: +{reward} ₽",
+      "ru": "🚜 Собрано {emoji} незрелым: +{reward} ₽",
+      "reason": "identical_to_english"
+    },
+    "farm.early_unavailable": {
+      "current": "Early harvest is not available for this plant.",
+      "en": "Early harvest is not available for this plant.",
+      "ru": "Ранний сбор недоступен для этого растения.",
+      "reason": "identical_to_english"
+    },
+    "farm.error_already_harvested": {
+      "current": "This plot has already been harvested",
+      "en": "This plot has already been harvested",
+      "ru": "Эта грядка уже собрана",
+      "reason": "identical_to_english"
+    },
+    "farm.error_boost_limit": {
+      "current": "No faster than this: the plant has hit its growth limit.",
+      "en": "No faster than this: the plant has hit its growth limit.",
+      "ru": "Быстрее уже не получится: ускорение этого растения на пределе.",
+      "reason": "identical_to_english"
+    },
+    "farm.error_plot_not_found": {
+      "current": "❌ Plot not found",
+      "en": "❌ Plot not found",
+      "ru": "❌ Грядка не найдена",
+      "reason": "identical_to_english"
+    },
+    "farm.pay_card": {
+      "current": "💳 Card",
+      "en": "💳 Card",
+      "ru": "💳 Картой",
+      "reason": "identical_to_english"
+    },
+    "farm.pay_card_unavailable": {
+      "current": "Card payment is temporarily unavailable.",
+      "en": "Card payment is temporarily unavailable.",
+      "ru": "Оплата картой временно недоступна.",
+      "reason": "identical_to_english"
+    },
+    "farm.pay_error": {
+      "current": "Payment creation error.",
+      "en": "Payment creation error.",
+      "ru": "Ошибка создания платежа.",
+      "reason": "identical_to_english"
+    },
+    "farm.pay_sbp": {
+      "current": "📲 SBP",
+      "en": "📲 SBP",
+      "ru": "📲 СБП",
+      "reason": "identical_to_english"
+    },
+    "farm.pay_sbp_unavailable": {
+      "current": "SBP is temporarily unavailable.",
+      "en": "SBP is temporarily unavailable.",
+      "ru": "СБП временно недоступен.",
+      "reason": "identical_to_english"
+    },
+    "farm.paywall": {
+      "current": "🌾 The farm is for subscribers only.\nGet a subscription to come back to your plots.",
+      "en": "🌾 The farm is for subscribers only.\nGet a subscription to come back to your plots.",
+      "ru": "🌾 Ферма доступна только подписчикам.\nОформите подписку, чтобы вернуться к грядкам.",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_apple": {
+      "current": "Apple tree",
+      "en": "Apple tree",
+      "ru": "Яблоня",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_cactus": {
+      "current": "Cactus",
+      "en": "Cactus",
+      "ru": "Кактус",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_carrot": {
+      "current": "Carrots",
+      "en": "Carrots",
+      "ru": "Морковь",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_cherry": {
+      "current": "Cherry",
+      "en": "Cherry",
+      "ru": "Вишня",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_cucumber": {
+      "current": "Cucumber",
+      "en": "Cucumber",
+      "ru": "Огурец",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_grape": {
+      "current": "Grapes",
+      "en": "Grapes",
+      "ru": "Виноград",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_greens": {
+      "current": "Greens",
+      "en": "Greens",
+      "ru": "Зелень",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_lavender": {
+      "current": "Lavender",
+      "en": "Lavender",
+      "ru": "Лаванда",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_lemon": {
+      "current": "Lemon tree",
+      "en": "Lemon tree",
+      "ru": "Лимонное дерево",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_oak": {
+      "current": "Oak",
+      "en": "Oak",
+      "ru": "Дуб",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_pepper": {
+      "current": "Chili pepper",
+      "en": "Chili pepper",
+      "ru": "Перчик",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_potato": {
+      "current": "Potatoes",
+      "en": "Potatoes",
+      "ru": "Картофель",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_strawberry": {
+      "current": "Strawberry",
+      "en": "Strawberry",
+      "ru": "Клубника",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_sunflower": {
+      "current": "Sunflower",
+      "en": "Sunflower",
+      "ru": "Подсолнух",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_tomato": {
+      "current": "Tomatoes",
+      "en": "Tomatoes",
+      "ru": "Томаты",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_already": {
+      "current": "This plot is already covered.",
+      "en": "This plot is already covered.",
+      "ru": "Грядка уже накрыта.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_applied": {
+      "current": "🛡 Plot covered (−{price} ₽)",
+      "en": "🛡 Plot covered (−{price} ₽)",
+      "ru": "🛡 Грядка накрыта (−{price} ₽)",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_failed": {
+      "current": "Could not cover the plot. Please try again.",
+      "en": "Could not cover the plot. Please try again.",
+      "ru": "Не удалось накрыть грядку. Попробуйте ещё раз.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_invoice_comment": {
+      "current": "Atlas Secure — Covering plot {num}",
+      "en": "Atlas Secure — Covering plot {num}",
+      "ru": "Atlas Secure — Накрытие грядки {num}",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_invoice_too_late": {
+      "current": "⏳ Less than {minutes} min until the storm — the payment will not arrive in time and the cover will not save the plot.\n\nYou can still cover the plot from your balance if it has enough funds.",
+      "en": "⏳ Less than {minutes} min until the storm — the payment will not arrive in time and the cover will not save the plot.\n\nYou can still cover the plot from your balance if it has enough funds.",
+      "ru": "⏳ До шторма меньше {minutes} мин — платёж не успеет дойти, и плёнка не спасёт грядку.\n\nНакрыть ещё можно с баланса, если на нём хватает денег.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_lava_button": {
+      "current": "💳 Go to payment",
+      "en": "💳 Go to payment",
+      "ru": "💳 Перейти к оплате",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_lava_invoice": {
+      "current": "💳 <b>Payment for covering the plot</b>\n\nAmount: {amount} ₽\n\nThe plot will be covered automatically after payment.",
+      "en": "💳 <b>Payment for covering the plot</b>\n\nAmount: {amount} ₽\n\nThe plot will be covered automatically after payment.",
+      "ru": "💳 <b>Оплата накрытия грядки</b>\n\nСумма: {amount} ₽\n\nПосле оплаты грядка накроется автоматически.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_no_storm": {
+      "current": "The storm has already passed or has not been announced yet.",
+      "en": "The storm has already passed or has not been announced yet.",
+      "ru": "Шторм уже прошёл или ещё не объявлен.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_payment_title": {
+      "current": "🛡 <b>Covering plot {num}</b>\n\nPlant: {emoji} {name}\nCover price: <b>{price} ₽</b>\nYour balance: {balance} ₽ — not enough for the cover.\n\n⚠️ The invoice is for the full cover price — {price} ₽. Your balance is not charged when you pay by card or SBP, it stays untouched.\n\nChoose a payment method:",
+      "en": "🛡 <b>Covering plot {num}</b>\n\nPlant: {emoji} {name}\nCover price: <b>{price} ₽</b>\nYour balance: {balance} ₽ — not enough for the cover.\n\n⚠️ The invoice is for the full cover price — {price} ₽. Your balance is not charged when you pay by card or SBP, it stays untouched.\n\nChoose a payment method:",
+      "ru": "🛡 <b>Накрытие грядки {num}</b>\n\nРастение: {emoji} {name}\nЦена плёнки: <b>{price} ₽</b>\nНа балансе: {balance} ₽ — на плёнку не хватает.\n\n⚠️ Счёт выставляется на полную стоимость плёнки — {price} ₽. Баланс при оплате картой или через СБП не списывается и остаётся у вас.\n\nВыберите способ оплаты:",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_plot_not_growing": {
+      "current": "This plot is no longer growing.",
+      "en": "This plot is no longer growing.",
+      "ru": "Грядка больше не растёт.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_sbp_button": {
+      "current": "📲 Pay via SBP",
+      "en": "📲 Pay via SBP",
+      "ru": "📲 Оплатить через СБП",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_sbp_invoice": {
+      "current": "📲 <b>SBP — covering the plot</b>\n\nAmount including the fee: {amount} ₽\n\nThe plot will be covered automatically after payment.",
+      "en": "📲 <b>SBP — covering the plot</b>\n\nAmount including the fee: {amount} ₽\n\nThe plot will be covered automatically after payment.",
+      "ru": "📲 <b>СБП — накрытие грядки</b>\n\nСумма с учётом наценки: {amount} ₽\n\nПосле оплаты грядка накроется автоматически.",
+      "reason": "identical_to_english"
+    },
+    "farm.storm_banner": {
+      "current": "⛈ <b>A storm is coming!</b> Impact in ≈ {hours} h\nGrowing plots without a cover will die.\n🚫 <b>Planting is unavailable until the storm is over.</b>\n",
+      "en": "⛈ <b>A storm is coming!</b> Impact in ≈ {hours} h\nGrowing plots without a cover will die.\n🚫 <b>Planting is unavailable until the storm is over.</b>\n",
+      "ru": "⛈ <b>Надвигается шторм!</b> До удара ≈ {hours} ч\nРастущие грядки без плёнки погибнут.\n🚫 <b>Посадка новых растений недоступна до конца шторма.</b>\n",
+      "reason": "identical_to_english"
+    },
+    "farm.storm_planting_blocked": {
+      "current": "🚫 A storm is coming — planting is paused. You can plant again once it passes.",
+      "en": "🚫 A storm is coming — planting is paused. You can plant again once it passes.",
+      "ru": "🚫 Идёт шторм — посадка временно недоступна. После шторма можно будет сажать снова.",
+      "reason": "identical_to_english"
+    },
+    "games.menu_paywall": {
+      "current": "🎮 The game club is for subscribers only!\nGet a subscription to unlock all games 🎯",
+      "en": "🎮 The game club is for subscribers only!\nGet a subscription to unlock all games 🎯",
+      "ru": "🎮 Игровой клуб доступен только для подписчиков!\nОформите подписку и получите доступ ко всем играм 🎯",
+      "reason": "identical_to_english"
+    },
+    "games.race_blocked": {
+      "current": "The game is already running, please wait",
+      "en": "The game is already running, please wait",
+      "ru": "Игра уже запущена, подождите",
+      "reason": "identical_to_english"
+    },
+    "incident.banner": {
+      "current": "⚠️ Technical work in progress",
+      "en": "⚠️ Technical work in progress",
+      "ru": "⚠️ Ведутся технические работы",
+      "reason": "identical_to_english"
+    },
+    "instruction._device_android": {
+      "current": "🤖 Android",
+      "en": "🤖 Android",
+      "ru": "🤖 Android",
+      "reason": "identical_to_english"
+    },
+    "instruction._device_desktop": {
+      "current": "💻 Windows / macOS",
+      "en": "💻 Windows / macOS",
+      "ru": "💻 Windows / macOS",
+      "reason": "identical_to_english"
+    },
+    "instruction._device_ios": {
+      "current": "📱 iOS",
+      "en": "📱 iOS",
+      "ru": "📱 iOS",
+      "reason": "identical_to_english"
+    },
+    "instruction._download_android": {
+      "current": "🤖 Android",
+      "en": "🤖 Android",
+      "ru": "🤖 Android",
+      "reason": "identical_to_english"
+    },
+    "instruction._download_desktop": {
+      "current": "💻 Windows",
+      "en": "💻 Windows",
+      "ru": "💻 Windows",
+      "reason": "identical_to_english"
+    },
+    "instruction._download_ios": {
+      "current": "📱 iOS",
+      "en": "📱 iOS",
+      "ru": "📱 iOS",
+      "reason": "identical_to_english"
+    },
+    "instruction._download_macos": {
+      "current": "🍎 MacOS",
+      "en": "🍎 MacOS",
+      "ru": "🍎 MacOS",
+      "reason": "identical_to_english"
+    },
+    "instruction._download_tv": {
+      "current": "📺 TV",
+      "en": "📺 TV",
+      "ru": "📺 TV",
+      "reason": "identical_to_english"
+    },
+    "lang.change": {
+      "current": "🌍 Change language",
+      "en": "🌍 Change language",
+      "ru": "🌍 Изменить язык",
+      "reason": "identical_to_english"
+    },
+    "lang.changed_toast": {
+      "current": "✅ Language changed",
+      "en": "✅ Language changed",
+      "ru": "✅ Язык изменён",
+      "reason": "identical_to_english"
+    },
+    "lang.select_title": {
+      "current": "🌍 Select your language:",
+      "en": "🌍 Select your language:",
+      "ru": "🌍 Выберите язык:",
+      "reason": "identical_to_english"
+    },
+    "main.about": {
+      "current": "ℹ️ About",
+      "en": "ℹ️ About",
+      "ru": "ℹ️ О сервисе",
+      "reason": "identical_to_english"
+    },
+    "main.about_title": {
+      "current": "🔎 About Atlas Secure",
+      "en": "🔎 About Atlas Secure",
+      "ru": "🔎 О сервисе Atlas Secure",
+      "reason": "identical_to_english"
+    },
+    "main.auto_renew_disable": {
+      "current": "⏸ Disable auto-renewal",
+      "en": "⏸ Disable auto-renewal",
+      "ru": "⏸ Отключить автопродление",
+      "reason": "identical_to_english"
+    },
+    "main.auto_renew_disabled": {
+      "current": "⏸ Auto-renewal disabled",
+      "en": "⏸ Auto-renewal disabled",
+      "ru": "⏸ Автопродление отключено",
+      "reason": "identical_to_english"
+    },
+    "main.auto_renew_enable": {
+      "current": "🔄 Enable auto-renewal",
+      "en": "🔄 Enable auto-renewal",
+      "ru": "🔄 Включить автопродление",
+      "reason": "identical_to_english"
+    },
+    "main.auto_renew_enabled": {
+      "current": "✅ Auto-renewal enabled",
+      "en": "✅ Auto-renewal enabled",
+      "ru": "✅ Автопродление включено",
+      "reason": "identical_to_english"
+    },
+    "main.change_language": {
+      "current": "🌍 Change language",
+      "en": "🌍 Change language",
+      "ru": "🌍 Изменить язык",
+      "reason": "identical_to_english"
+    },
+    "main.db_init_stage_warning": {
+      "current": "⚠️ Database is still initializing (STAGE). Some features may be unavailable.",
+      "en": "⚠️ Database is still initializing (STAGE). Some features may be unavailable.",
+      "ru": "⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны.",
+      "reason": "identical_to_english"
+    },
+    "main.ecosystem": {
+      "current": "⚪️ Our Ecosystem",
+      "en": "⚪️ Our Ecosystem",
+      "ru": "⚪️ Наша экосистема",
+      "reason": "identical_to_english"
+    },
+    "main.ecosystem_text": {
+      "current": "Atlas Secure develops as a unified digital environment within Telegram.\n\n⚪️ Available in the ecosystem:\n\n📶 Stable access service\n• High speed without limits\n• Stable messengers\n• Banking and gov services work\n• Stable mobile connection\n\n📊 Only Tracker (coming soon)\nPersonal habit assistant — goals and focus in one place.\n\n⚙️ All services unified in one management system.\n\nAtlas Secure is not separate features, but a connected environment where everything works together.",
+      "en": "Atlas Secure develops as a unified digital environment within Telegram.\n\n⚪️ Available in the ecosystem:\n\n📶 Stable access service\n• High speed without limits\n• Stable messengers\n• Banking and gov services work\n• Stable mobile connection\n\n📊 Only Tracker (coming soon)\nPersonal habit assistant — goals and focus in one place.\n\n⚙️ All services unified in one management system.\n\nAtlas Secure is not separate features, but a connected environment where everything works together.",
+      "ru": "Atlas Secure развивается\nкак единая цифровая среда внутри Telegram.\n\n⚪️ В экосистеме уже доступны:\n\n📶 Сервис стабильного доступа\n• высокая скорость без ограничений\n• устойчивая работа мессенджеров\n• корректная работа банковских и гос-сервисов\n• стабильное соединение в мобильных сетях\n\n📊 Only Tracker \nПерсональный помощник по привычкам —\nконтроль целей и фокус в одном пространстве.\n\n⚙️ Все сервисы объединены\nв единую систему управления.\n\nAtlas Secure — это не отдельные функции,\nа связанная среда,\nгде всё работает согласованно и стабильно.",
+      "reason": "identical_to_english"
+    },
+    "main.ecosystem_title": {
+      "current": "🔐 Our Ecosystem · Atlas Secure",
+      "en": "🔐 Our Ecosystem · Atlas Secure",
+      "ru": "🔐 Наша Экосистема · Atlas Secure",
+      "reason": "identical_to_english"
+    },
+    "main.home_welcome_text": {
+      "current": "🔐 Atlas Secure\n\nGlad to see you in Atlas Secure 🤝\n\nWe provide:\n⚙️ stable operation of familiar services\n⚡ fast and reliable connection\n🛡 privacy by default\n\nYou use the internet as usual —\nwe take care of stability and protection.",
+      "en": "🔐 Atlas Secure\n\nGlad to see you in Atlas Secure 🤝\n\nWe provide:\n⚙️ stable operation of familiar services\n⚡ fast and reliable connection\n🛡 privacy by default\n\nYou use the internet as usual —\nwe take care of stability and protection.",
+      "ru": "🔐 Atlas Secure\n\nРады видеть Вас в Atlas Secure 🤝\n\nМы обеспечиваем:\n⚙️ стабильную работу привычных сервисов\n⚡ быстрое и надёжное соединение\n🛡 конфиденциальность по умолчанию\n\nВы пользуетесь интернетом как обычно —\nо стабильности и защите мы позаботимся.",
+      "reason": "identical_to_english"
+    },
+    "main.incident_banner": {
+      "current": "⚠️ Technical work in progress",
+      "en": "⚠️ Technical work in progress",
+      "ru": "⚠️ Ведутся технические работы",
+      "reason": "identical_to_english"
+    },
+    "main.incident_status_warning": {
+      "current": "\n\n⚠️ WARNING: Incident mode active\n{incident_text}",
+      "en": "\n\n⚠️ WARNING: Incident mode active\n{incident_text}",
+      "ru": "\n\n⚠️ ВНИМАНИЕ: Режим инцидента активен\n{incident_text}",
+      "reason": "identical_to_english"
+    },
+    "main.instruction": {
+      "current": "🔌 Instruction",
+      "en": "🔌 Instruction",
+      "ru": "🔌 Инструкция",
+      "reason": "identical_to_english"
+    },
+    "main.invalid_promo": {
+      "current": "❌ Invalid promo code",
+      "en": "❌ Invalid promo code",
+      "ru": "❌ Неверный промокод",
+      "reason": "identical_to_english"
+    },
+    "main.no": {
+      "current": "NO",
+      "en": "NO",
+      "ru": "НЕТ",
+      "reason": "identical_to_english"
+    },
+    "main.pay_card": {
+      "current": "💳 Bank Card",
+      "en": "💳 Bank Card",
+      "ru": "💳 Банковская карта",
+      "reason": "identical_to_english"
+    },
+    "main.pay_with_card": {
+      "current": "💳 Pay with card",
+      "en": "💳 Pay with card",
+      "ru": "💳 Оплатить картой",
+      "reason": "identical_to_english"
+    },
+    "main.personal_discount_label": {
+      "current": "🎯 Personal Discount {percent}%",
+      "en": "🎯 Personal Discount {percent}%",
+      "ru": "🎯 Персональная скидка {percent}%",
+      "reason": "identical_to_english"
+    },
+    "main.profile_auto_renew_disabled": {
+      "current": "🔁 Auto-renewal: disabled",
+      "en": "🔁 Auto-renewal: disabled",
+      "ru": "🔁 Автопродление: выключено",
+      "reason": "identical_to_english"
+    },
+    "main.profile_auto_renew_enabled": {
+      "current": "🔁 Auto-renewal: {next_billing_date}",
+      "en": "🔁 Auto-renewal: {next_billing_date}",
+      "ru": "🔁 Автопродление: {next_billing_date}",
+      "reason": "identical_to_english"
+    },
+    "main.promo_applied": {
+      "current": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price.",
+      "en": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price.",
+      "ru": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Промокод применён. Скидка уже учтена в цене.",
+      "reason": "identical_to_english"
+    },
+    "main.promo_discount_label": {
+      "current": "🎟 Promo code",
+      "en": "🎟 Promo code",
+      "ru": "🎟 Промокод",
+      "reason": "identical_to_english"
+    },
+    "main.referral": {
+      "current": "💎 Loyalty Program",
+      "en": "💎 Loyalty Program",
+      "ru": "💎 Программа лояльности",
+      "reason": "identical_to_english"
+    },
+    "main.reissue_notification_text": {
+      "current": "Your VPN key has been updated\nand migrated to a new server version.\n\nFor proper operation:\n— remove the old key from VPN app\n— add the new access key\n\nKey:\n\n{sub_url}\n\nUpdate is necessary to maintain\nstability and connection performance.",
+      "en": "Your VPN key has been updated\nand migrated to a new server version.\n\nFor proper operation:\n— remove the old key from VPN app\n— add the new access key\n\nKey:\n\n{sub_url}\n\nUpdate is necessary to maintain\nstability and connection performance.",
+      "ru": "Ваш VPN-ключ обновлён\nи переведён на новую версию сервера.\n\nДля корректной работы:\n— удалите старый ключ из VPN-приложения\n— добавьте новую ссылку подписки\n\nСсылка подписки:\n\n{sub_url}\n\nОбновление необходимо для сохранения\nстабильности и производительности соединения.",
+      "reason": "identical_to_english"
+    },
+    "main.reissue_notification_title": {
+      "current": "🔐 VPN Key Update",
+      "en": "🔐 VPN Key Update",
+      "ru": "🔐 Обновление VPN-ключа",
+      "reason": "identical_to_english"
+    },
+    "main.reminder_admin_1day_6h": {
+      "current": "⏳ Temporary Atlas Secure access expires in 6 hours.\n\nWe recommend purchasing a full subscription\nto maintain stable access without interruption.",
+      "en": "⏳ Temporary Atlas Secure access expires in 6 hours.\n\nWe recommend purchasing a full subscription\nto maintain stable access without interruption.",
+      "ru": "⏳ Временный доступ Atlas Secure завершается через 6 часов.\n\nРекомендуем оформить полноценную подписку,\nчтобы сохранить стабильный доступ без перерыва.",
+      "reason": "identical_to_english"
+    },
+    "main.reminder_admin_7days_24h": {
+      "current": "⏳ Temporary Atlas Secure access expires in 24 hours.\n\nWe recommend purchasing a 1-month subscription\nfor continuous and stable connection.",
+      "en": "⏳ Temporary Atlas Secure access expires in 24 hours.\n\nWe recommend purchasing a 1-month subscription\nfor continuous and stable connection.",
+      "ru": "⏳ Временный доступ Atlas Secure завершается через 24 часа.\n\nРекомендуем оформить подписку на 1 месяц\nдля непрерывного и стабильного подключения.",
+      "reason": "identical_to_english"
+    },
+    "main.reminder_paid_24h": {
+      "current": "⏳ Your Atlas Secure access expires in 24 hours.\n\nWe recommend renewing your subscription in advance\nto maintain continuous connection.",
+      "en": "⏳ Your Atlas Secure access expires in 24 hours.\n\nWe recommend renewing your subscription in advance\nto maintain continuous connection.",
+      "ru": "⏳ Срок вашего доступа Atlas Secure истекает через 24 часа.\n\nРекомендуем продлить подписку заранее,\nчтобы сохранить непрерывное соединение.",
+      "reason": "identical_to_english"
+    },
+    "main.reminder_paid_3d": {
+      "current": "⏳ Your Atlas Secure access expires in 3 days.\n\nYou can renew your subscription in advance\nto avoid connection interruption.",
+      "en": "⏳ Your Atlas Secure access expires in 3 days.\n\nYou can renew your subscription in advance\nto avoid connection interruption.",
+      "ru": "⏳ Срок вашего доступа Atlas Secure истекает через 3 дня.\n\nВы можете продлить подписку заранее,\nчтобы избежать перерыва в соединении.",
+      "reason": "identical_to_english"
+    },
+    "main.renewal_pay_button": {
+      "current": "💳 Pay",
+      "en": "💳 Pay",
+      "ru": "💳 Оплатить",
+      "reason": "identical_to_english"
+    },
+    "main.sbp_payment_text": {
+      "current": "After making the transfer, confirm payment.\n\n⸻\n\nTransfer details\n\nBank: Ozon\nCard account: 2204321075030551\n\nAmount to confirm: {amount} ₽",
+      "en": "After making the transfer, confirm payment.\n\n⸻\n\nTransfer details\n\nBank: Ozon\nCard account: 2204321075030551\n\nAmount to confirm: {amount} ₽",
+      "ru": "После выполнения перевода подтвердите оплату.\n\n⸻\n\nРеквизиты для перевода\n\nБанк: Ozon\nСчёт карты: 2204321075030551\n\nСумма к подтверждению: {amount} ₽",
+      "reason": "identical_to_english"
+    },
+    "main.select_payment_method": {
+      "current": "Choose payment method:\n\nAmount: {price:.2f} ₽",
+      "en": "Choose payment method:\n\nAmount: {price:.2f} ₽",
+      "ru": "Выберите способ оплаты:\n\nСумма: {price:.2f} ₽",
+      "reason": "identical_to_english"
+    },
+    "main.service_status": {
+      "current": "📊 Service Status",
+      "en": "📊 Service Status",
+      "ru": "📊 Статус сервиса",
+      "reason": "identical_to_english"
+    },
+    "main.service_status_text": {
+      "current": "📊 Atlas Secure Service Status\n\nCurrent status: 🟢 Service works stably\n\nAll main components function\nin normal mode:\n• access is active\n• key issuance works\n• support is available\n\nAtlas Secure is built as private\ndigital infrastructure\nwith priority on stability\nand predictable operation.\n\nOur principles:\n• target uptime — 99.9%\n• planned work is done in advance\n• critical incidents are resolved\n  in priority order\n• data loss is architecturally excluded\n\nIn case of technical work\nor changes, users\nare notified in advance through bot.\n\nLast status update:\nautomatically",
+      "en": "📊 Atlas Secure Service Status\n\nCurrent status: 🟢 Service works stably\n\nAll main components function\nin normal mode:\n• access is active\n• key issuance works\n• support is available\n\nAtlas Secure is built as private\ndigital infrastructure\nwith priority on stability\nand predictable operation.\n\nOur principles:\n• target uptime — 99.9%\n• planned work is done in advance\n• critical incidents are resolved\n  in priority order\n• data loss is architecturally excluded\n\nIn case of technical work\nor changes, users\nare notified in advance through bot.\n\nLast status update:\nautomatically",
+      "ru": "📊 Статус сервиса Atlas Secure\n\nТекущий статус: 🟢 Сервис работает стабильно\n\nВсе основные компоненты функционируют\nв штатном режиме:\n• доступ активен\n• выдача ключей работает\n• поддержка на связи\n\nAtlas Secure построен как частная\nцифровая инфраструктура\nс приоритетом на стабильность\nи предсказуемую работу.\n\nНаши принципы:\n• целевой аптайм — 99.9%\n• плановые работы проводятся заранее\n• критические инциденты решаются\n  в приоритетном порядке\n• потеря данных исключена архитектурно\n\nВ случае технических работ\nили изменений пользователи\nуведомляются заранее через бот.\n\nПоследнее обновление статуса:\nавтоматически",
+      "reason": "identical_to_english"
+    },
+    "main.service_unavailable": {
+      "current": "⚠️ Service temporarily unavailable. Please try again later.",
+      "en": "⚠️ Service temporarily unavailable. Please try again later.",
+      "ru": "⚠️ Сервис временно недоступен. Попробуйте позже.",
+      "reason": "identical_to_english"
+    },
+    "main.service_unavailable_payment": {
+      "current": "⚠️ Service temporarily unavailable. Please try again later.",
+      "en": "⚠️ Service temporarily unavailable. Please try again later.",
+      "ru": "⚠️ Платёж получен, но сервис временно недоступен.\n\nМы уже работаем над восстановлением.\nВаш платёж не потеряется — доступ будет выдан автоматически,\nкак только сервис станет доступен.\n\nЕсли у вас есть вопросы, напишите в поддержку.",
+      "reason": "identical_to_english"
+    },
+    "main.settings": {
+      "current": "⚙️ Settings",
+      "en": "⚙️ Settings",
+      "ru": "⚙️ Настройки",
+      "reason": "identical_to_english"
+    },
+    "main.settings_title": {
+      "current": "⚙️ Atlas Secure Settings",
+      "en": "⚙️ Atlas Secure Settings",
+      "ru": "⚙️ Настройки сервиса Atlas Secure",
+      "reason": "identical_to_english"
+    },
+    "main.smart_notif_no_traffic_20m": {
+      "current": "If you haven't connected yet —\nusually it takes no more than a minute.\n\nThe key is ready and assigned to you.",
+      "en": "If you haven't connected yet —\nusually it takes no more than a minute.\n\nThe key is ready and assigned to you.",
+      "ru": "Если вы ещё не подключились —\nобычно это занимает не более минуты.\n\nКлюч уже готов и закреплён за вами.",
+      "reason": "identical_to_english"
+    },
+    "main.topup_amount_too_high": {
+      "current": "Maximum top-up amount: 100,000 ₽. Please enter a smaller amount.",
+      "en": "Maximum top-up amount: 100,000 ₽. Please enter a smaller amount.",
+      "ru": "Максимальная сумма пополнения: 100 000 ₽. Пожалуйста, введите меньшую сумму.",
+      "reason": "identical_to_english"
+    },
+    "main.topup_amount_too_low": {
+      "current": "Minimum top-up amount: 100 ₽. Please enter an amount of at least 100 ₽.",
+      "en": "Minimum top-up amount: 100 ₽. Please enter an amount of at least 100 ₽.",
+      "ru": "Минимальная сумма пополнения: 100 ₽. Пожалуйста, введите сумму не менее 100 ₽.",
+      "reason": "identical_to_english"
+    },
+    "main.topup_enter_amount": {
+      "current": "Enter your amount from 100 ₽",
+      "en": "Enter your amount from 100 ₽",
+      "ru": "Введите свою сумму от 100 ₽",
+      "reason": "identical_to_english"
+    },
+    "main.user_fallback": {
+      "current": "user",
+      "en": "user",
+      "ru": "пользователь",
+      "reason": "identical_to_english"
+    },
+    "main.vip_status_active": {
+      "current": "👑 Your VIP status is active",
+      "en": "👑 Your VIP status is active",
+      "ru": "👑 Ваш VIP-статус активен",
+      "reason": "identical_to_english"
+    },
+    "main.vip_status_badge": {
+      "current": "👑 VIP status active",
+      "en": "👑 VIP status active",
+      "ru": "👑 VIP-статус активен",
+      "reason": "identical_to_english"
+    },
+    "main.welcome": {
+      "current": "🔐 Atlas Secure\n\n🧩 Private digital access\n⚙️ Stable operation of familiar services\n🛡 Privacy by default\n\nYou connect —\neverything else works in the background.",
+      "en": "🔐 Atlas Secure\n\n🧩 Private digital access\n⚙️ Stable operation of familiar services\n🛡 Privacy by default\n\nYou connect —\neverything else works in the background.",
+      "ru": "<tg-emoji emoji-id=\"5462902520215002477\">💎</tg-emoji> <b>Atlas Secure</b>\n\nИнтернет без блокировок, нервов и ограничений.\n\n<tg-emoji emoji-id=\"5258203794772085854\">⚡️</tg-emoji> Молниеносное соединение\n<tg-emoji emoji-id=\"5226928895189598791\">⭐️</tg-emoji> Трафик под защитой 24/7\n<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> Весь интернет — как он должен быть\n\n<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> В нашем магазине — пополняй Steam, покупай Telegram Premium и многое другое",
+      "reason": "identical_to_english"
+    },
+    "main.welcome_discount_label": {
+      "current": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Welcome Discount",
+      "en": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Welcome Discount",
+      "ru": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Приветственная скидка",
+      "reason": "identical_to_english"
+    },
+    "main.yes": {
+      "current": "YES",
+      "en": "YES",
+      "ru": "ДА",
+      "reason": "identical_to_english"
+    },
+    "payment.already_processed": {
+      "current": "✅ This payment has already been processed.",
+      "en": "✅ This payment has already been processed.",
+      "ru": "✅ Этот платёж уже был обработан ранее.",
+      "reason": "identical_to_english"
+    },
+    "payment.card": {
+      "current": "💳 Bank Card",
+      "en": "💳 Bank Card",
+      "ru": "Карта резерв",
+      "reason": "identical_to_english"
+    },
+    "payment.crypto": {
+      "current": "🌎 CryptoBot",
+      "en": "🌎 CryptoBot",
+      "ru": "CryptoBot",
+      "reason": "identical_to_english"
+    },
+    "payment.sbp": {
+      "current": "🏦 SBP (+11%)",
+      "en": "🏦 SBP (+11%)",
+      "ru": "СБП",
+      "reason": "identical_to_english"
+    },
+    "payment.select_method": {
+      "current": "Choose payment method:\n\nAmount: {price:.2f} ₽",
+      "en": "Choose payment method:\n\nAmount: {price:.2f} ₽",
+      "ru": "💳 К оплате: <b>{price:.2f} ₽</b>",
+      "reason": "identical_to_english"
+    },
+    "payment.stars": {
+      "current": "⭐ Telegram Stars",
+      "en": "⭐ Telegram Stars",
+      "ru": "Telegram Stars",
+      "reason": "identical_to_english"
+    },
+    "profile.auto_renew_disabled": {
+      "current": "🔁 Auto-renewal: disabled",
+      "en": "🔁 Auto-renewal: disabled",
+      "ru": "🔁 Автопродление: выключено",
+      "reason": "identical_to_english"
+    },
+    "profile.auto_renew_enabled": {
+      "current": "🔁 Auto-renewal: {next_billing_date}",
+      "en": "🔁 Auto-renewal: {next_billing_date}",
+      "ru": "🔁 Автопродление: {next_billing_date}",
+      "reason": "identical_to_english"
+    },
+    "profile.copy_key": {
+      "current": "📋 Copy Key",
+      "en": "📋 Copy Key",
+      "ru": "🇩🇪 Скопировать Atlas DE",
+      "reason": "identical_to_english"
+    },
+    "profile.vpn_key_copied_toast": {
+      "current": "🔑 VPN key copied",
+      "en": "🔑 VPN key copied",
+      "ru": "🔑 VPN-ключ скопирован",
+      "reason": "identical_to_english"
+    },
+    "profile.withdraw_funds": {
+      "current": "💸 Withdraw funds",
+      "en": "💸 Withdraw funds",
+      "ru": "💸 Вывести средства",
+      "reason": "identical_to_english"
+    },
+    "referral.active_paid": {
+      "current": "💎 Active with subscription: {count}",
+      "en": "💎 Active with subscription: {count}",
+      "ru": "💎 Активных с подпиской: {count}",
+      "reason": "identical_to_english"
+    },
+    "referral.active_with_subscription": {
+      "current": "💎 Active with subscription: {count}",
+      "en": "💎 Active with subscription: {count}",
+      "ru": "💎 Активных с подпиской: {count}",
+      "reason": "identical_to_english"
+    },
+    "referral.cashback_amount": {
+      "current": "💳 {action_type} amount: {amount:.2f} ₽",
+      "en": "💳 Purchase amount: {amount:.2f} ₽",
+      "ru": "💳 Сумма покупки: {amount:.2f} ₽",
+      "reason": "latin_script_only"
+    },
+    "referral.cashback_level": {
+      "current": "📊 Your level: {percent}%",
+      "en": "📊 Your level: {percent}%",
+      "ru": "📊 Ваш уровень: {percent}%",
+      "reason": "identical_to_english"
+    },
+    "referral.cashback_max_level": {
+      "current": "🎯 You've reached the maximum level!",
+      "en": "🎯 You've reached the maximum level!",
+      "ru": "🎯 Вы достигли максимального уровня!",
+      "reason": "identical_to_english"
+    },
+    "referral.cashback_progress": {
+      "current": "👥 To next level: {needed} {friend} remaining",
+      "en": "👥 To next level: {needed} {friend} remaining",
+      "ru": "👥 До следующего: осталось {needed} {friend}",
+      "reason": "identical_to_english"
+    },
+    "referral.cashback_referred": {
+      "current": "👤 Referral: {referred}",
+      "en": "👤 Referral: {referred}",
+      "ru": null,
+      "reason": "identical_to_english"
+    },
+    "referral.cashback_reward": {
+      "current": "💰 Cashback credited: {amount:.2f} ₽ ({percent}%)",
+      "en": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Cashback: {amount:.2f} ₽ ({percent}%)",
+      "ru": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Кешбэк: {amount:.2f} ₽ ({percent}%)",
+      "reason": "latin_script_only"
+    },
+    "referral.cashback_title": {
+      "current": "🎉 Your referral made a {action_type}!",
+      "en": "💰 Cashback credited!",
+      "ru": "💰 Вам начислен кешбэк!",
+      "reason": "latin_script_only"
+    },
+    "referral.copy_link": {
+      "current": "📋 Copy Link",
+      "en": "📋 Copy Link",
+      "ru": "📋 Скопировать ссылку",
+      "reason": "identical_to_english"
+    },
+    "referral.current_status": {
+      "current": "🏆 Current status: {status}",
+      "en": "🏆 Current status: {status}",
+      "ru": "🏆 Текущий статус: {status}",
+      "reason": "identical_to_english"
+    },
+    "referral.how_it_works": {
+      "current": "📊 How the program works",
+      "en": "📊 How the program works",
+      "ru": "❓ Как работает",
+      "reason": "identical_to_english"
+    },
+    "referral.how_it_works_text": {
+      "current": "📊 How the referral program works\n\n1. Send your referral link to a friend\n2. Friend clicks the link and registers\n3. When friend purchases a subscription, you get cashback\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Cashback levels:\n• 0-24 friends → 10% cashback\n• 25-49 friends → 25% cashback\n• 50+ friends → 45% cashback\n\n💰 Cashback is automatically credited to your balance\non each referral purchase.\n\n💡 Level is determined by the number of referrals\nwho have paid for a subscription AT LEAST ONCE.",
+      "en": "📊 How the referral program works\n\n1. Send your referral link to a friend\n2. Friend clicks the link and registers\n3. When friend purchases a subscription, you get cashback\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Cashback levels:\n• 0-24 friends → 10% cashback\n• 25-49 friends → 25% cashback\n• 50+ friends → 45% cashback\n\n💰 Cashback is automatically credited to your balance\non each referral purchase.\n\n💡 Level is determined by the number of referrals\nwho have paid for a subscription AT LEAST ONCE.",
+      "ru": "❓ <b>Как заработать с Atlas Secure</b>\n\nЗа каждую покупку подписки по твоей ссылке ты получаешь <b>процент на баланс</b>. Дальше выводишь это на банковскую карту.\n\n<blockquote><b>1️⃣ Размести свою ссылку</b>\nДаже маленький блог или чат друзей подходит. Главное — твоя аудитория видит её:\n• в шапке Telegram-канала или профиля\n• в описании ролика на TikTok, YouTube, Reels\n• в чате, форуме, Discord-сервере\n• в личке другу — да, одного человека уже достаточно</blockquote>\n\n<blockquote><b>2️⃣ Друг оплачивает подписку</b>\nКэшбэк начисляется автоматически на твой баланс — и при первой покупке, и при каждом продлении. Без срока действия.</blockquote>\n\n<blockquote><b>3️⃣ Выводи деньги</b>\nС баланса — на банковскую карту или СБП. Минимум для вывода: 500 ₽.</blockquote>\n\n<blockquote><b>💰 Сколько платим</b>\n<tg-emoji emoji-id=\"5425141507050973573\">🏄</tg-emoji> 10% → <tg-emoji emoji-id=\"5399988331729664856\">👀</tg-emoji> 20% → <tg-emoji emoji-id=\"5413623448440160154\">👨‍💻</tg-emoji> 30% → <tg-emoji emoji-id=\"5278467510604160626\">💰</tg-emoji> 40% → <tg-emoji emoji-id=\"5229011542011299168\">👑</tg-emoji> <b>45%</b> навсегда\n\nУровень растёт автоматически с каждым новым купившим. <b>И не падает.</b> Один раз поднялся — закрепился навсегда.</blockquote>\n\n💡 Чем больше аудитория видит твою ссылку — тем выше уровень и больше денег на карте. Это рабочий канал дохода: просто оставь ссылку там, где тебя смотрят.",
+      "reason": "identical_to_english"
+    },
+    "referral.last_activity": {
+      "current": "📅 Last activity: {date}",
+      "en": "📅 Last activity: {date}",
+      "ru": "📅 Последняя активность: {date}",
+      "reason": "identical_to_english"
+    },
+    "referral.level_progress": {
+      "current": "\n\n📈 Your level: {current_level}% cashback\n{referrals_to_next} referrals left to reach {next_level}% level",
+      "en": "\n\n📈 Your level: {current_level}% cashback\n{referrals_to_next} referrals left to reach {next_level}% level",
+      "ru": "\n\n📈 Ваш уровень: {current_level}%\nДо уровня {next_level}% осталось {referrals_to_next} рефералов",
+      "reason": "identical_to_english"
+    },
+    "referral.max_level": {
+      "current": "\n\n🎉 You've reached the maximum level {current_level}%!",
+      "en": "\n\n🎉 You've reached the maximum level {current_level}%!",
+      "ru": "\n\n🎉 Вы достигли максимального уровня {current_level}%!",
+      "reason": "identical_to_english"
+    },
+    "referral.max_level_reached": {
+      "current": "🏆 You have reached the maximum program level",
+      "en": "🏆 You have reached the maximum program level",
+      "ru": "🏆 У вас максимальный уровень программы\n\n<blockquote><b>Не работает Телеграм у друга?</b>\nПригласи через сайт! Нажми кнопку «🌐 Веб-клиент»</blockquote>",
+      "reason": "identical_to_english"
+    },
+    "referral.next_level_line": {
+      "current": "🚀 To level {next_status_name}:\n{remaining_invites} connections left",
+      "en": "🚀 To level {next_status_name}:\n{remaining_invites} connections left",
+      "ru": "🚀 До уровня {next_status_name}:\nосталось {remaining_invites} подключений\n\n<blockquote><b>Не работает Телеграм у друга?</b>\nПригласи через сайт! Нажми кнопку «🌐 Веб-клиент»</blockquote>",
+      "reason": "identical_to_english"
+    },
+    "referral.program": {
+      "current": "💎 Loyalty Program",
+      "en": "💎 Loyalty Program",
+      "ru": "🎖 Круг Амбассадоров",
+      "reason": "identical_to_english"
+    },
+    "referral.program_status_footer": {
+      "current": "🚀 To next level: {remaining_invites} invites left",
+      "en": "🚀 To next level: {remaining_invites} invites left",
+      "ru": "🚀 До следующего уровня: осталось {remaining_invites} приглашений",
+      "reason": "identical_to_english"
+    },
+    "referral.program_text": {
+      "current": "💎 Loyalty Program\n\nInvite friends and get cashback\nto your balance for their payments.\n\n📊 Your statistics:\nInvited friends: {total_referred}\nYour cashback: {cashback_percent}%\nEarned: {total_cashback:.2f} ₽\n\n🔗 Your link:\n{referral_link}\n\n💡 How it works:\n• 0-24 friends → 10% cashback\n• 25-49 friends → 25% cashback\n• 50+ friends → 45% cashback",
+      "en": "💎 Loyalty Program\n\nInvite friends and get cashback\nto your balance for their payments.\n\n📊 Your statistics:\nInvited friends: {total_referred}\nYour cashback: {cashback_percent}%\nEarned: {total_cashback:.2f} ₽\n\n🔗 Your link:\n{referral_link}\n\n💡 How it works:\n• 0-24 friends → 10% cashback\n• 25-49 friends → 25% cashback\n• 50+ friends → 45% cashback",
+      "ru": "🎖 Круг Амбассадоров\n\nПриглашайте друзей и получайте кешбэк\nна баланс с каждой их покупки.\n\n📊 Ваша статистика:\nКупивших по ссылке: {total_referred}\nВаш кешбэк: {cashback_percent}%\nЗаработано: {total_cashback:.2f} ₽\n\n🔗 Ваша ссылка:\n{referral_link}\n\n💡 Уровни:\n• Проводник · 10% (до 25)\n• Хранитель · 20% (25+)\n• Инсайдер · 30% (50+)\n• Лидер · 40% (75+)\n• Амбассадор · 45% навсегда (100+)",
+      "reason": "identical_to_english"
+    },
+    "referral.registered_date": {
+      "current": "📅 Date: {date}",
+      "en": "📅 {date}",
+      "ru": "📅 {date}",
+      "reason": "latin_script_only"
+    },
+    "referral.registered_notification": {
+      "current": "🎉 New referral registered!\n\n👤 User: {user}\n📅 Date: {date}\n\n{first_payment_msg}",
+      "en": "🎉 You have a new referral!\n\n📅 {date}\n\n{first_payment_msg}",
+      "ru": "🎉 У вас новый реферал!\n\n📅 {date}\n\n{first_payment_msg}",
+      "reason": "latin_script_only"
+    },
+    "referral.registered_title": {
+      "current": "🎉 New Referral Registered!",
+      "en": "🎉 You have a new referral!",
+      "ru": "🎉 У вас новый реферал!",
+      "reason": "latin_script_only"
+    },
+    "referral.registered_user": {
+      "current": "👤 User: {user}",
+      "en": "👤 User: {user}",
+      "ru": null,
+      "reason": "identical_to_english"
+    },
+    "referral.rewards_earned": {
+      "current": "💎 Rewards credited: {amount:.2f} ₽",
+      "en": "💎 Rewards credited: {amount:.2f} ₽",
+      "ru": "💎 Начислено вознаграждений: {amount:.2f} ₽",
+      "reason": "identical_to_english"
+    },
+    "referral.share_button": {
+      "current": "📤 Share link",
+      "en": "📤 Share link",
+      "ru": "📤 Поделиться ссылкой",
+      "reason": "identical_to_english"
+    },
+    "referral.share_link_button": {
+      "current": "📤 Share link",
+      "en": "📤 Share link",
+      "ru": "📤 Поделиться ссылкой",
+      "reason": "identical_to_english"
+    },
+    "referral.stats_button": {
+      "current": "More",
+      "en": "More",
+      "ru": "📚 Подробнее",
+      "reason": "identical_to_english"
+    },
+    "referral.stats_next_level_line": {
+      "current": "🚀 To level {next_status_name}:\n{remaining_invites} connections left",
+      "en": "🚀 To level {next_status_name}:\n{remaining_invites} connections left",
+      "ru": "🚀 До уровня {next_status_name}:\nосталось {remaining_invites} подключений",
+      "reason": "identical_to_english"
+    },
+    "referral.status_footer": {
+      "current": "🚀 To next level: {remaining_invites} invites left",
+      "en": "🚀 To next level: {remaining_invites} invites left",
+      "ru": "🚀 До следующего уровня: осталось {remaining_invites} приглашений",
+      "reason": "identical_to_english"
+    },
+    "referral.total_invited": {
+      "current": "👤 Total invited: {count}",
+      "en": "👤 Total invited: {count}",
+      "ru": "👤 Всего приглашено: {count}",
+      "reason": "identical_to_english"
+    },
+    "referral.trial_activated_user": {
+      "current": "👤 User: {user}",
+      "en": "👤 User: {user}",
+      "ru": null,
+      "reason": "identical_to_english"
+    },
+    "subscription.auto_renew_disable": {
+      "current": "⏸ Disable auto-renewal",
+      "en": "⏸ Disable auto-renewal",
+      "ru": "⏸ Отключить автопродление",
+      "reason": "identical_to_english"
+    },
+    "subscription.auto_renew_disabled_toast": {
+      "current": "⏸ Auto-renewal disabled",
+      "en": "⏸ Auto-renewal disabled",
+      "ru": "⏸ Автопродление отключено",
+      "reason": "identical_to_english"
+    },
+    "subscription.auto_renew_enable": {
+      "current": "🔄 Enable auto-renewal",
+      "en": "🔄 Enable auto-renewal",
+      "ru": "🔄 Включить автопродление",
+      "reason": "identical_to_english"
+    },
+    "subscription.auto_renew_enabled_toast": {
+      "current": "✅ Auto-renewal enabled",
+      "en": "✅ Auto-renewal enabled",
+      "ru": "✅ Автопродление включено",
+      "reason": "identical_to_english"
+    },
+    "subscription.history_key_label": {
+      "current": "Key:",
+      "en": "Key:",
+      "ru": "Ключ:",
+      "reason": "identical_to_english"
+    },
+    "support.write_button": {
+      "current": "💬 Write to support",
+      "en": "💬 Write to support",
+      "ru": "💬 Написать в поддержку",
+      "reason": "identical_to_english"
+    },
+    "trial.notification_60h": {
+      "current": "🛡 VPN will be disabled soon\n\n12 hours of trial access remaining.\n\nContinue using protection — subscribe now.",
+      "en": "🛡 VPN will be disabled soon\n\n12 hours of trial access remaining.\n\nContinue using protection — subscribe now.",
+      "ru": "🛡 VPN скоро отключится\n\nОсталось 12 часов пробного доступа.\n\nПродолжите пользоваться защитой — оформите подписку.",
+      "reason": "identical_to_english"
+    },
+    "trial.notification_6h": {
+      "current": "✨ Just a reminder\n\nVPN is better to keep on all the time to protect your data.",
+      "en": "✨ Just a reminder\n\nVPN is better to keep on all the time to protect your data.",
+      "ru": "✨ Просто напоминание\n\nVPN лучше включать всегда, чтобы защитить ваши данные.",
+      "reason": "identical_to_english"
+    },
+    "trial.notification_71h": {
+      "current": "🚨 Last hour of trial access\n\nVPN will be disabled in one hour.\n\nSubscribe now to continue using secure access.",
+      "en": "🚨 Last hour of trial access\n\nVPN will be disabled in one hour.\n\nSubscribe now to continue using secure access.",
+      "ru": "🚨 Последний час пробного доступа\n\nЧерез час VPN будет отключён.\n\nОформите подписку, чтобы оставаться на связи, даже когда глушат связь!",
+      "reason": "identical_to_english"
+    }
+  },
+  "tj": {
+    "admin.activation_error_attempts": {
+      "current": "Attempts: {attempts}/{max_attempts}",
+      "en": "Attempts: {attempts}/{max_attempts}",
+      "ru": "Попыток: {attempts}/{max_attempts}",
+      "reason": "identical_to_english"
+    },
+    "admin.activation_error_title": {
+      "current": "⚠️ **VPN SUBSCRIPTION ACTIVATION ERROR**",
+      "en": "⚠️ **VPN SUBSCRIPTION ACTIVATION ERROR**",
+      "ru": "⚠️ **ОШИБКА АКТИВАЦИИ VPN ПОДПИСКИ**",
+      "reason": "identical_to_english"
+    },
+    "admin.activation_error_user": {
+      "current": "User: `{telegram_id}`",
+      "en": "User: `{telegram_id}`",
+      "ru": "Пользователь: `{telegram_id}`",
+      "reason": "identical_to_english"
+    },
+    "admin.analytics": {
+      "current": "💰 Analytics",
+      "en": "💰 Analytics",
+      "ru": "💰 Аналитика",
+      "reason": "identical_to_english"
+    },
+    "admin.audit": {
+      "current": "📜 Audit",
+      "en": "📜 Audit",
+      "ru": "📜 Аудит",
+      "reason": "identical_to_english"
+    },
+    "admin.audit_empty": {
+      "current": "📜 Audit\n\nAudit is empty. No actions recorded.",
+      "en": "📜 Audit\n\nAudit is empty. No actions recorded.",
+      "ru": "📜 Аудит\n\nАудит пуст. Действий не зафиксировано.",
+      "reason": "identical_to_english"
+    },
+    "admin.back": {
+      "current": "🔙 Back",
+      "en": "🔙 Back",
+      "ru": "🔙 Назад",
+      "reason": "identical_to_english"
+    },
+    "admin.back_to_analytics": {
+      "current": "🔙 Back to Analytics",
+      "en": "🔙 Back to Analytics",
+      "ru": "🔙 Назад к аналитике",
+      "reason": "identical_to_english"
+    },
+    "admin.back_to_broadcast": {
+      "current": "🔙 Back",
+      "en": "🔙 Back",
+      "ru": "🔙 Назад",
+      "reason": "identical_to_english"
+    },
+    "admin.back_to_keys": {
+      "current": "🔙 Back",
+      "en": "🔙 Back",
+      "ru": "🔙 Назад",
+      "reason": "identical_to_english"
+    },
+    "admin.back_to_stats": {
+      "current": "🔙 Back to Stats",
+      "en": "🔙 Back to Stats",
+      "ru": "🔙 Назад к статистике",
+      "reason": "identical_to_english"
+    },
+    "admin.broadcast": {
+      "current": "📣 Notifications",
+      "en": "📣 Notifications",
+      "ru": "📣 Уведомления",
+      "reason": "identical_to_english"
+    },
+    "admin.cancel": {
+      "current": "🔙 Cancel",
+      "en": "🔙 Cancel",
+      "ru": "🔙 Отмена",
+      "reason": "identical_to_english"
+    },
+    "admin.confirm": {
+      "current": "✅ Confirm",
+      "en": "✅ Confirm",
+      "ru": "✅ Подтвердить",
+      "reason": "identical_to_english"
+    },
+    "admin.copy_key": {
+      "current": "📋 Copy Key",
+      "en": "📋 Copy Key",
+      "ru": "📋 Скопировать ключ",
+      "reason": "identical_to_english"
+    },
+    "admin.create_discount": {
+      "current": "🎯 Create Discount",
+      "en": "🎯 Create Discount",
+      "ru": "🎯 Назначить скидку",
+      "reason": "identical_to_english"
+    },
+    "admin.credit_balance_prompt": {
+      "current": "💰 Grant balance\n\nEnter Telegram ID or username:",
+      "en": "💰 Grant balance\n\nEnter Telegram ID or username:",
+      "ru": "💰 Выдать средства\n\nВведите Telegram ID или username пользователя:",
+      "reason": "identical_to_english"
+    },
+    "admin.credit_balance_user_prompt": {
+      "current": "💰 Grant balance\n\nUser: {user_id}\n\nEnter amount in rubles:",
+      "en": "💰 Grant balance\n\nUser: {user_id}\n\nEnter amount in rubles:",
+      "ru": "💰 Выдать средства\n\nПользователь: {user_id}\n\nВведите сумму в рублях:",
+      "reason": "identical_to_english"
+    },
+    "admin.credit_positive_sum": {
+      "current": "❌ Amount must be positive.\n\nEnter amount in rubles:",
+      "en": "❌ Amount must be positive.\n\nEnter amount in rubles:",
+      "ru": "❌ Сумма должна быть положительным числом.\n\nВведите сумму в рублях:",
+      "reason": "identical_to_english"
+    },
+    "admin.credit_sum_format": {
+      "current": "❌ Invalid amount format.\n\nEnter number (e.g. 500 or 100.50):",
+      "en": "❌ Invalid amount format.\n\nEnter number (e.g. 500 or 100.50):",
+      "ru": "❌ Неверный формат суммы.\n\nВведите число (например: 500 или 100.50):",
+      "reason": "identical_to_english"
+    },
+    "admin.dashboard": {
+      "current": "📊 Admin Dashboard",
+      "en": "📊 Admin Dashboard",
+      "ru": "📊 Admin Dashboard",
+      "reason": "identical_to_english"
+    },
+    "admin.dashboard_title": {
+      "current": "🛠 Atlas Secure · Admin Dashboard\n\nSelect an action:",
+      "en": "🛠 Atlas Secure · Admin Dashboard\n\nSelect an action:",
+      "ru": "🛠 Atlas Secure · Admin Dashboard\n\nВыберите действие:",
+      "reason": "identical_to_english"
+    },
+    "admin.db_connection_failed": {
+      "current": "❌ Failed to connect to database",
+      "en": "❌ Failed to connect to database",
+      "ru": "❌ Не удалось подключиться к базе данных",
+      "reason": "identical_to_english"
+    },
+    "admin.db_unavailable": {
+      "current": "❌ Database unavailable",
+      "en": "❌ Database unavailable",
+      "ru": "❌ База данных недоступна",
+      "reason": "identical_to_english"
+    },
+    "admin.degraded_mode": {
+      "current": "⚠️ **BOT RUNNING IN DEGRADED MODE**\n\nDatabase is unavailable.\n\n• Bot is running and responding to commands\n• Critical operations are blocked\n• Users receive temporary unavailability messages\n\nBot will automatically retry DB connection every 30 seconds.\n\nCheck:\n• PostgreSQL availability\n• DATABASE_URL correctness\n• Network settings",
+      "en": "⚠️ **BOT RUNNING IN DEGRADED MODE**\n\nDatabase is unavailable.\n\n• Bot is running and responding to commands\n• Critical operations are blocked\n• Users receive temporary unavailability messages\n\nBot will automatically retry DB connection every 30 seconds.\n\nCheck:\n• PostgreSQL availability\n• DATABASE_URL correctness\n• Network settings",
+      "ru": "⚠️ **БОТ РАБОТАЕТ В ДЕГРАДИРОВАННОМ РЕЖИМЕ**\n\nБаза данных недоступна.\n\n• Бот запущен и отвечает на команды\n• Критические операции блокируются\n• Пользователи получают сообщения о временной недоступности\n\nБот будет автоматически пытаться восстановить соединение с БД каждые 30 секунд.\n\nПроверьте:\n• Доступность PostgreSQL\n• Правильность DATABASE_URL\n• Сетевые настройки",
+      "reason": "identical_to_english"
+    },
+    "admin.delete_discount": {
+      "current": "❌ Delete Discount",
+      "en": "❌ Delete Discount",
+      "ru": "❌ Удалить скидку",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_already_exists": {
+      "current": "❌ User already has {percent}% discount.\n\nRemove existing discount first.",
+      "en": "❌ User already has {percent}% discount.\n\nRemove existing discount first.",
+      "ru": "❌ У пользователя уже есть персональная скидка {percent}%.\n\nСначала удалите существующую скидку.",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_assign_days_prompt": {
+      "current": "🎯 Assign discount\n\nEnter days validity (or 0 for unlimited):",
+      "en": "🎯 Assign discount\n\nEnter days validity (or 0 for unlimited):",
+      "ru": "🎯 Назначить скидку\n\nВведите количество дней действия скидки (или 0 для бессрочной):",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_assign_prompt": {
+      "current": "🎯 Assign discount\n\nEnter discount percent (1 to 99):",
+      "en": "🎯 Assign discount\n\nEnter discount percent (1 to 99):",
+      "ru": "🎯 Назначить скидку\n\nВведите процент скидки (число от 1 до 99):",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_created": {
+      "current": "✅ Personal discount {percent}% assigned\n\nValid until: {expires}",
+      "en": "✅ Personal discount {percent}% assigned\n\nValid until: {expires}",
+      "ru": "✅ Персональная скидка {percent}% назначена\n\nСрок действия: {expires}",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_not_found": {
+      "current": "❌ Discount not found or already removed",
+      "en": "❌ Discount not found or already removed",
+      "ru": "❌ Скидка не найдена или уже удалена",
+      "reason": "identical_to_english"
+    },
+    "admin.discount_removed": {
+      "current": "✅ Personal discount removed",
+      "en": "✅ Personal discount removed",
+      "ru": "✅ Персональная скидка удалена",
+      "reason": "identical_to_english"
+    },
+    "admin.enter_number": {
+      "current": "❌ Enter a number",
+      "en": "❌ Enter a number",
+      "ru": "❌ Введите число",
+      "reason": "identical_to_english"
+    },
+    "admin.enter_positive_number": {
+      "current": "❌ Enter a positive number",
+      "en": "❌ Enter a positive number",
+      "ru": "❌ Введите положительное число",
+      "reason": "identical_to_english"
+    },
+    "admin.export": {
+      "current": "📤 Export Data",
+      "en": "📤 Export Data",
+      "ru": "📤 Экспорт данных",
+      "reason": "identical_to_english"
+    },
+    "admin.export_file_sent": {
+      "current": "✅ File sent",
+      "en": "✅ File sent",
+      "ru": "✅ Файл отправлен",
+      "reason": "identical_to_english"
+    },
+    "admin.export_prompt": {
+      "current": "📤 Export Data\n\nSelect export type:",
+      "en": "📤 Export Data\n\nSelect export type:",
+      "ru": "📤 Экспорт данных\n\nВыберите тип данных для экспорта:",
+      "reason": "identical_to_english"
+    },
+    "admin.export_users": {
+      "current": "👥 Users",
+      "en": "👥 Users",
+      "ru": "👥 Пользователи",
+      "reason": "identical_to_english"
+    },
+    "admin.forward": {
+      "current": "➡️ Forward",
+      "en": "➡️ Forward",
+      "ru": "➡️ Вперёд",
+      "reason": "identical_to_english"
+    },
+    "admin.go_to_instruction": {
+      "current": "🔌 Go to Instruction",
+      "en": "🔌 Go to Instruction",
+      "ru": "🔌 Перейти к инструкции",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_1_year": {
+      "current": "🗓 Grant 1 year",
+      "en": "🗓 Grant 1 year",
+      "ru": "🗓 Выдать доступ на 1 год",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_access_error": {
+      "current": "❌ Grant access error: {error}",
+      "en": "❌ Grant access error: {error}",
+      "ru": "❌ Ошибка выдачи доступа: {error}",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_custom": {
+      "current": "⚙️ Custom (days/hours/minutes)",
+      "en": "⚙️ Custom (days/hours/minutes)",
+      "ru": "⚙️ Настроить (дни/часы/минуты)",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_days_1": {
+      "current": "1 day",
+      "en": "1 day",
+      "ru": "1 день",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_fail_no_keys": {
+      "current": "❌ No free VPN keys available",
+      "en": "❌ No free VPN keys available",
+      "ru": "❌ Нет свободных VPN-ключей",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_minutes_10": {
+      "current": "⏱ 10 minutes",
+      "en": "⏱ 10 minutes",
+      "ru": "⏱ Доступ на 10 минут",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_unit_days": {
+      "current": "📅 Days",
+      "en": "📅 Days",
+      "ru": "📅 Дни",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_unit_hours": {
+      "current": "🕐 Hours",
+      "en": "🕐 Hours",
+      "ru": "🕐 Часы",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_unit_minutes": {
+      "current": "⏱ Minutes",
+      "en": "⏱ Minutes",
+      "ru": "⏱ Минуты",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_user_notification": {
+      "current": "✅ You have been granted access to Atlas Secure for {days} days.\nVPN key: {sub_url}\nExpires: {date}",
+      "en": "✅ You have been granted access to Atlas Secure for {days} days.\nVPN key: {sub_url}\nExpires: {date}",
+      "ru": "✅ Вам предоставлен доступ к Atlas Secure на {days} дней.\nСсылка подписки: {sub_url}\nСрок действия: до {date}",
+      "reason": "identical_to_english"
+    },
+    "admin.grant_vip": {
+      "current": "👑 Grant VIP",
+      "en": "👑 Grant VIP",
+      "ru": "👑 Выдать VIP",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_disable": {
+      "current": "❌ Disable",
+      "en": "❌ Disable",
+      "ru": "❌ Выключить",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_edit": {
+      "current": "📝 Edit Text",
+      "en": "📝 Edit Text",
+      "ru": "📝 Изменить текст",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_edit_text": {
+      "current": "📝 Edit text",
+      "en": "📝 Edit text",
+      "ru": "📝 Изменить текст",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_enable": {
+      "current": "✅ Enable",
+      "en": "✅ Enable",
+      "ru": "✅ Включить",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_status_off": {
+      "current": "⚪ Incident mode off",
+      "en": "⚪ Incident mode off",
+      "ru": "⚪ Режим инцидента выключен",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_status_on": {
+      "current": "🟢 Incident mode active",
+      "en": "🟢 Incident mode active",
+      "ru": "🟢 Режим инцидента активен",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_text_prompt": {
+      "current": "Enter incident text (or send /cancel to cancel):",
+      "en": "Enter incident text (or send /cancel to cancel):",
+      "ru": "Введите текст инцидента (или отправьте /cancel для отмены):",
+      "reason": "identical_to_english"
+    },
+    "admin.incident_title": {
+      "current": "🚨 Incident",
+      "en": "🚨 Incident",
+      "ru": "🚨 Инцидент",
+      "reason": "identical_to_english"
+    },
+    "admin.keys": {
+      "current": "🔑 VPN Keys",
+      "en": "🔑 VPN Keys",
+      "ru": "🔑 VPN-ключи",
+      "reason": "identical_to_english"
+    },
+    "admin.metrics": {
+      "current": "📈 Metrics",
+      "en": "📈 Metrics",
+      "ru": "📈 Метрики",
+      "reason": "identical_to_english"
+    },
+    "admin.next_page": {
+      "current": "➡️ Next",
+      "en": "➡️ Next",
+      "ru": "➡️ Следующие",
+      "reason": "identical_to_english"
+    },
+    "admin.no_active_subscription": {
+      "current": "❌ User has no active subscription",
+      "en": "❌ User has no active subscription",
+      "ru": "❌ У пользователя нет активной подписки",
+      "reason": "identical_to_english"
+    },
+    "admin.no_active_subscriptions_reissue": {
+      "current": "❌ No active subscriptions for reissue",
+      "en": "❌ No active subscriptions for reissue",
+      "ru": "❌ Нет активных подписок для перевыпуска",
+      "reason": "identical_to_english"
+    },
+    "admin.notify_no": {
+      "current": "🔕 No",
+      "en": "🔕 No",
+      "ru": "🔕 Нет",
+      "reason": "identical_to_english"
+    },
+    "admin.notify_yes": {
+      "current": "🔔 Yes",
+      "en": "🔔 Yes",
+      "ru": "🔔 Да",
+      "reason": "identical_to_english"
+    },
+    "admin.operation_cancelled": {
+      "current": "❌ Operation cancelled",
+      "en": "❌ Operation cancelled",
+      "ru": "❌ Операция отменена",
+      "reason": "identical_to_english"
+    },
+    "admin.payment_notification": {
+      "current": "💰 New payment\nUser: @{username}\nTelegram ID: {telegram_id}\nTariff: {tariff} months\nPrice: {price} ₽",
+      "en": "💰 New payment\nUser: @{username}\nTelegram ID: {telegram_id}\nTariff: {tariff} months\nPrice: {price} ₽",
+      "ru": "💰 Новая оплата\nПользователь: @{username}\nTelegram ID: {telegram_id}\nТариф: {tariff} месяцев\nСтоимость: {price} ₽",
+      "reason": "identical_to_english"
+    },
+    "admin.pending_activations_title": {
+      "current": "⚠️ **PENDING VPN ACTIVATIONS**\n",
+      "en": "⚠️ **PENDING VPN ACTIVATIONS**\n",
+      "ru": "⚠️ **ОТЛОЖЕННЫЕ АКТИВАЦИИ VPN**\n",
+      "reason": "identical_to_english"
+    },
+    "admin.pending_activations_top": {
+      "current": "\n**Top 5 oldest:**\n",
+      "en": "\n**Top 5 oldest:**\n",
+      "ru": "\n**Топ-5 старейших:**\n",
+      "reason": "identical_to_english"
+    },
+    "admin.pending_activations_total": {
+      "current": "Total pending subscriptions: **{count}**\n",
+      "en": "Total pending subscriptions: **{count}**\n",
+      "ru": "Всего pending подписок: **{count}**\n",
+      "reason": "identical_to_english"
+    },
+    "admin.prev": {
+      "current": "⬅️ Back",
+      "en": "⬅️ Back",
+      "ru": "⬅️ Назад",
+      "reason": "identical_to_english"
+    },
+    "admin.promo_stats": {
+      "current": "📊 Promo Stats",
+      "en": "📊 Promo Stats",
+      "ru": "📊 Статистика промокодов",
+      "reason": "identical_to_english"
+    },
+    "admin.recovered": {
+      "current": "✅ **SERVICE RESTORED**\n\nDatabase is available again.\n\n• Bot is fully operational\n• All operations restored\n• Background tasks running",
+      "en": "✅ **SERVICE RESTORED**\n\nDatabase is available again.\n\n• Bot is fully operational\n• All operations restored\n• Background tasks running",
+      "ru": "✅ **СЛУЖБА ВОССТАНОВЛЕНА**\n\nБаза данных стала доступна.\n\n• Бот работает в полнофункциональном режиме\n• Все операции восстановлены\n• Фоновые задачи запущены",
+      "reason": "identical_to_english"
+    },
+    "admin.referral_history": {
+      "current": "📋 Rewards History",
+      "en": "📋 Rewards History",
+      "ru": "📋 История начислений",
+      "reason": "identical_to_english"
+    },
+    "admin.referral_stats": {
+      "current": "🤝 Referral Stats",
+      "en": "🤝 Referral Stats",
+      "ru": "🤝 Реферальная статистика",
+      "reason": "identical_to_english"
+    },
+    "admin.referral_top": {
+      "current": "📈 Top Referrers",
+      "en": "📈 Top Referrers",
+      "ru": "📈 Топ рефереров",
+      "reason": "identical_to_english"
+    },
+    "admin.refresh": {
+      "current": "🔄 Refresh",
+      "en": "🔄 Refresh",
+      "ru": "🔄 Обновить",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_all_keys": {
+      "current": "🔄 Reissue All Keys",
+      "en": "🔄 Reissue All Keys",
+      "ru": "🔄 Перевыпустить все ключи",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_for_user": {
+      "current": "👤 Reissue for User",
+      "en": "👤 Reissue for User",
+      "ru": "👤 Перевыпустить для пользователя",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_invalid_id": {
+      "current": "Invalid telegram_id format. Use number.",
+      "en": "Invalid telegram_id format. Use number.",
+      "ru": "Неверный формат telegram_id. Используйте число.",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_key": {
+      "current": "🔁 Reissue Key",
+      "en": "🔁 Reissue Key",
+      "ru": "🔁 Перевыпустить ключ",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_usage": {
+      "current": "Usage: /reissue_key <telegram_id>",
+      "en": "Usage: /reissue_key <telegram_id>",
+      "ru": "Использование: /reissue_key <telegram_id>",
+      "reason": "identical_to_english"
+    },
+    "admin.reissue_user_notification": {
+      "current": "🔐 VPN key updated\n\nYour VPN connection key has been updated.\n\n🔑 <b>New key:</b>\n<code>{sub_url}</code>\n\nUse this key in your VPN app.\n\nThe old key is no longer valid.",
+      "en": "🔐 VPN key updated\n\nYour VPN connection key has been updated.\n\n🔑 <b>New key:</b>\n<code>{sub_url}</code>\n\nUse this key in your VPN app.\n\nThe old key is no longer valid.",
+      "ru": "🔐 Обновление VPN-ключа\n\nВаш VPN-ключ обновлён администратором\nи переведён на новую версию сервера.\n\nДля корректной работы:\n— удалите старый ключ из VPN-приложения\n— добавьте новую ссылку подписки\n\nСсылка подписки:\n\n{sub_url}\n\nОбновление необходимо для сохранения\nстабильности и производительности соединения.",
+      "reason": "identical_to_english"
+    },
+    "admin.revoke_confirm_text": {
+      "current": "❌ Revoke access\n\nNotify user?",
+      "en": "❌ Revoke access\n\nNotify user?",
+      "ru": "❌ Лишить доступа\n\nУведомить пользователя?",
+      "reason": "identical_to_english"
+    },
+    "admin.revoke_fail_no_sub": {
+      "current": "❌ User has no active subscription",
+      "en": "❌ User has no active subscription",
+      "ru": "❌ У пользователя нет активной подписки",
+      "reason": "identical_to_english"
+    },
+    "admin.revoke_user_notification": {
+      "current": "⛔ Your access to Atlas Secure has been revoked by the administrator.",
+      "en": "⛔ Your access to Atlas Secure has been revoked by the administrator.",
+      "ru": "⛔ Ваш доступ к Atlas Secure был отозван администратором.",
+      "reason": "identical_to_english"
+    },
+    "admin.revoke_vip": {
+      "current": "❌ Revoke VIP",
+      "en": "❌ Revoke VIP",
+      "ru": "❌ Снять VIP",
+      "reason": "identical_to_english"
+    },
+    "admin.search": {
+      "current": "🔍 Search",
+      "en": "🔍 Search",
+      "ru": "🔍 Поиск",
+      "reason": "identical_to_english"
+    },
+    "admin.send": {
+      "current": "✅ Send",
+      "en": "✅ Send",
+      "ru": "✅ Отправить",
+      "reason": "identical_to_english"
+    },
+    "admin.sort_by_cashback": {
+      "current": "💰 By Cashback",
+      "en": "💰 By Cashback",
+      "ru": "💰 По кешбэку",
+      "reason": "identical_to_english"
+    },
+    "admin.sort_by_invited": {
+      "current": "👥 By Invites",
+      "en": "👥 By Invites",
+      "ru": "👥 По приглашениям",
+      "reason": "identical_to_english"
+    },
+    "admin.sort_by_revenue": {
+      "current": "📈 By Revenue",
+      "en": "📈 By Revenue",
+      "ru": "📈 По доходу",
+      "reason": "identical_to_english"
+    },
+    "admin.stats": {
+      "current": "📊 Statistics",
+      "en": "📊 Statistics",
+      "ru": "📊 Статистика",
+      "reason": "identical_to_english"
+    },
+    "admin.system": {
+      "current": "🚨 System",
+      "en": "🚨 System",
+      "ru": "🚨 Система",
+      "reason": "identical_to_english"
+    },
+    "admin.test_first_purchase": {
+      "current": "💰 Test First Purchase Notification",
+      "en": "💰 Test First Purchase Notification",
+      "ru": "💰 Тест уведомления о первой покупке",
+      "reason": "identical_to_english"
+    },
+    "admin.test_menu": {
+      "current": "🧪 Tests",
+      "en": "🧪 Tests",
+      "ru": "🧪 Тесты",
+      "reason": "identical_to_english"
+    },
+    "admin.test_reminders": {
+      "current": "⏰ Test Reminders",
+      "en": "⏰ Test Reminders",
+      "ru": "⏰ Тест напоминаний",
+      "reason": "identical_to_english"
+    },
+    "admin.user": {
+      "current": "👤 User",
+      "en": "👤 User",
+      "ru": "👤 Пользователь",
+      "reason": "identical_to_english"
+    },
+    "admin.user_not_found": {
+      "current": "❌ User not found",
+      "en": "❌ User not found",
+      "ru": "❌ Пользователь не найден",
+      "reason": "identical_to_english"
+    },
+    "admin.user_prompt_enter_id": {
+      "current": "👤 User\n\nEnter Telegram ID or username:",
+      "en": "👤 User\n\nEnter Telegram ID or username:",
+      "ru": "👤 Пользователь\n\nВведите Telegram ID или username пользователя:",
+      "reason": "identical_to_english"
+    },
+    "admin.vip_granted": {
+      "current": "✅ VIP status granted",
+      "en": "✅ VIP status granted",
+      "ru": "✅ VIP-статус выдан",
+      "reason": "identical_to_english"
+    },
+    "admin.vip_not_found": {
+      "current": "❌ VIP status not found or already revoked",
+      "en": "❌ VIP status not found or already revoked",
+      "ru": "❌ VIP-статус не найден или уже снят",
+      "reason": "identical_to_english"
+    },
+    "admin.vip_revoked": {
+      "current": "✅ VIP status revoked",
+      "en": "✅ VIP status revoked",
+      "ru": "✅ VIP-статус снят",
+      "reason": "identical_to_english"
+    },
+    "broadcast._ab_stats": {
+      "current": "📊 A/B Stats",
+      "en": "📊 A/B Stats",
+      "ru": "📊 A/B статистика",
+      "reason": "identical_to_english"
+    },
+    "broadcast._ab_stats_empty": {
+      "current": "📊 A/B Statistics\n\nNo A/B tests found.",
+      "en": "📊 A/B Statistics\n\nNo A/B tests found.",
+      "ru": "📊 A/B статистика\n\nA/B тестов не найдено.",
+      "reason": "identical_to_english"
+    },
+    "broadcast._ab_stats_select": {
+      "current": "📊 A/B Statistics\n\nSelect notification to view statistics:",
+      "en": "📊 A/B Statistics\n\nSelect notification to view statistics:",
+      "ru": "📊 A/B статистика\n\nВыберите уведомление для просмотра статистики:",
+      "reason": "identical_to_english"
+    },
+    "broadcast._ab_test": {
+      "current": "🔬 A/B Test",
+      "en": "🔬 A/B Test",
+      "ru": "🔬 A/B тест",
+      "reason": "identical_to_english"
+    },
+    "broadcast._confirm_send": {
+      "current": "✅ Send",
+      "en": "✅ Send",
+      "ru": "✅ Отправить",
+      "reason": "identical_to_english"
+    },
+    "broadcast._create": {
+      "current": "➕ Create Notification",
+      "en": "➕ Create Notification",
+      "ru": "➕ Создать уведомление",
+      "reason": "identical_to_english"
+    },
+    "broadcast._normal": {
+      "current": "📝 Normal Notification",
+      "en": "📝 Normal Notification",
+      "ru": "📝 Обычное уведомление",
+      "reason": "identical_to_english"
+    },
+    "broadcast._preview_confirm": {
+      "current": "📋 Notification preview:\n\n{preview}\n\nConfirm send:",
+      "en": "📋 Notification preview:\n\n{preview}\n\nConfirm send:",
+      "ru": "📋 Предпросмотр уведомления:\n\n{preview}\n\nПодтвердите отправку:",
+      "reason": "identical_to_english"
+    },
+    "broadcast._report_partial": {
+      "current": "⚠️ Broadcast completed with errors.\n\nTotal: {total}\nSuccess: {sent}\nFailed: {failed}\n\nFailed users:\n{failed_list}\n\n📝 ID: {broadcast_id}",
+      "en": "⚠️ Broadcast completed with errors.\n\nTotal: {total}\nSuccess: {sent}\nFailed: {failed}\n\nFailed users:\n{failed_list}\n\n📝 ID: {broadcast_id}",
+      "ru": "⚠️ Broadcast completed with errors.\n\nTotal: {total}\nSuccess: {sent}\nFailed: {failed}\n\nFailed users:\n{failed_list}\n\n📝 ID: {broadcast_id}",
+      "reason": "identical_to_english"
+    },
+    "broadcast._report_success": {
+      "current": "✅ Broadcast completed.\n\nTotal: {total}\nSuccess: {sent}\nFailed: 0\n\n📝 ID: {broadcast_id}",
+      "en": "✅ Broadcast completed.\n\nTotal: {total}\nSuccess: {sent}\nFailed: 0\n\n📝 ID: {broadcast_id}",
+      "ru": "✅ Broadcast completed.\n\nTotal: {total}\nSuccess: {sent}\nFailed: 0\n\n📝 ID: {broadcast_id}",
+      "reason": "identical_to_english"
+    },
+    "broadcast._section_title": {
+      "current": "📣 Notifications\n\nSelect action:",
+      "en": "📣 Notifications\n\nSelect action:",
+      "ru": "📣 Уведомления\n\nВыберите действие:",
+      "reason": "identical_to_english"
+    },
+    "broadcast._segment_all": {
+      "current": "🌍 All Users",
+      "en": "🌍 All Users",
+      "ru": "🌍 Все пользователи",
+      "reason": "identical_to_english"
+    },
+    "broadcast._sending": {
+      "current": "📤 Sending notification...\n\nUsers: {total}\nPlease wait.",
+      "en": "📤 Sending notification...\n\nUsers: {total}\nPlease wait.",
+      "ru": "📤 Отправка уведомления...\n\nПользователей: {total}\nОжидайте завершения.",
+      "reason": "identical_to_english"
+    },
+    "broadcast._type_info": {
+      "current": "ℹ️ Information",
+      "en": "ℹ️ Information",
+      "ru": "ℹ️ Информация",
+      "reason": "identical_to_english"
+    },
+    "broadcast._type_maintenance": {
+      "current": "🔧 Maintenance",
+      "en": "🔧 Maintenance",
+      "ru": "🔧 Технические работы",
+      "reason": "identical_to_english"
+    },
+    "broadcast._type_promo": {
+      "current": "🎯 Promo",
+      "en": "🎯 Promo",
+      "ru": "🎯 Промо",
+      "reason": "identical_to_english"
+    },
+    "broadcast._type_security": {
+      "current": "🔒 Security",
+      "en": "🔒 Security",
+      "ru": "🔒 Безопасность",
+      "reason": "identical_to_english"
+    },
+    "buy.back_to_tariffs": {
+      "current": "← Back",
+      "en": "← Back",
+      "ru": "← Назад",
+      "reason": "identical_to_english"
+    },
+    "buy.button_price": {
+      "current": "{price} ₽ — {period}",
+      "en": "{price} ₽ — {period}",
+      "ru": "{period} — {price} ₽",
+      "reason": "identical_to_english"
+    },
+    "buy.button_price_badge": {
+      "current": "{price} ₽ — {period} {badge}",
+      "en": "{price} ₽ — {period} {badge}",
+      "ru": "{period} — {price} ₽ {badge}",
+      "reason": "identical_to_english"
+    },
+    "buy.button_price_discount": {
+      "current": "{base} ₽ → {final} ₽ — {period}",
+      "en": "{base} ₽ → {final} ₽ — {period}",
+      "ru": "{period} — {base} → {final} ₽",
+      "reason": "identical_to_english"
+    },
+    "buy.button_price_discount_badge": {
+      "current": "{base} ₽ → {final} ₽ — {period} {badge}",
+      "en": "{base} ₽ → {final} ₽ — {period} {badge}",
+      "ru": "{period} — {base} → {final} ₽ {badge}",
+      "reason": "identical_to_english"
+    },
+    "buy.corporate_back": {
+      "current": "◀️ Back",
+      "en": "◀️ Back",
+      "ru": "◀️ Назад",
+      "reason": "identical_to_english"
+    },
+    "buy.corporate_confirm": {
+      "current": "✅ Confirm",
+      "en": "✅ Confirm",
+      "ru": "✅ Подтвердить",
+      "reason": "identical_to_english"
+    },
+    "buy.enter_promo": {
+      "current": "🎟 Enter promo code",
+      "en": "🎟 Enter promo code",
+      "ru": "🎟 Ввести промокод",
+      "reason": "identical_to_english"
+    },
+    "buy.enter_promo_button": {
+      "current": "🎟 Enter promo code",
+      "en": "🎟 Enter promo code",
+      "ru": "🎟 Ввести промокод",
+      "reason": "identical_to_english"
+    },
+    "buy.invoice_description": {
+      "current": "Atlas Secure VPN {tariff_name} tariff, {months}-month subscription",
+      "en": "Atlas Secure VPN {tariff_name} tariff, {months}-month subscription",
+      "ru": "Atlas Secure VPN тариф {tariff_name}, подписка {months} мес.",
+      "reason": "identical_to_english"
+    },
+    "buy.period_2_4": {
+      "current": "{months} months",
+      "en": "{months} months",
+      "ru": "{months} мес",
+      "reason": "identical_to_english"
+    },
+    "buy.period_5_plus": {
+      "current": "{months} months",
+      "en": "{months} months",
+      "ru": "{months} мес",
+      "reason": "identical_to_english"
+    },
+    "buy.promo_applied": {
+      "current": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price.",
+      "en": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price.",
+      "ru": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Промокод применён. Скидка уже учтена в цене.",
+      "reason": "identical_to_english"
+    },
+    "buy.promo_applied_with_ttl": {
+      "current": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price. Valid for {minutes} more min.",
+      "en": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price. Valid for {minutes} more min.",
+      "ru": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Промокод применён. Скидка уже учтена в цене. Действителен ещё {minutes} мин.",
+      "reason": "identical_to_english"
+    },
+    "buy.select_basic_button": {
+      "current": "⚡️ Select Basic",
+      "en": "⚡️ Select Basic",
+      "ru": "⚡️ Выбрать Basic",
+      "reason": "identical_to_english"
+    },
+    "buy.select_plus_button": {
+      "current": "👑 Select Plus",
+      "en": "👑 Select Plus",
+      "ru": "👑 Выбрать Plus",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_basic_selected": {
+      "current": "🔐 Basic tariff selected\nWhat period are you interested in?",
+      "en": "🔐 Basic tariff selected\nWhat period are you interested in?",
+      "ru": "⚡ <b>Basic</b> — выберите срок",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_button_1": {
+      "current": "1 month · For trial · 149 ₽",
+      "en": "1 month · For trial · 149 ₽",
+      "ru": "1 месяц · Для знакомства · 149 ₽",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_button_12": {
+      "current": "12 months · Don't think about access · 899 ₽",
+      "en": "12 months · Don't think about access · 899 ₽",
+      "ru": "12 месяцев · Не думать о доступе · 899 ₽",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_button_3": {
+      "current": "3 months · Most popular · 399 ₽ ⭐",
+      "en": "3 months · Most popular · 399 ₽ ⭐",
+      "ru": "3 месяца · Чаще всего выбирают · 399 ₽ ⭐",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_label_basic": {
+      "current": "🪙 Basic",
+      "en": "🪙 Basic",
+      "ru": "🪙 Basic",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_label_plus": {
+      "current": "👑 Plus",
+      "en": "👑 Plus",
+      "ru": "👑 Plus",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_plus_selected": {
+      "current": "🔐 Plus tariff selected\nWhat period are you interested in?",
+      "en": "🔐 Plus tariff selected\nWhat period are you interested in?",
+      "ru": "👑 <b>Plus</b> — выберите срок",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_select_basic_button": {
+      "current": "⚡️ Select Basic",
+      "en": "⚡️ Select Basic",
+      "ru": "⚡️ Выбрать Basic",
+      "reason": "identical_to_english"
+    },
+    "buy.tariff_select_plus_button": {
+      "current": "👑 Select Plus",
+      "en": "👑 Select Plus",
+      "ru": "👑 Выбрать Plus",
+      "reason": "identical_to_english"
+    },
+    "common.back": {
+      "current": "← Back",
+      "en": "Back",
+      "ru": "Назад",
+      "reason": "latin_script_only"
+    },
+    "common.cancel": {
+      "current": "❌ Cancel",
+      "en": "❌ Cancel",
+      "ru": "❌ Отмена",
+      "reason": "identical_to_english"
+    },
+    "common.go_to_connection": {
+      "current": "🔌 Go to Connection",
+      "en": "🔌 Go to Connection",
+      "ru": "🔌 Перейти к подключению",
+      "reason": "identical_to_english"
+    },
+    "errors.db_init_stage_warning": {
+      "current": "⚠️ Database is still initializing (STAGE). Some features may be unavailable.",
+      "en": "⚠️ Database is still initializing (STAGE). Some features may be unavailable.",
+      "ru": "⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны.",
+      "reason": "identical_to_english"
+    },
+    "errors.discount_too_low": {
+      "current": "Amount after discount is below minimum for card payment (64 ₽).\nPlease select another tariff.",
+      "en": "Amount after discount is below minimum for card payment (64 ₽).\nPlease select another tariff.",
+      "ru": "Сумма после скидки ниже минимальной для оплаты картой (64 ₽).\nПожалуйста, выберите другой тариф.",
+      "reason": "identical_to_english"
+    },
+    "errors.payment_min_amount": {
+      "current": "Amount after discount is below minimum for card payment (64 ₽).\nPlease select another tariff.",
+      "en": "Amount after discount is below minimum for card payment (64 ₽).\nPlease select another tariff.",
+      "ru": "Сумма после скидки ниже минимальной для оплаты картой (64 ₽).\nПожалуйста, выберите другой тариф.",
+      "reason": "identical_to_english"
+    },
+    "errors.session_expired": {
+      "current": "⏳ Session expired. Please try again.",
+      "en": "⏳ Session expired. Please try again.",
+      "ru": "⏳ Сессия устарела. Пожалуйста, попробуйте ещё раз.",
+      "reason": "identical_to_english"
+    },
+    "errors.start_command": {
+      "current": "Please start with /start command",
+      "en": "Please start with /start command",
+      "ru": "Пожалуйста, начните с команды /start",
+      "reason": "identical_to_english"
+    },
+    "errors.try_later": {
+      "current": "⚠️ An error occurred. Please try again later.",
+      "en": "⚠️ An error occurred. Please try again later.",
+      "ru": "⚠️ Произошла ошибка. Попробуйте позже.",
+      "reason": "identical_to_english"
+    },
+    "farm.back_to_farm": {
+      "current": "🔙 To the farm",
+      "en": "🔙 To the farm",
+      "ru": "🔙 На ферму",
+      "reason": "identical_to_english"
+    },
+    "farm.button_buy_plot_slots": {
+      "current": "➕ Buy a plot — {price} ₽ ({slots} left)",
+      "en": "➕ Buy a plot — {price} ₽ ({slots} left)",
+      "ru": "➕ Купить грядку — {price} ₽ (осталось мест: {slots})",
+      "reason": "identical_to_english"
+    },
+    "farm.button_buy_plot_slots_disabled": {
+      "current": "➕ Plot (need {price} ₽, {slots} left)",
+      "en": "➕ Plot (need {price} ₽, {slots} left)",
+      "ru": "➕ Грядка (нужно {price} ₽, осталось мест: {slots})",
+      "reason": "identical_to_english"
+    },
+    "farm.button_dig": {
+      "current": "⛏ Dig up #{num}",
+      "en": "⛏ Dig up #{num}",
+      "ru": "⛏ Выкопать #{num}",
+      "reason": "identical_to_english"
+    },
+    "farm.button_early": {
+      "current": "🚜 Harvest #{num} unripe — +{reward} ₽",
+      "en": "🚜 Harvest #{num} unripe — +{reward} ₽",
+      "ru": "🚜 Собрать незрелым #{num} — +{reward} ₽",
+      "reason": "identical_to_english"
+    },
+    "farm.button_guide": {
+      "current": "📖 Guide",
+      "en": "📖 Guide",
+      "ru": "📖 Инструкция",
+      "reason": "identical_to_english"
+    },
+    "farm.button_plant_storm_blocked": {
+      "current": "🚫 Plot {num}: planting is closed during a storm",
+      "en": "🚫 Plot {num}: planting is closed during a storm",
+      "ru": "🚫 Грядка {num}: посадка во время шторма недоступна",
+      "reason": "identical_to_english"
+    },
+    "farm.button_shield": {
+      "current": "🛡 Cover #{num} — {price} ₽",
+      "en": "🛡 Cover #{num} — {price} ₽",
+      "ru": "🛡 Накрыть #{num} — {price} ₽",
+      "reason": "identical_to_english"
+    },
+    "farm.dig_confirm": {
+      "current": "⛏ <b>Dig up the plant?</b>\n\nDo you want to dig up <b>{name}</b> on plot {num}?\n\n⚠️ The plant will be destroyed with no reward.\nThe plot becomes empty and you can plant something new.",
+      "en": "⛏ <b>Dig up the plant?</b>\n\nDo you want to dig up <b>{name}</b> on plot {num}?\n\n⚠️ The plant will be destroyed with no reward.\nThe plot becomes empty and you can plant something new.",
+      "ru": "⛏ <b>Выкопать растение?</b>\n\nВы хотите выкопать <b>{name}</b> на грядке {num}?\n\n⚠️ Растение будет уничтожено без награды.\nГрядка станет пустой и можно будет посадить новое растение.",
+      "reason": "identical_to_english"
+    },
+    "farm.dig_success": {
+      "current": "⛏ Plant dug up! The plot is free.",
+      "en": "⛏ Plant dug up! The plot is free.",
+      "ru": "⛏ Растение выкопано! Грядка свободна.",
+      "reason": "identical_to_english"
+    },
+    "farm.dig_unavailable": {
+      "current": "❌ This plant cannot be dug up",
+      "en": "❌ This plant cannot be dug up",
+      "ru": "❌ Растение недоступно для выкапывания",
+      "reason": "identical_to_english"
+    },
+    "farm.dig_yes": {
+      "current": "⛏ Yes, dig up",
+      "en": "⛏ Yes, dig up",
+      "ru": "⛏ Да, выкопать",
+      "reason": "identical_to_english"
+    },
+    "farm.early_failed": {
+      "current": "Could not credit the reward.",
+      "en": "Could not credit the reward.",
+      "ru": "Не удалось зачислить награду.",
+      "reason": "identical_to_english"
+    },
+    "farm.early_no_storm": {
+      "current": "Early harvest is only available during a storm.",
+      "en": "Early harvest is only available during a storm.",
+      "ru": "Ранний сбор доступен только во время шторма.",
+      "reason": "identical_to_english"
+    },
+    "farm.early_success": {
+      "current": "🚜 Harvested {emoji} unripe: +{reward} ₽",
+      "en": "🚜 Harvested {emoji} unripe: +{reward} ₽",
+      "ru": "🚜 Собрано {emoji} незрелым: +{reward} ₽",
+      "reason": "identical_to_english"
+    },
+    "farm.early_unavailable": {
+      "current": "Early harvest is not available for this plant.",
+      "en": "Early harvest is not available for this plant.",
+      "ru": "Ранний сбор недоступен для этого растения.",
+      "reason": "identical_to_english"
+    },
+    "farm.error_already_harvested": {
+      "current": "This plot has already been harvested",
+      "en": "This plot has already been harvested",
+      "ru": "Эта грядка уже собрана",
+      "reason": "identical_to_english"
+    },
+    "farm.error_boost_limit": {
+      "current": "No faster than this: the plant has hit its growth limit.",
+      "en": "No faster than this: the plant has hit its growth limit.",
+      "ru": "Быстрее уже не получится: ускорение этого растения на пределе.",
+      "reason": "identical_to_english"
+    },
+    "farm.error_plot_not_found": {
+      "current": "❌ Plot not found",
+      "en": "❌ Plot not found",
+      "ru": "❌ Грядка не найдена",
+      "reason": "identical_to_english"
+    },
+    "farm.pay_card": {
+      "current": "💳 Card",
+      "en": "💳 Card",
+      "ru": "💳 Картой",
+      "reason": "identical_to_english"
+    },
+    "farm.pay_card_unavailable": {
+      "current": "Card payment is temporarily unavailable.",
+      "en": "Card payment is temporarily unavailable.",
+      "ru": "Оплата картой временно недоступна.",
+      "reason": "identical_to_english"
+    },
+    "farm.pay_error": {
+      "current": "Payment creation error.",
+      "en": "Payment creation error.",
+      "ru": "Ошибка создания платежа.",
+      "reason": "identical_to_english"
+    },
+    "farm.pay_sbp": {
+      "current": "📲 SBP",
+      "en": "📲 SBP",
+      "ru": "📲 СБП",
+      "reason": "identical_to_english"
+    },
+    "farm.pay_sbp_unavailable": {
+      "current": "SBP is temporarily unavailable.",
+      "en": "SBP is temporarily unavailable.",
+      "ru": "СБП временно недоступен.",
+      "reason": "identical_to_english"
+    },
+    "farm.paywall": {
+      "current": "🌾 The farm is for subscribers only.\nGet a subscription to come back to your plots.",
+      "en": "🌾 The farm is for subscribers only.\nGet a subscription to come back to your plots.",
+      "ru": "🌾 Ферма доступна только подписчикам.\nОформите подписку, чтобы вернуться к грядкам.",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_apple": {
+      "current": "Apple tree",
+      "en": "Apple tree",
+      "ru": "Яблоня",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_cactus": {
+      "current": "Cactus",
+      "en": "Cactus",
+      "ru": "Кактус",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_carrot": {
+      "current": "Carrots",
+      "en": "Carrots",
+      "ru": "Морковь",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_cherry": {
+      "current": "Cherry",
+      "en": "Cherry",
+      "ru": "Вишня",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_cucumber": {
+      "current": "Cucumber",
+      "en": "Cucumber",
+      "ru": "Огурец",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_grape": {
+      "current": "Grapes",
+      "en": "Grapes",
+      "ru": "Виноград",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_greens": {
+      "current": "Greens",
+      "en": "Greens",
+      "ru": "Зелень",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_lavender": {
+      "current": "Lavender",
+      "en": "Lavender",
+      "ru": "Лаванда",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_lemon": {
+      "current": "Lemon tree",
+      "en": "Lemon tree",
+      "ru": "Лимонное дерево",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_oak": {
+      "current": "Oak",
+      "en": "Oak",
+      "ru": "Дуб",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_pepper": {
+      "current": "Chili pepper",
+      "en": "Chili pepper",
+      "ru": "Перчик",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_potato": {
+      "current": "Potatoes",
+      "en": "Potatoes",
+      "ru": "Картофель",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_strawberry": {
+      "current": "Strawberry",
+      "en": "Strawberry",
+      "ru": "Клубника",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_sunflower": {
+      "current": "Sunflower",
+      "en": "Sunflower",
+      "ru": "Подсолнух",
+      "reason": "identical_to_english"
+    },
+    "farm.plant_tomato": {
+      "current": "Tomatoes",
+      "en": "Tomatoes",
+      "ru": "Томаты",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_already": {
+      "current": "This plot is already covered.",
+      "en": "This plot is already covered.",
+      "ru": "Грядка уже накрыта.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_applied": {
+      "current": "🛡 Plot covered (−{price} ₽)",
+      "en": "🛡 Plot covered (−{price} ₽)",
+      "ru": "🛡 Грядка накрыта (−{price} ₽)",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_failed": {
+      "current": "Could not cover the plot. Please try again.",
+      "en": "Could not cover the plot. Please try again.",
+      "ru": "Не удалось накрыть грядку. Попробуйте ещё раз.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_invoice_comment": {
+      "current": "Atlas Secure — Covering plot {num}",
+      "en": "Atlas Secure — Covering plot {num}",
+      "ru": "Atlas Secure — Накрытие грядки {num}",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_invoice_too_late": {
+      "current": "⏳ Less than {minutes} min until the storm — the payment will not arrive in time and the cover will not save the plot.\n\nYou can still cover the plot from your balance if it has enough funds.",
+      "en": "⏳ Less than {minutes} min until the storm — the payment will not arrive in time and the cover will not save the plot.\n\nYou can still cover the plot from your balance if it has enough funds.",
+      "ru": "⏳ До шторма меньше {minutes} мин — платёж не успеет дойти, и плёнка не спасёт грядку.\n\nНакрыть ещё можно с баланса, если на нём хватает денег.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_lava_button": {
+      "current": "💳 Go to payment",
+      "en": "💳 Go to payment",
+      "ru": "💳 Перейти к оплате",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_lava_invoice": {
+      "current": "💳 <b>Payment for covering the plot</b>\n\nAmount: {amount} ₽\n\nThe plot will be covered automatically after payment.",
+      "en": "💳 <b>Payment for covering the plot</b>\n\nAmount: {amount} ₽\n\nThe plot will be covered automatically after payment.",
+      "ru": "💳 <b>Оплата накрытия грядки</b>\n\nСумма: {amount} ₽\n\nПосле оплаты грядка накроется автоматически.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_no_storm": {
+      "current": "The storm has already passed or has not been announced yet.",
+      "en": "The storm has already passed or has not been announced yet.",
+      "ru": "Шторм уже прошёл или ещё не объявлен.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_payment_title": {
+      "current": "🛡 <b>Covering plot {num}</b>\n\nPlant: {emoji} {name}\nCover price: <b>{price} ₽</b>\nYour balance: {balance} ₽ — not enough for the cover.\n\n⚠️ The invoice is for the full cover price — {price} ₽. Your balance is not charged when you pay by card or SBP, it stays untouched.\n\nChoose a payment method:",
+      "en": "🛡 <b>Covering plot {num}</b>\n\nPlant: {emoji} {name}\nCover price: <b>{price} ₽</b>\nYour balance: {balance} ₽ — not enough for the cover.\n\n⚠️ The invoice is for the full cover price — {price} ₽. Your balance is not charged when you pay by card or SBP, it stays untouched.\n\nChoose a payment method:",
+      "ru": "🛡 <b>Накрытие грядки {num}</b>\n\nРастение: {emoji} {name}\nЦена плёнки: <b>{price} ₽</b>\nНа балансе: {balance} ₽ — на плёнку не хватает.\n\n⚠️ Счёт выставляется на полную стоимость плёнки — {price} ₽. Баланс при оплате картой или через СБП не списывается и остаётся у вас.\n\nВыберите способ оплаты:",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_plot_not_growing": {
+      "current": "This plot is no longer growing.",
+      "en": "This plot is no longer growing.",
+      "ru": "Грядка больше не растёт.",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_sbp_button": {
+      "current": "📲 Pay via SBP",
+      "en": "📲 Pay via SBP",
+      "ru": "📲 Оплатить через СБП",
+      "reason": "identical_to_english"
+    },
+    "farm.shield_sbp_invoice": {
+      "current": "📲 <b>SBP — covering the plot</b>\n\nAmount including the fee: {amount} ₽\n\nThe plot will be covered automatically after payment.",
+      "en": "📲 <b>SBP — covering the plot</b>\n\nAmount including the fee: {amount} ₽\n\nThe plot will be covered automatically after payment.",
+      "ru": "📲 <b>СБП — накрытие грядки</b>\n\nСумма с учётом наценки: {amount} ₽\n\nПосле оплаты грядка накроется автоматически.",
+      "reason": "identical_to_english"
+    },
+    "farm.storm_banner": {
+      "current": "⛈ <b>A storm is coming!</b> Impact in ≈ {hours} h\nGrowing plots without a cover will die.\n🚫 <b>Planting is unavailable until the storm is over.</b>\n",
+      "en": "⛈ <b>A storm is coming!</b> Impact in ≈ {hours} h\nGrowing plots without a cover will die.\n🚫 <b>Planting is unavailable until the storm is over.</b>\n",
+      "ru": "⛈ <b>Надвигается шторм!</b> До удара ≈ {hours} ч\nРастущие грядки без плёнки погибнут.\n🚫 <b>Посадка новых растений недоступна до конца шторма.</b>\n",
+      "reason": "identical_to_english"
+    },
+    "farm.storm_planting_blocked": {
+      "current": "🚫 A storm is coming — planting is paused. You can plant again once it passes.",
+      "en": "🚫 A storm is coming — planting is paused. You can plant again once it passes.",
+      "ru": "🚫 Идёт шторм — посадка временно недоступна. После шторма можно будет сажать снова.",
+      "reason": "identical_to_english"
+    },
+    "games.menu_paywall": {
+      "current": "🎮 The game club is for subscribers only!\nGet a subscription to unlock all games 🎯",
+      "en": "🎮 The game club is for subscribers only!\nGet a subscription to unlock all games 🎯",
+      "ru": "🎮 Игровой клуб доступен только для подписчиков!\nОформите подписку и получите доступ ко всем играм 🎯",
+      "reason": "identical_to_english"
+    },
+    "games.race_blocked": {
+      "current": "The game is already running, please wait",
+      "en": "The game is already running, please wait",
+      "ru": "Игра уже запущена, подождите",
+      "reason": "identical_to_english"
+    },
+    "incident.banner": {
+      "current": "⚠️ Technical work in progress",
+      "en": "⚠️ Technical work in progress",
+      "ru": "⚠️ Ведутся технические работы",
+      "reason": "identical_to_english"
+    },
+    "instruction._device_android": {
+      "current": "🤖 Android",
+      "en": "🤖 Android",
+      "ru": "🤖 Android",
+      "reason": "identical_to_english"
+    },
+    "instruction._device_desktop": {
+      "current": "💻 Windows / macOS",
+      "en": "💻 Windows / macOS",
+      "ru": "💻 Windows / macOS",
+      "reason": "identical_to_english"
+    },
+    "instruction._device_ios": {
+      "current": "📱 iOS",
+      "en": "📱 iOS",
+      "ru": "📱 iOS",
+      "reason": "identical_to_english"
+    },
+    "instruction._download_android": {
+      "current": "🤖 Android",
+      "en": "🤖 Android",
+      "ru": "🤖 Android",
+      "reason": "identical_to_english"
+    },
+    "instruction._download_desktop": {
+      "current": "💻 Windows",
+      "en": "💻 Windows",
+      "ru": "💻 Windows",
+      "reason": "identical_to_english"
+    },
+    "instruction._download_ios": {
+      "current": "📱 iOS",
+      "en": "📱 iOS",
+      "ru": "📱 iOS",
+      "reason": "identical_to_english"
+    },
+    "instruction._download_macos": {
+      "current": "🍎 MacOS",
+      "en": "🍎 MacOS",
+      "ru": "🍎 MacOS",
+      "reason": "identical_to_english"
+    },
+    "instruction._download_tv": {
+      "current": "📺 TV",
+      "en": "📺 TV",
+      "ru": "📺 TV",
+      "reason": "identical_to_english"
+    },
+    "lang.change": {
+      "current": "🌍 Change language",
+      "en": "🌍 Change language",
+      "ru": "🌍 Изменить язык",
+      "reason": "identical_to_english"
+    },
+    "lang.changed_toast": {
+      "current": "✅ Language changed",
+      "en": "✅ Language changed",
+      "ru": "✅ Язык изменён",
+      "reason": "identical_to_english"
+    },
+    "lang.select_title": {
+      "current": "🌍 Select your language:",
+      "en": "🌍 Select your language:",
+      "ru": "🌍 Выберите язык:",
+      "reason": "identical_to_english"
+    },
+    "main.about": {
+      "current": "ℹ️ About",
+      "en": "ℹ️ About",
+      "ru": "ℹ️ О сервисе",
+      "reason": "identical_to_english"
+    },
+    "main.about_title": {
+      "current": "🔎 About Atlas Secure",
+      "en": "🔎 About Atlas Secure",
+      "ru": "🔎 О сервисе Atlas Secure",
+      "reason": "identical_to_english"
+    },
+    "main.auto_renew_disable": {
+      "current": "⏸ Disable auto-renewal",
+      "en": "⏸ Disable auto-renewal",
+      "ru": "⏸ Отключить автопродление",
+      "reason": "identical_to_english"
+    },
+    "main.auto_renew_disabled": {
+      "current": "⏸ Auto-renewal disabled",
+      "en": "⏸ Auto-renewal disabled",
+      "ru": "⏸ Автопродление отключено",
+      "reason": "identical_to_english"
+    },
+    "main.auto_renew_enable": {
+      "current": "🔄 Enable auto-renewal",
+      "en": "🔄 Enable auto-renewal",
+      "ru": "🔄 Включить автопродление",
+      "reason": "identical_to_english"
+    },
+    "main.auto_renew_enabled": {
+      "current": "✅ Auto-renewal enabled",
+      "en": "✅ Auto-renewal enabled",
+      "ru": "✅ Автопродление включено",
+      "reason": "identical_to_english"
+    },
+    "main.change_language": {
+      "current": "🌍 Change language",
+      "en": "🌍 Change language",
+      "ru": "🌍 Изменить язык",
+      "reason": "identical_to_english"
+    },
+    "main.db_init_stage_warning": {
+      "current": "⚠️ Database is still initializing (STAGE). Some features may be unavailable.",
+      "en": "⚠️ Database is still initializing (STAGE). Some features may be unavailable.",
+      "ru": "⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны.",
+      "reason": "identical_to_english"
+    },
+    "main.ecosystem": {
+      "current": "⚪️ Our Ecosystem",
+      "en": "⚪️ Our Ecosystem",
+      "ru": "⚪️ Наша экосистема",
+      "reason": "identical_to_english"
+    },
+    "main.ecosystem_text": {
+      "current": "Atlas Secure develops as a unified digital environment within Telegram.\n\n⚪️ Available in the ecosystem:\n\n📶 Stable access service\n• High speed without limits\n• Stable messengers\n• Banking and gov services work\n• Stable mobile connection\n\n📊 Only Tracker (coming soon)\nPersonal habit assistant — goals and focus in one place.\n\n⚙️ All services unified in one management system.\n\nAtlas Secure is not separate features, but a connected environment where everything works together.",
+      "en": "Atlas Secure develops as a unified digital environment within Telegram.\n\n⚪️ Available in the ecosystem:\n\n📶 Stable access service\n• High speed without limits\n• Stable messengers\n• Banking and gov services work\n• Stable mobile connection\n\n📊 Only Tracker (coming soon)\nPersonal habit assistant — goals and focus in one place.\n\n⚙️ All services unified in one management system.\n\nAtlas Secure is not separate features, but a connected environment where everything works together.",
+      "ru": "Atlas Secure развивается\nкак единая цифровая среда внутри Telegram.\n\n⚪️ В экосистеме уже доступны:\n\n📶 Сервис стабильного доступа\n• высокая скорость без ограничений\n• устойчивая работа мессенджеров\n• корректная работа банковских и гос-сервисов\n• стабильное соединение в мобильных сетях\n\n📊 Only Tracker \nПерсональный помощник по привычкам —\nконтроль целей и фокус в одном пространстве.\n\n⚙️ Все сервисы объединены\nв единую систему управления.\n\nAtlas Secure — это не отдельные функции,\nа связанная среда,\nгде всё работает согласованно и стабильно.",
+      "reason": "identical_to_english"
+    },
+    "main.ecosystem_title": {
+      "current": "🔐 Our Ecosystem · Atlas Secure",
+      "en": "🔐 Our Ecosystem · Atlas Secure",
+      "ru": "🔐 Наша Экосистема · Atlas Secure",
+      "reason": "identical_to_english"
+    },
+    "main.home_welcome_text": {
+      "current": "🔐 Atlas Secure\n\nGlad to see you in Atlas Secure 🤝\n\nWe provide:\n⚙️ stable operation of familiar services\n⚡ fast and reliable connection\n🛡 privacy by default\n\nYou use the internet as usual —\nwe take care of stability and protection.",
+      "en": "🔐 Atlas Secure\n\nGlad to see you in Atlas Secure 🤝\n\nWe provide:\n⚙️ stable operation of familiar services\n⚡ fast and reliable connection\n🛡 privacy by default\n\nYou use the internet as usual —\nwe take care of stability and protection.",
+      "ru": "🔐 Atlas Secure\n\nРады видеть Вас в Atlas Secure 🤝\n\nМы обеспечиваем:\n⚙️ стабильную работу привычных сервисов\n⚡ быстрое и надёжное соединение\n🛡 конфиденциальность по умолчанию\n\nВы пользуетесь интернетом как обычно —\nо стабильности и защите мы позаботимся.",
+      "reason": "identical_to_english"
+    },
+    "main.incident_banner": {
+      "current": "⚠️ Technical work in progress",
+      "en": "⚠️ Technical work in progress",
+      "ru": "⚠️ Ведутся технические работы",
+      "reason": "identical_to_english"
+    },
+    "main.incident_status_warning": {
+      "current": "\n\n⚠️ WARNING: Incident mode active\n{incident_text}",
+      "en": "\n\n⚠️ WARNING: Incident mode active\n{incident_text}",
+      "ru": "\n\n⚠️ ВНИМАНИЕ: Режим инцидента активен\n{incident_text}",
+      "reason": "identical_to_english"
+    },
+    "main.instruction": {
+      "current": "🔌 Instruction",
+      "en": "🔌 Instruction",
+      "ru": "🔌 Инструкция",
+      "reason": "identical_to_english"
+    },
+    "main.invalid_promo": {
+      "current": "❌ Invalid promo code",
+      "en": "❌ Invalid promo code",
+      "ru": "❌ Неверный промокод",
+      "reason": "identical_to_english"
+    },
+    "main.no": {
+      "current": "NO",
+      "en": "NO",
+      "ru": "НЕТ",
+      "reason": "identical_to_english"
+    },
+    "main.pay_card": {
+      "current": "💳 Bank Card",
+      "en": "💳 Bank Card",
+      "ru": "💳 Банковская карта",
+      "reason": "identical_to_english"
+    },
+    "main.pay_with_card": {
+      "current": "💳 Pay with card",
+      "en": "💳 Pay with card",
+      "ru": "💳 Оплатить картой",
+      "reason": "identical_to_english"
+    },
+    "main.personal_discount_label": {
+      "current": "🎯 Personal Discount {percent}%",
+      "en": "🎯 Personal Discount {percent}%",
+      "ru": "🎯 Персональная скидка {percent}%",
+      "reason": "identical_to_english"
+    },
+    "main.profile_auto_renew_disabled": {
+      "current": "🔁 Auto-renewal: disabled",
+      "en": "🔁 Auto-renewal: disabled",
+      "ru": "🔁 Автопродление: выключено",
+      "reason": "identical_to_english"
+    },
+    "main.profile_auto_renew_enabled": {
+      "current": "🔁 Auto-renewal: {next_billing_date}",
+      "en": "🔁 Auto-renewal: {next_billing_date}",
+      "ru": "🔁 Автопродление: {next_billing_date}",
+      "reason": "identical_to_english"
+    },
+    "main.promo_applied": {
+      "current": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price.",
+      "en": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price.",
+      "ru": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Промокод применён. Скидка уже учтена в цене.",
+      "reason": "identical_to_english"
+    },
+    "main.promo_discount_label": {
+      "current": "🎟 Promo code",
+      "en": "🎟 Promo code",
+      "ru": "🎟 Промокод",
+      "reason": "identical_to_english"
+    },
+    "main.referral": {
+      "current": "💎 Loyalty Program",
+      "en": "💎 Loyalty Program",
+      "ru": "💎 Программа лояльности",
+      "reason": "identical_to_english"
+    },
+    "main.reissue_notification_text": {
+      "current": "Your VPN key has been updated\nand migrated to a new server version.\n\nFor proper operation:\n— remove the old key from VPN app\n— add the new access key\n\nKey:\n\n{sub_url}\n\nUpdate is necessary to maintain\nstability and connection performance.",
+      "en": "Your VPN key has been updated\nand migrated to a new server version.\n\nFor proper operation:\n— remove the old key from VPN app\n— add the new access key\n\nKey:\n\n{sub_url}\n\nUpdate is necessary to maintain\nstability and connection performance.",
+      "ru": "Ваш VPN-ключ обновлён\nи переведён на новую версию сервера.\n\nДля корректной работы:\n— удалите старый ключ из VPN-приложения\n— добавьте новую ссылку подписки\n\nСсылка подписки:\n\n{sub_url}\n\nОбновление необходимо для сохранения\nстабильности и производительности соединения.",
+      "reason": "identical_to_english"
+    },
+    "main.reissue_notification_title": {
+      "current": "🔐 VPN Key Update",
+      "en": "🔐 VPN Key Update",
+      "ru": "🔐 Обновление VPN-ключа",
+      "reason": "identical_to_english"
+    },
+    "main.reminder_admin_1day_6h": {
+      "current": "⏳ Temporary Atlas Secure access expires in 6 hours.\n\nWe recommend purchasing a full subscription\nto maintain stable access without interruption.",
+      "en": "⏳ Temporary Atlas Secure access expires in 6 hours.\n\nWe recommend purchasing a full subscription\nto maintain stable access without interruption.",
+      "ru": "⏳ Временный доступ Atlas Secure завершается через 6 часов.\n\nРекомендуем оформить полноценную подписку,\nчтобы сохранить стабильный доступ без перерыва.",
+      "reason": "identical_to_english"
+    },
+    "main.reminder_admin_7days_24h": {
+      "current": "⏳ Temporary Atlas Secure access expires in 24 hours.\n\nWe recommend purchasing a 1-month subscription\nfor continuous and stable connection.",
+      "en": "⏳ Temporary Atlas Secure access expires in 24 hours.\n\nWe recommend purchasing a 1-month subscription\nfor continuous and stable connection.",
+      "ru": "⏳ Временный доступ Atlas Secure завершается через 24 часа.\n\nРекомендуем оформить подписку на 1 месяц\nдля непрерывного и стабильного подключения.",
+      "reason": "identical_to_english"
+    },
+    "main.reminder_paid_24h": {
+      "current": "⏳ Your Atlas Secure access expires in 24 hours.\n\nWe recommend renewing your subscription in advance\nto maintain continuous connection.",
+      "en": "⏳ Your Atlas Secure access expires in 24 hours.\n\nWe recommend renewing your subscription in advance\nto maintain continuous connection.",
+      "ru": "⏳ Срок вашего доступа Atlas Secure истекает через 24 часа.\n\nРекомендуем продлить подписку заранее,\nчтобы сохранить непрерывное соединение.",
+      "reason": "identical_to_english"
+    },
+    "main.reminder_paid_3d": {
+      "current": "⏳ Your Atlas Secure access expires in 3 days.\n\nYou can renew your subscription in advance\nto avoid connection interruption.",
+      "en": "⏳ Your Atlas Secure access expires in 3 days.\n\nYou can renew your subscription in advance\nto avoid connection interruption.",
+      "ru": "⏳ Срок вашего доступа Atlas Secure истекает через 3 дня.\n\nВы можете продлить подписку заранее,\nчтобы избежать перерыва в соединении.",
+      "reason": "identical_to_english"
+    },
+    "main.renewal_pay_button": {
+      "current": "💳 Pay",
+      "en": "💳 Pay",
+      "ru": "💳 Оплатить",
+      "reason": "identical_to_english"
+    },
+    "main.sbp_payment_text": {
+      "current": "After making the transfer, confirm payment.\n\n⸻\n\nTransfer details\n\nBank: Ozon\nCard account: 2204321075030551\n\nAmount to confirm: {amount} ₽",
+      "en": "After making the transfer, confirm payment.\n\n⸻\n\nTransfer details\n\nBank: Ozon\nCard account: 2204321075030551\n\nAmount to confirm: {amount} ₽",
+      "ru": "После выполнения перевода подтвердите оплату.\n\n⸻\n\nРеквизиты для перевода\n\nБанк: Ozon\nСчёт карты: 2204321075030551\n\nСумма к подтверждению: {amount} ₽",
+      "reason": "identical_to_english"
+    },
+    "main.select_payment_method": {
+      "current": "Choose payment method:\n\nAmount: {price:.2f} ₽",
+      "en": "Choose payment method:\n\nAmount: {price:.2f} ₽",
+      "ru": "Выберите способ оплаты:\n\nСумма: {price:.2f} ₽",
+      "reason": "identical_to_english"
+    },
+    "main.service_status": {
+      "current": "📊 Service Status",
+      "en": "📊 Service Status",
+      "ru": "📊 Статус сервиса",
+      "reason": "identical_to_english"
+    },
+    "main.service_status_text": {
+      "current": "📊 Atlas Secure Service Status\n\nCurrent status: 🟢 Service works stably\n\nAll main components function\nin normal mode:\n• access is active\n• key issuance works\n• support is available\n\nAtlas Secure is built as private\ndigital infrastructure\nwith priority on stability\nand predictable operation.\n\nOur principles:\n• target uptime — 99.9%\n• planned work is done in advance\n• critical incidents are resolved\n  in priority order\n• data loss is architecturally excluded\n\nIn case of technical work\nor changes, users\nare notified in advance through bot.\n\nLast status update:\nautomatically",
+      "en": "📊 Atlas Secure Service Status\n\nCurrent status: 🟢 Service works stably\n\nAll main components function\nin normal mode:\n• access is active\n• key issuance works\n• support is available\n\nAtlas Secure is built as private\ndigital infrastructure\nwith priority on stability\nand predictable operation.\n\nOur principles:\n• target uptime — 99.9%\n• planned work is done in advance\n• critical incidents are resolved\n  in priority order\n• data loss is architecturally excluded\n\nIn case of technical work\nor changes, users\nare notified in advance through bot.\n\nLast status update:\nautomatically",
+      "ru": "📊 Статус сервиса Atlas Secure\n\nТекущий статус: 🟢 Сервис работает стабильно\n\nВсе основные компоненты функционируют\nв штатном режиме:\n• доступ активен\n• выдача ключей работает\n• поддержка на связи\n\nAtlas Secure построен как частная\nцифровая инфраструктура\nс приоритетом на стабильность\nи предсказуемую работу.\n\nНаши принципы:\n• целевой аптайм — 99.9%\n• плановые работы проводятся заранее\n• критические инциденты решаются\n  в приоритетном порядке\n• потеря данных исключена архитектурно\n\nВ случае технических работ\nили изменений пользователи\nуведомляются заранее через бот.\n\nПоследнее обновление статуса:\nавтоматически",
+      "reason": "identical_to_english"
+    },
+    "main.service_unavailable": {
+      "current": "⚠️ Service temporarily unavailable. Please try again later.",
+      "en": "⚠️ Service temporarily unavailable. Please try again later.",
+      "ru": "⚠️ Сервис временно недоступен. Попробуйте позже.",
+      "reason": "identical_to_english"
+    },
+    "main.service_unavailable_payment": {
+      "current": "⚠️ Service temporarily unavailable. Please try again later.",
+      "en": "⚠️ Service temporarily unavailable. Please try again later.",
+      "ru": "⚠️ Платёж получен, но сервис временно недоступен.\n\nМы уже работаем над восстановлением.\nВаш платёж не потеряется — доступ будет выдан автоматически,\nкак только сервис станет доступен.\n\nЕсли у вас есть вопросы, напишите в поддержку.",
+      "reason": "identical_to_english"
+    },
+    "main.settings": {
+      "current": "⚙️ Settings",
+      "en": "⚙️ Settings",
+      "ru": "⚙️ Настройки",
+      "reason": "identical_to_english"
+    },
+    "main.settings_title": {
+      "current": "⚙️ Atlas Secure Settings",
+      "en": "⚙️ Atlas Secure Settings",
+      "ru": "⚙️ Настройки сервиса Atlas Secure",
+      "reason": "identical_to_english"
+    },
+    "main.smart_notif_no_traffic_20m": {
+      "current": "If you haven't connected yet —\nusually it takes no more than a minute.\n\nThe key is ready and assigned to you.",
+      "en": "If you haven't connected yet —\nusually it takes no more than a minute.\n\nThe key is ready and assigned to you.",
+      "ru": "Если вы ещё не подключились —\nобычно это занимает не более минуты.\n\nКлюч уже готов и закреплён за вами.",
+      "reason": "identical_to_english"
+    },
+    "main.topup_amount_too_high": {
+      "current": "Maximum top-up amount: 100,000 ₽. Please enter a smaller amount.",
+      "en": "Maximum top-up amount: 100,000 ₽. Please enter a smaller amount.",
+      "ru": "Максимальная сумма пополнения: 100 000 ₽. Пожалуйста, введите меньшую сумму.",
+      "reason": "identical_to_english"
+    },
+    "main.topup_amount_too_low": {
+      "current": "Minimum top-up amount: 100 ₽. Please enter an amount of at least 100 ₽.",
+      "en": "Minimum top-up amount: 100 ₽. Please enter an amount of at least 100 ₽.",
+      "ru": "Минимальная сумма пополнения: 100 ₽. Пожалуйста, введите сумму не менее 100 ₽.",
+      "reason": "identical_to_english"
+    },
+    "main.topup_enter_amount": {
+      "current": "Enter your amount from 100 ₽",
+      "en": "Enter your amount from 100 ₽",
+      "ru": "Введите свою сумму от 100 ₽",
+      "reason": "identical_to_english"
+    },
+    "main.user_fallback": {
+      "current": "user",
+      "en": "user",
+      "ru": "пользователь",
+      "reason": "identical_to_english"
+    },
+    "main.vip_status_active": {
+      "current": "👑 Your VIP status is active",
+      "en": "👑 Your VIP status is active",
+      "ru": "👑 Ваш VIP-статус активен",
+      "reason": "identical_to_english"
+    },
+    "main.vip_status_badge": {
+      "current": "👑 VIP status active",
+      "en": "👑 VIP status active",
+      "ru": "👑 VIP-статус активен",
+      "reason": "identical_to_english"
+    },
+    "main.welcome": {
+      "current": "🔐 Atlas Secure\n\n🧩 Private digital access\n⚙️ Stable operation of familiar services\n🛡 Privacy by default\n\nYou connect —\neverything else works in the background.",
+      "en": "🔐 Atlas Secure\n\n🧩 Private digital access\n⚙️ Stable operation of familiar services\n🛡 Privacy by default\n\nYou connect —\neverything else works in the background.",
+      "ru": "<tg-emoji emoji-id=\"5462902520215002477\">💎</tg-emoji> <b>Atlas Secure</b>\n\nИнтернет без блокировок, нервов и ограничений.\n\n<tg-emoji emoji-id=\"5258203794772085854\">⚡️</tg-emoji> Молниеносное соединение\n<tg-emoji emoji-id=\"5226928895189598791\">⭐️</tg-emoji> Трафик под защитой 24/7\n<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> Весь интернет — как он должен быть\n\n<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> В нашем магазине — пополняй Steam, покупай Telegram Premium и многое другое",
+      "reason": "identical_to_english"
+    },
+    "main.welcome_discount_label": {
+      "current": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Welcome Discount",
+      "en": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Welcome Discount",
+      "ru": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Приветственная скидка",
+      "reason": "identical_to_english"
+    },
+    "main.yes": {
+      "current": "YES",
+      "en": "YES",
+      "ru": "ДА",
+      "reason": "identical_to_english"
+    },
+    "payment.already_processed": {
+      "current": "✅ This payment has already been processed.",
+      "en": "✅ This payment has already been processed.",
+      "ru": "✅ Этот платёж уже был обработан ранее.",
+      "reason": "identical_to_english"
+    },
+    "payment.card": {
+      "current": "💳 Bank Card",
+      "en": "💳 Bank Card",
+      "ru": "Карта резерв",
+      "reason": "identical_to_english"
+    },
+    "payment.crypto": {
+      "current": "🌎 CryptoBot",
+      "en": "🌎 CryptoBot",
+      "ru": "CryptoBot",
+      "reason": "identical_to_english"
+    },
+    "payment.sbp": {
+      "current": "🏦 SBP (+11%)",
+      "en": "🏦 SBP (+11%)",
+      "ru": "СБП",
+      "reason": "identical_to_english"
+    },
+    "payment.select_method": {
+      "current": "Choose payment method:\n\nAmount: {price:.2f} ₽",
+      "en": "Choose payment method:\n\nAmount: {price:.2f} ₽",
+      "ru": "💳 К оплате: <b>{price:.2f} ₽</b>",
+      "reason": "identical_to_english"
+    },
+    "payment.stars": {
+      "current": "⭐ Telegram Stars",
+      "en": "⭐ Telegram Stars",
+      "ru": "Telegram Stars",
+      "reason": "identical_to_english"
+    },
+    "profile.auto_renew_disabled": {
+      "current": "🔁 Auto-renewal: disabled",
+      "en": "🔁 Auto-renewal: disabled",
+      "ru": "🔁 Автопродление: выключено",
+      "reason": "identical_to_english"
+    },
+    "profile.auto_renew_enabled": {
+      "current": "🔁 Auto-renewal: {next_billing_date}",
+      "en": "🔁 Auto-renewal: {next_billing_date}",
+      "ru": "🔁 Автопродление: {next_billing_date}",
+      "reason": "identical_to_english"
+    },
+    "profile.copy_key": {
+      "current": "📋 Copy Key",
+      "en": "📋 Copy Key",
+      "ru": "🇩🇪 Скопировать Atlas DE",
+      "reason": "identical_to_english"
+    },
+    "profile.vpn_key_copied_toast": {
+      "current": "🔑 VPN key copied",
+      "en": "🔑 VPN key copied",
+      "ru": "🔑 VPN-ключ скопирован",
+      "reason": "identical_to_english"
+    },
+    "profile.withdraw_funds": {
+      "current": "💸 Withdraw funds",
+      "en": "💸 Withdraw funds",
+      "ru": "💸 Вывести средства",
+      "reason": "identical_to_english"
+    },
+    "referral.active_paid": {
+      "current": "💎 Active with subscription: {count}",
+      "en": "💎 Active with subscription: {count}",
+      "ru": "💎 Активных с подпиской: {count}",
+      "reason": "identical_to_english"
+    },
+    "referral.active_with_subscription": {
+      "current": "💎 Active with subscription: {count}",
+      "en": "💎 Active with subscription: {count}",
+      "ru": "💎 Активных с подпиской: {count}",
+      "reason": "identical_to_english"
+    },
+    "referral.cashback_amount": {
+      "current": "💳 {action_type} amount: {amount:.2f} ₽",
+      "en": "💳 Purchase amount: {amount:.2f} ₽",
+      "ru": "💳 Сумма покупки: {amount:.2f} ₽",
+      "reason": "latin_script_only"
+    },
+    "referral.cashback_level": {
+      "current": "📊 Your level: {percent}%",
+      "en": "📊 Your level: {percent}%",
+      "ru": "📊 Ваш уровень: {percent}%",
+      "reason": "identical_to_english"
+    },
+    "referral.cashback_max_level": {
+      "current": "🎯 You've reached the maximum level!",
+      "en": "🎯 You've reached the maximum level!",
+      "ru": "🎯 Вы достигли максимального уровня!",
+      "reason": "identical_to_english"
+    },
+    "referral.cashback_progress": {
+      "current": "👥 To next level: {needed} {friend} remaining",
+      "en": "👥 To next level: {needed} {friend} remaining",
+      "ru": "👥 До следующего: осталось {needed} {friend}",
+      "reason": "identical_to_english"
+    },
+    "referral.cashback_referred": {
+      "current": "👤 Referral: {referred}",
+      "en": "👤 Referral: {referred}",
+      "ru": null,
+      "reason": "identical_to_english"
+    },
+    "referral.cashback_reward": {
+      "current": "💰 Cashback credited: {amount:.2f} ₽ ({percent}%)",
+      "en": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Cashback: {amount:.2f} ₽ ({percent}%)",
+      "ru": "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Кешбэк: {amount:.2f} ₽ ({percent}%)",
+      "reason": "latin_script_only"
+    },
+    "referral.cashback_title": {
+      "current": "🎉 Your referral made a {action_type}!",
+      "en": "💰 Cashback credited!",
+      "ru": "💰 Вам начислен кешбэк!",
+      "reason": "latin_script_only"
+    },
+    "referral.copy_link": {
+      "current": "📋 Copy Link",
+      "en": "📋 Copy Link",
+      "ru": "📋 Скопировать ссылку",
+      "reason": "identical_to_english"
+    },
+    "referral.current_status": {
+      "current": "🏆 Current status: {status}",
+      "en": "🏆 Current status: {status}",
+      "ru": "🏆 Текущий статус: {status}",
+      "reason": "identical_to_english"
+    },
+    "referral.how_it_works": {
+      "current": "📊 How the program works",
+      "en": "📊 How the program works",
+      "ru": "❓ Как работает",
+      "reason": "identical_to_english"
+    },
+    "referral.how_it_works_text": {
+      "current": "📊 How the referral program works\n\n1. Send your referral link to a friend\n2. Friend clicks the link and registers\n3. When friend purchases a subscription, you get cashback\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Cashback levels:\n• 0-24 friends → 10% cashback\n• 25-49 friends → 25% cashback\n• 50+ friends → 45% cashback\n\n💰 Cashback is automatically credited to your balance\non each referral purchase.\n\n💡 Level is determined by the number of referrals\nwho have paid for a subscription AT LEAST ONCE.",
+      "en": "📊 How the referral program works\n\n1. Send your referral link to a friend\n2. Friend clicks the link and registers\n3. When friend purchases a subscription, you get cashback\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Cashback levels:\n• 0-24 friends → 10% cashback\n• 25-49 friends → 25% cashback\n• 50+ friends → 45% cashback\n\n💰 Cashback is automatically credited to your balance\non each referral purchase.\n\n💡 Level is determined by the number of referrals\nwho have paid for a subscription AT LEAST ONCE.",
+      "ru": "❓ <b>Как заработать с Atlas Secure</b>\n\nЗа каждую покупку подписки по твоей ссылке ты получаешь <b>процент на баланс</b>. Дальше выводишь это на банковскую карту.\n\n<blockquote><b>1️⃣ Размести свою ссылку</b>\nДаже маленький блог или чат друзей подходит. Главное — твоя аудитория видит её:\n• в шапке Telegram-канала или профиля\n• в описании ролика на TikTok, YouTube, Reels\n• в чате, форуме, Discord-сервере\n• в личке другу — да, одного человека уже достаточно</blockquote>\n\n<blockquote><b>2️⃣ Друг оплачивает подписку</b>\nКэшбэк начисляется автоматически на твой баланс — и при первой покупке, и при каждом продлении. Без срока действия.</blockquote>\n\n<blockquote><b>3️⃣ Выводи деньги</b>\nС баланса — на банковскую карту или СБП. Минимум для вывода: 500 ₽.</blockquote>\n\n<blockquote><b>💰 Сколько платим</b>\n<tg-emoji emoji-id=\"5425141507050973573\">🏄</tg-emoji> 10% → <tg-emoji emoji-id=\"5399988331729664856\">👀</tg-emoji> 20% → <tg-emoji emoji-id=\"5413623448440160154\">👨‍💻</tg-emoji> 30% → <tg-emoji emoji-id=\"5278467510604160626\">💰</tg-emoji> 40% → <tg-emoji emoji-id=\"5229011542011299168\">👑</tg-emoji> <b>45%</b> навсегда\n\nУровень растёт автоматически с каждым новым купившим. <b>И не падает.</b> Один раз поднялся — закрепился навсегда.</blockquote>\n\n💡 Чем больше аудитория видит твою ссылку — тем выше уровень и больше денег на карте. Это рабочий канал дохода: просто оставь ссылку там, где тебя смотрят.",
+      "reason": "identical_to_english"
+    },
+    "referral.last_activity": {
+      "current": "📅 Last activity: {date}",
+      "en": "📅 Last activity: {date}",
+      "ru": "📅 Последняя активность: {date}",
+      "reason": "identical_to_english"
+    },
+    "referral.level_progress": {
+      "current": "\n\n📈 Your level: {current_level}% cashback\n{referrals_to_next} referrals left to reach {next_level}% level",
+      "en": "\n\n📈 Your level: {current_level}% cashback\n{referrals_to_next} referrals left to reach {next_level}% level",
+      "ru": "\n\n📈 Ваш уровень: {current_level}%\nДо уровня {next_level}% осталось {referrals_to_next} рефералов",
+      "reason": "identical_to_english"
+    },
+    "referral.max_level": {
+      "current": "\n\n🎉 You've reached the maximum level {current_level}%!",
+      "en": "\n\n🎉 You've reached the maximum level {current_level}%!",
+      "ru": "\n\n🎉 Вы достигли максимального уровня {current_level}%!",
+      "reason": "identical_to_english"
+    },
+    "referral.max_level_reached": {
+      "current": "🏆 You have reached the maximum program level",
+      "en": "🏆 You have reached the maximum program level",
+      "ru": "🏆 У вас максимальный уровень программы\n\n<blockquote><b>Не работает Телеграм у друга?</b>\nПригласи через сайт! Нажми кнопку «🌐 Веб-клиент»</blockquote>",
+      "reason": "identical_to_english"
+    },
+    "referral.next_level_line": {
+      "current": "🚀 To level {next_status_name}:\n{remaining_invites} connections left",
+      "en": "🚀 To level {next_status_name}:\n{remaining_invites} connections left",
+      "ru": "🚀 До уровня {next_status_name}:\nосталось {remaining_invites} подключений\n\n<blockquote><b>Не работает Телеграм у друга?</b>\nПригласи через сайт! Нажми кнопку «🌐 Веб-клиент»</blockquote>",
+      "reason": "identical_to_english"
+    },
+    "referral.program": {
+      "current": "💎 Loyalty Program",
+      "en": "💎 Loyalty Program",
+      "ru": "🎖 Круг Амбассадоров",
+      "reason": "identical_to_english"
+    },
+    "referral.program_status_footer": {
+      "current": "🚀 To next level: {remaining_invites} invites left",
+      "en": "🚀 To next level: {remaining_invites} invites left",
+      "ru": "🚀 До следующего уровня: осталось {remaining_invites} приглашений",
+      "reason": "identical_to_english"
+    },
+    "referral.program_text": {
+      "current": "💎 Loyalty Program\n\nInvite friends and get cashback\nto your balance for their payments.\n\n📊 Your statistics:\nInvited friends: {total_referred}\nYour cashback: {cashback_percent}%\nEarned: {total_cashback:.2f} ₽\n\n🔗 Your link:\n{referral_link}\n\n💡 How it works:\n• 0-24 friends → 10% cashback\n• 25-49 friends → 25% cashback\n• 50+ friends → 45% cashback",
+      "en": "💎 Loyalty Program\n\nInvite friends and get cashback\nto your balance for their payments.\n\n📊 Your statistics:\nInvited friends: {total_referred}\nYour cashback: {cashback_percent}%\nEarned: {total_cashback:.2f} ₽\n\n🔗 Your link:\n{referral_link}\n\n💡 How it works:\n• 0-24 friends → 10% cashback\n• 25-49 friends → 25% cashback\n• 50+ friends → 45% cashback",
+      "ru": "🎖 Круг Амбассадоров\n\nПриглашайте друзей и получайте кешбэк\nна баланс с каждой их покупки.\n\n📊 Ваша статистика:\nКупивших по ссылке: {total_referred}\nВаш кешбэк: {cashback_percent}%\nЗаработано: {total_cashback:.2f} ₽\n\n🔗 Ваша ссылка:\n{referral_link}\n\n💡 Уровни:\n• Проводник · 10% (до 25)\n• Хранитель · 20% (25+)\n• Инсайдер · 30% (50+)\n• Лидер · 40% (75+)\n• Амбассадор · 45% навсегда (100+)",
+      "reason": "identical_to_english"
+    },
+    "referral.registered_date": {
+      "current": "📅 Date: {date}",
+      "en": "📅 {date}",
+      "ru": "📅 {date}",
+      "reason": "latin_script_only"
+    },
+    "referral.registered_notification": {
+      "current": "🎉 New referral registered!\n\n👤 User: {user}\n📅 Date: {date}\n\n{first_payment_msg}",
+      "en": "🎉 You have a new referral!\n\n📅 {date}\n\n{first_payment_msg}",
+      "ru": "🎉 У вас новый реферал!\n\n📅 {date}\n\n{first_payment_msg}",
+      "reason": "latin_script_only"
+    },
+    "referral.registered_title": {
+      "current": "🎉 New Referral Registered!",
+      "en": "🎉 You have a new referral!",
+      "ru": "🎉 У вас новый реферал!",
+      "reason": "latin_script_only"
+    },
+    "referral.registered_user": {
+      "current": "👤 User: {user}",
+      "en": "👤 User: {user}",
+      "ru": null,
+      "reason": "identical_to_english"
+    },
+    "referral.rewards_earned": {
+      "current": "💎 Rewards credited: {amount:.2f} ₽",
+      "en": "💎 Rewards credited: {amount:.2f} ₽",
+      "ru": "💎 Начислено вознаграждений: {amount:.2f} ₽",
+      "reason": "identical_to_english"
+    },
+    "referral.share_button": {
+      "current": "📤 Share link",
+      "en": "📤 Share link",
+      "ru": "📤 Поделиться ссылкой",
+      "reason": "identical_to_english"
+    },
+    "referral.share_link_button": {
+      "current": "📤 Share link",
+      "en": "📤 Share link",
+      "ru": "📤 Поделиться ссылкой",
+      "reason": "identical_to_english"
+    },
+    "referral.stats_button": {
+      "current": "More",
+      "en": "More",
+      "ru": "📚 Подробнее",
+      "reason": "identical_to_english"
+    },
+    "referral.stats_next_level_line": {
+      "current": "🚀 To level {next_status_name}:\n{remaining_invites} connections left",
+      "en": "🚀 To level {next_status_name}:\n{remaining_invites} connections left",
+      "ru": "🚀 До уровня {next_status_name}:\nосталось {remaining_invites} подключений",
+      "reason": "identical_to_english"
+    },
+    "referral.status_footer": {
+      "current": "🚀 To next level: {remaining_invites} invites left",
+      "en": "🚀 To next level: {remaining_invites} invites left",
+      "ru": "🚀 До следующего уровня: осталось {remaining_invites} приглашений",
+      "reason": "identical_to_english"
+    },
+    "referral.total_invited": {
+      "current": "👤 Total invited: {count}",
+      "en": "👤 Total invited: {count}",
+      "ru": "👤 Всего приглашено: {count}",
+      "reason": "identical_to_english"
+    },
+    "referral.trial_activated_user": {
+      "current": "👤 User: {user}",
+      "en": "👤 User: {user}",
+      "ru": null,
+      "reason": "identical_to_english"
+    },
+    "subscription.auto_renew_disable": {
+      "current": "⏸ Disable auto-renewal",
+      "en": "⏸ Disable auto-renewal",
+      "ru": "⏸ Отключить автопродление",
+      "reason": "identical_to_english"
+    },
+    "subscription.auto_renew_disabled_toast": {
+      "current": "⏸ Auto-renewal disabled",
+      "en": "⏸ Auto-renewal disabled",
+      "ru": "⏸ Автопродление отключено",
+      "reason": "identical_to_english"
+    },
+    "subscription.auto_renew_enable": {
+      "current": "🔄 Enable auto-renewal",
+      "en": "🔄 Enable auto-renewal",
+      "ru": "🔄 Включить автопродление",
+      "reason": "identical_to_english"
+    },
+    "subscription.auto_renew_enabled_toast": {
+      "current": "✅ Auto-renewal enabled",
+      "en": "✅ Auto-renewal enabled",
+      "ru": "✅ Автопродление включено",
+      "reason": "identical_to_english"
+    },
+    "subscription.history_key_label": {
+      "current": "Key:",
+      "en": "Key:",
+      "ru": "Ключ:",
+      "reason": "identical_to_english"
+    },
+    "support.write_button": {
+      "current": "💬 Write to support",
+      "en": "💬 Write to support",
+      "ru": "💬 Написать в поддержку",
+      "reason": "identical_to_english"
+    },
+    "trial.notification_60h": {
+      "current": "🛡 VPN will be disabled soon\n\n12 hours of trial access remaining.\n\nContinue using protection — subscribe now.",
+      "en": "🛡 VPN will be disabled soon\n\n12 hours of trial access remaining.\n\nContinue using protection — subscribe now.",
+      "ru": "🛡 VPN скоро отключится\n\nОсталось 12 часов пробного доступа.\n\nПродолжите пользоваться защитой — оформите подписку.",
+      "reason": "identical_to_english"
+    },
+    "trial.notification_6h": {
+      "current": "✨ Just a reminder\n\nVPN is better to keep on all the time to protect your data.",
+      "en": "✨ Just a reminder\n\nVPN is better to keep on all the time to protect your data.",
+      "ru": "✨ Просто напоминание\n\nVPN лучше включать всегда, чтобы защитить ваши данные.",
+      "reason": "identical_to_english"
+    },
+    "trial.notification_71h": {
+      "current": "🚨 Last hour of trial access\n\nVPN will be disabled in one hour.\n\nSubscribe now to continue using secure access.",
+      "en": "🚨 Last hour of trial access\n\nVPN will be disabled in one hour.\n\nSubscribe now to continue using secure access.",
+      "ru": "🚨 Последний час пробного доступа\n\nЧерез час VPN будет отключён.\n\nОформите подписку, чтобы оставаться на связи, даже когда глушат связь!",
+      "reason": "identical_to_english"
+    }
+  }
+}

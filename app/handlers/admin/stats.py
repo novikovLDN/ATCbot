@@ -201,15 +201,14 @@ async def callback_admin_metrics(callback: CallbackQuery):
         
         text = "📈 Бизнес-метрики\n\n"
         
-        # Среднее время подтверждения оплаты
-        approval_time = metrics.get('avg_payment_approval_time_seconds')
-        if approval_time:
-            minutes = int(approval_time / 60)
-            seconds = int(approval_time % 60)
-            text += f"⏱ Среднее время подтверждения оплаты: {minutes} мин {seconds} сек\n"
-        else:
-            text += "⏱ Среднее время подтверждения оплаты: нет данных\n"
-        
+        # Строки «Среднее время подтверждения оплаты» здесь больше нет.
+        # Метрика считалась парсингом текста audit_log по событию
+        # payment_approved, которое перестал писать кто-либо после удаления
+        # ручной модерации платежей, и всегда печаталась как «нет данных».
+        # Мерить нечего: платёж подтверждает вебхук провайдера в тот же
+        # момент, когда создаётся строка в payments. Подробности — в
+        # докстринге database.analytics.get_business_metrics.
+
         # Среднее время жизни подписки
         lifetime = metrics.get('avg_subscription_lifetime_days')
         if lifetime:

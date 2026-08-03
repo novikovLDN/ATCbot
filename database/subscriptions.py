@@ -985,140 +985,161 @@ async def reissue_vpn_key_atomic(
 ) -> Tuple[Optional[str], Optional[str]]:
     """Атомарно перевыпустить VPN-ключ для пользователя.
 
-    Strict two-phase activation: add_vless_user OUTSIDE DB transaction.
-    Phase 1: Session lock, fetch sub, add_vless_user (new UUID).
-    Phase 2: DB transaction (UPDATE). On failure: safe_remove_vless_user_with_retry.
-    After commit: remove old UUID from Xray.
+    POOL_STABILITY: соединение пула НЕ удерживается во время похода в панель.
+    Раньше функция брала conn, вешала session-level pg_advisory_lock и внутри
+    этого блока делала DELETE + preflight + POST к Remnawave — до нескольких
+    секунд на одного пользователя. Массовый перевыпуск или пара админов
+    одновременно выедали пул, и деградировали пользовательские хендлеры.
+    Разнесено на фазы по образцу app/services/activation/service.py:
+
+      Фаза 1 — короткое соединение: прочитать строку подписки, отпустить conn.
+      Фаза 2 — HTTP к панели (соединения пула на руках нет).
+      Фаза 3 — новое соединение, транзакция с pg_advisory_xact_lock,
+               перепроверка состояния и UPDATE.
+
+    Про снятый session-lock. Он охватывал и сетевую фазу, то есть страховал
+    от двойного перевыпуска целиком. Взамен в фазе 3 под xact-локом сверяем
+    uuid: если пока мы ходили в панель кто-то уже перевыпустил ключ, наш UPDATE
+    не применяется, а свежесозданная сущность удаляется тем же обработчиком,
+    что и при любом другом сбое фазы 3. Двойной записи в базу не будет, сирота
+    в панели не останется.
     """
     pool = await get_pool()
+
+    # ── Фаза 1: читаем состояние и сразу отпускаем соединение ────────
+    now = datetime.now(timezone.utc)
     async with pool.acquire() as conn:
-        # Session-level lock (prevents concurrent reissue for same user)
-        await conn.execute("SELECT pg_advisory_lock($1)", telegram_id)
+        subscription_row = await conn.fetchrow(
+            """SELECT * FROM subscriptions
+               WHERE telegram_id = $1 AND status = 'active' AND expires_at > $2""",
+            telegram_id, _to_db_utc(now)
+        )
+    if not subscription_row:
+        logger.error(f"Cannot reissue VPN key for user {telegram_id}: no active subscription")
+        return None, None
+
+    subscription = dict(subscription_row)
+    old_uuid = subscription.get("uuid")
+    old_vpn_key = subscription.get("vpn_key", "")
+    expires_at = _ensure_utc(subscription["expires_at"])
+    reissue_tariff = (subscription.get("subscription_type") or "basic").strip().lower()
+    if reissue_tariff not in config.VALID_SUBSCRIPTION_TYPES:
+        reissue_tariff = "basic"
+
+    # ── Фаза 2 (вне транзакции И вне удерживаемого соединения) ───────
+    # Task 2 cut-over: delete the user's current Remnawave premium
+    # entity and create a fresh one — the old subscription URL and
+    # connection UUID stop working, exactly like the legacy
+    # add_vless_user + remove-old-uuid flow did.
+    from app.services import remnawave_premium
+    import uuid as _uuid_lib
+    new_uuid = str(_uuid_lib.uuid4())
+    reissue_result = await remnawave_premium.reissue_premium_user_entity(
+        telegram_id,
+        requested_uuid=new_uuid,
+        expire_at=expires_at,
+        description=f"Premium reissued via bot ({reissue_tariff})",
+    )
+    if not reissue_result.ok:
+        raise RuntimeError(
+            f"Remnawave premium reissue failed: status={reissue_result.status} "
+            f"error={reissue_result.error}"
+        )
+    new_vpn_key = reissue_result.subscription_url
+    if not new_vpn_key:
+        raise RuntimeError("Remnawave reissue returned empty subscription URL")
+
+    logger.info(
+        "REISSUE_TWO_PHASE_ACTIVATION",
+        extra={"user": telegram_id, "new_uuid": new_uuid[:8] + "...", "phase": "phase1_complete"}
+    )
+
+    # On Phase-3 failure we delete the freshly-created panel entity
+    # (its panel UUID, not a samopis uuid).
+    uuid_to_cleanup_on_failure = reissue_result.panel_uuid
+
+    # ── Фаза 3: короткая транзакция под advisory-локом ───────────────
+    async with pool.acquire() as conn:
         try:
-            now = datetime.now(timezone.utc)
-            subscription_row = await conn.fetchrow(
-                """SELECT * FROM subscriptions
-                   WHERE telegram_id = $1 AND status = 'active' AND expires_at > $2""",
-                telegram_id, _to_db_utc(now)
-            )
-            if not subscription_row:
-                logger.error(f"Cannot reissue VPN key for user {telegram_id}: no active subscription")
-                return None, None
-
-            subscription = dict(subscription_row)
-            old_uuid = subscription.get("uuid")
-            old_vpn_key = subscription.get("vpn_key", "")
-            expires_at = _ensure_utc(subscription["expires_at"])
-            reissue_tariff = (subscription.get("subscription_type") or "basic").strip().lower()
-            if reissue_tariff not in config.VALID_SUBSCRIPTION_TYPES:
-                reissue_tariff = "basic"
-
-            # PHASE 1 (outside DB transaction): reissue the premium entity.
-            # Task 2 cut-over: delete the user's current Remnawave premium
-            # entity and create a fresh one — the old subscription URL and
-            # connection UUID stop working, exactly like the legacy
-            # add_vless_user + remove-old-uuid flow did.
-            from app.services import remnawave_premium
-            import uuid as _uuid_lib
-            new_uuid = str(_uuid_lib.uuid4())
-            reissue_result = await remnawave_premium.reissue_premium_user_entity(
-                telegram_id,
-                requested_uuid=new_uuid,
-                expire_at=expires_at,
-                description=f"Premium reissued via bot ({reissue_tariff})",
-            )
-            if not reissue_result.ok:
-                raise RuntimeError(
-                    f"Remnawave premium reissue failed: status={reissue_result.status} "
-                    f"error={reissue_result.error}"
+            async with conn.transaction():
+                await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+                sub_check = await conn.fetchrow(
+                    """SELECT telegram_id, uuid FROM subscriptions
+                       WHERE telegram_id = $1 AND status = 'active' AND expires_at > $2""",
+                    telegram_id, _to_db_utc(now)
                 )
-            new_vpn_key = reissue_result.subscription_url
-            if not new_vpn_key:
-                raise RuntimeError("Remnawave reissue returned empty subscription URL")
-            uuid_from_api = new_uuid
-
-            logger.info(
-                "REISSUE_TWO_PHASE_ACTIVATION",
-                extra={"user": telegram_id, "new_uuid": new_uuid[:8] + "...", "phase": "phase1_complete"}
-            )
-
-            # On Phase-2 failure we delete the freshly-created panel entity
-            # (its panel UUID, not a samopis uuid).
-            uuid_to_cleanup_on_failure = reissue_result.panel_uuid
-
+                if not sub_check:
+                    raise Exception("Subscription no longer active")
+                # Пока мы ходили в панель, строку мог переписать параллельный
+                # перевыпуск. Тогда наш new_uuid уже неактуален: применять его
+                # поверх чужого — значит оставить чужую панельную сущность
+                # сиротой и выдать человеку ключ, который через секунду
+                # затрут. Отказываемся и уходим в cleanup ниже.
+                if sub_check["uuid"] != old_uuid:
+                    raise Exception(
+                        "Concurrent reissue detected: uuid changed while calling panel"
+                    )
+                new_subscription_type = reissue_tariff
+                if new_subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
+                    new_subscription_type = "basic"
+                await conn.execute(
+                    """UPDATE subscriptions
+                       SET uuid = $1, vpn_key = $2, subscription_type = $4,
+                           remnawave_premium_uuid = $5,
+                           remnawave_premium_sub_url = $6,
+                           remnawave_premium_short_uuid = $7
+                       WHERE telegram_id = $3""",
+                    new_uuid, new_vpn_key, telegram_id, new_subscription_type,
+                    reissue_result.panel_uuid,
+                    reissue_result.subscription_url,
+                    reissue_result.short_uuid,
+                )
+                await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, now, expires_at, "manual_reissue")
+                old_key_preview = f"{old_vpn_key[:20]}..." if old_vpn_key and len(old_vpn_key) > 20 else (old_vpn_key or "N/A")
+                new_key_preview = f"{new_vpn_key[:20]}..." if new_vpn_key and len(new_vpn_key) > 20 else (new_vpn_key or "N/A")
+                details = f"User {telegram_id}, Old key: {old_key_preview}, New key: {new_key_preview}, Expires: {expires_at.isoformat()}"
+                await _log_audit_event_atomic(conn, "admin_reissue", admin_telegram_id, telegram_id, details)
+        except Exception as tx_err:
+            # Фаза 3 (база) не прошла — свежая premium-сущность из фазы 2
+            # осталась в панели сиротой; удаляем её.
             try:
-                async with conn.transaction():
-                    await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
-                    sub_check = await conn.fetchrow(
-                        """SELECT telegram_id FROM subscriptions
-                           WHERE telegram_id = $1 AND status = 'active' AND expires_at > $2""",
-                        telegram_id, _to_db_utc(now)
-                    )
-                    if not sub_check:
-                        raise Exception("Subscription no longer active")
-                    new_subscription_type = reissue_tariff
-                    if new_subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
-                        new_subscription_type = "basic"
-                    await conn.execute(
-                        """UPDATE subscriptions
-                           SET uuid = $1, vpn_key = $2, subscription_type = $4,
-                               remnawave_premium_uuid = $5,
-                               remnawave_premium_sub_url = $6,
-                               remnawave_premium_short_uuid = $7
-                           WHERE telegram_id = $3""",
-                        new_uuid, new_vpn_key, telegram_id, new_subscription_type,
-                        reissue_result.panel_uuid,
-                        reissue_result.subscription_url,
-                        reissue_result.short_uuid,
-                    )
-                    await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, now, expires_at, "manual_reissue")
-                    old_key_preview = f"{old_vpn_key[:20]}..." if old_vpn_key and len(old_vpn_key) > 20 else (old_vpn_key or "N/A")
-                    new_key_preview = f"{new_vpn_key[:20]}..." if new_vpn_key and len(new_vpn_key) > 20 else (new_vpn_key or "N/A")
-                    details = f"User {telegram_id}, Old key: {old_key_preview}, New key: {new_key_preview}, Expires: {expires_at.isoformat()}"
-                    await _log_audit_event_atomic(conn, "admin_reissue", admin_telegram_id, telegram_id, details)
-            except Exception as tx_err:
-                # Phase 2 (DB) failed — the fresh premium entity created in
-                # Phase 1 is now orphaned in Remnawave; delete it.
-                try:
-                    from app.services import remnawave_api
-                    if uuid_to_cleanup_on_failure:
-                        await remnawave_api.delete_user(uuid_to_cleanup_on_failure)
-                    logger.critical(
-                        f"ORPHAN_PREVENTED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... reason=reissue_phase2_failed "
-                        f"user={telegram_id} error={tx_err}"
-                    )
-                except Exception as remove_err:
-                    logger.critical(
-                        f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... "
-                        f"reason={remove_err} user={telegram_id}"
-                    )
-                logger.exception(f"Error in reissue_vpn_key_atomic for user {telegram_id}, transaction rolled back")
-                raise
+                from app.services import remnawave_api
+                if uuid_to_cleanup_on_failure:
+                    await remnawave_api.delete_user(uuid_to_cleanup_on_failure)
+                logger.critical(
+                    f"ORPHAN_PREVENTED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... reason=reissue_phase2_failed "
+                    f"user={telegram_id} error={tx_err}"
+                )
+            except Exception as remove_err:
+                logger.critical(
+                    f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... "
+                    f"reason={remove_err} user={telegram_id}"
+                )
+            logger.exception(f"Error in reissue_vpn_key_atomic for user {telegram_id}, transaction rolled back")
+            raise
 
-            # The old premium entity was already deleted in Phase 1 by
-            # reissue_premium_user_entity — no separate teardown needed here.
-            if old_uuid:
-                try:
-                    await _log_vpn_lifecycle_audit_async(
-                        action="vpn_remove_user",
-                        telegram_id=telegram_id,
-                        uuid=old_uuid,
-                        source="admin_reissue",
-                        result="success",
-                        details=f"Old premium entity deleted during reissue, expires_at={expires_at.isoformat()}"
-                    )
-                except Exception:
-                    pass
-
-            new_uuid_preview = f"{new_uuid[:8]}..." if len(new_uuid) > 8 else "***"
-            logger.info(
-                f"VPN key reissued [action=admin_reissue, user={telegram_id}, admin={admin_telegram_id}, "
-                f"new_uuid={new_uuid_preview}]",
-                extra={"correlation_id": correlation_id} if correlation_id else {}
+    # The old premium entity was already deleted in Phase 2 by
+    # reissue_premium_user_entity — no separate teardown needed here.
+    if old_uuid:
+        try:
+            await _log_vpn_lifecycle_audit_async(
+                action="vpn_remove_user",
+                telegram_id=telegram_id,
+                uuid=old_uuid,
+                source="admin_reissue",
+                result="success",
+                details=f"Old premium entity deleted during reissue, expires_at={expires_at.isoformat()}"
             )
-            return new_vpn_key, old_vpn_key
-        finally:
-            await conn.execute("SELECT pg_advisory_unlock($1)", telegram_id)
+        except Exception:
+            pass
+
+    new_uuid_preview = f"{new_uuid[:8]}..." if len(new_uuid) > 8 else "***"
+    logger.info(
+        f"VPN key reissued [action=admin_reissue, user={telegram_id}, admin={admin_telegram_id}, "
+        f"new_uuid={new_uuid_preview}]",
+        extra={"correlation_id": correlation_id} if correlation_id else {}
+    )
+    return new_vpn_key, old_vpn_key
 
 
 """

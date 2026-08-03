@@ -103,12 +103,109 @@ def is_within_time_window(
 
 
 # ====================================================================================
+# Reminder Windows (dashboard-configurable)
+# ====================================================================================
+
+# Ключ реестра автоуведомлений для каждого платного напоминания. Через них
+# дашборд отдаёт trigger_config, и по ним же считается статистика отправок.
+PAID_REMINDER_NOTIFICATION_KEYS: Dict[ReminderType, str] = {
+    ReminderType.REMINDER_7D: "subscription.reminder_7d",
+    ReminderType.REMINDER_3D: "subscription.reminder_3d",
+    ReminderType.REMINDER_1D: "subscription.reminder_1d",
+    ReminderType.REMINDER_3H: "subscription.reminder_3h",
+}
+
+# Окна отправки по умолчанию: (за сколько часов до конца, допуск в часах).
+#
+# Раньше эти числа были вбиты прямо в should_send_reminder (3 / 2.4 / 1 / 0.5 ч
+# допуска) и расходились с default_trigger в реестре автоуведомлений
+# (12 / 6 / 2 / 1 ч). Админ расширял допуск в дашборде, ничего не менялось, и
+# он считал настройку рабочей. Теперь источник один — реестр, а дашборд
+# реально управляет окном.
+DEFAULT_PAID_REMINDER_WINDOWS: Dict[ReminderType, Tuple[float, float]] = {
+    ReminderType.REMINDER_7D: (24 * 7, 12.0),
+    ReminderType.REMINDER_3D: (24 * 3, 6.0),
+    ReminderType.REMINDER_1D: (24.0, 2.0),
+    ReminderType.REMINDER_3H: (3.0, 1.0),
+}
+
+# Окна для админских грантов. Из дашборда не настраиваются: ключей реестра
+# для них нет, тексты берутся напрямую из i18n (см. reminders.py).
+ADMIN_GRANT_REMINDER_WINDOWS: Dict[int, Tuple[float, float, ReminderType]] = {
+    1: (6.0, 0.5, ReminderType.ADMIN_1DAY_6H),    # грант на сутки → за 6 часов
+    7: (24.0, 1.0, ReminderType.ADMIN_7DAYS_24H),  # грант на неделю → за сутки
+}
+
+
+def _positive_float(raw: Any) -> Optional[float]:
+    """Число из trigger_config или None, если это мусор.
+
+    trigger_config — JSON из базы, который правит человек через дашборд.
+    Строка, ноль или отрицательное значение здесь означали бы окно, в которое
+    никто никогда не попадёт, поэтому такие значения игнорируем и работаем на
+    дефолте, а не молча выключаем напоминание.
+    """
+    if isinstance(raw, bool) or raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def resolve_reminder_window(
+    reminder_type: ReminderType,
+    trigger_configs: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[timedelta, timedelta]:
+    """Вернуть (за сколько до конца, допуск) для платного напоминания.
+
+    `trigger_configs` — то, что дашборд хранит в automated_notifications:
+    {registry_key: {"before_expiry_hours": …, "tolerance_hours": …}}.
+    Отсутствующий ключ или битые значения → дефолт из
+    DEFAULT_PAID_REMINDER_WINDOWS.
+    """
+    before_h, tolerance_h = DEFAULT_PAID_REMINDER_WINDOWS[reminder_type]
+    key = PAID_REMINDER_NOTIFICATION_KEYS.get(reminder_type)
+    cfg = (trigger_configs or {}).get(key or "") or {}
+    before_h = _positive_float(cfg.get("before_expiry_hours")) or before_h
+    tolerance_h = _positive_float(cfg.get("tolerance_hours")) or tolerance_h
+    return timedelta(hours=before_h), timedelta(hours=tolerance_h)
+
+
+def reminder_query_windows(
+    trigger_configs: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> list:
+    """Все окна воркера напоминаний как (часов до конца, допуск, имя флага).
+
+    Нужны отбору кандидатов в SQL (database/reminders_queries.py). Считаем их
+    здесь, чтобы выборка и решение шли по ОДНИМ И ТЕМ ЖЕ числам: разъедутся —
+    воркер будет либо вычитывать людей, которых всё равно пропустит, либо
+    (хуже) не вычитывать тех, кому пора писать.
+    """
+    out = []
+    for rtype in DEFAULT_PAID_REMINDER_WINDOWS:
+        target, tolerance = resolve_reminder_window(rtype, trigger_configs)
+        out.append((
+            target.total_seconds() / 3600.0,
+            tolerance.total_seconds() / 3600.0,
+            get_reminder_flag_name(rtype),
+        ))
+    for before_h, tolerance_h, rtype in ADMIN_GRANT_REMINDER_WINDOWS.values():
+        out.append((before_h, tolerance_h, get_reminder_flag_name(rtype)))
+    return out
+
+
+# ====================================================================================
 # Reminder Decision Logic
 # ====================================================================================
 
 def should_send_reminder(
     subscription: Dict[str, Any],
-    now: Optional[datetime] = None
+    now: Optional[datetime] = None,
+    trigger_configs: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> ReminderDecision:
     """
     Determine if a reminder should be sent for a subscription.
@@ -121,7 +218,10 @@ def should_send_reminder(
     Args:
         subscription: Subscription dictionary from database
         now: Current time (defaults to datetime.now(timezone.utc))
-        
+        trigger_configs: окна из дашборда, {registry_key: trigger_config}.
+            Читает их вызывающий (один раз на проход воркера, а не на
+            пользователя), функция остаётся чистой. None → дефолтные окна.
+
     Returns:
         ReminderDecision with should_send flag and reminder type
     """
@@ -186,80 +286,51 @@ def should_send_reminder(
     
     # ADMIN-GRANTED ACCESS
     if is_admin_grant:
-        if admin_grant_days == 1:
-            # 1 day - reminder at 6 hours
-            if is_within_time_window(time_until_expiry, timedelta(hours=6), timedelta(hours=0.5)):
-                # Check idempotency
-                if subscription.get("reminder_6h_sent", False):
+        admin_window = ADMIN_GRANT_REMINDER_WINDOWS.get(admin_grant_days)
+        if admin_window:
+            before_h, tolerance_h, admin_type = admin_window
+            if is_within_time_window(
+                time_until_expiry, timedelta(hours=before_h), timedelta(hours=tolerance_h)
+            ):
+                flag = get_reminder_flag_name(admin_type)
+                if subscription.get(flag, False):
                     return ReminderDecision(
                         should_send=False,
-                        reminder_type=ReminderType.ADMIN_1DAY_6H,
-                        reason="Reminder already sent (reminder_6h_sent flag)"
+                        reminder_type=admin_type,
+                        reason=f"Reminder already sent ({flag} flag)"
                     )
-                
-                return ReminderDecision(
-                    should_send=True,
-                    reminder_type=ReminderType.ADMIN_1DAY_6H
-                )
-        
-        elif admin_grant_days == 7:
-            # 7 days - reminder at 24 hours
-            if is_within_time_window(time_until_expiry, timedelta(hours=24), timedelta(hours=1)):
-                # Check idempotency
-                if subscription.get("reminder_24h_sent", False):
-                    return ReminderDecision(
-                        should_send=False,
-                        reminder_type=ReminderType.ADMIN_7DAYS_24H,
-                        reason="Reminder already sent (reminder_24h_sent flag)"
-                    )
-                
-                return ReminderDecision(
-                    should_send=True,
-                    reminder_type=ReminderType.ADMIN_7DAYS_24H
-                )
-    
+                return ReminderDecision(should_send=True, reminder_type=admin_type)
+
+
     # PAID SUBSCRIPTIONS
     else:
-        # Reminder at 7 days
-        if is_within_time_window(time_until_expiry, timedelta(days=7), timedelta(hours=3)):
-            if subscription.get("reminder_7d_sent", False):
+        # Окна берём из trigger_config (дашборд), см. resolve_reminder_window.
+        # Порядок проверки — от дальнего к ближнему: если админ раздует допуски
+        # так, что окна перекроются, выигрывает более раннее напоминание.
+        _flags = {
+            ReminderType.REMINDER_7D: "reminder_7d_sent",
+            ReminderType.REMINDER_3D: "reminder_3d_sent",
+            ReminderType.REMINDER_1D: "reminder_1d_sent",
+            ReminderType.REMINDER_3H: "reminder_3h_sent",
+        }
+        for _rtype in (
+            ReminderType.REMINDER_7D,
+            ReminderType.REMINDER_3D,
+            ReminderType.REMINDER_1D,
+            ReminderType.REMINDER_3H,
+        ):
+            target, tolerance = resolve_reminder_window(_rtype, trigger_configs)
+            if not is_within_time_window(time_until_expiry, target, tolerance):
+                continue
+            if subscription.get(_flags[_rtype], False):
                 return ReminderDecision(
                     should_send=False,
-                    reminder_type=ReminderType.REMINDER_7D,
-                    reason="Reminder already sent (reminder_7d_sent flag)"
+                    reminder_type=_rtype,
+                    reason=f"Reminder already sent ({_flags[_rtype]} flag)"
                 )
-            return ReminderDecision(should_send=True, reminder_type=ReminderType.REMINDER_7D)
+            return ReminderDecision(should_send=True, reminder_type=_rtype)
 
-        # Reminder at 3 days
-        elif is_within_time_window(time_until_expiry, timedelta(days=3), timedelta(hours=2.4)):
-            if subscription.get("reminder_3d_sent", False):
-                return ReminderDecision(
-                    should_send=False,
-                    reminder_type=ReminderType.REMINDER_3D,
-                    reason="Reminder already sent (reminder_3d_sent flag)"
-                )
-            return ReminderDecision(should_send=True, reminder_type=ReminderType.REMINDER_3D)
 
-        # Reminder at 1 day (24 hours)
-        elif is_within_time_window(time_until_expiry, timedelta(hours=24), timedelta(hours=1)):
-            if subscription.get("reminder_1d_sent", False):
-                return ReminderDecision(
-                    should_send=False,
-                    reminder_type=ReminderType.REMINDER_1D,
-                    reason="Reminder already sent (reminder_1d_sent flag)"
-                )
-            return ReminderDecision(should_send=True, reminder_type=ReminderType.REMINDER_1D)
-
-        # Reminder at 3 hours — special 15% discount offer
-        elif is_within_time_window(time_until_expiry, timedelta(hours=3), timedelta(hours=0.5)):
-            if subscription.get("reminder_3h_sent", False):
-                return ReminderDecision(
-                    should_send=False,
-                    reminder_type=ReminderType.REMINDER_3H,
-                    reason="Reminder already sent (reminder_3h_sent flag)"
-                )
-            return ReminderDecision(should_send=True, reminder_type=ReminderType.REMINDER_3H)
-    
     # No reminder should be sent
     return ReminderDecision(
         should_send=False,

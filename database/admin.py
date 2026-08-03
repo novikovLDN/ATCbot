@@ -228,14 +228,26 @@ async def get_user_extended_stats(telegram_id: int) -> Dict[str, Any]:
                  AND action_type IN ('reissue','manual_reissue')""",
             telegram_id,
         )
-        # Финансы — approved-платежи по всем типам (подписки/трафик/etc).
-        # amount_kopecks * 0.01 = рубли; NULLs исключаем.
+        # Финансы — оплаченные покупки по всем типам (подписки/трафик/etc).
+        # price_kopecks / 100 = рубли; NULLs исключаем.
+        #
+        # Колонки называются именно так, а не иначе, и это важно: в
+        # pending_purchases НЕТ ни amount_kopecks, ни paid_at. Запрос,
+        # который их запрашивал, падал UndefinedColumnError на живой базе —
+        # карточка пользователя в боте и в дашборде не открывалась вовсе.
+        #
+        # Момент оплаты берём из created_at — это старт чекаута, а не
+        # приход денег. Расхождение до срока жизни счёта (минуты). Честная
+        # колонка paid_at потребует миграции + записи в двух местах, где
+        # статус переводится в 'paid' (database/subscriptions.py,
+        # database/pending_purchases.py); до тех пор created_at — лучшее,
+        # что есть, и им же считаются все оконные метрики выручки.
         pay_row = await conn.fetchrow(
             """SELECT
                    COUNT(*) AS n,
-                   COALESCE(SUM(amount_kopecks), 0)::BIGINT AS total_kopecks,
-                   MIN(paid_at) AS first_paid_at,
-                   MAX(paid_at) AS last_paid_at
+                   COALESCE(SUM(price_kopecks), 0)::BIGINT AS total_kopecks,
+                   MIN(created_at) AS first_paid_at,
+                   MAX(created_at) AS last_paid_at
                FROM pending_purchases
                WHERE telegram_id = $1
                  AND status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'""",
@@ -1206,16 +1218,30 @@ async def fix_bypass_overwrite_victim(telegram_id: int) -> Dict[str, Any]:
 
 
 async def get_daily_timeseries(days: int) -> Dict[str, Any]:
-    """Daily аггрегаты за последние `days` суток UTC.
+    """Daily аггрегаты за последние `days` суток по Москве.
 
     Один payload — три серии: revenue, new_users, new_subscriptions.
     Все пустые дни в окне присутствуют с нулями (через generate_series),
     чтобы фронту не приходилось их добивать самому — графики получают
     непрерывный X.
 
-    Используем UTC-cast явно (`AT TIME ZONE 'UTC'`), а не голый NOW(),
-    чтобы границы дня не съезжали при session-TZ ≠ UTC. См. tz-коммент
-    в get_users_by_segment.
+    ПОЧЕМУ МОСКВА, А НЕ UTC.
+    Раньше сутки резались по UTC, а тайл «Доход сегодня» на том же экране
+    считался от полуночи МСК (фронт присылает since=mskTodayStartIso,
+    см. dashboard/src/lib/format.ts). Три часа покупок — с 00:00 до 03:00
+    МСК — у тайла попадали в сегодня, а у графика во вчера: две цифры про
+    один и тот же день не сходились, и понять, какая из них правильная,
+    было нельзя. Часовой график (get_hourly_timeseries) уже жил в МСК.
+    Теперь весь дашборд режет сутки одинаково.
+
+    Границу окна считаем от полуночи МСК того же дня, что и первая точка
+    generate_series: иначе в первый день окна попадал бы хвост предыдущих
+    суток и первая точка графика выглядела бы аномально низкой/высокой.
+
+    Выручка — только внешние поступления: строки с payment_provider =
+    'balance' это внутреннее движение денег (покупка с баланса), они уже
+    посчитаны в момент пополнения. См. REVENUE_EXTERNAL_ONLY_SQL в
+    database/analytics.py.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -1223,34 +1249,40 @@ async def get_daily_timeseries(days: int) -> Dict[str, Any]:
             """
             WITH days AS (
                 SELECT generate_series(
-                    DATE_TRUNC('day', (NOW() AT TIME ZONE 'UTC')) - ($1::int - 1) * INTERVAL '1 day',
-                    DATE_TRUNC('day', (NOW() AT TIME ZONE 'UTC')),
+                    DATE_TRUNC('day', (NOW() AT TIME ZONE 'Europe/Moscow')) - ($1::int - 1) * INTERVAL '1 day',
+                    DATE_TRUNC('day', (NOW() AT TIME ZONE 'Europe/Moscow')),
                     INTERVAL '1 day'
                 )::date AS day
             ),
+            win AS (
+                SELECT (
+                    (DATE_TRUNC('day', (NOW() AT TIME ZONE 'Europe/Moscow'))
+                        - ($1::int - 1) * INTERVAL '1 day') AT TIME ZONE 'Europe/Moscow'
+                ) AS since
+            ),
             pay AS (
-                SELECT DATE_TRUNC('day', created_at AT TIME ZONE 'UTC')::date AS day,
+                SELECT DATE_TRUNC('day', created_at AT TIME ZONE 'Europe/Moscow')::date AS day,
                        COALESCE(SUM(price_kopecks), 0)::bigint AS revenue_kopecks,
                        COUNT(*)::int AS payments_count
                 FROM pending_purchases
                 WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
-                  AND created_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
+                  AND created_at >= (SELECT since FROM win)
                 GROUP BY 1
             ),
             usr AS (
-                SELECT DATE_TRUNC('day', created_at AT TIME ZONE 'UTC')::date AS day,
+                SELECT DATE_TRUNC('day', created_at AT TIME ZONE 'Europe/Moscow')::date AS day,
                        COUNT(*)::int AS new_users
                 FROM users
-                WHERE created_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
+                WHERE created_at >= (SELECT since FROM win)
                 GROUP BY 1
             ),
             sub AS (
-                SELECT DATE_TRUNC('day', activated_at AT TIME ZONE 'UTC')::date AS day,
+                SELECT DATE_TRUNC('day', activated_at AT TIME ZONE 'Europe/Moscow')::date AS day,
                        COUNT(*)::int AS new_subs,
                        COUNT(*) FILTER (WHERE source = 'payment')::int AS new_paid_subs
                 FROM subscriptions
                 WHERE activated_at IS NOT NULL
-                  AND activated_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
+                  AND activated_at >= (SELECT since FROM win)
                 GROUP BY 1
             )
             SELECT
@@ -1280,7 +1312,8 @@ async def get_daily_timeseries(days: int) -> Dict[str, Any]:
         }
         for r in rows
     ]
-    return {"days": days, "series": series}
+    # tz отдаём явно — чтобы на фронте не гадать, в каких сутках точка.
+    return {"days": days, "tz": "Europe/Moscow", "series": series}
 
 
 async def get_hourly_timeseries(days: int) -> Dict[str, Any]:

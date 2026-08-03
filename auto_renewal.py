@@ -629,17 +629,21 @@ async def auto_renewal_task(bot: Bot):
         f"renewal_window={RENEWAL_WINDOW_HOURS}h"
     )
     
-    # Первая проверка сразу при запуске
-    try:
-        async with _worker_lock:
-            await process_auto_renewals(bot)
-    except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
-        # RESILIENCE FIX: Temporary DB failures don't crash the task
-        logger.warning(f"auto_renewal: Initial check failed (DB temporarily unavailable): {type(e).__name__}: {str(e)[:100]}")
-    except Exception as e:
-        logger.error(f"auto_renewal: Unexpected error in initial check: {type(e).__name__}: {str(e)[:100]}")
-        logger.debug("auto_renewal: Full traceback for initial check", exc_info=True)
-
+    # Стартового прогона здесь больше нет.
+    #
+    # Раньше перед циклом безусловно вызывался process_auto_renewals: без
+    # проверки feature-флагов, без database.DB_READY и без wait_for. То есть
+    # реальное списание денег шло в обход всех гейтов и не попадало в
+    # ITERATION_START/END — для метрик этой работы просто не существовало.
+    # Два конкретных последствия: при выключенном auto_renewal_enabled деньги
+    # всё равно списывались (флаг читался только на первом витке цикла), а
+    # зависший прогон навсегда удерживал _worker_lock — каждая следующая
+    # итерация честно рапортовала timeout, но причина в логах не видна.
+    #
+    # Теперь первая же работа идёт через обычный виток цикла: со всеми
+    # гейтами, таймаутом и логированием. Задержка — только jitter ниже (до
+    # минуты), что несущественно при окне продления в 6 часов.
+    #
     # POOL STABILITY: One-time startup jitter to avoid 600s worker alignment burst.
     jitter_s = random.uniform(5, 60)
     await asyncio.sleep(jitter_s)

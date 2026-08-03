@@ -227,7 +227,23 @@ async def auth_setup(body: SetupRequest, response: Response):
         raise HTTPException(403, "not_admin")
 
     if await admin_auth.credentials_exist():
-        # Setup is one-shot. To change creds, the bot must reset first.
+        # Setup — одноразовый, и это осознанно, хотя ровно об него
+        # спотыкается сценарий «поставил иконку на домашний экран».
+        #
+        # У приложения с домашнего экрана на iOS своё хранилище: ни куки
+        # atlas_admin_session, ни bootstrap-токена из localStorage там
+        # нет — оно стартует с формы логина. Соблазн «разрешить setup
+        # ещё раз, раз человек пришёл с валидной magic-ссылкой» надо
+        # давить: ссылка уходит в переписку с ботом и живёт там вечно,
+        # а повторный setup — это смена пароля без знания старого, то
+        # есть захват аккаунта любым, кто пролистал историю чата.
+        #
+        # Поэтому лечим не здесь, а раньше: сразу после первичной
+        # настройки фронт предлагает завести passkey
+        # (dashboard/src/pages/SetupPassword.tsx), который переживает
+        # установку на домашний экран. Крайний случай — «Сбросить
+        # пароль» в боте, но он сносит и все passkey, о чём на экране
+        # входа теперь написано прямо.
         raise HTTPException(409, "already_setup")
 
     ok = await admin_auth.set_credentials(body.username, body.password)

@@ -280,10 +280,20 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
             )
 
         expires_str = subscription_end.strftime("%d.%m.%Y")
-        from html import escape as html_escape
-        from app.services.user_subscription_links import get_user_primary_subscription_url
-        sub_url = await get_user_primary_subscription_url(telegram_id)
-        success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str, sub_url=html_escape(sub_url))
+        # sub_url здесь больше не считаем. Раньше на этом месте дёргался
+        # get_user_primary_subscription_url, результат экранировался и
+        # уходил в get_text как sub_url= — но плейсхолдера {sub_url} нет
+        # ни в одном из семи словарей, str.format лишние kwargs молча
+        # глотает. То есть был лишний поход в БД ровно на пути активации
+        # триала, ради значения, которое никто не показывал.
+        #
+        # Возвращать ссылку в текст мы не стали намеренно: ключи в боте
+        # не отдаём (по той же причине снесён экран get_sub_key), а
+        # get_user_primary_subscription_url теперь может законно вернуть
+        # пустую строку — подставлять её в сообщение об успехе нечего.
+        # Пользователь идёт на экран установки по кнопке «Настроить
+        # устройство» из get_payment_success_keyboard.
+        success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str)
         try:
             if _degradation_notice:
                 success_text += "\n\n⏳ Возможны небольшие задержки"

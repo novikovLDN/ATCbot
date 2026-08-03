@@ -438,10 +438,11 @@ export function Dashboard() {
                 label="Продлений на юзера"
                 value={fmtNum(asNum(overview.data?.business_metrics?.avg_renewals_per_user))}
               />
-              <KpiRow
-                label="Время апрува"
-                value={fmtSeconds(asNum(overview.data?.business_metrics?.avg_payment_approval_time_seconds))}
-              />
+              {/* Плитки «Время апрува» здесь больше нет: метрика считалась
+                  парсингом текста audit_log по событию, которого никто не
+                  пишет, и всегда была прочерком. Мерить нечего — ручного
+                  подтверждения платежей в боте не осталось. См.
+                  database/analytics.py::get_business_metrics. */}
               <KpiRow
                 label="Всего юзеров"
                 value={fmtNum(asNum(overview.data?.total_users))}
@@ -495,7 +496,7 @@ export function Dashboard() {
             <KpiCard
               label="Approval rate"
               value={`${fmtNum(asNum(overview.data?.business_metrics?.approval_rate_percent))}%`}
-              sub={`${fmtSeconds(asNum(overview.data?.business_metrics?.avg_payment_approval_time_seconds))} среднее`}
+              sub="подтверждено провайдером"
               loading={overview.isLoading}
             />
           </div>
@@ -2224,13 +2225,6 @@ function asNum(v: unknown): number | undefined {
     return Number.isFinite(n) ? n : undefined;
   }
   return undefined;
-}
-
-function fmtSeconds(s: number | undefined): string {
-  if (s == null || !Number.isFinite(s)) return "—";
-  if (s < 60) return `${Math.round(s)}с`;
-  if (s < 3600) return `${Math.round(s / 60)}мин`;
-  return `${Math.round((s / 3600) * 10) / 10}ч`;
 }
 
 // useCountUp — анимация цифры от предыдущего значения к новому через

@@ -276,8 +276,72 @@ async def main():
             )
             return False
 
+    async def verify_instance_lock() -> bool:
+        """Проверить, что advisory-лок всё ещё наш, и вернуть его при потере.
+
+        Лок session-level и живёт на конкретном соединении. Postgres снимает
+        его сам, как только соединение обрывается: сетевой блип, рестарт базы,
+        idle_session_timeout. Раньше этого никто не замечал — процесс
+        продолжал считать себя единственной репликой, а следующая реплика
+        спокойно брала освободившийся лок. Две реплики параллельно продлевают
+        подписки и шлют дубли уведомлений, и ни лога, ни алерта при этом нет.
+
+        Вызывается из healthcheck раз в 10 минут.
+        """
+        global instance_lock_conn
+        if instance_lock_conn is None:
+            # Лока нет вовсе: стартовали при недоступной БД либо потеряли его
+            # на прошлой проверке. Пробуем взять — в PROD неудача завершит
+            # процесс внутри acquire_instance_lock.
+            return await acquire_instance_lock("периодическая проверка")
+
+        try:
+            # Спрашиваем ровно то соединение, на котором лок брали: pg_locks
+            # с pid = pg_backend_pid() покажет запись, только если лок
+            # действительно за нами. Для bigint-ключа старшие 32 бита лежат
+            # в classid, младшие — в objid.
+            held = await instance_lock_conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_locks
+                    WHERE locktype = 'advisory'
+                      AND pid = pg_backend_pid()
+                      AND ((classid::bigint << 32) | objid::bigint) = $1
+                )
+                """,
+                ADVISORY_LOCK_KEY,
+            )
+        except Exception as e:
+            # Мёртвое соединение — это и есть потеря лока, не отдельная беда.
+            logger.warning("Проверка advisory-лока не удалась (соединение мертво?): %s", e)
+            held = False
+
+        if held:
+            return True
+
+        logger.critical(
+            "Advisory-лок потерян: соединение оборвалось, гарантия «одна реплика» не действует",
+        )
+        stale_conn, instance_lock_conn = instance_lock_conn, None
+        try:
+            pool = await database.get_pool()
+            if pool is not None:
+                await pool.release(stale_conn)
+        except Exception as e:
+            logger.debug("Не удалось вернуть в пул соединение потерянного лока: %s", e)
+        try:
+            from app.services.admin_alerts import send_alert
+            await send_alert(
+                bot, "worker",
+                "Advisory-лок single-instance потерян — пробуем взять заново",
+                force=True,
+            )
+        except Exception:
+            pass
+        return await acquire_instance_lock("перезахват после потери")
+
     await acquire_instance_lock("старт")
-    
+
     # Centralized list for graceful shutdown
     background_tasks = []
     
@@ -393,6 +457,15 @@ async def main():
     await start_db_workers("старт")
 
 
+
+    # Что именно наблюдает health-check.
+    #
+    # started_workers передаём по ссылке: словарь дозаполняется при
+    # восстановлении БД, и поднятые позже воркеры попадают под наблюдение
+    # без отдельной регистрации. Умерший воркер молчит — без этой проверки
+    # он и остаётся незамеченным до жалоб пользователей.
+    healthcheck.watch_tasks(started_workers)
+    healthcheck.register_instance_lock_check(verify_instance_lock)
 
     # Запуск фоновой задачи для health-check
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
@@ -686,6 +759,9 @@ async def main():
                 uv_server.serve(), name="uvicorn_webhook"
             )
             background_tasks.append(webhook_server_task)
+            # Смерть uvicorn = бот не принимает апдейты вообще. Раньше
+            # health-check этого не видел и продолжал рапортовать db=ok.
+            healthcheck.watch_tasks({"uvicorn_webhook": webhook_server_task})
             logger.info("UVICORN_STARTED host=0.0.0.0 port=%s", config.WEBHOOK_PORT)
         except Exception as e:
             logger.error("UVICORN_START_FAILED port=%s error=%s", config.WEBHOOK_PORT, e)
