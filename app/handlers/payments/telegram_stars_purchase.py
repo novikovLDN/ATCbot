@@ -3,10 +3,16 @@ Telegram Stars purchase flow.
 
 Screens:
 1. Choose star pack (60-10000 stars, 2 per row)
-2. Choose recipient (Себе / Подарить)
+2. Choose recipient (self / gift)
 3. Enter username (@username)
 4. Choose payment method (card)
 5. Payment → success + admin notification
+
+Тексты экранов лежат в i18n под префиксом stars.*. Раньше они были зашиты
+в код по-русски, и покупатель с любым другим языком видел русский экран
+посреди переведённого бота. Единственное исключение — сообщение админу
+в send_stars_success: адресат один и говорит по-русски, локализовать его
+незачем.
 """
 import asyncio
 import logging
@@ -98,13 +104,13 @@ async def callback_stars_buy(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await state.set_state(TelegramStarsState.choose_pack)
 
-    text = "⭐ <b>Купить Telegram Stars</b>\n\nВыберите количество звёзд:"
+    text = i18n_get_text(language, "stars.choose_pack")
 
     rows = []
     row = []
     for stars, info in STARS_PACKS.items():
         price = info["price"]
-        label = f"{stars}⭐ | {price}₽"
+        label = i18n_get_text(language, "stars.pack_button", stars=stars, price=price)
         row.append(InlineKeyboardButton(
             text=label,
             callback_data=f"stars_pack:{stars}",
@@ -165,13 +171,18 @@ async def callback_stars_pack(callback: CallbackQuery, state: FSMContext):
     await state.update_data(stars_amount=stars, stars_price=pack["price"])
     await state.set_state(TelegramStarsState.choose_recipient)
 
-    text = (
-        f"⭐ <b>{stars} Telegram Stars — {pack['price']} ₽</b>\n\n"
-        f"Выберите получателя звёзд:"
+    text = i18n_get_text(
+        language, "stars.choose_recipient", stars=stars, price=pack["price"],
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 Себе", callback_data="stars_recipient:self")],
-        [InlineKeyboardButton(text="🎁 Подарить", callback_data="stars_recipient:gift")],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "stars.recipient_self"),
+            callback_data="stars_recipient:self",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "stars.recipient_gift"),
+            callback_data="stars_recipient:gift",
+        )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="stars_buy",
@@ -205,16 +216,11 @@ async def callback_stars_recipient(callback: CallbackQuery, state: FSMContext):
     stars = data.get("stars_amount", 0)
     price = data.get("stars_price", 0)
 
-    if recipient_type == "self":
-        hint = "Введите свой username Telegram:"
-    else:
-        hint = "Введите username друга:"
+    hint_key = "stars.username_hint_self" if recipient_type == "self" else "stars.username_hint_gift"
+    hint = i18n_get_text(language, hint_key)
 
-    text = (
-        f"⭐ <b>Купить {stars} Telegram Stars — {price} ₽</b>\n\n"
-        f"{hint}\n\n"
-        f"⚠️ Обязательно через <b>@</b>\n"
-        f"Пример: <code>@username</code>"
+    text = i18n_get_text(
+        language, "stars.enter_username", stars=stars, price=price, hint=hint,
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
@@ -254,7 +260,7 @@ async def process_stars_username(message: Message, state: FSMContext):
                 [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
             ])
             await message.answer(
-                "❌ Слишком много неверных попыток. Попробуйте позже.",
+                i18n_get_text(language, "stars.too_many_attempts"),
                 reply_markup=kb, parse_mode="HTML",
             )
         return
@@ -267,12 +273,8 @@ async def process_stars_username(message: Message, state: FSMContext):
     stars = data.get("stars_amount", 0)
     price = data.get("stars_price", 0)
 
-    confirm_text = (
-        f"⭐ <b>Купить Telegram Stars</b>\n\n"
-        f"📦 Количество: <b>{stars}⭐</b>\n"
-        f"👤 Получатель: <b>{username}</b>\n"
-        f"💰 К оплате: <b>{price} ₽</b>\n\n"
-        f"Выберите способ оплаты:"
+    confirm_text = i18n_get_text(
+        language, "stars.confirm", stars=stars, username=username, price=price,
     )
 
     # Balance payment is disabled by policy for Telegram Stars purchases.
@@ -281,16 +283,25 @@ async def process_stars_username(message: Message, state: FSMContext):
     _ = await database.get_user_balance(telegram_id)
     buttons = []
     if config.TG_PROVIDER_TOKEN:
-        buttons.append([InlineKeyboardButton(text="💳 Банковская карта", callback_data="stars_pay:card")])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "stars.pay_card"),
+            callback_data="stars_pay:card",
+        )])
 
     import lava_service
     if lava_service.is_enabled():
-        buttons.append([InlineKeyboardButton(text="💳 Карта (Lava)", callback_data="stars_pay:lava")])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "stars.pay_lava"),
+            callback_data="stars_pay:lava",
+        )])
 
     if config.PLATEGA_MERCHANT_ID:
         import math
         sbp_price = math.ceil(price * (1 + config.SBP_MARKUP_PERCENT / 100))
-        buttons.append([InlineKeyboardButton(text=f"📱 СБП ({sbp_price} ₽)", callback_data="stars_pay:sbp")])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "stars.pay_sbp", price=sbp_price),
+            callback_data="stars_pay:sbp",
+        )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
@@ -348,10 +359,10 @@ async def callback_stars_pay_balance(callback: CallbackQuery, state: FSMContext)
     # Balance payment is disabled by policy for Telegram Stars purchases.
     # The UI no longer offers this button, but the route stays as a guard
     # against hand-crafted callback_data.
+    language = await resolve_user_language(callback.from_user.id)
     try:
         await callback.answer(
-            "Оплата с баланса для Telegram Stars недоступна. "
-            "Выберите карту или СБП.",
+            i18n_get_text(language, "stars.balance_disabled"),
             show_alert=True,
         )
     except Exception:
@@ -378,12 +389,17 @@ async def callback_stars_pay_card(callback: CallbackQuery, state: FSMContext):
 
         invoice_msg = await callback.bot.send_invoice(
             chat_id=telegram_id,
-            title="Telegram Stars",
-            description=f"Telegram Stars — {stars}⭐ для {username}",
+            title=i18n_get_text(language, "stars.invoice_title"),
+            description=i18n_get_text(
+                language, "stars.invoice_description", stars=stars, username=username,
+            ),
             payload=f"purchase:{purchase_id}",
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
-            prices=[LabeledPrice(label=f"{stars} Telegram Stars", amount=price_kopecks)],
+            prices=[LabeledPrice(
+                label=i18n_get_text(language, "stars.invoice_label", stars=stars),
+                amount=price_kopecks,
+            )],
         )
         await callback.bot.send_message(telegram_id, i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id))
@@ -415,7 +431,9 @@ async def callback_stars_pay_lava(callback: CallbackQuery, state: FSMContext):
 
     import lava_service
     if not lava_service.is_enabled():
-        await callback.answer("Оплата временно недоступна", show_alert=True)
+        await callback.answer(
+            i18n_get_text(language, "errors.payments_unavailable"), show_alert=True,
+        )
         return
 
     try:
@@ -426,11 +444,15 @@ async def callback_stars_pay_lava(callback: CallbackQuery, state: FSMContext):
             description=f"Telegram Stars {stars}⭐ → {username}",
         )
         if not invoice or not invoice.get("url"):
-            await callback.message.answer("❌ Ошибка создания платежа.", parse_mode="HTML")
+            await callback.message.answer(
+                i18n_get_text(language, "stars.invoice_create_failed"), parse_mode="HTML",
+            )
             return
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить", url=invoice["url"])],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "stars.pay_button"), url=invoice["url"],
+            )],
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
         ])
         msg = await callback.bot.send_message(telegram_id, i18n_get_text(language, "payment.invoice_timeout"), reply_markup=kb, parse_mode="HTML")
@@ -474,11 +496,15 @@ async def callback_stars_pay_sbp(callback: CallbackQuery, state: FSMContext):
             payment_method=2,
         )
         if not transaction or not transaction.get("url"):
-            await callback.message.answer("❌ Ошибка создания платежа СБП.", parse_mode="HTML")
+            await callback.message.answer(
+                i18n_get_text(language, "stars.invoice_create_failed_sbp"), parse_mode="HTML",
+            )
             return
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📱 Оплатить через СБП", url=transaction["url"])],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "stars.pay_button_sbp"), url=transaction["url"],
+            )],
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
         ])
         await callback.bot.send_message(telegram_id, i18n_get_text(language, "payment.invoice_timeout"), reply_markup=kb, parse_mode="HTML")
@@ -517,17 +543,14 @@ async def send_stars_success(
 
     price_str = f"{price_rubles:,.0f}".replace(",", " ")
 
-    text = (
-        f"✅ <b>Оплата прошла успешно!</b>\n\n"
-        f"⭐ Товар: Telegram Stars\n"
-        f"📦 Количество: {stars}⭐\n"
-        f"👤 Получатель: {username}\n"
-        f"💳 Сумма: {price_str} ₽\n\n"
-        f"⏳ Ожидайте получения звёзд в течение <b>5–15 минут</b>.\n\n"
-        f"Если звёзды не поступили, напишите нам:"
+    text = i18n_get_text(
+        language, "stars.success", stars=stars, username=username, price=price_str,
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/atlas_suppbot")],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "stars.support_button"),
+            url="https://t.me/atlas_suppbot",
+        )],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
     try:

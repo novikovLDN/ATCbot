@@ -144,7 +144,6 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
 
         # Кнопки покупки для пользователей без подписки
         # Проверяем спецпредложение для истекших подписок
-        offer_shown = False
         try:
             special_offer = await database.get_special_offer_info(telegram_id)
             if special_offer:
@@ -154,13 +153,14 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                     callback_data="special_offer_buy",
                     icon_custom_emoji_id="5199785165735367039",  # ⚡️
                 )])
-                offer_shown = True
         except Exception as e:
             logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
 
-        if not offer_shown and not trial_available:
-            # Нет триала и нет спецпредложения — обычные кнопки
-            pass
+        # Здесь стояла ветка `if not offer_shown and not trial_available: pass`
+        # с комментарием «обычные кнопки». Тело было пустое: задуманное
+        # отдельное меню для «нет триала и нет оффера» так и не написали, а
+        # флаг offer_shown после этого нигде не читался. Кнопки ниже
+        # выставляются всем без подписки — ровно то, что ветка и не меняла.
 
         buttons.append([InlineKeyboardButton(
             text="Купить подписку",

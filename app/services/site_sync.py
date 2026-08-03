@@ -6,9 +6,14 @@ Implements the sync protocol per TZ:
 - POST /api/bot/sync-referrals — referral data sync
 - POST /api/bot/extend — notify site of subscription payment
 - POST /api/bot/sync — overwrite site subscription
-- GET  /api/bot/status — get full user status from site
+- POST /api/bot/link — привязка Telegram-аккаунта по deep-link токену
 
 All requests require X-Bot-Api-Key header.
+
+Направление одностороннее: бот пишет своё состояние на сайт и забирает
+только pendingCashback в ответе sync-balance. Читающие обёртки над
+GET /api/bot/sync-balance и GET /api/bot/status удалены — их не вызывал
+никто, а выглядели они готовой сверкой с сайтом.
 """
 import logging
 from typing import Optional, Dict, Any, List
@@ -57,25 +62,10 @@ async def _post(endpoint: str, data: dict) -> Optional[dict]:
         return None
 
 
-async def _get(endpoint: str, params: dict = None) -> Optional[dict]:
-    """GET from site API. Returns parsed response or None on error."""
-    if not is_enabled():
-        return None
-    url = f"{config.SITE_API_URL.rstrip('/')}/{endpoint.lstrip('/')}"
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(url, params=params, headers=_headers())
-            if resp.status_code != 200:
-                logger.error("SITE_SYNC_ERROR: %s status=%d body=%s", endpoint, resp.status_code, resp.text[:300])
-                return None
-            result = resp.json()
-            if not result.get("success"):
-                logger.error("SITE_SYNC_FAIL: %s error=%s", endpoint, result.get("error", "unknown"))
-                return None
-            return result.get("data", result)
-    except Exception as e:
-        logger.warning("SITE_SYNC_EXCEPTION: %s %s", endpoint, e)
-        return None
+# Здесь был _get — зеркало _post для GET-запросов. Удалён вместе с двумя
+# своими единственными потребителями (check_balance, get_user_status): без них
+# у него не осталось ни одного вызова. Понадобится чтение с сайта — вернуть по
+# образцу _post, вместе с вызывающим кодом.
 
 
 # ── Balance Sync ────────────────────────────────────────────────
@@ -116,9 +106,9 @@ async def sync_balance(telegram_id: int) -> Optional[dict]:
     return data
 
 
-async def check_balance(telegram_id: int) -> Optional[dict]:
-    """GET /api/bot/sync-balance — check balance without modifying it."""
-    return await _get("sync-balance", {"telegram_id": str(telegram_id)})
+# Здесь была check_balance — GET /api/bot/sync-balance «только посмотреть».
+# Удалена: вызовов не было. Живой путь один — sync_balance выше, её зовут
+# воркер (app/workers/site_sync_worker.py:88) и /start (app/handlers/user/start.py:140).
 
 
 # ── Referral Sync ───────────────────────────────────────────────
@@ -189,10 +179,11 @@ async def sync_subscription(telegram_id: int, subscription_end: str, plan: str =
 
 
 # ── Status ──────────────────────────────────────────────────────
-
-async def get_user_status(telegram_id: int) -> Optional[dict]:
-    """Get full user status from site."""
-    return await _get("status", {"telegram_id": str(telegram_id)})
+# Здесь была get_user_status — GET /api/bot/status, «полное состояние
+# пользователя на сайте». Удалена: ни одного вызова. Бот сам является
+# источником правды по подписке и балансу и состояние с сайта не читает —
+# только пишет (sync_balance / sync_referrals / notify_subscription_extend).
+# Пока функция лежала здесь, она выглядела рабочей сверкой с сайтом.
 
 
 # ── Link Telegram Account ──────────────────────────────────────
@@ -239,12 +230,9 @@ async def full_sync_after_payment(
     await sync_balance(telegram_id)
 
 
-async def periodic_sync(telegram_id: int):
-    """Periodic sync per TZ:
-    1. POST /api/bot/sync-balance → apply pendingCashback
-    2. POST /api/bot/sync-referrals
-    """
-    if not is_enabled():
-        return
-    await sync_balance(telegram_id)
-    await sync_referrals(telegram_id)
+# Здесь была periodic_sync — «периодическая синхронизация»: is_enabled() +
+# sync_balance + sync_referrals. Удалена как мёртвый дубль: периодический
+# проход делает app/workers/site_sync_worker.py, который проверяет is_enabled()
+# сам и зовёт sync_balance/sync_referrals напрямую (строки 88-89). Две копии
+# одного цикла неизбежно разъезжаются — правку внесли бы в ту, что не
+# выполняется.

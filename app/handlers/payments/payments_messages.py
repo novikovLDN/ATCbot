@@ -254,14 +254,23 @@ async def process_successful_payment(message: Message, state: FSMContext):
         language = await resolve_user_language(message.from_user.id)
         text = i18n_get_text(language, "main.service_unavailable_payment")
         
-        # Создаем стандартную inline клавиатуру для UX
+        # Создаем стандартную inline клавиатуру для UX.
+        #
+        # Третьим позиционным аргументом здесь лежали строки вида
+        # "buy_renew_button" — наследство тех времён, когда третий параметр
+        # get_text назывался strict и значение просто игнорировалось.
+        # Теперь третий параметр — настоящий запасной текст, и эти строки
+        # стали бы подписью кнопки, если бы ключ пропал: человек увидел бы
+        # на кнопке «buy_renew_button». Убрали: оба ключа есть во всех семи
+        # языках, а на случай пропажи в get_text уже есть цепочка
+        # язык → английский → русский.
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=i18n_get_text(language, "buy.renew_button", "buy_renew_button"),
+                text=i18n_get_text(language, "buy.renew_button"),
                 callback_data="menu_buy_vpn"
             )],
             [InlineKeyboardButton(
-                text=i18n_get_text(language, "main.support_button", "support_button"),
+                text=i18n_get_text(language, "main.support_button"),
                 url="https://t.me/atlas_suppbot"
             )]
         ])
@@ -403,14 +412,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
             # Отправляем сообщение об успешном пополнении
             text = i18n_get_text(language, "main.topup_balance_success", balance=new_balance)
             
-            # Создаем inline клавиатуру для UX
+            # Создаем inline клавиатуру для UX.
+            # Третий позиционный аргумент get_text убран — см. комментарий
+            # выше, в ветке «сервис недоступен».
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text=i18n_get_text(language, "buy.renew_button", "buy_renew_button"),
+                    text=i18n_get_text(language, "buy.renew_button"),
                     callback_data="menu_buy_vpn"
                 )],
                 [InlineKeyboardButton(
-                    text=i18n_get_text(language, "main.profile", "profile"),
+                    text=i18n_get_text(language, "main.profile"),
                     callback_data="menu_profile"
                 )]
             ])

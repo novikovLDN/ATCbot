@@ -220,9 +220,14 @@ async def callback_admin_metrics(callback: CallbackQuery):
         renewals = metrics.get('avg_renewals_per_user', 0.0)
         text += f"🔄 Среднее количество продлений на пользователя: {renewals:.2f}\n"
         
-        # Процент подтвержденных платежей
-        approval_rate = metrics.get('approval_rate_percent', 0.0)
-        text += f"✅ Процент подтвержденных платежей: {approval_rate:.1f}%\n"
+        # Строки «Процент подтверждённых платежей» здесь больше нет.
+        # Она делила approved на все строки payments и всегда давала 100%:
+        # строка в payments по построению не может остаться
+        # неподтверждённой — либо вставляется сразу approved, либо
+        # переводится в approved внутри той же транзакции, а при неудаче
+        # откатывается целиком. Знаменатель совпадал с числителем.
+        # Подробности и разбор вариантов замены — в докстринге
+        # database.analytics.get_business_metrics.
 
         # Referral analytics
         try:
@@ -266,10 +271,16 @@ async def callback_admin_stats(callback: CallbackQuery):
         # Extended stats (if available)
         try:
             ext = await database.get_extended_bot_stats()
-            text += f"🆕 Новых сегодня: {ext.get('new_today', '—')}\n"
+            text += f"🆕 Новых сегодня (МСК): {ext.get('new_today', '—')}\n"
             text += f"🎁 Trial: {ext.get('total_trial', '—')} ({ext.get('trial_rate', 0)}%)\n"
             text += f"📈 Конверсия: {ext.get('conversion_rate', 0)}%\n"
-            text += f"📉 Отток: {ext.get('churn_rate', 0)}%\n"
+            # Не «отток»: это доля юзеров с просроченной подпиской за всё
+            # время, без привязки к периоду. См. докстринг
+            # database.analytics.get_extended_bot_stats.
+            text += (
+                "📉 Подписка просрочена у: "
+                f"{ext.get('expired_subscription_share_percent', 0)}%\n"
+            )
         except Exception:
             pass
 
@@ -737,19 +748,30 @@ async def callback_admin_extended_stats(callback: CallbackQuery):
         text = "📊 Расширенная статистика\n\n"
         text += "— Пользователи —\n"
         text += f"👥 Всего: {stats['total_users']}\n"
-        text += f"🆕 Новых сегодня: {stats['new_today']}\n"
+        text += f"🆕 Новых сегодня (МСК): {stats['new_today']}\n"
         text += f"🎁 Trial активаций: {stats['total_trial']} ({stats['trial_rate']}%)\n\n"
 
         text += "— Подписки —\n"
         text += f"🔑 Активных: {stats['active_subs']}\n"
         text += f"⛔ Истёкших: {stats['expired_subs']}\n"
         text += f"📈 Конверсия: {stats['conversion_rate']}%\n"
-        text += f"📉 Отток: {stats['churn_rate']}%\n"
-        text += f"🔄 Ср. подписок на юзера: {stats['avg_subs_per_user']}\n\n"
+        # Подписи здесь были неверными: «Отток» на самом деле доля юзеров
+        # с просроченной подпиской за всё время, а «MRR» — просто выручка
+        # за 30 дней вместе с разовыми покупками мини-магазина. Считаем то
+        # же самое, но называем как есть. Разбор — в докстринге
+        # database.analytics.get_extended_bot_stats.
+        text += (
+            "📉 Подписка просрочена у: "
+            f"{stats['expired_subscription_share_percent']}%\n"
+        )
+        text += (
+            "🔄 Ср. оплаченных периодов на юзера: "
+            f"{stats['avg_subscription_periods_per_user']}\n\n"
+        )
 
         text += "— Финансы —\n"
-        text += f"💰 Общая выручка: {stats['total_revenue']}₽\n"
-        text += f"📅 MRR (30 дней): {stats['mrr']}₽\n\n"
+        text += f"💰 Общая выручка: {stats['total_revenue_rubles']}₽\n"
+        text += f"📅 Выручка за 30 дней: {stats['revenue_last_30d_rubles']}₽\n\n"
 
         text += "— Система —\n"
         text += f"📢 Рассылок отправлено: {stats['total_broadcasts']}"

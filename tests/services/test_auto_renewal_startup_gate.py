@@ -17,6 +17,7 @@ import pytest
 
 import auto_renewal
 import database
+from app.core import worker_startup
 
 
 def _task_src():
@@ -53,14 +54,16 @@ async def test_db_gate_blocks_work_at_startup(monkeypatch):
 
     monkeypatch.setattr(auto_renewal, "process_auto_renewals", _spy)
     monkeypatch.setattr(database, "DB_READY", False)
-    # Стартовый jitter в тесте не ждём: он до минуты.
-    monkeypatch.setattr(auto_renewal.random, "uniform", lambda a, b: 0)
+    # Стартовый jitter переехал в общий app/core/worker_startup —
+    # подменяем его там, ждать до минуты в тесте нечего.
+    monkeypatch.setattr(worker_startup, "STARTUP_JITTER_MIN_SECONDS", 0.0)
+    monkeypatch.setattr(worker_startup, "STARTUP_JITTER_MAX_SECONDS", 0.0)
 
     task = asyncio.create_task(auto_renewal.auto_renewal_task(object()))
     await asyncio.sleep(0.05)
     task.cancel()
-    # Воркер ловит CancelledError сам (штатная остановка), поэтому наружу
-    # исключение может и не выйти — важно лишь дождаться завершения.
+    # Воркер обязан пробросить CancelledError наружу (единый контракт
+    # остановки), поэтому ловим её здесь — важно лишь дождаться завершения.
     try:
         await task
     except asyncio.CancelledError:
@@ -78,7 +81,10 @@ async def test_feature_flag_blocks_work_at_startup(monkeypatch):
 
     monkeypatch.setattr(auto_renewal, "process_auto_renewals", _spy)
     monkeypatch.setattr(database, "DB_READY", True)
-    monkeypatch.setattr(auto_renewal.random, "uniform", lambda a, b: 0)
+    # Стартовый jitter переехал в общий app/core/worker_startup —
+    # подменяем его там, ждать до минуты в тесте нечего.
+    monkeypatch.setattr(worker_startup, "STARTUP_JITTER_MIN_SECONDS", 0.0)
+    monkeypatch.setattr(worker_startup, "STARTUP_JITTER_MAX_SECONDS", 0.0)
 
     from app.core import feature_flags
 
@@ -91,8 +97,8 @@ async def test_feature_flag_blocks_work_at_startup(monkeypatch):
     task = asyncio.create_task(auto_renewal.auto_renewal_task(object()))
     await asyncio.sleep(0.05)
     task.cancel()
-    # Воркер ловит CancelledError сам (штатная остановка), поэтому наружу
-    # исключение может и не выйти — важно лишь дождаться завершения.
+    # Воркер обязан пробросить CancelledError наружу (единый контракт
+    # остановки), поэтому ловим её здесь — важно лишь дождаться завершения.
     try:
         await task
     except asyncio.CancelledError:

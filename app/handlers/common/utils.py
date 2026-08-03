@@ -450,36 +450,22 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
             logger.error(f"Failed to send fallback message after inaccessible check: {send_error}")
         return
 
-    current_text = None
-    try:
-        if hasattr(message, 'text'):
-            text_attr = getattr(message, 'text', None)
-            if text_attr:
-                current_text = text_attr
-        if not current_text and hasattr(message, 'caption'):
-            caption_attr = getattr(message, 'caption', None)
-            if caption_attr:
-                current_text = caption_attr
-    except AttributeError:
-        logger.debug("AttributeError while checking message text/caption, treating as inaccessible")
-        current_text = None
-
-    if current_text and current_text == text:
-        current_markup = None
-        try:
-            if hasattr(message, 'reply_markup'):
-                markup_attr = getattr(message, 'reply_markup', None)
-                if markup_attr:
-                    current_markup = markup_attr
-        except AttributeError:
-            current_markup = None
-
-        if reply_markup is None:
-            if current_markup is None:
-                return
-        else:
-            if current_markup and _markups_equal(current_markup, reply_markup):
-                return
+    # Здесь была «экономия на вызовах Bot API»: читали message.text/caption
+    # и, если он совпадал с новым текстом при равной клавиатуре, выходили
+    # без edit_message.
+    #
+    # Сравнение было заведомо ложным. message.text — то, что Telegram уже
+    # отрендерил, то есть БЕЗ разметки, а text приходит сюда с <b>,
+    # <blockquote>, <tg-emoji>. Для экранов с разметкой (почти все)
+    # равенство не выполнялось никогда, и экономии не было.
+    #
+    # Чинить сравнение (снимать теги перед проверкой) сознательно не стали:
+    # так оно начало бы срабатывать, и любой экран, где меняется только
+    # разметка, молча переставал бы обновляться — этот дефект в боте уже
+    # был, см. докстринг get_about_keyboard про экран политики.
+    #
+    # Повторный edit с тем же содержимым безопасен: Telegram отвечает
+    # 'message is not modified', и это гасится ниже по функции.
 
     has_photo = getattr(message, "photo", None) and len(message.photo) > 0
     if has_photo:
@@ -705,42 +691,18 @@ async def format_text_with_incident(text: str, language: str) -> str:
         return text
 
 
-def detect_platform(callback_or_message) -> str:
-    """Stub — Telegram Bot API does not expose client platform. Always returns 'unknown'."""
-    return "unknown"
-
-
-def format_promo_stats_text(stats: list) -> str:
-    """Форматировать статистику промокодов в текст"""
-    if not stats:
-        return "Промокоды не найдены."
-
-    text = "📊 Статистика промокодов\n\n"
-
-    for promo in stats:
-        code = promo["code"]
-        discount_percent = promo["discount_percent"]
-        max_uses = promo["max_uses"]
-        used_count = promo["used_count"]
-        is_active = promo["is_active"]
-
-        text += f"{code}\n"
-        text += f"— Скидка: {discount_percent}%\n"
-
-        if max_uses is not None:
-            text += f"— Использовано: {used_count} / {max_uses}\n"
-            if is_active:
-                text += "— Статус: активен\n"
-            else:
-                text += "— Статус: исчерпан\n"
-        else:
-            text += f"— Использовано: {used_count}\n"
-            text += "— Статус: без ограничений\n"
-
-        text += "\n"
-
-    return text
-
+# Здесь были detect_platform и format_promo_stats_text.
+#
+# detect_platform всегда возвращала "unknown": Bot API не сообщает, с
+# какого клиента пришёл апдейт. Заглушка выглядела как рабочее
+# определение платформы, и на неё можно было построить ветвление, которое
+# никогда не сработает.
+#
+# format_promo_stats_text — вторая копия форматтера. Живая версия, которую
+# зовут три экрана админки, лежит в app/handlers/admin/stats.py:29.
+#
+# Обе держались только реэкспортом в app/handlers/common/__init__.py и
+# проявились сразу, как фасад убрали.
 
 _REISSUE_LOCKS: Dict[int, asyncio.Lock] = {}
 

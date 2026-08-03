@@ -93,3 +93,36 @@ class TestFlagRemoved:
         """upgrade_vless_user и remove_plus_inbound не имели ни одного вызова."""
         assert not hasattr(vpn_utils_module, "upgrade_vless_user")
         assert not hasattr(vpn_utils_module, "remove_plus_inbound")
+
+
+class TestXrayLeftoversRemoved:
+    """Обвязка HTTP-вызовов к xray не должна вернуться вместе с копипастой.
+
+    Опасность не в лишних строках, а в том, что они утверждают поведение,
+    которого нет: пойманный VPNTimeoutError читается как «таймауты
+    обрабатываются», а _validate_api_url_security — как «URL панели
+    проверяется». Бросать и проверять давно нечего.
+    """
+
+    @pytest.mark.parametrize("name", [
+        "VPNTimeoutError",
+        "AuthError",
+        "InvalidResponseError",
+        "CriticalUUIDMismatchError",
+        "_validate_uuid_no_prefix",
+        "_validate_api_url_security",
+        "_fire_and_forget",
+        "_background_tasks",
+        "VPN_HTTP_TIMEOUT",
+        "HTTP_TIMEOUT",
+        "MAX_RETRIES",
+        "RETRY_DELAY",
+        "retry_async",
+        "weakref",
+    ])
+    def test_symbol_is_gone(self, vpn_utils_module, name):
+        assert not hasattr(vpn_utils_module, name)
+
+    def test_base_error_stays(self, vpn_utils_module):
+        """VPNAPIError жив: его бросает safe_remove_vless_user_with_retry."""
+        assert issubclass(vpn_utils_module.VPNAPIError, Exception)

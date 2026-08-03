@@ -342,13 +342,13 @@ def get_biz_price(tariff: str, period_days: int, country: str = "nl") -> int:
     multiplier = BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
     return int(round(base_price * multiplier / 100) * 100)  # Округление до сотен
 
-def get_biz_price_stars(tariff: str, period_days: int, country: str = "nl") -> int:
-    """Получить цену бизнес-тарифа в Stars для конкретной страны."""
-    if tariff not in TARIFFS_STARS or period_days not in TARIFFS_STARS[tariff]:
-        return 0
-    base_price = TARIFFS_STARS[tariff][period_days]["price"]
-    multiplier = BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
-    return int(round(base_price * multiplier))
+# Здесь была get_biz_price_stars — цена бизнес-тарифа в Stars с наценкой по
+# стране. Удалена: вызовов не было ни одного (соседняя get_biz_price живёт и
+# зовётся из app/handlers/payments/callbacks.py:426 и :927). Функция ещё и
+# читала TARIFFS_STARS, объявленный НИЖЕ по файлу: на импорте это не падало
+# только потому, что обращение происходит в момент вызова, а вызова не было.
+# Если оплата бизнес-тарифов звёздами понадобится — писать заново рядом с
+# TARIFFS_STARS и сразу с вызывающим кодом.
 
 # Тарифы для оплаты Telegram Stars (цены в Stars, +70% от рублёвых)
 # 1 Star ≈ 1.85 RUB (курс приблизительный, цены округлены)

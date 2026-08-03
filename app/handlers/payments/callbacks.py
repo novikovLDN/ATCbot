@@ -4,7 +4,7 @@ Payment-related callback handlers: buy, tariff selection, payment methods.
 import logging
 import time
 
-from aiogram import Router, F, Bot
+from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
@@ -22,12 +22,11 @@ from app.handlers.common.utils import (
     safe_edit_text,
     get_promo_session,
     validate_callback_data,
-    sanitize_display_name,
 )
 from app.handlers.common.keyboards import (
     get_connect_keyboard,
 )
-from app.handlers.common.states import PromoCodeInput, CorporateAccessRequest, PurchaseState
+from app.handlers.common.states import PromoCodeInput, PurchaseState
 from app.core.structured_logger import log_event
 
 payments_callbacks_router = Router()
@@ -956,109 +955,22 @@ async def callback_biz_country_selected(callback: CallbackQuery, state: FSMConte
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
 
 
-@payments_callbacks_router.callback_query(F.data == "corporate_access_confirm", StateFilter(CorporateAccessRequest.waiting_for_confirmation))
-async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    """
-    🧩 CORPORATE ACCESS REQUEST FLOW
-    
-    On confirmation: Send admin notification and user confirmation.
-    """
-    try:
-        await callback.answer()
-    except Exception:
-        pass
+# Здесь был обработчик callback_corporate_access_confirm (callback_data
+# "corporate_access_confirm"): он слал админу заявку на корпоративный доступ и
+# показывал пользователю «запрос принят».
+#
+# Удалён как недостижимый. Достижимости не было по двум независимым причинам:
+#   1) ни одна клавиатура во всём репозитории (включая dashboard/ на TypeScript)
+#      не создаёт кнопку с callback_data "corporate_access_confirm";
+#   2) обработчик стоял под StateFilter(CorporateAccessRequest.waiting_for_confirmation),
+#      а это состояние нигде не выставляется — класс CorporateAccessRequest
+#      встречался только в определении в states.py и в самом фильтре.
+#
+# Живой корпоративный сценарий сейчас другой: кнопка "corporate_access_request"
+# → callback_corporate_access_request (каталог бизнес-тарифов) → "tariff:biz_*"
+# → выбор страны → обычная оплата. Заявка админу в нём не нужна.
+#
+# Если сценарий «оставить заявку» понадобится снова: текст ответа лежит в
+# ключе buy.corporate_request_accepted (все семь языков), тип уведомления
+# админу — "corporate_access_request" в admin_notifications.
 
-    if not await ensure_db_ready_callback(callback):
-        return
-    
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    user = await database.get_user(telegram_id)
-
-    try:
-        # Get user data with sanitization
-        raw_username = callback.from_user.username if callback.from_user else None
-        if raw_username:
-            sanitized = sanitize_display_name(raw_username)
-            username_display = f"@{sanitized}" if sanitized else i18n_get_text(language, "common.user")
-        else:
-            username_display = i18n_get_text(language, "common.username_not_set")
-        
-        # Get subscription status
-        subscription = await database.get_subscription(telegram_id)
-        has_active_subscription = False
-        if subscription:
-            from app.services.subscriptions.service import get_subscription_status
-            subscription_status = get_subscription_status(subscription)
-            has_active_subscription = subscription_status.is_active
-        
-        subscription_status_text = "ДА" if has_active_subscription else "НЕТ"
-        
-        # Get registration date
-        registration_date = "N/A"
-        if user and user.get("created_at"):
-            if isinstance(user["created_at"], str):
-                from datetime import datetime
-                registration_date = datetime.fromisoformat(user["created_at"]).strftime("%d.%m.%Y")
-            else:
-                registration_date = user["created_at"].strftime("%d.%m.%Y")
-        
-        # Current date
-        from datetime import datetime, timezone
-        request_date = datetime.now(timezone.utc).strftime("%d.%m.%Y")
-        
-        # Send admin notification using unified service
-        import admin_notifications
-        admin_message = (
-            f"📩 Новый запрос на корпоративный доступ\n\n"
-            f"ID: {telegram_id}\n"
-            f"Username: {username_display}\n"
-            f"Дата запроса: {request_date}\n\n"
-            f"Активная подписка: {subscription_status_text}\n"
-            f"Дата регистрации в боте: {registration_date}"
-        )
-        
-        admin_notified = await admin_notifications.send_admin_notification(
-            bot=bot,
-            message=admin_message,
-            notification_type="corporate_access_request",
-            parse_mode=None
-        )
-        
-        # Send user confirmation message
-        user_confirmation_text = i18n_get_text(language, "buy.corporate_request_accepted")
-
-        user_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "main.profile"),
-                callback_data="menu_profile"
-            )],
-        ])
-
-        await callback.message.answer(user_confirmation_text, reply_markup=user_keyboard, parse_mode="HTML")
-        
-        # Write audit log
-        try:
-            await database._log_audit_event_atomic_standalone(
-                "corporate_access_request",
-                telegram_id,
-                None,
-                f"Corporate access request: username={username_display}, has_active_subscription={has_active_subscription}, admin_notified={admin_notified}, requested_at={request_date}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to write audit log for corporate access request: {e}")
-        
-        # Clear FSM
-        await state.clear()
-        logger.debug(f"FSM: CorporateAccessRequest cleared after confirmation for user {telegram_id}")
-        
-    except Exception as e:
-        logger.exception(f"Error in callback_corporate_access_confirm: {e}")
-        # Still confirm user even if admin notification fails
-        try:
-            user_confirmation_text = i18n_get_text(language, "buy.corporate_request_accepted")
-            await callback.message.answer(user_confirmation_text, parse_mode="HTML")
-        except Exception:
-            pass
-        await state.clear()
-        await callback.answer(i18n_get_text(language, "buy.corporate_request_accepted").split("\n")[0], show_alert=True)

@@ -281,9 +281,10 @@ from database.traffic import (  # noqa: F401
     count_premium_migration_progress,
     set_remnawave_bypass_cache,
     get_remnawave_bypass_cache,
-    count_migration_broadcast_candidates,
-    list_migration_broadcast_candidates,
-    mark_migration_notice_sent,
+    # Реэкспорт count_migration_broadcast_candidates,
+    # list_migration_broadcast_candidates и mark_migration_notice_sent снят
+    # вместе с самими функциями: миграционную рассылку удалили, потребителей
+    # не осталось. См. комментарий в database/traffic.py.
     get_traffic_notification_flags,
     set_traffic_notification_flag,
     reset_traffic_notification_flags,

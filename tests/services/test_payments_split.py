@@ -84,6 +84,29 @@ def test_old_payments_module_is_gone():
     assert not (CALLBACKS / "payments_callbacks.py").exists()
 
 
+def test_gift_screen_reuses_the_shared_invoice_cleanup():
+    """Экран подарка не должен держать свою копию автоудаления инвойса.
+
+    Копий было пять с расходящимися сигнатурами: четыре брали message_id:
+    int, версия в gift.py — Message. Пока они жили порознь, смена
+    INVOICE_TIMEOUT или добавление лога попадали в один-два файла: инвойсы
+    одних товаров исчезали, других висели просроченными.
+    """
+    src = (CALLBACKS / "gift.py").read_text(encoding="utf-8")
+    assert "_invoice_cleanup import _schedule_invoice_deletion" in src
+    assert "async def _schedule_invoice_deletion" not in src, (
+        "в gift.py снова своя копия автоудаления инвойса"
+    )
+
+
+def test_shared_and_gift_cleanup_are_the_same_object():
+    """Импорт, а не одноимённая функция: расхождению взяться неоткуда."""
+    from app.handlers.callbacks import gift
+    from app.handlers.callbacks import _invoice_cleanup
+
+    assert gift._schedule_invoice_deletion is _invoice_cleanup._schedule_invoice_deletion
+
+
 # ──────────────────────────────────────────────────────────────────────
 #  Слой доставки рассылок
 # ──────────────────────────────────────────────────────────────────────

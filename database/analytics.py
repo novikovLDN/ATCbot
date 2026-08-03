@@ -68,7 +68,40 @@ async def get_business_metrics() -> Dict[str, Any]:
         Словарь с метриками:
         - avg_subscription_lifetime_days: среднее время жизни подписки (в днях)
         - avg_renewals_per_user: среднее количество продлений на пользователя
-        - approval_rate_percent: процент подтвержденных платежей
+
+    ПОЧЕМУ ЗДЕСЬ БОЛЬШЕ НЕТ approval_rate_percent
+    ("Процент подтверждённых платежей").
+
+    Считалась она как COUNT(status='approved') / COUNT(*) по payments и
+    всегда давала 100%. Не потому, что у нас идеальные платежи, а потому,
+    что строка в payments по построению не может остаться неподтверждённой:
+    пять из шести мест INSERT'а сразу пишут status='approved'
+    (database/subscriptions.py: balance_topup, gift, traffic_pack,
+    farm_effect, apple_id), а шестое — ветка подписки в finalize_purchase —
+    вставляет 'pending' и переводит в 'approved' в ТОЙ ЖЕ транзакции. Если
+    выдача упала, транзакция откатывается и строки не остаётся вовсе.
+    Знаменатель и числитель — одно и то же множество.
+
+    Почему не переопределили как «долю успешных попыток оплаты». Для этого
+    нужен знаменатель — попытки. Обоих кандидатов пришлось забраковать:
+
+    1) payment_errors. Это лог НАШИХ сбоев на вебхуке, а не отказов
+       плательщику: stage там — setup_missing, webhook_invalid_json,
+       transient, timeout, unhandled_exception (app/api/payment_webhook.py).
+       'transient' вообще означает «повторим», и после успешного повтора в
+       базе будут и строка ошибки, и одобренный платёж. Такой знаменатель
+       считал бы успешные оплаты неудачными.
+
+    2) pending_purchases. Соблазнительно взять paid / (paid + expired), но
+       'expired' там не равно «человек не заплатил»: создание любого нового
+       счёта принудительно гасит все прежние pending этого пользователя
+       (database/pending_purchases.py: 51, 120, 258). Пользователь, который
+       потыкал три тарифа и купил один, даст 1 paid и 2 expired — метрика
+       мерила бы нажатия на кнопки.
+
+    Отказ на стороне провайдера (карта не прошла) до нас просто не доходит:
+    вебхук приходит только по успеху. Мерить нечего, поэтому метрика убрана
+    целиком, а не заменена правдоподобным числом.
 
     ПОЧЕМУ ЗДЕСЬ БОЛЬШЕ НЕТ avg_payment_approval_time_seconds
     ("Время апрува" в дашборде и в /admin → Метрики).
@@ -116,20 +149,10 @@ async def get_business_metrics() -> Dict[str, Any]:
         avg_renewals = 0.0
         if total_users_with_subscriptions and total_users_with_subscriptions > 0:
             avg_renewals = (total_renewals or 0) / total_users_with_subscriptions
-        
-        # 3. Процент подтвержденных платежей
-        total_payments = await conn.fetchval("SELECT COUNT(*) FROM payments")
-        approved_payments = await conn.fetchval(
-            "SELECT COUNT(*) FROM payments WHERE status = 'approved'"
-        )
-        approval_rate = 0.0
-        if total_payments and total_payments > 0:
-            approval_rate = ((approved_payments or 0) / total_payments) * 100
-        
+
         return {
             "avg_subscription_lifetime_days": float(avg_lifetime) if avg_lifetime else None,
             "avg_renewals_per_user": float(avg_renewals) if avg_renewals else 0.0,
-            "approval_rate_percent": float(approval_rate) if approval_rate else 0.0,
         }
 
 
@@ -449,13 +472,22 @@ async def get_payments_breakdown(hours: int) -> Dict[str, Any]:
 
         # by_apple_nominal — только apple_id_ строки, распарсим tariff
         # apple_id_{region}_{nominal} → region + nominal.
+        #
+        # ESCAPE обязателен. В LIKE символ `_` — одиночный wildcard, то есть
+        # шаблон 'apple_id_%' совпадает и с 'appleXidY...'. Сейчас таких
+        # тарифов нет, но появится любой — и он молча попадёт в разбивку
+        # Apple с мусорным регионом и номиналом. Экранируем `_`, чтобы
+        # шаблон означал ровно префикс 'apple_id_'.
+        #
+        # Строка сырая (r"""), иначе Python сам съест `\_` как неизвестную
+        # escape-последовательность и в SQL уедет непонятно что.
         try:
             rows = await conn.fetch(
-                """SELECT tariff, COUNT(*)::BIGINT AS c,
+                r"""SELECT tariff, COUNT(*)::BIGINT AS c,
                           COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
                    FROM pending_purchases
                    WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance' AND created_at >= $1
-                     AND tariff LIKE 'apple_id_%'
+                     AND tariff LIKE 'apple\_id\_%' ESCAPE '\'
                    GROUP BY tariff
                    ORDER BY rev DESC""",
                 since,
@@ -463,12 +495,21 @@ async def get_payments_breakdown(hours: int) -> Dict[str, Any]:
             apple = []
             for r in rows:
                 t = str(r["tariff"] or "")
+                # Разбор позиционный, поэтому проверяем форму ДО обращения
+                # по индексам: ждём ровно apple / id / регион / номинал.
+                # Всё, что не легло в эту форму, не выбрасываем (это
+                # оплаченные деньги, они должны быть видны), а показываем
+                # как есть — чтобы админ увидел странный тариф, а не тихо
+                # приписанный чужому региону доход.
                 parts = t.split("_")
-                region = parts[2] if len(parts) >= 3 else "?"
-                nominal_raw = parts[3] if len(parts) >= 4 else "0"
-                try:
-                    nominal = int(nominal_raw)
-                except ValueError:
+                if len(parts) == 4 and parts[3].isdigit():
+                    region = parts[2]
+                    nominal = int(parts[3])
+                else:
+                    logger.warning(
+                        "breakdown by_apple_nominal: неожиданный формат тарифа %r", t,
+                    )
+                    region = t or "?"
                     nominal = 0
                 apple.append({
                     "region": region,
@@ -904,7 +945,43 @@ async def get_purchase_breakdown() -> Dict[str, Any]:
 
 
 async def get_extended_bot_stats() -> Dict[str, Any]:
-    """Расширенная статистика бота для мониторинга."""
+    """Расширенная статистика бота для мониторинга.
+
+    КТО ЭТО ЧИТАЕТ. Дашборд берёт отсюда только total_users и
+    active_subscriptions (см. /stats/overview). Всё остальное рисует бот:
+    /admin → Статистика и /admin → Расширенная статистика
+    (app/handlers/admin/stats.py). Поэтому «удалить неиспользуемое»
+    не вариант — экраны бота обращаются к ключам по индексу и упадут
+    целиком. Вместо удаления — честные имена и честный расчёт.
+
+    ЧТО БЫЛО НЕ ТАК И ЧТО ИСПРАВЛЕНО
+
+    1. new_today считался от полуночи UTC, хотя весь остальной дашборд
+       (get_daily_timeseries, get_hourly_timeseries, тайл «Сегодня») режет
+       сутки по Europe/Moscow. Три часа регистраций — с 00:00 до 03:00 МСК —
+       у этой цифры попадали во вчера, у соседних во сегодня. Теперь МСК.
+
+    2. mrr никогда не был MRR: это просто сумма оплат за последние 30 дней,
+       включая разовые покупки мини-магазина. Честное имя —
+       revenue_last_30d_rubles; ключ mrr остался синонимом для экрана бота.
+
+    3. total_revenue и mrr отдавались в копейках, а бот печатал их с «₽» —
+       на экране висела цифра в сто раз больше настоящей. Теперь оба поля
+       (и их новые имена) в рублях.
+
+    4. churn_rate — это не отток. Это доля пользователей, у которых
+       подписка сейчас просрочена, за всё время и без привязки к периоду;
+       в знаменатель входят триалы и bypass-строки. Честное имя —
+       expired_subscription_share_percent, churn_rate оставлен синонимом.
+       (Замечание аудита «считается по строкам, а не по пользователям»
+       не подтвердилось: subscriptions.telegram_id UNIQUE, строка = юзер.)
+
+    5. avg_subs_per_user считался как AVG(COUNT(*) GROUP BY telegram_id)
+       по subscriptions. Из-за того же UNIQUE это тождественно 1.0 —
+       константа, занимающая строку на экране. Считаем то, что обещает
+       название: сколько оплаченных периодов подписки приходится на
+       пользователя, по subscription_history (purchase + renewal).
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         now = datetime.now(timezone.utc)
@@ -934,38 +1011,60 @@ async def get_extended_bot_stats() -> Dict[str, Any]:
 
         # Выручка — из pending_purchases: payments не содержит товары
         # мини-магазина и двоит деньги при покупке с баланса.
-        total_revenue = await conn.fetchval(
+        total_revenue_kop = await conn.fetchval(
             "SELECT COALESCE(SUM(price_kopecks), 0) FROM pending_purchases WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'"
         ) or 0
 
-        # Выручка за 30 дней (оценка MRR).
+        # Выручка за последние 30 дней. Это НЕ MRR: сюда входят разовые
+        # покупки мини-магазина и подписки любой длины, никакой
+        # нормировки на месяц нет.
         # created_at в pending_purchases — момент начала оплаты, а не её
         # подтверждения. Счёт живёт 15-30 минут, поэтому для месячного окна
         # это корректный ориентир.
-        mrr_since = _to_db_utc(now - timedelta(days=30))
-        mrr = await conn.fetchval(
+        revenue_30d_since = _to_db_utc(now - timedelta(days=30))
+        revenue_30d_kop = await conn.fetchval(
             "SELECT COALESCE(SUM(price_kopecks), 0) FROM pending_purchases "
             "WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance' AND created_at >= $1",
-            mrr_since
+            revenue_30d_since
         ) or 0
 
-        # New users today
-        today_start = _to_db_utc(now.replace(hour=0, minute=0, second=0, microsecond=0))
+        # Новые пользователи за сегодня — сутки по Москве, как и весь
+        # остальной дашборд. Границу считает сам Postgres: NOW() в МСК,
+        # обрезаем до полуночи и переводим обратно в timestamptz, чтобы
+        # сравнение с users.created_at (TIMESTAMPTZ с миграции 025) шло
+        # в одной зоне.
         new_today = await conn.fetchval(
-            "SELECT COUNT(*) FROM users WHERE created_at >= $1", today_start
+            """SELECT COUNT(*) FROM users
+               WHERE created_at >= (
+                   DATE_TRUNC('day', (NOW() AT TIME ZONE 'Europe/Moscow'))
+                       AT TIME ZONE 'Europe/Moscow'
+               )"""
         )
 
         # Broadcasts sent
         total_broadcasts = await conn.fetchval("SELECT COUNT(*) FROM broadcasts")
 
-        # Average subscriptions per paying user
-        avg_subs = await conn.fetchval(
-            "SELECT ROUND(AVG(cnt), 1) FROM (SELECT COUNT(*) as cnt FROM subscriptions GROUP BY telegram_id) sub"
+        # Сколько оплаченных периодов подписки приходится на пользователя.
+        # Берём subscription_history, а не subscriptions: в subscriptions
+        # telegram_id UNIQUE, поэтому среднее по строкам там тождественно
+        # равно 1.0. reissue/manual_reissue отбрасываем — перевыпуск ключа
+        # не новая подписка.
+        avg_periods = await conn.fetchval(
+            """SELECT ROUND(AVG(cnt), 1) FROM (
+                   SELECT COUNT(*) AS cnt
+                   FROM subscription_history
+                   WHERE action_type IN ('purchase', 'renewal')
+                   GROUP BY telegram_id
+               ) h"""
         )
 
         conversion_rate = round((users_with_sub / total_users * 100), 1) if total_users > 0 else 0
         trial_rate = round((total_trial / total_users * 100), 1) if total_users > 0 else 0
-        churn_rate = round((expired_subs / (active_subs + expired_subs) * 100), 1) if (active_subs + expired_subs) > 0 else 0
+        expired_share = round((expired_subs / (active_subs + expired_subs) * 100), 1) if (active_subs + expired_subs) > 0 else 0
+
+        total_revenue_rubles = int(total_revenue_kop) / 100
+        revenue_last_30d_rubles = int(revenue_30d_kop) / 100
+        avg_periods_per_user = float(avg_periods) if avg_periods else 0.0
 
         return {
             "total_users": total_users or 0,
@@ -982,12 +1081,21 @@ async def get_extended_bot_stats() -> Dict[str, Any]:
             "trial_rate": trial_rate,
             "users_with_sub": users_with_sub or 0,
             "conversion_rate": conversion_rate,
-            "churn_rate": churn_rate,
-            "total_revenue": total_revenue,
-            "mrr": mrr,
             "new_today": new_today or 0,
             "total_broadcasts": total_broadcasts or 0,
-            "avg_subs_per_user": float(avg_subs) if avg_subs else 0,
+            # Честные имена — их и надо использовать в новом коде.
+            "total_revenue_rubles": total_revenue_rubles,
+            "revenue_last_30d_rubles": revenue_last_30d_rubles,
+            "expired_subscription_share_percent": expired_share,
+            "avg_subscription_periods_per_user": avg_periods_per_user,
+            # Старые имена — синонимы, живут ради экранов бота
+            # (app/handlers/admin/stats.py читает их по индексу). Значения
+            # те же самые, включая перевод денег в рубли: раньше здесь
+            # лежали копейки, а бот дописывал к ним «₽».
+            "total_revenue": total_revenue_rubles,
+            "mrr": revenue_last_30d_rubles,
+            "churn_rate": expired_share,
+            "avg_subs_per_user": avg_periods_per_user,
         }
 
 

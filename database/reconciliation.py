@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 # Threshold — anything above this from NOW is considered suspicious.
 _EIGHT_YEARS = timedelta(days=365 * 8)
 
-# Max parallel Remnawave API calls when cross-checking candidate panel dates.
-_PANEL_FETCH_CONCURRENCY = 8
+# Константа _PANEL_FETCH_CONCURRENCY (лимит параллельных запросов к панели)
+# удалена вместе с _bulk_fetch_panel_expires_at — её читала только та функция.
 
 # ── Кэш полного скана панели ──────────────────────────────────────────
 # get_all_users листает Remnawave страницами по 1000; на проде это ~358k
@@ -201,32 +201,14 @@ async def _fetch_panel_expires_at(
     return dt
 
 
-async def _bulk_fetch_panel_expires_at(
-    entries: List[Dict[str, Any]],
-) -> Dict[int, Optional[datetime]]:
-    """Fetch Remnawave `expireAt` for many candidates in parallel with a
-    concurrency cap so we don't hammer the panel. Returns a dict
-    `telegram_id → datetime | None`."""
-    if not entries:
-        return {}
-
-    sem = asyncio.Semaphore(_PANEL_FETCH_CONCURRENCY)
-
-    async def _one(row: Dict[str, Any]):
-        tg = row["telegram_id"]
-        uuid = row.get("remnawave_premium_uuid")
-        async with sem:
-            dt = await _fetch_panel_expires_at(tg, uuid)
-        return tg, dt
-
-    results = await asyncio.gather(*[_one(r) for r in entries], return_exceptions=True)
-    out: Dict[int, Optional[datetime]] = {}
-    for res in results:
-        if isinstance(res, Exception):
-            continue
-        tg, dt = res
-        out[tg] = dt
-    return out
+# Здесь была _bulk_fetch_panel_expires_at — пакетный опрос панели по списку
+# кандидатов с семафором на 8 параллельных запросов. Удалена: ни одного
+# вызывающего по всему дереву не было ни разу. Рядом живёт _fetch_panel_expires_at
+# (её зовут get_reconciliation_detail и apply_reconciliation_fix), и пакетная
+# обёртка читалась как рабочая часть API модуля — кто-нибудь построил бы на ней
+# новый экран сверки, ни разу не проверенный на живой панели.
+# Если пакетный опрос понадобится — писать заново под конкретный вызов,
+# с явным лимитом и обработкой ошибок панели.
 
 
 # ──────────────────────────────────────────────────────────────────────

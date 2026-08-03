@@ -1255,4 +1255,32 @@ LANG = {
     'farm.plant_oak': 'Дуб',
     'games.menu_paywall': '🎮 Игровой клуб доступен только для подписчиков!\nОформите подписку и получите доступ ко всем играм 🎯',
     'games.race_blocked': 'Игра уже запущена, подождите',
+
+    # ── Магазин Telegram Stars ──────────────────────────────────────────
+    # Экран покупки звёзд. До этого тексты были зашиты прямо в
+    # telegram_stars_purchase.py по-русски, и покупатель с любым другим
+    # языком видел русский экран посреди переведённого бота.
+    'stars.choose_pack': "⭐ <b>Купить Telegram Stars</b>\n\nВыберите количество звёзд:",
+    'stars.pack_button': "{stars}⭐ | {price}₽",
+    'stars.choose_recipient': "⭐ <b>{stars} Telegram Stars — {price} ₽</b>\n\nВыберите получателя звёзд:",
+    'stars.recipient_self': "👤 Себе",
+    'stars.recipient_gift': "🎁 Подарить",
+    'stars.username_hint_self': "Введите свой username Telegram:",
+    'stars.username_hint_gift': "Введите username друга:",
+    'stars.enter_username': "⭐ <b>Купить {stars} Telegram Stars — {price} ₽</b>\n\n{hint}\n\n⚠️ Обязательно через <b>@</b>\nПример: <code>@username</code>",
+    'stars.too_many_attempts': "❌ Слишком много неверных попыток. Попробуйте позже.",
+    'stars.confirm': "⭐ <b>Купить Telegram Stars</b>\n\n📦 Количество: <b>{stars}⭐</b>\n👤 Получатель: <b>{username}</b>\n💰 К оплате: <b>{price} ₽</b>\n\nВыберите способ оплаты:",
+    'stars.pay_card': "💳 Банковская карта",
+    'stars.pay_lava': "💳 Карта (Lava)",
+    'stars.pay_sbp': "📱 СБП ({price} ₽)",
+    'stars.balance_disabled': "Оплата с баланса для Telegram Stars недоступна. Выберите карту или СБП.",
+    'stars.invoice_title': "Telegram Stars",
+    'stars.invoice_description': "Telegram Stars — {stars}⭐ для {username}",
+    'stars.invoice_label': "{stars} Telegram Stars",
+    'stars.invoice_create_failed': "❌ Ошибка создания платежа.",
+    'stars.invoice_create_failed_sbp': "❌ Ошибка создания платежа СБП.",
+    'stars.pay_button': "💳 Оплатить",
+    'stars.pay_button_sbp': "📱 Оплатить через СБП",
+    'stars.success': "✅ <b>Оплата прошла успешно!</b>\n\n⭐ Товар: Telegram Stars\n📦 Количество: {stars}⭐\n👤 Получатель: {username}\n💳 Сумма: {price} ₽\n\n⏳ Ожидайте получения звёзд в течение <b>5–15 минут</b>.\n\nЕсли звёзды не поступили, напишите нам:",
+    'stars.support_button': "💬 Поддержка",
 }

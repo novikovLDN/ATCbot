@@ -1,6 +1,7 @@
 """Модуль для отправки напоминаний об окончании подписки"""
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from aiogram import Bot
@@ -10,6 +11,7 @@ import config
 from app import i18n
 from app.services.language_service import resolve_user_language
 from app.core.feature_flags import background_workers_paused
+from app.core.worker_startup import startup_jitter
 from app.services.notifications import service as notification_service
 from app.services.notifications.service import ReminderType
 from app.utils.telegram_safe import safe_send_message
@@ -32,6 +34,43 @@ _REMINDER_3D_PHOTO = {
 
 # Idempotency: skip if reminder sent within this window (container restart guard)
 REMINDER_IDEMPOTENCY_WINDOW = timedelta(minutes=30)
+
+# ──────────────────────────────────────────────────────────────────────────
+#  Бюджет времени на одну итерацию напоминаний
+# ──────────────────────────────────────────────────────────────────────────
+#
+# ЧТО БЫЛО. Итерация целиком оборачивалась в asyncio.wait_for(..., 120 с) —
+# одно число на любой размер выборки. Выборка кандидатов теперь идёт в SQL
+# страницами по 500 строк с потолком 20000 (database/reminders_queries.py),
+# и 120 секунд на неё физически не хватает: на каждого, кому реально уходит
+# напоминание, приходится resolve_user_language, чтение текста из дашборда,
+# отправка с паузой 0.05 с под лимит Telegram, отметка флага и запись в
+# audit_log — порядка 0.1 секунды даже без сетевых задержек.
+#
+# ЧЕМ ЭТО ПЛОХО ИМЕННО ЗДЕСЬ. wait_for отменяет корутину целиком, посреди
+# прохода, без единого лога о том, сколько успели. А выборка идёт ORDER BY id,
+# то есть обрывается всегда один и тот же хвост — эти люди не получают
+# напоминаний систематически, а в логах видно только «iteration cancelled».
+#
+# ЧТО ТЕПЕРЬ. Два разных ограничителя:
+#   • мягкий бюджет — считается от РАЗМЕРА ВЫБОРКИ, проверяется в цикле,
+#     на исчерпании цикл выходит сам и пишет REMINDERS_BACKLOG с числами;
+#     недоделанные кандидаты не теряются — флаги им не выставлены, и на
+#     следующем витке (через 45 минут) они снова в выборке;
+#   • жёсткий wait_for — страховка от зависшего await (Telegram или пул),
+#     который мягкую проверку просто не достигнет. Он заведомо больше
+#     мягкого, чтобы штатным путём выхода был мягкий, а не отмена.
+REMINDERS_BASE_ITERATION_SECONDS = 60.0
+# Верхняя оценка работы на одного кандидата выборки.
+REMINDERS_SECONDS_PER_CANDIDATE = 0.1
+# Потолок мягкого бюджета. При интервале воркера в 45 минут 10 минут работы —
+# это ещё с большим запасом, но уже вчетверо больше прежних 120 секунд.
+REMINDERS_MAX_ITERATION_SECONDS = float(
+    os.getenv("REMINDERS_MAX_ITERATION_SECONDS", "600")
+)
+# Запас поверх мягкого бюджета: столько отводится на саму выборку и на то,
+# чтобы цикл успел заметить исчерпание бюджета и корректно выйти.
+REMINDERS_ITERATION_HARD_TIMEOUT = REMINDERS_MAX_ITERATION_SECONDS + 120.0
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +151,6 @@ def get_tariff_1_month_keyboard(language: str) -> InlineKeyboardMarkup:
     return _buy_keyboard(language, "main.buy")
 
 
-
-
 async def _load_paid_reminder_trigger_configs() -> dict:
     """Прочитать окна напоминаний из дашборда — один раз на проход.
 
@@ -135,8 +172,15 @@ async def _load_paid_reminder_trigger_configs() -> dict:
     return out
 
 
-async def send_smart_reminders(bot: Bot):
-    """Отправить умные напоминания пользователям (старая логика для совместимости)"""
+async def send_smart_reminders(bot: Bot) -> int:
+    """Отправить умные напоминания пользователям.
+
+    Возвращает число отправленных сообщений — оно уходит в items_processed
+    метрики итерации. Раньше туда безусловно писался ноль, и по ITERATION_END
+    нельзя было отличить «никому не пора» от «выборка была, но мы её не
+    разгребли».
+    """
+    sent_count = 0
     try:
         # Сначала конфиг окон, потом выборка: отбор кандидатов в SQL идёт по
         # тем же числам, по которым потом решает should_send_reminder.
@@ -146,11 +190,32 @@ async def send_smart_reminders(bot: Bot):
         )
 
         if not subscriptions:
-            return
+            return sent_count
 
         logger.info("Found %d subscriptions for reminders check", len(subscriptions))
 
+        # Мягкий бюджет считаем от фактического размера выборки: на пустой
+        # день это минута, на разгребание потолка в 20000 строк — десять.
+        iteration_start = time.monotonic()
+        budget_seconds = min(
+            REMINDERS_MAX_ITERATION_SECONDS,
+            REMINDERS_BASE_ITERATION_SECONDS
+            + len(subscriptions) * REMINDERS_SECONDS_PER_CANDIDATE,
+        )
+        checked = 0
+
         for subscription in subscriptions:
+            if time.monotonic() - iteration_start > budget_seconds:
+                # Выходим сами, до того как сработает жёсткий wait_for.
+                # Иначе итерацию отменяют посреди прохода и в логах остаётся
+                # только «iteration cancelled» без единой цифры.
+                logger.warning(
+                    "REMINDERS_BACKLOG checked=%s of=%s sent=%s budget=%.0fs — "
+                    "выборка не разобрана за итерацию, остаток уйдёт в следующую",
+                    checked, len(subscriptions), sent_count, budget_seconds,
+                )
+                break
+            checked += 1
             telegram_id = subscription["telegram_id"]
 
             try:
@@ -317,6 +382,7 @@ async def send_smart_reminders(bot: Bot):
                             except Exception:
                                 pass
                         continue
+                    sent_count += 1
                     await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
 
                     # Mark reminder as sent using notification service
@@ -350,11 +416,19 @@ async def send_smart_reminders(bot: Bot):
     except Exception as e:
         logger.exception(f"Error in send_smart_reminders: {e}")
 
+    return sent_count
+
 
 async def reminders_task(bot: Bot):
     """Фоновая задача для отправки напоминаний об окончании подписки (выполняется каждые 30-60 минут)"""
-    # Небольшая задержка при старте, чтобы БД успела инициализироваться
-    await asyncio.sleep(60)
+    # Здесь был фиксированный asyncio.sleep(60).
+    #
+    # Из-за него reminders просыпался ровно в ту же секунду, что и остальные
+    # воркеры с фиксированной паузой: разом шли выборки из базы и рассылка в
+    # Telegram, причём ровно на прогреве бота. Случайная задержка (общее
+    # правило, см. app/core/worker_startup) разносит старты по минутному окну
+    # и разрывает кратность периодов, из-за которой фазы совпадали снова.
+    await startup_jitter("reminders")
 
     iteration_number = 0
     while True:
@@ -374,17 +448,21 @@ async def reminders_task(bot: Bot):
         
         iteration_outcome = "success"
         iteration_error_type = None
-        
+        items_sent = 0
+
         try:
-            # H1 fix: Wrap iteration body with timeout
-            async def _run_iteration():
-                await send_smart_reminders(bot)
-            
+            # Жёсткий таймаут — только страховка от зависшего await. Штатный
+            # выход по времени делает мягкий бюджет внутри send_smart_reminders,
+            # он считается от размера выборки и заведомо меньше этого числа.
             try:
-                await asyncio.wait_for(_run_iteration(), timeout=120.0)
+                items_sent = await asyncio.wait_for(
+                    send_smart_reminders(bot),
+                    timeout=REMINDERS_ITERATION_HARD_TIMEOUT,
+                )
             except asyncio.TimeoutError:
                 logger.error(
-                    "WORKER_TIMEOUT worker=reminders exceeded 120s — iteration cancelled"
+                    "WORKER_TIMEOUT worker=reminders exceeded %.0fs — iteration cancelled",
+                    REMINDERS_ITERATION_HARD_TIMEOUT,
                 )
                 iteration_outcome = "timeout"
                 iteration_error_type = "timeout"
@@ -408,13 +486,15 @@ async def reminders_task(bot: Bot):
             log_worker_iteration_end(
                 worker_name="reminders",
                 outcome=iteration_outcome,
-                items_processed=0,
+                items_processed=items_sent,
                 error_type=iteration_error_type,
                 duration_ms=duration_ms,
             )
-        
-        if iteration_outcome == "cancelled":
-            break
-        
+
+        # Здесь стоял `if iteration_outcome == "cancelled": break`. Ветка
+        # недостижима: отмена выше делает raise, до этой строки исполнение уже
+        # не доходит. Оставлять её вредно — она создаёт впечатление, что после
+        # отмены цикл ещё что-то доделывает.
+
         # Проверяем каждые 45 минут для баланса между точностью и нагрузкой
         await asyncio.sleep(45 * 60)  # 45 минут в секундах

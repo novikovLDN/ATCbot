@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -109,6 +109,10 @@ const METRICS: readonly MetricDef[] = [
 
 const RANGE_OPTIONS = [7, 30, 90, 180] as const;
 type RangeDays = (typeof RANGE_OPTIONS)[number];
+
+/** Минимальный интервал между инвалидациями ключа ['stats'] по событиям
+ *  из WebSocket. Подробнее — рядом с invalidateStats в Dashboard(). */
+const STATS_INVALIDATE_MS = 5000;
 
 // ─ Live event ringbuffer ─────────────────────────────────────────────
 
@@ -236,6 +240,42 @@ export function Dashboard() {
     staleTime: 60_000,
   });
 
+  // Инвалидация ['stats'] — не чаще раза в 5 секунд.
+  //
+  // Обработчик ниже дёргает её на КАЖДОЕ событие шины любого типа, а под
+  // ключом ['stats'] висят самые тяжёлые агрегаты страницы (overview,
+  // daily, hourly, breakdown). При всплеске — массовая регистрация,
+  // пачка платежей после рассылки — это перезапрашивало их чаще, чем
+  // собственный refetchInterval запросов.
+  //
+  // Троттлинг с хвостом: первое событие обновляет сразу, всё, что
+  // прилетело за окно, схлопывается в один отложенный вызов. Так
+  // последнее событие всплеска не теряется.
+  const lastStatsInvalidateRef = useRef(0);
+  const pendingStatsInvalidateRef = useRef<number | null>(null);
+  const invalidateStats = useCallback(() => {
+    const wait = STATS_INVALIDATE_MS - (Date.now() - lastStatsInvalidateRef.current);
+    if (wait <= 0) {
+      lastStatsInvalidateRef.current = Date.now();
+      qc.invalidateQueries({ queryKey: ["stats"] });
+      return;
+    }
+    if (pendingStatsInvalidateRef.current !== null) return;
+    pendingStatsInvalidateRef.current = window.setTimeout(() => {
+      pendingStatsInvalidateRef.current = null;
+      lastStatsInvalidateRef.current = Date.now();
+      qc.invalidateQueries({ queryKey: ["stats"] });
+    }, wait);
+  }, [qc]);
+  useEffect(
+    () => () => {
+      if (pendingStatsInvalidateRef.current !== null) {
+        window.clearTimeout(pendingStatsInvalidateRef.current);
+      }
+    },
+    [],
+  );
+
   const [live, setLive] = useState<LiveEntry[]>([]);
   useEventStream((e) => {
     if (e.type === "ping") return;
@@ -286,11 +326,17 @@ export function Dashboard() {
       };
     }
     if (entry) setLive((prev) => [entry!, ...prev].slice(0, 25));
-    qc.invalidateQueries({ queryKey: ["stats"] });
+    invalidateStats();
   });
 
   // Дельта: вторая половина выбранного окна vs первая половина.
-  // Работает для 7/30/90 — даёт «как изменилось за половину периода».
+  // Работает для любого окна 7/30/90/180 — даёт «как изменилось за
+  // половину периода».
+  //
+  // Отдаём наружу ещё и half — длину плеча сравнения в днях. Подпись под
+  // цифрой раньше была прибита гвоздями к «vs prev 30d» и врала дважды:
+  // при выборе 7 дней говорила про 30, а в дефолтном режиме (30 дней)
+  // сравнивала 15 против 15, а не 30 против предыдущих 30.
   const revenueDelta = useMemo(() => {
     const s = daily.data?.series ?? [];
     if (s.length < 4) return null;
@@ -298,7 +344,7 @@ export function Dashboard() {
     const prev = s.slice(0, half).reduce((a, r) => a + r.revenue_rubles, 0);
     const last = s.slice(-half).reduce((a, r) => a + r.revenue_rubles, 0);
     if (prev === 0) return null;
-    return ((last - prev) / prev) * 100;
+    return { percent: ((last - prev) / prev) * 100, half };
   }, [daily.data]);
 
   // Конверсия: started → triallers → payers. Берём из overview/revenue.
@@ -345,8 +391,11 @@ export function Dashboard() {
             subline={
               revenueDelta != null
                 ? {
-                    text: `${revenueDelta >= 0 ? "+" : ""}${revenueDelta.toFixed(1)}% vs prev 30d`,
-                    positive: revenueDelta >= 0,
+                    text:
+                      `${revenueDelta.percent >= 0 ? "+" : ""}` +
+                      `${revenueDelta.percent.toFixed(1)}% · ` +
+                      `${revenueDelta.half} дн против предыдущих ${revenueDelta.half}`,
+                    positive: revenueDelta.percent >= 0,
                   }
                 : revenue.data
                 ? { text: `ARPU ${fmtRub(revenue.data.arpu_rubles)}`, positive: true }
@@ -426,10 +475,11 @@ export function Dashboard() {
           <SurfaceCard>
             <SurfaceHeader eyebrow="Бизнес-метрики" title="KPI" icon={<TrendingUp className="h-3.5 w-3.5 text-fg-subtle" />} />
             <dl className="mt-4 space-y-3.5">
-              <KpiRow
-                label="Approval rate"
-                value={`${fmtNum(asNum(overview.data?.business_metrics?.approval_rate_percent))}%`}
-              />
+              {/* Плитки «Approval rate» здесь больше нет: метрика делила
+                  approved на все строки payments и всегда давала 100% —
+                  неподтверждённой строки в payments по построению не
+                  бывает. См. database/analytics.py::get_business_metrics,
+                  там же разобрано, почему её нечем заменить. */}
               <KpiRow
                 label="Средний срок жизни"
                 value={`${fmtNum(asNum(overview.data?.business_metrics?.avg_subscription_lifetime_days))} дн`}
@@ -451,14 +501,16 @@ export function Dashboard() {
           </SurfaceCard>
         </section>
 
-        {/* Финансы — 6 ключевых денежных метрик */}
+        {/* Финансы — 5 ключевых денежных метрик. Шестой была
+            «Approval rate»; убрана вместе с самой метрикой (всегда 100%
+            по построению — см. database/analytics.py). */}
         <SurfaceCard>
           <SurfaceHeader
             eyebrow="Финансы"
             title="Денежные метрики"
             sub="всё время · обновляется каждую минуту"
           />
-          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
             <KpiCard
               label="Доход всего"
               value={fmtRub(revenue.data?.total_revenue_rubles)}
@@ -492,12 +544,6 @@ export function Dashboard() {
               value={fmtRub(today24Revenue.data?.revenue_rubles)}
               sub={`${fmtNum(today24Revenue.data?.payments_count)} платежей`}
               loading={today24Revenue.isLoading}
-            />
-            <KpiCard
-              label="Approval rate"
-              value={`${fmtNum(asNum(overview.data?.business_metrics?.approval_rate_percent))}%`}
-              sub="подтверждено провайдером"
-              loading={overview.isLoading}
             />
           </div>
         </SurfaceCard>

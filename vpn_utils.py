@@ -1,114 +1,50 @@
-"""
-Модуль для работы с Xray Core VPN API (VLESS + REALITY).
+"""Совместимостные заглушки на месте снятого с эксплуатации xray-API.
 
-Этот модуль является единой точкой абстракции для работы с VPN инфраструктурой.
-Все VPN операции должны выполняться через функции этого модуля.
+Единственный VPN-бэкенд — Remnawave (app.services.purchase_flow,
+app.services.remnawave_premium). Здесь остались только точки входа,
+которые ещё зовут остаточные пути (восстановление в auto_renewal,
+админский перевыпуск, очистка триалов), плюс генерация ссылки подписки.
 
-STEP 1.3 - EXTERNAL DEPENDENCIES POLICY:
-- VPN API unavailable → activation skipped, no errors raised
-- VPN API disabled (VPN_ENABLED=False) → NOT treated as error, graceful degradation
-- VPN API timeout → retried with exponential backoff (max 2 retries)
-- VPN API 401/403 → AuthError raised immediately (NOT retried)
-- VPN API 4xx → InvalidResponseError raised immediately (NOT retried)
-- VPN API 5xx/timeout/network → retried with exponential backoff
-
-STEP 3 — PART D: EXTERNAL DEPENDENCY ISOLATION
-- All VPN API calls are isolated inside try/except blocks
-- External failures are mapped to dependency_error
-- External failure does NOT break handler/worker
-- System continues degraded when VPN API unavailable
-- Retries handled by retry_async (transient errors only)
+Ходить по HTTP отсюда больше некуда, поэтому вместе с xray-веткой уехали
+её обвязка и типы ошибок — держать их значит утверждать в коде поведение,
+которого нет. Что именно удалено и почему — в комментариях ниже по файлу.
 """
 import httpx
 import logging
 import asyncio
-from datetime import datetime, timezone
-from typing import Dict, Optional, Tuple
-import weakref
+from datetime import datetime
+from typing import Dict, Optional
 import config
-from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
 
-# Store strong references to fire-and-forget tasks to prevent GC and ensure
-# "Task exception was never retrieved" warnings are suppressed.
-# Tasks auto-remove on completion via done_callback.
-_background_tasks: set = set()
-
-
-def _fire_and_forget(coro) -> None:
-    """Schedule a coroutine as a background task with proper error handling."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            task = asyncio.create_task(coro)
-            _background_tasks.add(task)
-
-            def _task_done(t):
-                _background_tasks.discard(t)
-                if not t.cancelled() and t.exception():
-                    logger.warning(f"Background VPN audit task failed: {t.exception()}")
-
-            task.add_done_callback(_task_done)
-    except Exception as e:
-        logger.warning(f"Failed to schedule background task: {e}")
-
-# Explicit timeout for all VPN API calls (connect, read, write, pool)
-VPN_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
-# Legacy float for code that expects a single number (e.g. health check)
-HTTP_TIMEOUT = 10.0
-MAX_RETRIES = 2
-RETRY_DELAY = 1.0
+# Здесь жила обвязка HTTP-вызовов к xray: _fire_and_forget с реестром
+# фоновых задач _background_tasks (аудит-логи отправлялись мимо основного
+# потока), VPN_HTTP_TIMEOUT/HTTP_TIMEOUT/MAX_RETRIES/RETRY_DELAY и импорт
+# app.utils.retry.retry_async. Ни одного вызова из репозитория не
+# осталось: сетевых запросов в модуле нет. Своя обвязка фоновых задач
+# есть у Remnawave — app/services/remnawave_service.py:_fire_and_forget.
 
 
 class VPNAPIError(Exception):
-    """Базовый класс для ошибок VPN API"""
+    """Базовый класс для ошибок VPN API.
+
+    Оставлен: его бросает safe_remove_vless_user_with_retry, и её
+    вызывающие ловят именно этот тип при откате провижининга.
+    """
     pass
 
 
-class VPNTimeoutError(VPNAPIError):
-    """Таймаут при обращении к VPN API"""
-    pass
-
-
-class AuthError(VPNAPIError):
-    """Ошибка аутентификации (401, 403)"""
-    pass
-
-
-class InvalidResponseError(VPNAPIError):
-    """Некорректный ответ от VPN API"""
-    pass
-
-
-class CriticalUUIDMismatchError(VPNAPIError):
-    """Xray API returned UUID different from what we sent"""
-    pass
-
-
-def _validate_uuid_no_prefix(uuid_val: str) -> None:
-    """Reject any UUID with environment prefix. UUID must be raw 36-char only."""
-    if not uuid_val:
-        return
-    u = uuid_val.strip()
-    if "stage-" in u or u.startswith("stage-") or "prod-" in u or u.startswith("prod-") or "test-" in u or u.startswith("test-"):
-        logger.critical(f"INVALID_UUID_PREFIX_DETECTED [uuid={repr(uuid_val)[:50]}]")
-        raise RuntimeError("UUID must not contain environment prefix (stage-, prod-, test-)")
-
-
-def _validate_api_url_security(api_url: str) -> None:
-    """Validate XRAY_API_URL: HTTPS required in PROD, no private IPs in PROD."""
-    if not api_url.startswith('https://') and config.IS_PROD:
-        raise ValueError(f"SECURITY: XRAY_API_URL must use HTTPS. Got: {api_url}")
-    if config.IS_PROD:
-        forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
-        api_url_lower = api_url.lower()
-        for pattern in forbidden_patterns:
-            if pattern in api_url_lower:
-                raise RuntimeError(
-                    f"SECURITY: XRAY_API_URL must use public HTTPS URL, "
-                    f"not private IP. Got: {api_url}"
-                )
+# Здесь были VPNTimeoutError, AuthError, InvalidResponseError и
+# CriticalUUIDMismatchError. Все четыре описывали ответы xray-API, и
+# бросать их стало некому. Опаснее всего был VPNTimeoutError: его ещё
+# ловил снятый слой app/services/vpn — читалось это как «таймауты
+# обрабатываются», хотя обработчик был недостижим.
+#
+# Тут же были _validate_uuid_no_prefix (запрет префиксов stage-/prod- в
+# UUID) и _validate_api_url_security (HTTPS и запрет приватных IP для
+# XRAY_API_URL). Обе проверяли аргументы удалённых HTTP-функций;
+# XRAY_API_URL из оборота выведен, проверять нечего.
 
 
 # Здесь была check_xray_health — GET /health на снятый с эксплуатации

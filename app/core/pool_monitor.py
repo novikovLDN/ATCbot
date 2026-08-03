@@ -12,13 +12,14 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _POOL_MONITOR_ENABLED = os.getenv("POOL_MONITOR_ENABLED", "").strip().lower() in ("true", "1", "yes")
-# Set when we log high wait (for watchdog diagnostic). Monotonic time or 0 if never.
-_last_pool_wait_spike_monotonic: float = 0.0
 
-
-def get_last_pool_wait_spike_monotonic() -> float:
-    """Return monotonic time of last pool wait spike (warning or critical), or 0 if never."""
-    return _last_pool_wait_spike_monotonic
+# Здесь жила пара «_last_pool_wait_spike_monotonic + get_last_pool_wait_spike_monotonic»:
+# модульная переменная со временем последнего всплеска ожидания пула и геттер
+# к ней «для вотчдога». Вотчдог её никогда не читал — геттер не звали нигде,
+# то есть переменная только писалась. Удалено целиком: наблюдаемость всплесков
+# даёт логирование ниже (WARNING > 1 с, CRITICAL > 5 с), а мёртвый геттер
+# выглядел готовой точкой интеграции для мониторинга, которой на деле нет.
+# Понадобится машинно-читаемый сигнал — заводить метрику, а не глобал.
 
 
 def _is_enabled() -> bool:
@@ -39,9 +40,7 @@ class _MonitoredAcquireContextManager:
         start = time.monotonic()
         self._conn = await self.pool.acquire()
         wait_s = time.monotonic() - start
-        global _last_pool_wait_spike_monotonic
         if wait_s > 5.0:
-            _last_pool_wait_spike_monotonic = time.monotonic()
             logger.critical(
                 "pool_acquire_wait_critical label=%s wait_s=%.2f",
                 self.label,
@@ -49,7 +48,6 @@ class _MonitoredAcquireContextManager:
                 extra={"pool_monitor": True, "wait_s": wait_s, "label": self.label},
             )
         elif wait_s > 1.0:
-            _last_pool_wait_spike_monotonic = time.monotonic()
             logger.warning(
                 "pool_acquire_wait_high label=%s wait_s=%.2f",
                 self.label,

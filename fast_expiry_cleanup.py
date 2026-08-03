@@ -13,7 +13,6 @@ Fast Expiry Cleanup - автоматическое отключение истё
 import asyncio
 import logging
 import os
-import random
 import time
 from datetime import datetime, timezone
 import asyncpg
@@ -26,6 +25,7 @@ from app.utils.logging_helpers import (
 )
 from app.core.cooperative_yield import cooperative_yield
 from app.core.pool_monitor import acquire_connection
+from app.core.worker_startup import startup_jitter
 from app.utils.telegram_safe import safe_send_message
 from app.services.language_service import resolve_user_language
 from app import i18n
@@ -69,8 +69,16 @@ async def fast_expiry_cleanup_task(bot=None):
     Идемпотентность:
     - remove-user идемпотентен (отсутствие UUID на сервере не считается ошибкой)
     - Повторное удаление одного UUID безопасно
-    - Защита от race condition через processing_uuids множество
-    
+    - Защиты от гонки между репликами здесь НЕТ. Раньше в этом списке
+      значилось «защита через processing_uuids множество» — множество жило в
+      памяти процесса, uuid добавлялся и удалялся в пределах одного витка
+      цикла, так что проверка не могла сработать ни разу, а между репликами
+      она не защищала в принципе. Строчка в докстринге была опаснее самого
+      кода: на несуществующую защиту можно было опереться при доработке.
+      Настоящая защита — advisory-лок или SELECT ... FOR UPDATE SKIP LOCKED,
+      как в auto_renewal; здесь пока обходимся тем, что операция идемпотентна
+      и UPDATE идёт с проверкой uuid (сравните cleanup: UPDATE_FAILED).
+
     Не блокирует event loop:
     - Использует async/await для всех операций
     - Сетевые запросы выполняются асинхронно
@@ -81,10 +89,9 @@ async def fast_expiry_cleanup_task(bot=None):
         f"range: 60-300 seconds, using UTC time)"
     )
     
-    # Prevent worker burst at startup
-    jitter_s = random.uniform(5, 60)
-    await asyncio.sleep(jitter_s)
-    logger.debug("fast_expiry_cleanup: startup jitter done (%.1fs)", jitter_s)
+    # Разброс старта — общее правило для всех воркеров,
+    # см. app/core/worker_startup.
+    await startup_jitter("fast_expiry_cleanup")
     
     iteration_number = 0
     
@@ -96,9 +103,12 @@ async def fast_expiry_cleanup_task(bot=None):
         # Причина пропуска итерации — уходит в метрики вместе с исходом.
         iteration_reason = None
         
-        # Множество для отслеживания UUID, которые мы уже обрабатываем (защита от race condition)
-        # MEMORY_LEAK_FIX: Clear set at start of each iteration to prevent unbounded growth
-        processing_uuids = set()
+        # Здесь заводилось множество processing_uuids «для защиты от race
+        # condition». Удалено: uuid добавлялся в него и тут же удалялся в
+        # finally того же прохода цикла, обработка последовательная, так что
+        # проверка `if uuid in processing_uuids` не могла сработать ни разу.
+        # Между репликами оно тоже не защищало — живёт в памяти процесса.
+        # См. докстринг выше про то, чем защищаться на самом деле.
         iteration_start_time = time.time()
         iteration_number += 1
         
@@ -226,15 +236,9 @@ async def fast_expiry_cleanup_task(bot=None):
                                     )
                                     continue
 
-                                if uuid in processing_uuids:
-                                    uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
-                                    logger.debug(
-                                        f"cleanup: SKIP_ALREADY_PROCESSING [user={telegram_id}, uuid={uuid_preview}] - "
-                                        "UUID already being processed"
-                                    )
-                                    continue
-
-                                processing_uuids.add(uuid)
+                                # Здесь была проверка `if uuid in processing_uuids`
+                                # с веткой SKIP_ALREADY_PROCESSING — недостижимая
+                                # (см. комментарий в начале витка цикла).
                                 uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
 
                                 try:
@@ -457,8 +461,10 @@ async def fast_expiry_cleanup_task(bot=None):
                                     )
                                     logger.exception(f"cleanup: EXCEPTION_TRACEBACK [user={telegram_id}, uuid={uuid_preview}]")
 
-                                finally:
-                                    processing_uuids.discard(uuid)
+                                # Здесь был finally с processing_uuids.discard(uuid) —
+                                # вторая половина мнимой защиты от гонки, из-за
+                                # которой она и не работала: uuid снимался в том же
+                                # витке, в котором ставился.
 
                             if rows:
                                 last_seen_id = rows[-1]["id"]
@@ -519,6 +525,5 @@ async def fast_expiry_cleanup_task(bot=None):
         
         # Sleep after iteration completes (outside try/finally)
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
-
 
 

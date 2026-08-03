@@ -33,6 +33,19 @@ _ALERT_COOLDOWNS = {
 # Last alert timestamp per category
 _last_alert_at: dict[str, float] = {}
 
+# Сколько алертов категории проглотил кулдаун с момента последней отправки.
+#
+# Зачем считать. Кулдаун защищает от шторма, но раньше он же прятал его
+# масштаб: при аварии первый алерт уходил, а следующие сто просто возвращали
+# False. Админ видел одну строчку и думал, что сломался один платёж. Счётчик
+# едет в следующее сообщение — «и ещё N таких же» — и авария сразу отличима
+# от единичного сбоя.
+_suppressed_since_last: dict[str, int] = {}
+
+# Пауза перед повторной попыткой отправки. Вынесена в константу, чтобы тесты
+# не ждали две секунды на каждый прогон.
+_RETRY_DELAY_SECONDS = 2.0
+
 
 async def send_alert(
     bot,
@@ -51,6 +64,11 @@ async def send_alert(
 
     Returns:
         True if alert was sent, False if rate-limited or failed
+
+    Почему функция не имеет права упасть. Это последний рубеж: её зовут из
+    except-веток обработки платежей и из воркеров. Исключение отсюда гасит
+    вызывающий код или, хуже, подменяет собой исходную ошибку в логе. Поэтому
+    здесь всё завёрнуто, а наружу идёт только bool.
     """
     now = time.monotonic()
     cooldown = _ALERT_COOLDOWNS.get(category, 300)
@@ -58,38 +76,76 @@ async def send_alert(
     if not force:
         last = _last_alert_at.get(category, 0.0)
         if now - last < cooldown:
+            suppressed = _suppressed_since_last.get(category, 0) + 1
+            _suppressed_since_last[category] = suppressed
+            logger.warning(
+                "ADMIN_ALERT_SUPPRESSED category=%s suppressed_since_last=%d cooldown=%ds",
+                category, suppressed, cooldown,
+            )
             return False
 
-    try:
-        header = _CATEGORY_HEADERS.get(category, f"[{category.upper()}]")
-        full_message = f"{header}\n{message}"
+    if bot is None:
+        # Отдельная ветка, потому что без неё мы бы ушли в общий except,
+        # проспали две секунды и получили тот же AttributeError на повторе.
+        logger.error("ADMIN_ALERT_NO_BOT category=%s — алерт потерян", category)
+        return False
 
-        # Truncate to Telegram message limit
-        if len(full_message) > 4000:
-            full_message = full_message[:3997] + "..."
-
-        await asyncio.wait_for(
-            bot.send_message(config.ADMIN_TELEGRAM_ID, full_message),
-            timeout=10.0,
+    # Текст собираем ДО try.
+    #
+    # Раньше full_message создавался внутри try. Если падало само
+    # формирование (например, category оказывалась не строкой и .upper()
+    # бросал AttributeError), то в ветке повтора имя full_message не
+    # существовало — второй вызов падал с NameError, и в логе оставалось
+    # ADMIN_ALERT_RETRY_FAILED с причиной, не имеющей отношения к делу.
+    # Настоящая ошибка при этом терялась.
+    header = _CATEGORY_HEADERS.get(category, f"[{category}]".upper())
+    suppressed = _suppressed_since_last.get(category, 0)
+    body = message if isinstance(message, str) else str(message)
+    if suppressed:
+        body += (
+            f"\n\n(и ещё {suppressed} таких же алертов за последние "
+            f"{cooldown} с — показан только этот)"
         )
-        _last_alert_at[category] = now
-        logger.info(f"ADMIN_ALERT_SENT category={category}")
-        return True
-    except Exception as e:
-        logger.error(f"ADMIN_ALERT_FAILED category={category} error={e}")
-        # Single retry after 2s for transient Telegram errors
+    full_message = f"{header}\n{body}"
+
+    # Truncate to Telegram message limit
+    if len(full_message) > 4000:
+        full_message = full_message[:3997] + "..."
+
+    # Две попытки одним циклом: тело отправки общее, значит расходиться им
+    # некуда. Прошлая версия дублировала вызов руками — так и разъехалось.
+    last_error: Exception | None = None
+    for attempt in (1, 2):
         try:
-            await asyncio.sleep(2)
             await asyncio.wait_for(
                 bot.send_message(config.ADMIN_TELEGRAM_ID, full_message),
                 timeout=10.0,
             )
-            _last_alert_at[category] = now
-            logger.info(f"ADMIN_ALERT_SENT_RETRY category={category}")
+            # Счётчик обнуляем только после подтверждённой доставки: если
+            # сбросить раньше, при неудаче мы потеряем масштаб аварии.
+            _suppressed_since_last.pop(category, None)
+            _last_alert_at[category] = time.monotonic()
+            if attempt == 1:
+                logger.info(f"ADMIN_ALERT_SENT category={category}")
+            else:
+                logger.info(f"ADMIN_ALERT_SENT_RETRY category={category}")
             return True
-        except Exception as retry_err:
-            logger.error(f"ADMIN_ALERT_RETRY_FAILED category={category} error={retry_err}")
-            return False
+        except Exception as e:
+            last_error = e
+            if attempt == 1:
+                logger.error(f"ADMIN_ALERT_FAILED category={category} error={e}")
+                try:
+                    await asyncio.sleep(_RETRY_DELAY_SECONDS)
+                except asyncio.CancelledError:
+                    # Воркер гасят — не мешаем остановке, но и не притворяемся,
+                    # что алерт доставлен.
+                    raise
+
+    logger.error(f"ADMIN_ALERT_RETRY_FAILED category={category} error={last_error}")
+    # Недоставленный алерт тоже подавленный: он должен попасть в счётчик
+    # следующего, иначе авария на N событий отразится числом N-1.
+    _suppressed_since_last[category] = suppressed + 1
+    return False
 
 
 _CATEGORY_HEADERS = {

@@ -861,17 +861,17 @@ async def init_db() -> bool:
             except Exception:
                 pass
         
-            # Таблица vpn_keys
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS vpn_keys (
-                    id SERIAL PRIMARY KEY,
-                    vpn_key TEXT UNIQUE NOT NULL,
-                    is_used BOOLEAN DEFAULT FALSE,
-                    assigned_to BIGINT,
-                    assigned_at TIMESTAMP
-                )
-            """)
-        
+            # Здесь создавалась таблица vpn_keys (vpn_key, is_used,
+            # assigned_to, assigned_at) — реликт пула заранее нарезанных
+            # ключей. Ни одного SELECT/INSERT/UPDATE/DELETE по ней в коде
+            # нет: ключ подписки живёт в колонке subscriptions.vpn_key, а
+            # выдаёт его Remnawave. Стартовый DDL брал на пустую таблицу
+            # ACCESS EXCLUSIVE и создавал впечатление, что пул существует.
+            #
+            # Саму таблицу этим не удалить: она есть в migrations/001_init.sql
+            # и в проде уже создана, а DROP TABLE — отдельная миграция схемы
+            # и решение владельца. Здесь снят только повторный CREATE.
+
             # Таблица audit_log
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS audit_log (

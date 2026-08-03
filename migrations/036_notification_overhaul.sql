@@ -35,6 +35,23 @@ CREATE TABLE IF NOT EXISTS user_cashback_multipliers (
 CREATE INDEX IF NOT EXISTS idx_user_cashback_mult_tgid ON user_cashback_multipliers(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_user_cashback_mult_active ON user_cashback_multipliers(ends_at);
 
+-- ВНИМАНИЕ: две таблицы ниже (admin_notification_templates и
+-- admin_notification_log) НИКЕМ НЕ ИСПОЛЬЗУЮТСЯ. Проверено 2026-08 поиском по
+-- всему дереву: их имена не встречаются ни в .py, ни в других .sql, ни в
+-- дашборде (.ts/.tsx). Ни одной вставки, ни одного чтения — таблицы всегда
+-- пустые. Не ищите потребителей, их нет.
+--
+-- Реальный лог отправленных уведомлений ведётся в automated_notification_sends,
+-- шаблоны админских рассылок живут в коде (app/handlers/admin/notifications.py).
+-- Соседние таблицы этой же миграции (cashback_promotions,
+-- user_cashback_multipliers) — живые, их не трогать.
+--
+-- Удалять таблицы отдельной миграцией DROP TABLE — решение владельца: это
+-- изменение схемы на проде, и если шаблоны админских уведомлений всё же
+-- планируются, дешевле оставить как есть. Правки самой миграции 036 бесполезны:
+-- она давно применена, повторно не выполняется (учёт по version в
+-- schema_migrations).
+
 -- Admin notification templates storage
 CREATE TABLE IF NOT EXISTS admin_notification_templates (
     id SERIAL PRIMARY KEY,

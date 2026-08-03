@@ -20,17 +20,29 @@
   • перевод мёртвого текста на семь языков — это работа, которая
     никогда не будет показана человеку.
 
-Что осталось жить и требует отдельного решения владельца: колонка
-subscriptions.migration_notice_sent_at (миграция 049) и три функции
-слоя БД — count_migration_broadcast_candidates,
-list_migration_broadcast_candidates, mark_migration_notice_sent. Они
-за пределами этой правки, но теперь их тоже никто не вызывает.
+Следом убраны три осиротевшие функции слоя БД —
+count_migration_broadcast_candidates, list_migration_broadcast_candidates,
+mark_migration_notice_sent (database/traffic.py) и их реэкспорт из
+database/__init__.py. Без рассылки их никто не звал, а выглядели они
+рабочей частью API базы.
+
+Что осталось и требует отдельного решения владельца: колонка
+subscriptions.migration_notice_sent_at (миграция 049). Её удаление —
+миграция схемы, а не правка кода.
 """
 from pathlib import Path
+
+import database
 
 REMOVED = [
     "app/services/migration_broadcast.py",
     "tests/services/test_migration_broadcast.py",
+]
+
+REMOVED_DB_FUNCS = [
+    "count_migration_broadcast_candidates",
+    "list_migration_broadcast_candidates",
+    "mark_migration_notice_sent",
 ]
 
 
@@ -40,6 +52,15 @@ def test_migration_broadcast_module_stays_removed():
             f"{path} вернулся: это одноразовая русскоязычная рассылка "
             f"с истёкшей датой отключения ссылок"
         )
+
+
+def test_db_helpers_stay_removed():
+    """Функции слоя БД ушли вместе с рассылкой — и из traffic.py, и из фасада."""
+    import database.traffic as traffic
+
+    for name in REMOVED_DB_FUNCS:
+        assert not hasattr(traffic, name), f"database.traffic.{name} вернулась без потребителя"
+        assert not hasattr(database, name), f"database.{name} снова реэкспортируется"
 
 
 def test_nothing_imports_migration_broadcast():

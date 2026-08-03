@@ -475,15 +475,17 @@ def format_referral_notification_text(
         )
 
     if referrals_needed > 0:
-        if language == "ru":
-            if referrals_needed % 10 == 1 and referrals_needed % 100 != 11:
-                friend_word = i18n_get_text(language, "referral.friend_singular")
-            elif 2 <= referrals_needed % 10 <= 4 and (referrals_needed % 100 < 10 or referrals_needed % 100 >= 20):
-                friend_word = i18n_get_text(language, "referral.friend_dual")
-            else:
-                friend_word = i18n_get_text(language, "referral.friend_plural")
-        else:
-            friend_word = i18n_get_text(language, "referral.friend_plural")
+        # Здесь была ветка `if language == "ru"` со склонением слова «друг»
+        # (referral.friend_singular / friend_dual). Она недостижима: русские
+        # пользователи уходят в return выше, через pick_purchase_push.
+        #
+        # Убрано именно поэтому: правка склонений в этом блоке не давала
+        # никакого эффекта на экране, и найти причину можно было только
+        # дочитав функцию до конца. Ключи referral.friend_singular и
+        # referral.friend_dual после этого не запрашивает никто.
+        #
+        # Для остальных языков множественная форма одна — friend_plural.
+        friend_word = i18n_get_text(language, "referral.friend_plural")
 
         progress_text = i18n_get_text(
             language,

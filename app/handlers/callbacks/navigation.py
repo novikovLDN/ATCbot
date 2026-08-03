@@ -5,6 +5,7 @@ import asyncio
 import io
 import logging
 import os
+from html import escape as html_escape
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
@@ -189,7 +190,14 @@ async def callback_biz_copy_link(callback: CallbackQuery):
     sub = await database.get_subscription(telegram_id)
     vpn_key = sub.get("vpn_key", "") if sub else ""
     if vpn_key:
-        await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+        # Экранируем ссылку перед подстановкой в <code>: с parse_mode="HTML"
+        # один символ & или < в query-части ломает разбор всего сообщения —
+        # Telegram отклоняет отправку, и человек вместо ключа не получает
+        # ничего. То же правило уже применяется в subscription.py,
+        # bypass_gift_setup.py, broadcast.py и broadcast_sender.py.
+        await callback.message.answer(
+            f"<code>{html_escape(vpn_key, quote=False)}</code>", parse_mode="HTML",
+        )
         await callback.answer("Скопируйте ссылку выше")
     else:
         await callback.answer("Ключ не найден", show_alert=True)
@@ -387,9 +395,18 @@ async def callback_paid_discount_15(callback: CallbackQuery, state: FSMContext):
 # Оставлена вторая, кнопка в мини-приложение переехала в неё.
 
 
-@router.callback_query(F.data.in_({"copy_key_menu", "copy_key", "copy_key_plus", "copy_vpn_key"}))
+@router.callback_query(F.data == "copy_vpn_key")
 async def callback_connect_instead_of_copy(callback: CallbackQuery):
-    """Ключи больше не отправляются в боте; показываем кнопку «Подключиться» (Mini App)."""
+    """Ключи больше не отправляются в боте; показываем кнопку «Подключиться» (Mini App).
+
+    Фильтр был in_({copy_key_menu, copy_key, copy_key_plus, copy_vpn_key}).
+    Живой из четырёх — только copy_vpn_key: его выставляет
+    get_reissue_notification_keyboard (уведомление о перевыпуске ключа).
+    copy_key оставался от get_profile_keyboard_old, которую удалили вместе
+    с выдачей ключей в боте; copy_key_menu и copy_key_plus не выставляла ни
+    одна кнопка. Лишние значения в фильтре читаются как «эти кнопки где-то
+    есть» и мешают искать настоящие мёртвые кнопки.
+    """
     try:
         await callback.answer()
     except Exception:

@@ -3,7 +3,6 @@
 """
 import asyncio
 import logging
-import random
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Tuple
@@ -22,6 +21,7 @@ from app.utils.logging_helpers import (
     classify_error,
 )
 from app.core.structured_logger import log_event
+from app.core.worker_startup import startup_jitter
 
 logger = logging.getLogger(__name__)
 
@@ -353,7 +353,6 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
             )
             return
     # conn released — Telegram I/O below does NOT hold a DB connection
-
 
 
 async def process_trial_notifications(bot: Bot):
@@ -730,10 +729,9 @@ async def run_trial_scheduler(bot: Bot):
         _TRIAL_SCHEDULER_STARTED = True
     logger.info("Trial notifications scheduler started")
     
-    # Prevent worker burst at startup
-    jitter_s = random.uniform(5, 60)
-    await asyncio.sleep(jitter_s)
-    logger.debug("trial_notifications: startup jitter done (%.1fs)", jitter_s)
+    # Разброс старта — общее правило для всех воркеров,
+    # см. app/core/worker_startup.
+    await startup_jitter("trial_notifications")
     
     iteration_number = 0
     
@@ -749,8 +747,7 @@ async def run_trial_scheduler(bot: Bot):
         
         iteration_outcome = "success"
         iteration_error_type = None
-        should_exit_loop = False
-        
+
         try:
             # Feature flag check
             from app.core.feature_flags import get_feature_flags
@@ -797,9 +794,14 @@ async def run_trial_scheduler(bot: Bot):
                 iteration_error_type = "timeout"
             
         except asyncio.CancelledError:
+            # Отмена перебрасывается, а не гасится: см. тот же контракт в
+            # activation_worker/auto_renewal/reminders/fast_expiry_cleanup.
+            # Раньше здесь был break — задача завершалась «успешно», и в
+            # main.py остановка по shutdown не отличалась от самопроизвольного
+            # выхода воркера.
             logger.info("Trial notifications task cancelled")
             iteration_outcome = "cancelled"
-            should_exit_loop = True
+            raise
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop
             logger.warning(f"trial_notifications: Database temporarily unavailable in scheduler loop: {type(e).__name__}: {str(e)[:100]}")
@@ -825,12 +827,11 @@ async def run_trial_scheduler(bot: Bot):
                 error_type=iteration_error_type,
                 duration_ms=duration_ms
             )
+            # На пути отмены здесь не должно быть await: пока finally спит,
+            # задача не завершается и shutdown ждёт её впустую.
             if iteration_outcome not in ("success", "cancelled", "skipped"):
                 await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-        
-        if should_exit_loop:
-            break
-        
+
         # Sleep after iteration completes (outside try/finally)
         # Ждём 5 минут до следующей проверки
         await asyncio.sleep(300)

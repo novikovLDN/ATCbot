@@ -89,7 +89,13 @@ def test_payments_still_used_where_it_belongs():
     assert "telegram_payment_charge_id" in src, "проверка идемпотентности не должна была уехать"
 
 
-def test_approval_rate_still_reads_payments():
-    """Доля подтверждённых платежей — метрика статусов, ей нужна payments."""
+def test_business_metrics_no_longer_counts_payment_statuses():
+    """Раньше здесь жила «доля подтверждённых платежей» по payments.
+
+    Метрику убрали: числитель и знаменатель совпадали по построению —
+    строка в payments не может остаться неподтверждённой. Разбор — в
+    tests/services/test_approval_rate_removed.py.
+    """
     src = _sql_of(analytics_mod, "get_business_metrics")
-    assert "FROM payments" in src
+    body = src.split('"""', 2)[-1]  # докстринг объясняет дефект, его не смотрим
+    assert "FROM payments" not in body

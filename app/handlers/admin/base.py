@@ -957,10 +957,17 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
         await callback.answer(f"Ошибка выполнения теста: {e}", show_alert=True)
 
 
-@admin_base_router.callback_query(F.data == "noop")
-async def noop_handler(callback: CallbackQuery):
-    """Обработчик disabled кнопки во время перевыпуска ключа"""
-    await callback.answer("Операция уже выполняется...", show_alert=False)
+# Здесь был второй обработчик F.data == "noop" (тост «Операция уже
+# выполняется...»). Он был недостижим: в app/handlers/__init__.py
+# callbacks_router подключается раньше admin_router, а внутри
+# callbacks/__init__.py первым идёт navigation_router — его
+# callback_noop и забирал апдейт, включая нажатия админских
+# декоративных кнопок вроде «⏳ Перевыпуск...».
+#
+# Держать копию было опасно ровно тем, что она выглядела рабочей: любое
+# добавленное сюда поведение (логирование, другой текст) молча не
+# сработало бы. Единственный noop живёт в
+# app/handlers/callbacks/navigation.py.
 
 
 # ── QoDev (site-linked users) ────────────────────────────────────

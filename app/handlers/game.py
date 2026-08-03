@@ -71,6 +71,32 @@ FARM_PLOT_PRICE_KOPECKS = 6000  # 60 RUB
 FARM_MAX_PLOTS = 9
 
 
+def farm_half_reward_kopecks(reward_kopecks: int) -> int:
+    """Половина награды растения в копейках — ровно та сумма, которая уходит
+    на баланс при раннем сборе и при оффлайн-автосборе шторма.
+
+    ЗАЧЕМ ОТДЕЛЬНАЯ ФУНКЦИЯ. Витрина и начисление считали половину по-разному:
+    кнопка делила награду на 200 (то есть сразу в рубли, с отбрасыванием
+    копеек), начисление — на 2 (в копейках). Для наград с нечётным числом
+    сотен копеек это расходилось: дуб 5300 → на кнопке «+26 ₽», на баланс
+    26,50 ₽. Сейчас расхождение в пользу пользователя и жалоб не вызывает, но
+    в обратную сторону это уже обращения в поддержку и разъезд с отчётностью.
+    Считать половину можно только здесь, а показывать — только через
+    format_kopecks_rub, тогда витрина и касса не разъедутся.
+    """
+    return int(reward_kopecks) // 2
+
+
+def format_kopecks_rub(kopecks: int) -> str:
+    """Копейки → строка рублей с двумя знаками: 2650 → «26.50», 400 → «4.00».
+
+    Формат тот же, что во всей остальной денежной части бота ({amount:.2f} ₽
+    в словарях i18n), поэтому ферма перестаёт быть единственным местом, где
+    сумма показывается «примерно».
+    """
+    return f"{int(kopecks) / 100:.2f}"
+
+
 def get_games_menu_keyboard(language: str) -> InlineKeyboardMarkup:
     """Games menu keyboard"""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -108,10 +134,17 @@ def get_games_back_keyboard(language: str) -> InlineKeyboardMarkup:
 
 
 @router.callback_query(F.data == "games_menu")
-async def callback_games_menu(callback: CallbackQuery):
+async def callback_games_menu(callback: CallbackQuery, state: FSMContext):
     """Games menu screen — subscription required (same check as bowling/dice/farm)."""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
+
+    # Выход из бомбера кнопкой «К играм» раньше оставлял BomberState.playing
+    # висеть навсегда: партия закончилась, а FSM считает, что пользователь всё
+    # ещё на поле. Чистим только это состояние — если человек стоит в другом
+    # сценарии (ввод суммы, промокод) и заглянул в игры, его ввод рвать нельзя.
+    if await state.get_state() == BomberState.playing.state:
+        await state.clear()
 
     telegram_id = callback.from_user.id
     subscription = await database.get_subscription(telegram_id)
@@ -523,15 +556,42 @@ def create_bomber_grid_keyboard(mines: Set[int], player_bombs: Set[int], languag
 
 @router.callback_query(F.data == "game_bomber")
 async def callback_game_bomber(callback: CallbackQuery, state: FSMContext):
-    """Start Bomber game - initialize grid with 3 random mines"""
+    """Start Bomber game - initialize grid with 3 random mines.
+
+    Подписка проверяется до старта партии — так же, как в боулинге и кубиках.
+    Бомбер ничего не начисляет и не списывает, но открывается той же
+    клавиатурой, а старое сообщение с кнопками живёт в чате вечно: без
+    проверки истёкший подписчик продолжает пользоваться платной механикой в
+    обход пейволла меню игр.
+    """
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    
-    await callback.answer()
-    
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    
+
+    try:
+        subscription = await database.get_subscription(telegram_id)
+    except Exception as e:
+        # Сбой базы не должен превращаться в отказ плательщику: партия в
+        # бомбере ничего не стоит и ничего не приносит, поэтому пускаем
+        # дальше — так же, как это делает guard фермы.
+        logger.warning("GAME_BOMBER [user=%s] subscription_check_failed=%s", telegram_id, e)
+        subscription = True
+
+    if not subscription:
+        # Показываем алерт ПЕРВЫМ ответом на callback: Telegram учитывает
+        # только один answer на запрос, после пустого answer() алерт до
+        # пользователя уже не дойдёт.
+        await callback.answer(
+            i18n_get_text(language, "games.menu_paywall"),
+            show_alert=True,
+        )
+        logger.info("GAME_BOMBER [user=%s] no_subscription paywall", telegram_id)
+        return
+
+    await callback.answer()
+
     # Initialize game: 3 random mines on 5x5 grid (25 cells, indices 0-24)
     mines = set(random.sample(range(25), 3))
     player_bombs: Set[int] = set()

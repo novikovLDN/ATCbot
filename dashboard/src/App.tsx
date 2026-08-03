@@ -50,27 +50,32 @@ export default function App() {
 
   const [stage, setStage] = useState<Stage>({ kind: "loading" });
 
-  const refresh = useCallback(async () => {
+  // Возвращает true, если сервер подтвердил живую сессию. Вызывающим это
+  // нужно, чтобы не выбрасывать bootstrap-токен раньше времени — см.
+  // onDone у SetupPassword ниже.
+  const refresh = useCallback(async (): Promise<boolean> => {
     try {
       const status = await endpoints.authStatus();
       if (status.has_session) {
         setStage({ kind: "ready" });
-        return;
+        return true;
       }
       if (!status.has_password) {
         // Bootstrap setup needs a magic-link JWT
         const token = auth.get();
         if (!token) {
           setStage({ kind: "login" }); // no token, no setup — bot must issue link
-          return;
+          return false;
         }
         setStage({ kind: "setup", bootstrapToken: token });
-        return;
+        return false;
       }
       // Password exists; bearer JWT (if any) is no longer auto-login.
       setStage({ kind: "login" });
+      return false;
     } catch {
       setStage({ kind: "login" });
+      return false;
     }
   }, []);
 
@@ -86,9 +91,24 @@ export default function App() {
         ) : stage.kind === "setup" ? (
           <SetupPassword
             bootstrapToken={stage.bootstrapToken}
-            onDone={() => {
-              auth.clear(); // bootstrap token no longer needed
-              refresh();
+            onDone={async () => {
+              // Токен из magic-ссылки выбрасываем ТОЛЬКО после того, как
+              // /auth/status подтвердил сессию.
+              //
+              // Setup одноразовый, и это осознанно: ссылка живёт в
+              // переписке с ботом вечно, второй setup по ней = смена
+              // пароля без знания старого. Обратная сторона — цена
+              // ошибки. Если set_credentials прошёл, а кука не встала
+              // (оборвалась сеть на ответе, Safari выкинул её в
+              // standalone-контексте), то очищенный токен означает: сессии
+              // нет, второй setup даёт 409, и войти нечем — только сброс
+              // пароля через бота, который заодно сносит все passkey.
+              //
+              // Пока сессии нет, токен остаётся в localStorage: он ещё
+              // работает как Bearer для API (app/api/dashboard/deps.py) и
+              // как ?token= для WebSocket.
+              const ok = await refresh();
+              if (ok) auth.clear();
             }}
           />
         ) : stage.kind === "login" ? (

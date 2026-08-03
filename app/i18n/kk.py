@@ -890,4 +890,33 @@ LANG = {
     'farm.plant_oak': 'Oak',
     'games.menu_paywall': '🎮 The game club is for subscribers only!\nGet a subscription to unlock all games 🎯',
     'games.race_blocked': 'The game is already running, please wait',
+
+    # ── Telegram Stars shop ─────────────────────────────────────────────
+    # ВРЕМЕННО: значения на английском. Настоящего перевода на этот язык
+    # нет — выдуманный машинный перевод в платёжном экране опаснее
+    # честного английского: ошибка в сумме или в слове «получатель» стоит
+    # денег. Заменить, когда появится живой переводчик.
+    'stars.choose_pack': "⭐ <b>Buy Telegram Stars</b>\n\nChoose how many stars you need:",
+    'stars.pack_button': "{stars}⭐ | {price}₽",
+    'stars.choose_recipient': "⭐ <b>{stars} Telegram Stars — {price} ₽</b>\n\nChoose who gets the stars:",
+    'stars.recipient_self': "👤 For myself",
+    'stars.recipient_gift': "🎁 As a gift",
+    'stars.username_hint_self': "Enter your Telegram username:",
+    'stars.username_hint_gift': "Enter your friend's Telegram username:",
+    'stars.enter_username': "⭐ <b>Buy {stars} Telegram Stars — {price} ₽</b>\n\n{hint}\n\n⚠️ It must start with <b>@</b>\nExample: <code>@username</code>",
+    'stars.too_many_attempts': "❌ Too many invalid attempts. Please try again later.",
+    'stars.confirm': "⭐ <b>Buy Telegram Stars</b>\n\n📦 Amount: <b>{stars}⭐</b>\n👤 Recipient: <b>{username}</b>\n💰 Total: <b>{price} ₽</b>\n\nChoose a payment method:",
+    'stars.pay_card': "💳 Bank card",
+    'stars.pay_lava': "💳 Card (Lava)",
+    'stars.pay_sbp': "📱 SBP ({price} ₽)",
+    'stars.balance_disabled': "Paying from balance is not available for Telegram Stars. Please choose card or SBP.",
+    'stars.invoice_title': "Telegram Stars",
+    'stars.invoice_description': "Telegram Stars — {stars}⭐ for {username}",
+    'stars.invoice_label': "{stars} Telegram Stars",
+    'stars.invoice_create_failed': "❌ Could not create the payment.",
+    'stars.invoice_create_failed_sbp': "❌ Could not create the SBP payment.",
+    'stars.pay_button': "💳 Pay",
+    'stars.pay_button_sbp': "📱 Pay via SBP",
+    'stars.success': "✅ <b>Payment received!</b>\n\n⭐ Item: Telegram Stars\n📦 Amount: {stars}⭐\n👤 Recipient: {username}\n💳 Paid: {price} ₽\n\n⏳ The stars arrive within <b>5–15 minutes</b>.\n\nIf they do not, write to us:",
+    'stars.support_button': "💬 Support",
 }

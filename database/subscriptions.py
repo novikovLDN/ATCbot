@@ -133,6 +133,20 @@ from database.trials_queries import (  # noqa: F401,E402
 )
 
 # Напоминания об истечении вынесены в database/reminders_queries.py.
+#
+# ОСТОРОЖНО с первыми двумя именами — это legacy, их не вызывает никто:
+#   • mark_reminder_sent(telegram_id) выставляет старый флаг
+#     subscriptions.reminder_sent, который планировщик напоминаний не читает.
+#     Живая отметка — app/services/notifications/service.py:mark_reminder_sent
+#     (telegram_id, reminder_type, conn), её зовёт reminders.py; имена
+#     совпадают, сигнатуры разные, перепутать легко и молча.
+#   • get_subscriptions_needing_reminder — выборка по тому же старому флагу.
+#     Живая выборка — get_subscriptions_for_reminders (окна 7д/3д/1д/3ч
+#     + админские, флаги reminder_*_sent).
+# Позвать legacy-пару вместо живой = повторная отправка напоминания
+# пользователю либо, наоборот, молчание. Колонка reminder_sent остаётся в
+# схеме и сбрасывается ниже при каждой выдаче доступа — снос колонки это
+# миграция схемы, решение владельца, а не правка кода.
 from database.reminders_queries import (  # noqa: F401,E402
     get_subscriptions_needing_reminder,
     mark_reminder_sent,

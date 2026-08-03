@@ -18,6 +18,13 @@
 
 • app/core/i18n/ — пакет ломался на импорте (тянул несуществующий .manager)
   и никем не использовался. Рабочая локализация живёт в app/i18n.
+
+• app/utils/message_guard.py (90 строк) — третий, никем не вызываемый
+  способ сменить экран поверх фото-сообщения. Работающих способов два:
+  app/handlers/common/utils.py:safe_edit_text (удаляет фото и шлёт текст)
+  и app/handlers/common/screens.py:_send_screen_photo. Пока файл лежал
+  рядом, разработчик мог взять из трёх вариантов мёртвый и получить
+  экран, который «почему-то не открывается».
 """
 from pathlib import Path
 
@@ -29,6 +36,7 @@ REMOVED = [
     "app/utils/audit.py",
     "app/core/i18n/__init__.py",
     "app/core/i18n/types.py",
+    "app/utils/message_guard.py",
 ]
 
 

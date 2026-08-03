@@ -2,7 +2,6 @@
 import asyncio
 import logging
 import os
-import random
 import time
 from datetime import datetime, timedelta, timezone
 from aiogram import Bot
@@ -22,6 +21,7 @@ from app.utils.logging_helpers import (
 )
 from app.core.cooperative_yield import cooperative_yield
 from app.core.pool_monitor import acquire_connection
+from app.core.worker_startup import startup_jitter
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,15 @@ if RENEWAL_WINDOW_HOURS < 1:
 RENEWAL_WINDOW = timedelta(hours=RENEWAL_WINDOW_HOURS)
 
 # STEP 3 — PART B: WORKER LOOP SAFETY
-# Minimum safe sleep on failure to prevent tight retry storms
-MINIMUM_SAFE_SLEEP_ON_FAILURE = 300  # seconds (half of AUTO_RENEWAL_INTERVAL_SECONDS minimum)
+#
+# НИЖНЯЯ ГРАНИЦА паузы после сбойной итерации — защита от шторма повторов,
+# когда база или панель лежат и каждая попытка падает мгновенно.
+#
+# Важно: это пол, а не добавка. Комментарий «half of AUTO_RENEWAL_INTERVAL_SECONDS
+# minimum» вводил в заблуждение — 300 это и есть сам минимум интервала, а
+# сложение с ним давало 600 с реальной паузы вместо заявленных 300.
+# Применяется через max(), см. конец auto_renewal_task.
+MINIMUM_SAFE_SLEEP_ON_FAILURE = 300  # seconds
 
 
 class _RollbackUser(Exception):
@@ -82,7 +89,7 @@ async def process_auto_renewals(bot: Bot):
     renewal_threshold = now + RENEWAL_WINDOW
 
     query_with_reachable = """
-        SELECT s.*, u.language, u.balance
+        SELECT s.*, u.balance
         FROM subscriptions s
         JOIN users u ON s.telegram_id = u.telegram_id
         WHERE s.status = 'active'
@@ -96,7 +103,7 @@ async def process_auto_renewals(bot: Bot):
         LIMIT $3
         FOR UPDATE SKIP LOCKED"""
     fallback_query = """
-        SELECT s.*, u.language, u.balance
+        SELECT s.*, u.balance
         FROM subscriptions s
         JOIN users u ON s.telegram_id = u.telegram_id
         WHERE s.status = 'active'
@@ -174,7 +181,11 @@ async def process_auto_renewals(bot: Bot):
                         break
                     telegram_id = sub_row["telegram_id"]
                     subscription = sub_row
-                    language = sub_row.get("language", "en")
+                    # Здесь читался language из users и клался в payload фазы B.
+                    # Он никогда не использовался: текст уведомления берёт язык
+                    # через resolve_user_language (там ещё и фолбэки по
+                    # language_code Telegram). Убрано, чтобы не выглядело
+                    # источником языка — правка этой строки ни на что не влияла.
                     try:
                       # Вложенная транзакция = SAVEPOINT. Без неё ошибка Postgres
                       # на одном пользователе переводила соединение в failed-
@@ -428,7 +439,6 @@ async def process_auto_renewals(bot: Bot):
                             notifications_to_send.append({
                                 "telegram_id": telegram_id,
                                 "payment_id": payment_id,
-                                "language": language,
                                 "expires_str": expires_str,
                                 "expires_at": expires_at,
                                 "duration_days": duration_days,
@@ -644,10 +654,9 @@ async def auto_renewal_task(bot: Bot):
     # гейтами, таймаутом и логированием. Задержка — только jitter ниже (до
     # минуты), что несущественно при окне продления в 6 часов.
     #
-    # POOL STABILITY: One-time startup jitter to avoid 600s worker alignment burst.
-    jitter_s = random.uniform(5, 60)
-    await asyncio.sleep(jitter_s)
-    logger.debug(f"auto_renewal: startup jitter done ({jitter_s:.1f}s)")
+    # Разброс старта — общее правило для всех воркеров,
+    # см. app/core/worker_startup.
+    await startup_jitter("auto_renewal")
     
     iteration_number = 0
     
@@ -656,7 +665,6 @@ async def auto_renewal_task(bot: Bot):
         iteration_number += 1
         iteration_outcome = "success"
         iteration_error_type = None
-        should_exit_loop = False
 
         # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration start
         correlation_id = log_worker_iteration_start(
@@ -704,9 +712,14 @@ async def auto_renewal_task(bot: Bot):
                 # Do NOT re-raise; continue to next iteration after finally
 
         except asyncio.CancelledError:
+            # Отмена перебрасывается, а не гасится (единый контракт всех
+            # воркеров). Раньше здесь был break: задача завершалась «штатно»,
+            # и по логам нельзя было отличить остановку процесса от
+            # самопроизвольного выхода воркера — а для автопродления это
+            # разница между «мы выключились» и «деньги перестали списываться».
             logger.info("Auto-renewal task cancelled")
             iteration_outcome = "cancelled"
-            should_exit_loop = True
+            raise
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop
             logger.warning(f"auto_renewal: DB temporarily unavailable: {type(e).__name__}: {str(e)[:100]}")
@@ -732,13 +745,26 @@ async def auto_renewal_task(bot: Bot):
                 error_type=iteration_error_type,
                 duration_ms=duration_ms,
             )
-            if iteration_outcome not in ("success", "cancelled", "skipped"):
-                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+            # Здесь был `await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)`.
+            # Он ПРИБАВЛЯЛСЯ к обычной паузе цикла ниже: после сбойной итерации
+            # воркер спал 300 с, а потом ещё AUTO_RENEWAL_INTERVAL_SECONDS.
+            # При минимальном интервале в 300 с фактическая пауза выходила
+            # вдвое больше заявленной, и окно продления в 6 часов обслуживалось
+            # реже, чем обещает конфиг. Нижняя граница паузы теперь считается
+            # как максимум, а не как слагаемое (см. ниже).
+            #
+            # Заодно на пути отмены в finally больше нет ни одного await:
+            # спящий finally задерживает завершение задачи при shutdown.
 
-        if should_exit_loop:
-            break
-        
-        # Sleep after iteration completes (outside try/finally)
-        # Ждем до следующей проверки (5-15 минут, по умолчанию 10 минут)
-        await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS)
+        # Пауза до следующей итерации.
+        #
+        # MINIMUM_SAFE_SLEEP_ON_FAILURE — это ПОЛ паузы после сбоя (защита от
+        # шторма повторов), а не добавка к интервалу. Поэтому max, а не сумма.
+        # Сейчас интервал сам по себе не меньше 300 с, так что max почти всегда
+        # вернёт интервал — правило записано явно, чтобы понижение нижней
+        # границы интервала в будущем не сняло защиту молча.
+        sleep_seconds = AUTO_RENEWAL_INTERVAL_SECONDS
+        if iteration_outcome not in ("success", "skipped"):
+            sleep_seconds = max(AUTO_RENEWAL_INTERVAL_SECONDS, MINIMUM_SAFE_SLEEP_ON_FAILURE)
+        await asyncio.sleep(sleep_seconds)
 

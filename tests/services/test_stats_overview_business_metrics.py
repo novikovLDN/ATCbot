@@ -27,7 +27,6 @@ async def test_overview_includes_business_metrics(monkeypatch):
     monkeypatch.setattr(
         stats.database, "get_business_metrics",
         AsyncMock(return_value={
-            "approval_rate_percent": 97.5,
             "avg_subscription_lifetime_days": 63.2,
             "avg_renewals_per_user": 1.4,
         }),
@@ -35,7 +34,8 @@ async def test_overview_includes_business_metrics(monkeypatch):
 
     data = await stats.stats_overview()
 
-    assert data["business_metrics"]["approval_rate_percent"] == 97.5
+    assert data["business_metrics"]["avg_subscription_lifetime_days"] == 63.2
+    assert data["business_metrics"]["avg_renewals_per_user"] == 1.4
     assert data["active_paid_subscriptions"] == 2
 
 

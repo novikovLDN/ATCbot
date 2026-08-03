@@ -3,7 +3,6 @@ import asyncio
 import html
 import logging
 import os
-import random
 import re
 import time
 from datetime import datetime, timezone
@@ -32,6 +31,7 @@ from app.utils.logging_helpers import (
 from app.core.structured_logger import log_event
 from app.core.cooperative_yield import cooperative_yield
 from app.core.pool_monitor import acquire_connection
+from app.core.worker_startup import startup_jitter
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +102,10 @@ if ACTIVATION_INTERVAL_SECONDS > 1800:  # Максимум 30 минут
 # Максимальное количество попыток активации (используется для логирования)
 MAX_ACTIVATION_ATTEMPTS = activation_service.get_max_activation_attempts()
 
-async def process_pending_activations(bot: Bot) -> tuple[int, str]:
+async def process_pending_activations(bot: Bot) -> tuple[int, str, str | None]:
     """
     Обработать подписки с отложенной активацией (activation_status='pending')
-    
+
     ИНВАРИАНТЫ:
     - НЕ трогаем payments
     - НЕ трогаем expires_at
@@ -130,28 +130,38 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
         bot: Экземпляр Telegram бота для отправки уведомлений
     
     Returns:
-        Tuple of (items_processed, outcome) where outcome is "success" | "degraded" | "failed" | "skipped"
+        Кортеж (items_processed, outcome, error_type).
+
+        outcome — "success" | "degraded" | "failed" | "skipped".
+        error_type — таксономия сбоя из classify_error (infra_error /
+        dependency_error / domain_error / unexpected_error) или None, если
+        итерация прошла без ошибки.
+
+        Третий элемент появился не для красоты: раньше тип ошибки считался
+        здесь же, в except, и тут же выбрасывался — наружу уезжал только
+        outcome="failed". В метриках все сбои выглядели одинаково, и отличить
+        «база отвалилась» от «баг в коде» по ITERATION_END было нельзя.
     """
     if not database.DB_READY:
         logger.debug("Skipping activation worker: DB not ready")
-        return (0, "skipped")
-    
+        return (0, "skipped", None)
+
     if not config.VPN_ENABLED:
         logger.debug("Skipping activation worker: VPN API not enabled")
-        return (0, "skipped")
-    
+        return (0, "skipped", None)
+
     # RESILIENCE FIX: Handle temporary DB unavailability gracefully
     try:
         pool = await database.get_pool()
         if pool is None:
             logger.warning("Activation worker: Cannot get DB pool")
-            return (0, "skipped")
+            return (0, "skipped", None)
     except (asyncpg.PostgresError, asyncio.TimeoutError, RuntimeError) as e:
         logger.warning(f"activation_worker: Database temporarily unavailable (pool acquisition failed): {type(e).__name__}: {str(e)[:100]}")
-        return (0, "skipped")
+        return (0, "skipped", None)
     except Exception as e:
         logger.error(f"activation_worker: Unexpected error getting DB pool: {type(e).__name__}: {str(e)[:100]}")
-        return (0, "failed")
+        return (0, "failed", classify_error(e))
     
     items_processed = 0
     outcome = "success"
@@ -182,7 +192,7 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
 
         if not pending_subscriptions:
             logger.debug("No pending activations found")
-            return (0, "success")
+            return (0, "success", None)
 
         logger.info(f"Found {len(pending_subscriptions)} pending activations to process")
         iteration_start = time.monotonic()
@@ -473,16 +483,18 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
             reason=f"fetched={len(pending_subscriptions)} processed={items_processed}",
         )
 
-        return (items_processed, outcome)
+        return (items_processed, outcome, None)
     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
         # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
         logger.warning(f"activation_worker: Database temporarily unavailable in process_pending_activations: {type(e).__name__}: {str(e)[:100]}")
-        return (items_processed, "degraded")
+        return (items_processed, "degraded", classify_error(e))
     except Exception as e:
         logger.error(f"activation_worker: Unexpected error in process_pending_activations: {type(e).__name__}: {str(e)[:100]}")
         logger.debug("activation_worker: Full traceback in process_pending_activations", exc_info=True)
-        error_type = classify_error(e)
-        return (items_processed, "failed")
+        # Тип ошибки уезжает наверх третьим элементом кортежа. Раньше он
+        # считался этой же строкой и терялся тут же: в ITERATION_END уходило
+        # голое failed без таксономии.
+        return (items_processed, "failed", classify_error(e))
 
 
 async def activation_worker_task(bot: Bot):
@@ -494,11 +506,10 @@ async def activation_worker_task(bot: Bot):
     """
     logger.info(f"Activation worker task started (interval={ACTIVATION_INTERVAL_SECONDS}s, max_attempts={MAX_ACTIVATION_ATTEMPTS})")
     
-    # Prevent worker burst at startup
-    jitter_s = random.uniform(5, 60)
-    await asyncio.sleep(jitter_s)
-    logger.debug("activation_worker: startup jitter done (%.1fs)", jitter_s)
-    
+    # Разброс старта — общее правило для всех воркеров, см. app/core/worker_startup.
+    await startup_jitter("activation_worker")
+
+
     iteration_number = 0
     
     # STEP 3 — PART B: WORKER LOOP SAFETY
@@ -518,8 +529,7 @@ async def activation_worker_task(bot: Bot):
         items_processed = 0
         outcome = "success"
         iteration_error_type = None
-        should_exit_loop = False
-        
+
         try:
             # Feature flag check
             from app.core.feature_flags import get_feature_flags
@@ -563,7 +573,9 @@ async def activation_worker_task(bot: Bot):
                     return await process_pending_activations(bot)
             
             try:
-                items_processed, outcome = await asyncio.wait_for(_run_iteration(), timeout=120.0)
+                items_processed, outcome, iteration_error_type = await asyncio.wait_for(
+                    _run_iteration(), timeout=120.0
+                )
             except asyncio.TimeoutError:
                 logger.error(
                     "WORKER_TIMEOUT worker=activation_worker exceeded 120s — iteration cancelled"
@@ -578,9 +590,17 @@ async def activation_worker_task(bot: Bot):
                 iteration_error_type = classify_error(e)
             
         except asyncio.CancelledError:
+            # Отмена остаётся отменой: логируем, закрываем итерацию в метриках
+            # (это делает finally ниже) и перебрасываем.
+            #
+            # Раньше здесь стоял break без raise. Задача завершалась «штатно»,
+            # и снаружи, в main.py, остановка по shutdown была неотличима от
+            # «воркер сам решил выйти навсегда» — по логам причину не найти.
+            # Плюс asyncio считает проглоченную отмену багом: задача, которую
+            # попросили остановиться, обязана отмениться.
             logger.info("Activation worker task cancelled")
             outcome = "cancelled"
-            should_exit_loop = True
+            raise
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop
             logger.warning(f"activation_worker: Database temporarily unavailable in task loop: {type(e).__name__}: {str(e)[:100]}")
@@ -597,21 +617,25 @@ async def activation_worker_task(bot: Bot):
             except Exception:
                 pass
         finally:
-            # H2 fix: ITERATION_END always fires in finally block
+            # H2 fix: ITERATION_END always fires in finally block.
+            #
+            # Проверок вида `if 'iteration_error_type' in locals()` здесь
+            # больше нет: обе переменные безусловно инициализируются в начале
+            # витка, так что ветка «переменной нет» была недостижима и только
+            # маскировала бы настоящую опечатку в имени.
             duration_ms = (time.time() - iteration_start_time) * 1000
-            error_type = iteration_error_type if 'iteration_error_type' in locals() else (None if outcome == "success" else "infra_error")
             log_worker_iteration_end(
                 worker_name="activation_worker",
                 outcome=outcome,
-                items_processed=items_processed if 'items_processed' in locals() else 0,
-                error_type=error_type,
+                items_processed=items_processed,
+                error_type=iteration_error_type,
                 duration_ms=duration_ms
             )
+            # На пути отмены (outcome="cancelled") здесь не должно быть ни
+            # одного await: пока finally спит, задача не завершается, и
+            # shutdown ждёт её впустую до своего таймаута.
             if outcome not in ("success", "cancelled", "skipped"):
                 await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-        
-        if should_exit_loop:
-            break
-        
+
         # Sleep after iteration completes (outside try/finally)
         await asyncio.sleep(ACTIVATION_INTERVAL_SECONDS)

@@ -117,11 +117,12 @@ async def test_whole_batch_is_processed_in_one_iteration(monkeypatch, worker_env
     monkeypatch.setattr(activation_service, "get_pending_subscriptions", _get_pending)
 
     started = time.monotonic()
-    processed, outcome = await aw.process_pending_activations(bot=object())
+    processed, outcome, error_type = await aw.process_pending_activations(bot=object())
     elapsed = time.monotonic() - started
 
     assert processed == 120, "очередь разобрана не полностью"
     assert outcome == "success"
+    assert error_type is None, "успешный виток не должен нести тип ошибки"
     assert elapsed < 2.0, f"виток занял {elapsed:.1f}s — где-то остался фиксированный sleep"
     assert len(worker_env) == 120, "не всем отправлено уведомление об активации"
 
@@ -155,7 +156,7 @@ async def test_no_fixed_pause_per_subscription(monkeypatch, worker_env):
 
     monkeypatch.setattr(asyncio, "sleep", _tracking_sleep)
     try:
-        processed, _ = await aw.process_pending_activations(bot=object())
+        processed, _, _ = await aw.process_pending_activations(bot=object())
     finally:
         monkeypatch.undo()
 

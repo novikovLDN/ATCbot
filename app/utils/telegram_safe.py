@@ -16,6 +16,7 @@
 import logging
 import re
 import asyncio
+from html import escape as html_escape
 
 from aiogram.exceptions import (
     TelegramBadRequest,
@@ -25,7 +26,17 @@ from aiogram.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-_TG_ADS_EMOJI_RE = re.compile(r'!\[(.+?)\]\(tg://emoji\?id=(\d+)\)')
+# Telegram-клиент при копировании premium-эмодзи вставляет их в
+# markdown-синтаксисе картинки: ![👑](tg://emoji?id=12345). Бот шлёт всё с
+# parse_mode="HTML", поэтому такой текст надо перевести в <tg-emoji>.
+#
+# Класс [^\]]+? вместо .+? — намеренно. С точкой (без re.DOTALL) метка не
+# матчилась, если админ переносил строку внутри скобок, и один и тот же
+# текст конвертировался по-разному в зависимости от пути отправки:
+# дашборд (app/api/dashboard/routes/broadcasts.py:normalize_premium_emoji)
+# использует [^\]]+? и такую метку ловит. Расхождение видно только в
+# продакшене — админ проверяет рассылку, получает одно, люди другое.
+_TG_ADS_EMOJI_RE = re.compile(r'!\[([^\]]+?)\]\(tg://emoji\?id=(\d+)\)')
 
 # Потолок ожидания по требованию Telegram. Провайдер иногда просит
 # десятки минут — столько держать корутину бессмысленно, лучше признать
@@ -56,13 +67,24 @@ def _strip_markup(text: str) -> str:
 
 
 def convert_tg_emoji(text: str) -> str:
-    """Convert Telegram Ads emoji format to HTML tg-emoji tags.
+    """Перевести Ads-формат premium-эмодзи в HTML-тег tg-emoji.
 
-    Input:  ![🎮](tg://emoji?id=5319247469165433798)
-    Output: <tg-emoji emoji-id="5319247469165433798">🎮</tg-emoji>
+    Вход:  ![🎮](tg://emoji?id=5319247469165433798)
+    Выход: <tg-emoji emoji-id="5319247469165433798">🎮</tg-emoji>
+
+    Метка экранируется: между ![ и ] лежит произвольный текст админа, а
+    результат уходит с parse_mode="HTML". Один символ & или < в метке
+    ломал разбор всего сообщения, и рассылка падала целиком, а не на
+    одном эмодзи. id проверен регуляркой (\\d+), его экранировать нечего.
+
+    Идемпотентна: текст, уже приведённый к HTML, под шаблон не подходит.
     """
+    if not text:
+        return text
     return _TG_ADS_EMOJI_RE.sub(
-        r'<tg-emoji emoji-id="\2">\1</tg-emoji>', text
+        lambda m: f'<tg-emoji emoji-id="{m.group(2)}">'
+                  f'{html_escape(m.group(1), quote=False)}</tg-emoji>',
+        text,
     )
 
 

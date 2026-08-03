@@ -38,12 +38,15 @@ def test_metric_is_not_computed_anymore():
 
 
 def test_surviving_metrics_are_still_there():
-    """Убрана ровно одна метрика — остальные три обязаны остаться."""
+    """Живые метрики обязаны остаться.
+
+    approval_rate_percent из этого списка уехал — его убрали отдельно,
+    см. tests/services/test_approval_rate_removed.py.
+    """
     src = inspect.getsource(analytics_mod.get_business_metrics)
     for key in (
         "avg_subscription_lifetime_days",
         "avg_renewals_per_user",
-        "approval_rate_percent",
     ):
         assert key in src
 

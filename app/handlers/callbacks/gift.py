@@ -15,7 +15,6 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     LabeledPrice,
-    Message,
     SwitchInlineQueryChosenChat,
 )
 from aiogram.filters import StateFilter
@@ -28,11 +27,16 @@ from app.core.rate_limit import check_rate_limit
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.states import GiftState
+# Автоудаление инвойса — одна общая реализация на все платёжные экраны.
+# Здесь была шестая по счёту копия _schedule_invoice_deletion (пятая жила
+# в payments/*, шестая тут) с тем же телом, но без логирования. Пока копии
+# расходились, правка таймаута или логов попадала в один-два файла из
+# шести: инвойсы одних товаров исчезали, других — висели.
+from app.handlers.callbacks._invoice_cleanup import _schedule_invoice_deletion
 
 gift_router = Router()
 logger = logging.getLogger(__name__)
 
-INVOICE_TIMEOUT = config.INVOICE_TIMEOUT_SECONDS
 LAVA_INVOICE_TIMEOUT = 15 * 60  # 15 minutes
 
 
@@ -41,15 +45,6 @@ async def _auto_delete_lava_msg(bot, chat_id: int, msg):
     try:
         await asyncio.sleep(LAVA_INVOICE_TIMEOUT)
         await bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-    except Exception:
-        pass
-
-
-async def _schedule_invoice_deletion(bot: Bot, chat_id: int, invoice_message: Message, timeout: int = INVOICE_TIMEOUT):
-    """Удаляет сообщение с инвойсом через timeout секунд."""
-    try:
-        await asyncio.sleep(timeout)
-        await bot.delete_message(chat_id=chat_id, message_id=invoice_message.message_id)
     except Exception:
         pass
 
