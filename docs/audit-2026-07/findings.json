@@ -2911,7 +2911,12 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "workers",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Удалена недостижимая ветка ACTIVATION_SKIP_VPN_UNAVAILABLE и try/except вокруг двух присваиваний, которые не могут упасть. Флаг «панель временно недоступна» жёстко выставлялся в False после снятия SystemState, а except не срабатывал никогда — из трёх веток логирования работали две. Осталось то, что действительно различимо: выдача выключена конфигом или сбой панели.",
+      "fixed_in": [
+        "activation_worker.py"
+      ]
     },
     {
       "title": "traffic_monitor и site_sync_worker не имеют ни таймаута итерации, ни лимита времени на батч",
@@ -3238,7 +3243,13 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Разбивка выполнена: 5162 → 3294 строки. Вынесены promo.py, pending_purchases.py, trials_queries.py, reminders_queries.py, referral_analytics.py; мёртвый payments_legacy (create_payment, approve_payment_atomic и др., 353 строки) удалён целиком, а не вынесен. Остаток — транзакционное ядро (grant_access, finalize_purchase, reissue_vpn_key_atomic и чтение состояния): эти функции делят состояние транзакции и advisory-локи, разносить их по модулям значило бы разорвать неделимые операции. Совместимость (database.<name> и database.subscriptions.<name>) закреплена tests/services/test_module_split.py.",
+      "fixed_in": [
+        "database/subscriptions.py",
+        "tests/services/test_module_split.py"
+      ]
     },
     {
       "title": "Разбиение database/admin.py (4917 строк) по ответственностям",
@@ -3251,7 +3262,15 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Разбивка выполнена: 4917 → 2278 строк. Ранее вынесены analytics.py, broadcasts.py, discounts.py. Теперь вынесено денежное ядро — database/balance_purchases.py (finalize_balance_purchase 279 строк и finalize_balance_topup 217): это единственные функции админского слоя, где деньги списываются и зачисляются, и правят их по другим причинам, чем отчёты и рассылки. В admin.py остались админские действия над доступом, экспорты, сверка bypass и удаление пользователя. Реэкспорт через пакет database сохранён — все вызывающие ходят именно так, ни одного обращения через database.admin.<name> к этим функциям нет. Тесты обновлены (test_module_split, test_revenue_definition, test_revenue_source).",
+      "fixed_in": [
+        "database/balance_purchases.py",
+        "database/admin.py",
+        "database/__init__.py",
+        "tests/services/test_module_split.py"
+      ]
     },
     {
       "title": "app/handlers/traffic.py: два обработчика с мёртвым legacy-телом после return",

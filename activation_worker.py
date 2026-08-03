@@ -236,24 +236,18 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                 except VPNActivationError as e:
                     error_msg = str(e)
                     new_attempts = current_attempts + 1
-                    try:
-                        # Simple VPN API availability check
-                        vpn_api_permanently_disabled = not config.VPN_ENABLED
-                        vpn_api_temporarily_unavailable = False  # Simplified - no SystemState check
-                    except Exception:
-                        vpn_api_permanently_disabled = not config.VPN_ENABLED
-                        vpn_api_temporarily_unavailable = config.VPN_ENABLED
-                    if vpn_api_permanently_disabled:
+                    # Раньше здесь было три ветки логирования и try/except
+                    # вокруг двух присваиваний, которые не могут упасть.
+                    # Средняя ветка (ACTIVATION_SKIP_VPN_UNAVAILABLE) была
+                    # недостижима: флаг «панель временно недоступна» жёстко
+                    # выставлялся в False после снятия SystemState, а except
+                    # никогда не срабатывал. Осталось то, что действительно
+                    # различимо: выдача выключена конфигом или сбой панели.
+                    if not config.VPN_ENABLED:
                         logger.warning(
                             f"ACTIVATION_FAILED_VPN_DISABLED [subscription_id={subscription_id}, "
                             f"user={telegram_id}, attempt={new_attempts}/{MAX_ACTIVATION_ATTEMPTS}, "
                             f"error={error_msg}]"
-                        )
-                    elif vpn_api_temporarily_unavailable:
-                        logger.info(
-                            f"ACTIVATION_SKIP_VPN_UNAVAILABLE [subscription_id={subscription_id}, "
-                            f"user={telegram_id}, attempt={new_attempts}/{MAX_ACTIVATION_ATTEMPTS}, "
-                            f"reason=VPN_API_temporarily_unavailable, will_retry=True]"
                         )
                     else:
                         logger.warning(

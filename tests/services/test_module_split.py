@@ -206,12 +206,25 @@ def test_broadcast_defined_in_its_module(name):
     assert hasattr(br, name)
 
 
-def test_money_functions_stayed_in_admin():
-    """Денежные операции не должны были уехать вместе с рассылками."""
+def test_money_functions_live_in_their_own_modules():
+    """Денежные операции лежат там, где задумано, и не растекаются.
+
+    finalize_balance_* вынесены в database/balance_purchases.py: это две
+    самые длинные функции админского слоя и единственные, где списываются
+    и зачисляются деньги, — их правят по другим причинам, чем отчёты и
+    рассылки. Админские операции над доступом остаются в admin.py.
+    """
+    import database
     import database.admin as adm
+    import database.balance_purchases as bal
     import database.broadcasts as br
-    for name in ("finalize_balance_purchase", "finalize_balance_topup",
-                 "admin_grant_access_atomic", "admin_revoke_access_atomic"):
+
+    for name in ("finalize_balance_purchase", "finalize_balance_topup"):
+        assert hasattr(bal, name), f"{name} потерялась из balance_purchases"
+        assert not hasattr(br, name), f"{name} ошибочно уехала в broadcasts"
+        assert hasattr(database, name), f"{name} перестала реэкспортироваться"
+
+    for name in ("admin_grant_access_atomic", "admin_revoke_access_atomic"):
         assert hasattr(adm, name), f"{name} потерялась из admin"
         assert not hasattr(br, name), f"{name} ошибочно уехала в broadcasts"
 

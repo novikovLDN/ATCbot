@@ -65,10 +65,14 @@ def test_every_paid_query_declares_its_revenue_intent(path):
 
 def test_balance_funded_payments_are_marked():
     """Покупка с баланса и автопродление обязаны писать
-    payment_provider='balance' — иначе строка неотличима от оплаты картой."""
-    admin = Path("database/admin.py").read_text(encoding="utf-8")
+    payment_provider='balance' — иначе строка неотличима от оплаты картой.
+
+    Денежное ядро переехало из database/admin.py в
+    database/balance_purchases.py — проверяем там.
+    """
+    balance = Path("database/balance_purchases.py").read_text(encoding="utf-8")
     renewal = Path("auto_renewal.py").read_text(encoding="utf-8")
-    for src, name in ((admin, "finalize_balance_purchase"), (renewal, "auto_renewal")):
+    for src, name in ((balance, "finalize_balance_purchase"), (renewal, "auto_renewal")):
         assert "'approved', 'balance'" in src, (
             f"{name}: платёж с баланса не помечен провайдером"
         )

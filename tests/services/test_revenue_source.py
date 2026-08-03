@@ -78,8 +78,14 @@ def test_paid_status_used_not_approved():
 
 def test_payments_still_used_where_it_belongs():
     """payments остаётся источником для идемпотентности и истории платежей —
-    это про сами платежи, а не про выручку."""
-    src = inspect.getsource(admin_mod)
+    это про сами платежи, а не про выручку.
+
+    Проверка идемпотентности живёт в денежном ядре, которое переехало из
+    database/admin.py в database/balance_purchases.py.
+    """
+    from database import balance_purchases as balance_mod
+
+    src = inspect.getsource(balance_mod)
     assert "telegram_payment_charge_id" in src, "проверка идемпотентности не должна была уехать"
 
 

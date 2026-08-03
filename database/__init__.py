@@ -357,6 +357,13 @@ from database.farm import (  # noqa: F401
 )
 
 # Admin: stats, broadcasts, analytics, exports, gifts, VIP, discounts
+# Покупка и пополнение с внутреннего баланса — денежное ядро, вынесено
+# из admin.py: его правят по другим причинам, чем отчёты и рассылки.
+from database.balance_purchases import (  # noqa: F401
+    finalize_balance_purchase,
+    finalize_balance_topup,
+)
+
 from database.admin import (  # noqa: F401
     get_all_users_telegram_ids,
     get_eligible_no_subscription_broadcast_users,
@@ -367,8 +374,6 @@ from database.admin import (  # noqa: F401
     get_subscription_history,
     get_user_extended_stats,
     admin_grant_access_atomic,
-    finalize_balance_purchase,
-    finalize_balance_topup,
     admin_grant_access_minutes_atomic,
     admin_revoke_access_atomic,
     get_ltv,
