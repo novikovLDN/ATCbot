@@ -1,5 +1,20 @@
-"""
-Admin broadcast handlers: create broadcasts, A/B tests, no-subscription broadcasts.
+"""Мастер создания рассылки: от заголовка до отправки.
+
+ЧТО ЗДЕСЬ
+    Пошаговый сценарий: заголовок → тип (обычная или A/B) → текст →
+    премиум-эмодзи → кнопки → скидка → сегмент получателей → подтверждение
+    и запуск. Плюс два готовых пресета (техработы, промо по трафику) и
+    точечная рассылка тем, у кого нет подписки.
+
+КУДА УЕХАЛО ОСТАЛЬНОЕ
+    _broadcast_send.py     доставка: отправка, ретраи, клавиатура, темп
+    broadcast_manage.py    удаление отправленных и статистика A/B
+    broadcast_gifts.py     рассылки с подарками
+
+ЧТО ЛЕГКО СЛОМАТЬ
+    Сегмент получателей выбирается в предпоследнем шаге, а список
+    вычисляется в момент отправки — не раньше. Между выбором и запуском
+    админ может думать минуты, и за это время список успевает измениться.
 """
 import logging
 import asyncio
@@ -28,6 +43,19 @@ from app.handlers.admin.keyboards import (
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.guards import ensure_db_ready_callback, ensure_db_ready_message
 from app.services.user_subscription_links import get_user_bypass_url
+# Нижний уровень доставки: отправка с ретраями, сборка клавиатуры и
+# параметры темпа рассылки — см. _broadcast_send.py.
+from app.handlers.admin._broadcast_send import (
+    BROADCAST_BATCH_PAUSE,
+    BROADCAST_BATCH_SIZE,
+    BROADCAST_CONCURRENCY,
+    BROADCAST_RETRY_LIMIT,
+    _GIFT_REVEAL_PERCENT_DEFAULT,
+    _btn_label,
+    _build_broadcast_reply_markup,
+    _safe_send,
+    _safe_send_with_buttons,
+)
 
 
 # ── Preset: maintenance broadcast with bypass key + 20% traffic discount ──
@@ -69,181 +97,8 @@ logger = logging.getLogger(__name__)
 # сохранён в базе. Дублируется здесь сознательно: broadcast_gifts
 # импортирует из этого модуля, и обратная зависимость на уровне
 # модуля замкнула бы импорты в кольцо.
-_GIFT_REVEAL_PERCENT_DEFAULT = 20
 
 # Production broadcast: controlled concurrency, rate limiting, event-loop safe
-BROADCAST_CONCURRENCY = 15          # Safe under Telegram 30 msg/sec
-BROADCAST_BATCH_SIZE = 200          # Soft batch limit
-BROADCAST_BATCH_PAUSE = 2           # Seconds between batches
-BROADCAST_RETRY_LIMIT = 3           # Retry per user
-
-
-async def _safe_send(
-    bot: Bot,
-    user_id: int,
-    text: str,
-    semaphore: asyncio.Semaphore,
-    photo_file_id: str | None = None,
-    caption: str | None = None,
-) -> int | None:
-    """Send message or photo. Returns message_id on success, None on failure."""
-    from app.utils.telegram_safe import convert_tg_emoji
-    text = convert_tg_emoji(text)
-    if caption:
-        caption = convert_tg_emoji(caption)
-    async with semaphore:
-        for attempt in range(BROADCAST_RETRY_LIMIT):
-            try:
-                if photo_file_id:
-                    result = await bot.send_photo(
-                        user_id,
-                        photo=photo_file_id,
-                        caption=caption or text,
-                        parse_mode="HTML",
-                    )
-                else:
-                    result = await bot.send_message(user_id, text, parse_mode="HTML")
-                return result.message_id
-            except TelegramRetryAfter as e:
-                await asyncio.sleep(e.retry_after + 1)
-            except Exception:
-                await asyncio.sleep(1)
-        return None
-
-
-
-async def _safe_send_with_buttons(
-    bot: Bot,
-    user_id: int,
-    text: str,
-    semaphore: asyncio.Semaphore,
-    reply_markup: InlineKeyboardMarkup | None = None,
-    photo_file_id: str | None = None,
-    animation_file_id: str | None = None,
-    caption: str | None = None,
-) -> int | None:
-    """Send message with optional inline buttons.
-
-    Приоритет media:
-      1) animation_file_id (GIF/MP4) → send_animation
-      2) photo_file_id → send_photo
-      3) plain text → send_message
-
-    Returns message_id on success, None on failure.
-    """
-    from app.utils.telegram_safe import convert_tg_emoji
-    text = convert_tg_emoji(text)
-    if caption:
-        caption = convert_tg_emoji(caption)
-    async with semaphore:
-        for attempt in range(BROADCAST_RETRY_LIMIT):
-            try:
-                if animation_file_id:
-                    result = await bot.send_animation(
-                        user_id,
-                        animation=animation_file_id,
-                        caption=caption or text,
-                        reply_markup=reply_markup,
-                        parse_mode="HTML",
-                    )
-                elif photo_file_id:
-                    result = await bot.send_photo(
-                        user_id,
-                        photo=photo_file_id,
-                        caption=caption or text,
-                        reply_markup=reply_markup,
-                        parse_mode="HTML",
-                    )
-                else:
-                    result = await bot.send_message(user_id, text, reply_markup=reply_markup, parse_mode="HTML")
-                return result.message_id
-            except TelegramRetryAfter as e:
-                await asyncio.sleep(e.retry_after + 1)
-            except Exception:
-                await asyncio.sleep(1)
-        return None
-
-
-def _build_broadcast_reply_markup(
-    buttons: list[str],
-    broadcast_id: int,
-    discount: int | None = None,
-) -> InlineKeyboardMarkup | None:
-    """Build inline keyboard for broadcast message based on selected buttons."""
-    if not buttons:
-        return None
-
-    rows = []
-    for btn in buttons:
-        if btn == "buy":
-            rows.append([InlineKeyboardButton(
-                text="Купить",
-                callback_data="menu_buy_vpn",
-                icon_custom_emoji_id="5199785165735367039",  # ⚡️
-            )])
-        elif btn == "promo_buy":
-            label = f"🎁 Купить со скидкой {discount}%" if discount else "🎁 Купить со скидкой"
-            rows.append([InlineKeyboardButton(text=label, callback_data=f"broadcast_promo_buy:{broadcast_id}")])
-        elif btn == "promo_traffic":
-            label = f"📊 Купить трафик −{discount}%" if discount else "📊 Купить трафик"
-            rows.append([InlineKeyboardButton(text=label, callback_data=f"broadcast_promo_traffic:{broadcast_id}")])
-        elif btn == "gift_1m":
-            rows.append([InlineKeyboardButton(
-                text="🎁 −30% на 1 месяц",
-                callback_data="broadcast_gift_1m",
-            )])
-        elif btn == "gift_3m":
-            rows.append([InlineKeyboardButton(
-                text="🎁 Скидка 30% на 3 месяца",
-                callback_data="broadcast_gift_3m",
-            )])
-        elif btn == "gift_1y_40":
-            rows.append([InlineKeyboardButton(
-                text="🎁 1 год со скидкой 40%",
-                callback_data="broadcast_gift_1y_40",
-            )])
-        elif btn == "bypass":
-            rows.append([InlineKeyboardButton(text="🌐 Включить обход", callback_data="broadcast_bypass")])
-        elif btn == "channel":
-            rows.append([InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/ATC_VPN")])
-        elif btn == "support":
-            rows.append([InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/atlas_suppbot")])
-        elif btn == "referral":
-            rows.append([InlineKeyboardButton(text="👥 Пригласить друга", callback_data="menu_referral")])
-        elif btn == "happ_ios":
-            rows.append([InlineKeyboardButton(
-                text="📲 Скачать Happ для iOS ⚡️",
-                url="https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6788279553?l=en-GB",
-            )])
-        elif btn == "happ_android":
-            rows.append([InlineKeyboardButton(
-                text="📲 Скачать Happ для Android 🤖",
-                url="https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
-            )])
-        elif btn == "web_client":
-            rows.append([InlineKeyboardButton(
-                text="🌐 Веб-клиент QoDev",
-                url="https://qodev.dev",
-            )])
-        elif btn == "buy_combo":
-            rows.append([InlineKeyboardButton(
-                text="Купить Комбо",
-                callback_data="buy_combo",
-                icon_custom_emoji_id="5199785165735367039",  # ⚡️
-            )])
-        elif btn == "proxy":
-            rows.append([InlineKeyboardButton(text="🌐 MT Прокси", callback_data="proxy_open")])
-        elif btn == "share_discount":
-            # Recipient таппает → переходит на экран «подари другу
-            # скидку 30%» (callback share_discount_open). Там уже его
-            # личная share-ссылка на t.me/share/url, открывающая
-            # нативный picker Telegram.
-            rows.append([InlineKeyboardButton(
-                text="🎁 Поделиться скидкой",
-                callback_data="share_discount_open",
-            )])
-
-    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
 @admin_broadcast_router.callback_query(F.data == "admin:bcast_preset_maintenance")
@@ -783,28 +638,6 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
         )
 
 
-def _btn_label(btn_type: str) -> str:
-    """Human-readable label for button type"""
-    labels = {
-        "buy": "🛒 Купить",
-        "promo_buy": "🎁 Купить со скидкой",
-        "promo_traffic": "📊 Купить трафик промо",
-        "gift_3m": "🎁 Скидка 30% на 3 месяца",
-        "gift_1y_40": "🎁 1 год со скидкой 40%",
-        "bypass": "🌐 Включить обход",
-        "channel": "📢 Наш канал",
-        "support": "💬 Поддержка",
-        "referral": "👥 Реферальная программа",
-        "happ_ios": "📲 Скачать Happ iOS",
-        "happ_android": "📲 Скачать Happ Android",
-        "web_client": "🌐 Веб-клиент QoDev",
-        "buy_combo": "🏆 Купить Комбо",
-        "proxy": "🌐 MT Прокси",
-        "share_discount": "🎁 Поделиться скидкой",
-    }
-    return labels.get(btn_type, btn_type)
-
-
 @admin_broadcast_router.message(BroadcastCreate.waiting_for_discount)
 async def process_broadcast_discount(message: Message, state: FSMContext):
     """Обработка ввода скидки для кнопки 'Купить со скидкой'"""
@@ -1203,252 +1036,3 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
 
     finally:
         await state.clear()
-
-
-@admin_broadcast_router.callback_query(F.data == "broadcast:delete_list")
-async def callback_broadcast_delete_list(callback: CallbackQuery):
-    """Список броадкастов для удаления у пользователей."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer("⛔️", show_alert=True)
-        return
-    await callback.answer()
-
-    broadcasts = await database.get_recent_broadcasts(limit=10)
-    if not broadcasts:
-        await safe_edit_text(
-            callback.message,
-            "📭 Нет броадкастов для удаления.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")],
-            ]),
-            bot=callback.bot,
-        )
-        return
-
-    lines = ["🗑 <b>Удалить уведомление у пользователей</b>\n"]
-    buttons = []
-    for b in broadcasts:
-        bid = b["id"]
-        title = (b["title"] or "—")[:30]
-        sent = b["sent_count"] or 0
-        has_ids = b["has_msg_ids"] or 0
-        date_str = b["created_at"].strftime("%d.%m %H:%M") if b["created_at"] else "—"
-        label = f"#{bid} {title} ({sent} отпр.)"
-        if has_ids == 0:
-            label += " ❌ нет ID"
-        lines.append(f"• <b>#{bid}</b> {title} — {sent} отпр., {has_ids} с ID — {date_str}")
-        if has_ids > 0:
-            buttons.append([InlineKeyboardButton(
-                text=f"🗑 #{bid} {title}",
-                callback_data=f"broadcast:delete_confirm:{bid}",
-            )])
-
-    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")])
-    text = "\n".join(lines)
-    if not any("delete_confirm" in str(b) for row in buttons for b in row):
-        text += "\n\n⚠️ Ни один броадкаст не имеет сохранённых message_id. Удаление доступно только для новых уведомлений."
-    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot)
-
-
-@admin_broadcast_router.callback_query(F.data.startswith("broadcast:delete_confirm:"))
-async def callback_broadcast_delete_confirm(callback: CallbackQuery):
-    """Подтверждение удаления броадкаста."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer("⛔️", show_alert=True)
-        return
-    await callback.answer()
-
-    broadcast_id = int(callback.data.split(":")[-1])
-    pairs = await database.get_broadcast_message_ids(broadcast_id)
-
-    if not pairs:
-        await safe_edit_text(
-            callback.message,
-            f"❌ Броадкаст #{broadcast_id} — нет сообщений с сохранёнными ID для удаления.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:delete_list")],
-            ]),
-            bot=callback.bot,
-        )
-        return
-
-    text = (
-        f"🗑 <b>Удалить броадкаст #{broadcast_id}?</b>\n\n"
-        f"Будет удалено <b>{len(pairs)}</b> сообщений из чатов пользователей.\n\n"
-        f"⚠️ Это действие необратимо."
-    )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"✅ Удалить {len(pairs)} сообщений", callback_data=f"broadcast:delete_exec:{broadcast_id}")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast:delete_list")],
-    ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-
-
-@admin_broadcast_router.callback_query(F.data.startswith("broadcast:delete_exec:"))
-async def callback_broadcast_delete_exec(callback: CallbackQuery):
-    """Выполнение удаления броадкаста у пользователей."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer("⛔️", show_alert=True)
-        return
-    await callback.answer()
-
-    broadcast_id = int(callback.data.split(":")[-1])
-    pairs = await database.get_broadcast_message_ids(broadcast_id)
-
-    if not pairs:
-        await safe_edit_text(
-            callback.message,
-            f"❌ Нет сообщений для удаления.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:delete_list")],
-            ]),
-            bot=callback.bot,
-        )
-        return
-
-    await safe_edit_text(
-        callback.message,
-        f"🗑 Удаляю {len(pairs)} сообщений броадкаста #{broadcast_id}...\n\n⏳ Это может занять несколько минут. Результат будет отправлен в чат.",
-        bot=callback.bot,
-    )
-
-    # Run deletion in background to avoid webhook timeout
-    async def _delete_in_background():
-        bot = callback.bot
-        deleted = 0
-        failed = 0
-        for telegram_id, message_id in pairs:
-            try:
-                await bot.delete_message(chat_id=telegram_id, message_id=message_id)
-                deleted += 1
-            except Exception:
-                failed += 1
-            if deleted % 30 == 0:
-                await asyncio.sleep(1)  # Rate limit
-
-        await database.mark_broadcast_messages_deleted(broadcast_id)
-
-        text = (
-            f"✅ <b>Броадкаст #{broadcast_id} удалён</b>\n\n"
-            f"🗑 Удалено: {deleted}\n"
-            f"❌ Не удалось: {failed}\n"
-            f"📊 Всего: {len(pairs)}"
-        )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 К списку", callback_data="broadcast:delete_list")],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")],
-        ])
-        await bot.send_message(
-            chat_id=config.ADMIN_TELEGRAM_ID, text=text,
-            reply_markup=keyboard, parse_mode="HTML",
-        )
-        logger.info(f"BROADCAST_BULK_DELETE broadcast_id={broadcast_id} deleted={deleted} failed={failed} total={len(pairs)}")
-
-    asyncio.create_task(_delete_in_background())
-
-
-@admin_broadcast_router.callback_query(F.data == "broadcast:ab_stats")
-async def callback_broadcast_ab_stats(callback: CallbackQuery):
-    """Список A/B тестов"""
-    user = await database.get_user(callback.from_user.id)
-    language = await resolve_user_language(callback.from_user.id)
-    
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
-        return
-    
-    await callback.answer()
-    
-    try:
-        ab_tests = await database.get_ab_test_broadcasts()
-        
-        if not ab_tests:
-            text = i18n_get_text(language, "broadcast._ab_stats_empty")
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language), bot=callback.bot)
-            return
-        
-        text = i18n_get_text(language, "broadcast._ab_stats_select")
-        keyboard = get_ab_test_list_keyboard(ab_tests, language)
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-        
-        # Логируем действие
-        await database._log_audit_event_atomic_standalone("admin_view_ab_stats_list", callback.from_user.id, None, f"Viewed {len(ab_tests)} A/B tests")
-    
-    except Exception as e:
-        logger.exception(f"Error in callback_broadcast_ab_stats: {e}")
-        await callback.message.answer(
-            i18n_get_text(language, "broadcast._ab_stats_error"),
-            parse_mode="HTML",
-        )
-
-
-@admin_broadcast_router.callback_query(F.data.startswith("broadcast:ab_stat:"))
-async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
-    """Статистика конкретного A/B теста"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
-        return
-    
-    await callback.answer()
-    language = await resolve_user_language(callback.from_user.id)
-
-    try:
-        broadcast_id = int(callback.data.split(":")[2])
-
-        # Получаем информацию об уведомлении
-        broadcast = await database.get_broadcast(broadcast_id)
-        if not broadcast:
-            await callback.message.answer("Уведомление не найдено.", parse_mode="HTML")
-            return
-        
-        # Получаем статистику
-        stats = await database.get_ab_test_stats(broadcast_id)
-        
-        if not stats:
-            text = f"📊 A/B статистика\n\nУведомление: #{broadcast_id}\n\nНедостаточно данных для анализа."
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="broadcast:ab_stats")],
-            ])
-            await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-            return
-        
-        # Формируем текст статистики
-        total_sent = stats["total_sent"]
-        variant_a_sent = stats["variant_a_sent"]
-        variant_b_sent = stats["variant_b_sent"]
-        
-        # Проценты
-        if total_sent > 0:
-            percent_a = round((variant_a_sent / total_sent) * 100)
-            percent_b = round((variant_b_sent / total_sent) * 100)
-        else:
-            percent_a = 0
-            percent_b = 0
-        
-        text = (
-            f"📊 A/B статистика\n\n"
-            f"Уведомление: #{broadcast_id}\n"
-            f"Заголовок: {broadcast.get('title', '—')}\n\n"
-            f"Вариант A:\n"
-            f"— Отправлено: {variant_a_sent} ({percent_a}%)\n\n"
-            f"Вариант B:\n"
-            f"— Отправлено: {variant_b_sent} ({percent_b}%)\n\n"
-            f"Всего отправлено: {total_sent}"
-        )
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="broadcast:ab_stats")],
-        ])
-        
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-        
-        # Логируем действие
-        await database._log_audit_event_atomic_standalone("admin_view_ab_stat_detail", callback.from_user.id, None, f"Viewed A/B stats for broadcast {broadcast_id}")
-    
-    except (ValueError, IndexError) as e:
-        logging.error(f"Error parsing broadcast ID: {e}")
-        await callback.message.answer("Ошибка: неверный ID уведомления.", parse_mode="HTML")
-    except Exception as e:
-        logger.exception(f"Error in callback_broadcast_ab_stat_detail: {e}")
-        await callback.message.answer("Ошибка при получении статистики A/B теста. Проверь логи.", parse_mode="HTML")

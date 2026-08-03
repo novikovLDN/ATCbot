@@ -181,3 +181,72 @@ def test_invoice_cleanup_has_no_siblings_imports():
 def test_old_payments_module_is_gone():
     """Файл удалён целиком: всё его содержимое переехало."""
     assert not Path("app/handlers/callbacks/payments_callbacks.py").exists()
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  Разбивка рассылок
+# ──────────────────────────────────────────────────────────────────────
+#
+# app/handlers/admin/broadcast.py был на 1455 строк и держал вместе три
+# уровня: как отправить сообщение (ретраи, темп, клавиатура), пошаговый
+# мастер создания и управление уже отправленным (удаление, статистика A/B).
+
+BROADCAST_MODULES = ["broadcast.py", "broadcast_manage.py", "_broadcast_send.py"]
+
+BROADCAST_HANDLERS = {
+    "callback_admin_bcast_preset_maintenance", "callback_broadcast_promo_traffic_ext",
+    "cmd_notify_no_subscription", "process_no_sub_broadcast_text",
+    "callback_no_sub_broadcast_confirm", "callback_admin_broadcast",
+    "callback_broadcast_create", "process_broadcast_title",
+    "callback_broadcast_test_type", "process_broadcast_message_a",
+    "process_broadcast_message_b", "process_broadcast_message",
+    "process_broadcast_emoji", "callback_broadcast_buttons",
+    "process_broadcast_discount", "callback_promo_duration",
+    "callback_broadcast_segment", "callback_broadcast_confirm_send",
+    "callback_broadcast_delete_list", "callback_broadcast_delete_confirm",
+    "callback_broadcast_delete_exec", "callback_broadcast_ab_stats",
+    "callback_broadcast_ab_stat_detail",
+}
+
+
+def test_no_broadcast_handler_was_lost():
+    found = set()
+    for name in BROADCAST_MODULES:
+        tree = ast.parse((ADMIN / name).read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.decorator_list:
+                found.add(node.name)
+    missing = BROADCAST_HANDLERS - found
+    assert not missing, f"обработчики рассылок пропали: {sorted(missing)}"
+
+
+def test_every_broadcast_handler_is_registered():
+    from app.handlers.admin import router
+
+    registered = set()
+
+    def walk(r):
+        for h in list(r.callback_query.handlers) + list(r.message.handlers):
+            registered.add(getattr(h.callback, "__name__", ""))
+        for sub in r.sub_routers:
+            walk(sub)
+
+    walk(router)
+    missing = BROADCAST_HANDLERS - registered
+    assert not missing, f"объявлены, но не подключены: {sorted(missing)}"
+
+
+def test_send_layer_does_not_import_the_wizard():
+    """Нижний уровень доставки не должен знать про мастер создания —
+    иначе кольцо, и уровень перестаёт быть нижним."""
+    src = (ADMIN / "_broadcast_send.py").read_text(encoding="utf-8")
+    for sibling in ("broadcast_manage", "broadcast_gifts"):
+        assert f"admin.{sibling} import" not in src
+    assert "admin.broadcast import" not in src
+
+
+def test_retry_after_is_handled_in_the_send_layer():
+    """Telegram отвечает TelegramRetryAfter с точным временем ожидания.
+    Проигнорировать его — получить временную блокировку и встать целиком."""
+    src = (ADMIN / "_broadcast_send.py").read_text(encoding="utf-8")
+    assert "TelegramRetryAfter" in src

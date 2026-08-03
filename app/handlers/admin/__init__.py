@@ -17,6 +17,7 @@ from .access_revoke import admin_revoke_router
 from .finance import admin_finance_router
 from .reissue import admin_reissue_router
 from .broadcast import admin_broadcast_router
+from .broadcast_manage import admin_broadcast_manage_router
 from .notifications import admin_notifications_router
 from .traffic_admin import admin_traffic_router
 from .bypass_gift import admin_bypass_gift_router
@@ -50,6 +51,7 @@ router.include_router(admin_revoke_router)
 router.include_router(admin_finance_router)
 router.include_router(admin_reissue_router)
 router.include_router(admin_broadcast_router)
+router.include_router(admin_broadcast_manage_router)
 router.include_router(admin_notifications_router)
 router.include_router(admin_traffic_router)
 router.include_router(admin_bypass_gift_router)

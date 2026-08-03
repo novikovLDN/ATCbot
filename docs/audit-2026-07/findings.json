@@ -3612,6 +3612,26 @@
         "app/handlers/payments/payments_messages.py",
         "tests/services/test_goods_delivery.py"
       ]
+    },
+    {
+      "title": "Разбивка app/handlers/admin/broadcast.py (1455 строк) по уровням",
+      "severity": "P2",
+      "category": "refactor",
+      "file": "app/handlers/admin/broadcast.py",
+      "line": 1,
+      "defect": "Файл держал вместе три уровня: низкоуровневую доставку (отправка, ретраи на TelegramRetryAfter, темп, сборка клавиатуры), пошаговый мастер создания рассылки и управление уже отправленным (удаление у получателей, статистика A/B).",
+      "failure_scenario": "Правка темпа отправки делается посреди мастера создания; проверить, что не задет сценарий удаления, по диффу невозможно.",
+      "proposed_action": "Сделано.",
+      "source": "audit-followup",
+      "status": "fixed",
+      "resolution": "Разрезан на три модуля: broadcast.py (мастер создания и пресеты, 1038 строк), broadcast_manage.py (удаление отправленных и статистика A/B, 286), _broadcast_send.py (доставка: _safe_send, ретраи, сборка клавиатуры и константы темпа, 239). Нижний уровень вынесен так, чтобы не знать про мастер — иначе он перестаёт быть нижним. Все 23 регистрации сверены до и после (потерь и лишнего нет), каждая проверена на видимость диспетчеру. Тесты дописаны в tests/services/test_access_split.py, включая проверку, что обработка TelegramRetryAfter осталась в слое доставки: игнорировать её значит получить временную блокировку и остановить рассылку целиком.",
+      "fixed_in": [
+        "app/handlers/admin/broadcast.py",
+        "app/handlers/admin/broadcast_manage.py",
+        "app/handlers/admin/_broadcast_send.py",
+        "app/handlers/admin/__init__.py",
+        "tests/services/test_access_split.py"
+      ]
     }
   ],
   "refuted": [
