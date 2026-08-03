@@ -36,7 +36,12 @@ def _patch_common(monkeypatch, confirmation, finalize_result):
     fake_db = MagicMock()
     fake_db.get_pending_purchase_by_id = AsyncMock(return_value=GIFT_PENDING)
     fake_db.finalize_purchase = AsyncMock(return_value=finalize_result)
+    # Выдача идёт через сервисный слой (subscription_service), а он держит
+    # собственную ссылку на database. Подменяем в обоих модулях: иначе
+    # обёртка пойдёт в настоящую базу, которой в тестах нет.
     monkeypatch.setattr(confirmation, "database", fake_db)
+    from app.services.subscriptions import service as _subscription_service
+    monkeypatch.setattr(_subscription_service, "database", fake_db)
     return fake_db
 
 
@@ -138,7 +143,12 @@ async def test_regular_subscription_still_uses_generic_confirmation(monkeypatch)
         "success": True, "payment_id": 7, "expires_at": None,
         "subscription_type": "basic",
     })
+    # Выдача идёт через сервисный слой (subscription_service), а он держит
+    # собственную ссылку на database. Подменяем в обоих модулях: иначе
+    # обёртка пойдёт в настоящую базу, которой в тестах нет.
     monkeypatch.setattr(confirmation, "database", fake_db)
+    from app.services.subscriptions import service as _subscription_service
+    monkeypatch.setattr(_subscription_service, "database", fake_db)
 
     generic = AsyncMock()
     monkeypatch.setattr(confirmation, "_send_confirmation", generic)

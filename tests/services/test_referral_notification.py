@@ -118,7 +118,12 @@ async def test_webhook_payment_notifies_referrer(monkeypatch):
         "subscription_type": "basic", "period_days": 30,
         "referral_reward": REWARD,
     })
+    # Выдача идёт через сервисный слой (subscription_service), а он держит
+    # собственную ссылку на database. Подменяем в обоих модулях: иначе
+    # обёртка пойдёт в настоящую базу, которой в тестах нет.
     monkeypatch.setattr(confirmation, "database", fake_db)
+    from app.services.subscriptions import service as _subscription_service
+    monkeypatch.setattr(_subscription_service, "database", fake_db)
     monkeypatch.setattr(confirmation, "_send_confirmation", AsyncMock())
     monkeypatch.setattr(
         "app.services.site_sync.is_enabled", lambda: False, raising=False,

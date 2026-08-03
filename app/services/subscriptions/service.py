@@ -13,6 +13,14 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 from dataclasses import dataclass
 import database
+# Доменные исключения слоя БД: сервис их не «переводит», а пропускает —
+# см. комментарий в finalize_purchase.
+from database.subscriptions import (
+    PaymentAlreadyProcessed,
+    PaymentAmountMismatch,
+    PurchaseInvalidStatus,
+    PurchaseLocked,
+)
 import config
 
 logger = logging.getLogger(__name__)
@@ -307,6 +315,24 @@ async def finalize_purchase(
         
         return result
         
+    except (
+        PaymentAlreadyProcessed,
+        PaymentAmountMismatch,
+        PurchaseInvalidStatus,
+        PurchaseLocked,
+    ):
+        # Доменные исключения слоя БД пробрасываем как есть.
+        #
+        # Каждое означает конкретную вещь, на которую вызывающий отвечает
+        # по-своему: «платёж уже обработан» — вернуть провайдеру
+        # already_processed и не повторять; «сумма не сошлась» — отказать и
+        # позвать админа; «покупка заперта» — подождать и повторить.
+        #
+        # Если завернуть их в общий PaymentFinalizationError, все три
+        # превращаются в «что-то пошло не так»: повторный вебхук получит
+        # ошибку вместо идемпотентного ответа, а расхождение суммы потеряет
+        # причину.
+        raise
     except ValueError as e:
         # database.finalize_purchase raises ValueError for invalid inputs
         raise PaymentFinalizationError(f"Invalid purchase: {e}") from e

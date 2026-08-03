@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any
 import asyncpg
 import config
 import database
+from app.services.payments.exceptions import PaymentFinalizationError
 from aiogram import Bot
 
 from database.subscriptions import (
@@ -180,16 +181,22 @@ async def process_confirmed_payment(
 
             return {"status": "ok", "purchase_id": purchase_id}
 
-        result = await database.finalize_purchase(
+        # Через сервисный слой, а не напрямую в database.
+        #
+        # Обёртка сама проверяет success и приводит любую ошибку к
+        # PaymentFinalizationError. Раньше отсюда звали database напрямую и
+        # разбирали результат вручную, бросая голый Exception — при одной и
+        # той же ошибке вебхук отвечал провайдеру не тем, чем экран в боте,
+        # а шаг, добавленный в обёртку (метрика, идемпотентный лог),
+        # обходился стороной.
+        from app.services.subscriptions import service as subscription_service
+
+        result = await subscription_service.finalize_purchase(
             purchase_id=purchase_id,
             payment_provider=provider,
             amount_rubles=amount_rubles,
             invoice_id=str(invoice_id),
         )
-
-        if not result or not result.get("success"):
-            logger.error(f"{provider} webhook: finalize_purchase failed: {result}")
-            raise Exception(f"finalize_purchase returned invalid result: {result}")
 
         if result.get("remnawave_sync_failed"):
             err = result.get("remnawave_sync_error") or "unknown"
@@ -381,6 +388,43 @@ async def process_confirmed_payment(
                 f"Replay resync to Remnawave failed: {resync_err}"
             ) from resync_err
         return {"status": "already_processed"}
+    except PaymentFinalizationError as e:
+        # Сервисная обёртка приводит ЛЮБУЮ ошибку выдачи к своему типу, в
+        # том числе временную: RuntimeError из provision_subscription, когда
+        # панель ответила не 2xx.
+        #
+        # Разбирать её надо по первопричине. Иначе моргнувшая панель
+        # выглядела бы как окончательный отказ, вебхук отвечал бы 200, и
+        # провайдер не повторил бы платёж — человек заплатил и остался без
+        # подписки.
+        cause = e.__cause__
+        if isinstance(cause, (asyncpg.PostgresError, asyncio.TimeoutError, OSError, RuntimeError)):
+            logger.error(
+                f"PAYMENT_TRANSIENT_ERROR: provider={provider}, user={telegram_id}, "
+                f"purchase_id={purchase_id}, error={type(cause).__name__}: {cause}"
+            )
+            from app.services.admin_alerts import alert_payment_failure
+            tariff, period_days = await _lookup_purchase_tariff(purchase_id)
+            await alert_payment_failure(
+                bot, provider, telegram_id, purchase_id, cause, is_transient=True,
+                amount_rubles=amount_rubles, tariff=tariff, period_days=period_days,
+            )
+            raise TransientPaymentError(
+                f"Transient error during payment: {type(cause).__name__}: {cause}"
+            ) from e
+
+        logger.exception(
+            f"PAYMENT_PERMANENT_ERROR: provider={provider}, user={telegram_id}, "
+            f"purchase_id={purchase_id}, error={e}"
+        )
+        from app.services.admin_alerts import alert_payment_failure
+        tariff, period_days = await _lookup_purchase_tariff(purchase_id)
+        await alert_payment_failure(
+            bot, provider, telegram_id, purchase_id, e, is_transient=False,
+            amount_rubles=amount_rubles, tariff=tariff, period_days=period_days,
+        )
+        return {"status": "error"}
+
     except (asyncpg.PostgresError, asyncio.TimeoutError, OSError, RuntimeError) as e:
         # Transient infrastructure error (DB / network / Remnawave provision
         # raised RuntimeError) — provider MUST retry. provision_subscription

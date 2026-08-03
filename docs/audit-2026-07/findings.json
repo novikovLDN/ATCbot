@@ -3968,6 +3968,23 @@
         "app/handlers/callbacks/__init__.py",
         "tests/services/test_broadcast_buttons_reachable.py"
       ]
+    },
+    {
+      "title": "Выдача всех семи товаров мини-магазина недостижима: тело функций после return",
+      "severity": "P0",
+      "category": "bug",
+      "file": "app/handlers/payments/goods_delivery.py",
+      "line": 65,
+      "source": "regression-check",
+      "defect": "При выносе выдачи из обработчика оплаты в отдельный модуль тела всех семи функций (deliver_gift, deliver_premium, deliver_stars, deliver_steam, deliver_spotify, deliver_apple_id, deliver_traffic_pack) остались на лишнем уровне отступа — внутри guard-clause, сразу после `return False`. 318 строк недостижимого кода.",
+      "failure_scenario": "Каждая функция всегда возвращала False. Цикл выдачи не забирал ни одну покупку, всё уходило в предохранитель: покупателю писали «заказ у поддержки», админу летел алерт. Автоматическая выдача не работала ни для подарка, ни для Premium, звёзд, Steam, Spotify, Apple ID и пакетов ГБ — каждый заказ требовал ручного разбора.",
+      "status": "fixed",
+      "resolution": "Тела всех семи функций сдвинуты на уровень функции. Внесено моим же коммитом 114e88c (разбор обработчика оплаты по типам товара) — ошибка отступа при выносе.\nСмягчающее обстоятельство: предохранитель, написанный в том же коммите, не давал выдать чужой товар и не терял деньги — покупка помечалась оплаченной, админ получал алерт. То есть заказы обрабатывались вручную, а не пропадали.\nНайдено обходом дерева разбора: Python на код после return не ругается, ruff в конфигурации проекта тоже, а тестами выдача не покрывалась — она требует базы и Telegram.\nДобавлены два теста: tests/services/test_goods_delivery_reachable.py проверяет, что у каждой функции есть рабочее тело после проверки типа и путь к return True, а список в диспетчере совпадает с модулем; tests/services/test_no_unreachable_code.py обходит весь app/ и database/ (204 файла) и запрещает операторы после return / raise / continue / break в том же блоке.",
+      "fixed_in": [
+        "app/handlers/payments/goods_delivery.py",
+        "tests/services/test_goods_delivery_reachable.py",
+        "tests/services/test_no_unreachable_code.py"
+      ]
     }
   ],
   "refuted": [

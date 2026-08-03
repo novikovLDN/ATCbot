@@ -59,7 +59,12 @@ async def test_amount_mismatch_alerts_admin_and_reports_error(monkeypatch):
         side_effect=PaymentAmountMismatch("Payment amount mismatch: expected=499.00, actual=1.00")
     )
 
+    # Выдача идёт через сервисный слой (subscription_service), а он держит
+    # собственную ссылку на database. Подменяем в обоих модулях: иначе
+    # обёртка пойдёт в настоящую базу, которой в тестах нет.
     monkeypatch.setattr(confirmation, "database", fake_db)
+    from app.services.subscriptions import service as _subscription_service
+    monkeypatch.setattr(_subscription_service, "database", fake_db)
     monkeypatch.setattr(confirmation, "_lookup_purchase_tariff", fake_lookup_tariff)
     monkeypatch.setattr(
         "app.services.admin_alerts.alert_payment_failure", fake_alert, raising=False
@@ -92,7 +97,12 @@ async def test_already_processed_still_returns_idempotent_status(monkeypatch):
     )
     fake_db.get_subscription = AsyncMock(return_value=None)
 
+    # Выдача идёт через сервисный слой (subscription_service), а он держит
+    # собственную ссылку на database. Подменяем в обоих модулях: иначе
+    # обёртка пойдёт в настоящую базу, которой в тестах нет.
     monkeypatch.setattr(confirmation, "database", fake_db)
+    from app.services.subscriptions import service as _subscription_service
+    monkeypatch.setattr(_subscription_service, "database", fake_db)
 
     result = await confirmation.process_confirmed_payment(
         provider="platega", purchase_id="purchase_abc", amount_rubles=499.0,
