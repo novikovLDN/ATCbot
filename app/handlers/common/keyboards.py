@@ -543,31 +543,21 @@ def get_service_status_keyboard(language: str):
 
 
 
-def get_instruction_keyboard(
-    language: str,
-    platform: str = "unknown",
-    subscription_type: str = "basic",
-    vpn_key: Optional[str] = None,
-):
-    """Клавиатура экрана 'Инструкция': кнопка перехода в мини-приложение + Назад."""
-    guide_url = f"{MINI_APP_URL}?startapp=guide"
-    buttons = [
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "instruction._open_guide", "📖 Инструкция по установке"),
-            web_app=WebAppInfo(url=guide_url),
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
-        )],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+# Здесь была get_instruction_keyboard — клавиатура удалённого экрана
+# «Инструкция». Кнопка в мини-приложение теперь стоит на экране
+# выбора устройства (connect_guide).
 
 
 def get_reissue_notification_keyboard(language: str = "ru"):
-    """Клавиатура для уведомления о перевыпуске VPN-ключа"""
+    """Клавиатура уведомления о перевыпуске VPN-ключа.
+
+    Кнопка инструкции ведёт на connect_instruction — пошаговую установку.
+    Раньше она вела на menu_instruction: отдельный экран-заглушку, который
+    удалён. После перевыпуска человеку нужно заново добавить ключ, и
+    полезен именно пошаговый экран, а не страница со ссылкой.
+    """
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.go_to_instruction"), callback_data="menu_instruction")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.go_to_instruction"), callback_data="connect_instruction")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.copy_key"), callback_data="copy_vpn_key")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.my_profile"), callback_data="menu_profile")],
     ])

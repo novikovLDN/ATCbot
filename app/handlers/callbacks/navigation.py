@@ -372,12 +372,19 @@ async def callback_paid_discount_15(callback: CallbackQuery, state: FSMContext):
     await _open_buy_screen(callback, callback.bot, state)
 
 
-@router.callback_query(F.data == "menu_instruction")
-@router.callback_query(F.data == "instruction")
-async def callback_instruction(callback: CallbackQuery):
-    """Инструкция. Entry from main menu (menu_instruction) or profile (instruction)."""
-    from app.handlers.common.screens import _open_instruction_screen
-    await _open_instruction_screen(callback, callback.bot)
+# Здесь был экран «Инструкция» на menu_instruction / instruction.
+#
+# Инструкций в боте было две. Эта — страница из одной строки текста и
+# кнопки в мини-приложение. Вторая, connect_instruction, — настоящая
+# пошаговая установка: выбор устройства, ссылки на приложения, ключи,
+# QR-код, диплинки.
+#
+# Первая при этом была практически недостижима: в меню кнопки не было,
+# попасть можно было только командой /instruction, которую надо знать,
+# да из админского уведомления о перевыпуске ключа. Алиас instruction
+# вообще не выставлялся ни одной кнопкой.
+#
+# Оставлена вторая, кнопка в мини-приложение переехала в неё.
 
 
 @router.callback_query(F.data.in_({"copy_key_menu", "copy_key", "copy_key_plus", "copy_vpn_key"}))

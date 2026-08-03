@@ -1107,7 +1107,17 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Канонический экран — пошаговая установка (connect_instruction): выбор устройства, ссылки на приложения, ключи, QR, диплинки. Он и стоит в меню.\nВторой экран (menu_instruction + сиротский алиас instruction) удалён: это была страница из одной строки текста и кнопки в мини-приложение, попасть на неё можно было только командой /instruction или из админского уведомления о перевыпуске. Вместе с ним удалены _open_instruction_screen и get_instruction_keyboard.\nМини-приложение не потеряно: кнопка «Инструкция по установке» (ключ instruction._open_guide, есть во всех семи языках) переехала на экран выбора устройства.\nКоманда /instruction теперь ведёт туда же, что и кнопка: тело экрана вынесено в _open_connect_screen(event, bot), принимающую и Message, и CallbackQuery. Раньше команда и кнопка показывали разное.\nКнопка в уведомлении о перевыпуске переключена на connect_instruction: после перевыпуска ключ надо добавить заново, и полезен именно пошаговый экран.\nКлюч instruction._text остался в словарях мёртвым — словари i18n сейчас правит другой исполнитель, чтобы не конфликтовать, удаление ключа отложено.",
+      "fixed_in": [
+        "app/handlers/callbacks/navigation.py",
+        "app/handlers/callbacks/connect_guide.py",
+        "app/handlers/common/screens.py",
+        "app/handlers/common/keyboards.py",
+        "app/handlers/user/support.py",
+        "tests/services/test_single_instruction_screen.py"
+      ]
     },
     {
       "title": "Кнопки «Скопировать логин» и «Скопировать пароль» в бизнес-панели отдают одно и то же значение",

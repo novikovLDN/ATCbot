@@ -21,7 +21,7 @@ import logging
 import os
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile, WebAppInfo
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state
 from aiogram.filters import StateFilter
@@ -39,6 +39,7 @@ from app.handlers.common.keyboards import (
     get_about_keyboard,
     get_service_status_keyboard,
     get_connect_keyboard,
+    MINI_APP_URL,
 )
 router = Router()
 
@@ -58,8 +59,17 @@ async def callback_connect_instruction(callback: CallbackQuery):
         await callback.answer()
     except Exception:
         pass
+    await _open_connect_screen(callback, callback.bot)
 
-    telegram_id = callback.from_user.id
+
+async def _open_connect_screen(event, bot):
+    """Экран выбора устройства — общий для кнопки и команды /instruction.
+
+    Принимает и CallbackQuery, и Message: инструкция должна открываться
+    одинаково, откуда бы человек ни пришёл. Раньше у команды был свой,
+    более бедный экран.
+    """
+    telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
 
     # Auto-provision Remnawave user for existing subscribers + ensure squad (fire-and-forget)
@@ -107,19 +117,35 @@ async def callback_connect_instruction(callback: CallbackQuery):
             InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
             InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
         ],
+        # Мини-приложение с визуальной инструкцией. Раньше на него вёл
+        # отдельный экран «Инструкция» — промежуточная страница из одной
+        # строки текста и одной кнопки. Попасть на неё можно было только
+        # командой /instruction, которую надо знать: в меню её не было.
+        # Кнопку перенесли сюда, промежуточный экран убрали.
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "instruction._open_guide", "📖 Инструкция по установке"),
+            web_app=WebAppInfo(url=f"{MINI_APP_URL}?startapp=guide"),
+        )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
         )],
     ])
 
-    # Always send photo + text for device selection
+    # Экран всегда отправляется картинкой с подписью.
     _ds_photo = _DEVICE_SELECT_PHOTO.get("prod" if config.IS_PROD else "stage", "")
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await callback.bot.send_photo(
+
+    # Экран, с которого пришли по кнопке, убираем: заменить картинку в
+    # уже отправленном сообщении нельзя. При заходе командой удалять
+    # нечего — там сообщение самого человека.
+    prev = getattr(event, "message", None)
+    if prev is not None:
+        try:
+            await prev.delete()
+        except Exception:
+            pass
+
+    await bot.send_photo(
         chat_id=telegram_id,
         photo=_ds_photo,
         caption=text,

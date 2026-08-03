@@ -21,7 +21,6 @@ from app.services.subscriptions.service import (
 from app.handlers.common.utils import safe_edit_text, sanitize_display_name
 from app.handlers.common.keyboards import (
     get_about_keyboard,
-    get_instruction_keyboard,
     get_profile_keyboard,
 )
 from app.handlers.common.states import PurchaseState
@@ -158,23 +157,11 @@ async def _open_help_screen(event: Union[Message, CallbackQuery], bot: Bot):
     )
 
 
-async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bot):
-    """Инструкция. Reusable for callback and /instruction command. Directs user to mini app guide."""
-    if isinstance(event, CallbackQuery):
-        try:
-            await event.answer()
-        except Exception:
-            pass
-
-    msg = event.message if isinstance(event, CallbackQuery) else event
-    telegram_id = event.from_user.id
-    language = await resolve_user_language(telegram_id)
-    text = i18n_get_text(language, "instruction._text", "instruction_text")
-    await safe_edit_text(
-        msg, text,
-        reply_markup=get_instruction_keyboard(language),
-        bot=bot
-    )
+# Здесь был _open_instruction_screen — экран из строки текста и
+# кнопки в мини-приложение. Инструкций в боте было две, и эта была
+# практически недостижима: в меню кнопки не было. Осталась вторая,
+# пошаговая установка (connect_guide._open_connect_screen), кнопка
+# в мини-приложение переехала в неё.
 
 
 

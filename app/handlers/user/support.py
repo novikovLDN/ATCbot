@@ -10,9 +10,11 @@ from aiogram.filters import Command
 from app.handlers.common.guards import ensure_db_ready_message
 from app.handlers.common.screens import (
     _open_help_screen,
-    _open_instruction_screen,
     _open_about_screen,
 )
+# Локальный импорт внутри обработчика не нужен: connect_guide тянет
+# screens, а screens — нет, кольца не будет.
+from app.handlers.callbacks.connect_guide import _open_connect_screen
 
 user_router = Router()
 logger = logging.getLogger(__name__)
@@ -30,12 +32,18 @@ async def cmd_help(message: Message, bot: Bot):
 
 @user_router.message(Command("instruction"))
 async def cmd_instruction(message: Message, bot: Bot):
-    """Обработчик команды /instruction — открывает экран инструкции"""
+    """Команда /instruction — открывает пошаговую установку.
+
+    Раньше вела на отдельный экран-заглушку с кнопкой в мини-приложение.
+    Инструкций в боте было две, и та, что в меню (пошаговая установка),
+    полезнее: выбор устройства, ссылки на приложения, ключи, QR. Кнопку в
+    мини-приложение перенесли туда же, так что ничего не потеряно.
+    """
     if message.chat.type != "private":
         return
     if not await ensure_db_ready_message(message):
         return
-    await _open_instruction_screen(message, bot)
+    await _open_connect_screen(message, bot)
 
 
 @user_router.message(Command("info"))

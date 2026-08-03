@@ -25,7 +25,6 @@ from app.handlers.common.keyboards import (
     get_profile_keyboard,
     get_about_keyboard,
     get_service_status_keyboard,
-    get_instruction_keyboard,
     get_reissue_notification_keyboard,
     _get_promo_error_keyboard,
 )
@@ -51,7 +50,6 @@ __all__ = [
     "get_profile_keyboard",
     "get_about_keyboard",
     "get_service_status_keyboard",
-    "get_instruction_keyboard",
     "get_reissue_notification_keyboard",
     "_get_promo_error_keyboard",
 ]
