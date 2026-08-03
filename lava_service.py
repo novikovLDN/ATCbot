@@ -71,11 +71,22 @@ async def create_invoice(
     amount_rubles: float,
     purchase_id: str,
     comment: str = "",
-    expire: int = 300,
+    expire: int = config.INVOICE_TIMEOUT_SECONDS,
 ) -> Dict[str, Any]:
-    """Create payment invoice via Lava Business API.
+    """Создать счёт в Lava Business API.
 
     POST https://api.lava.ru/business/invoice/create
+
+    Про expire. Раньше здесь стояло жёсткое 300, а бот удаляет сообщение со
+    счётом через config.INVOICE_TIMEOUT_SECONDS = 900 и обещает человеку
+    15 минут. Значения разошлись: пользователь открывал ссылку на седьмой
+    минуте и упирался в истёкший счёт, хотя кнопка ещё висела в чате.
+
+    Теперь срок берётся из той же константы, что и время жизни сообщения, —
+    расходиться им больше нечем. Значение безопасно при любой трактовке
+    единицы измерения провайдером: если это секунды, получается ровно
+    обещанные 15 минут; если минуты — счёт проживёт дольше обещанного, что
+    человеку не вредит.
     """
     if not is_enabled():
         raise Exception("Lava not configured")

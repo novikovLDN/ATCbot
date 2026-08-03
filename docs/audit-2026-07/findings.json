@@ -319,7 +319,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "payments",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Срок жизни счёта Lava берётся из config.INVOICE_TIMEOUT_SECONDS — той же константы, что и время жизни сообщения с кнопкой. Раньше здесь стояло жёсткое 300, а бот обещал человеку 15 минут: на седьмой минуте открывалась ссылка на истёкший счёт, хотя кнопка ещё висела в чате. Значение безопасно при любой трактовке единицы провайдером: секунды дают ровно обещанные 15 минут, минуты — дольше обещанного, что человеку не вредит.",
+      "fixed_in": [
+        "lava_service.py",
+        "tests/services/test_worker_iteration_budget.py"
+      ]
     },
     {
       "title": "Голое except/continue в расчёте цены прячет ошибки и молча убирает периоды с экрана покупки",
@@ -347,7 +353,9 @@
       "risk": "низкий",
       "confidence": "medium",
       "_dom": "payments",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Уже исправлено ранее: pending объявлена до try (`pending: Optional[Dict[str, Any]] = None`) с комментарием, объясняющим, что ветка восстановления обращается к ней и при исключении на первом же запросе получала UnboundLocalError."
     },
     {
       "title": "Экран покупки Telegram Stars захардкожен на русском, язык пользователя игнорируется",
@@ -2548,7 +2556,9 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "i18n",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Пакет app/core/i18n удалён целиком вместе с другими мёртвыми модулями — он ломался на импорте несуществующего .manager и никем не использовался."
     },
     {
       "title": "Ни одного fallback при ошибке парсинга разметки — 337 tg-emoji без деградации",
@@ -2872,7 +2882,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "workers",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Ветка «БД не готова» теперь выставляет outcome='skipped' и причину 'db_not_ready'. Раньше переменная оставалась 'success', и недоступность базы выглядела в метриках успешной итерацией. Конец итерации логирует finally — он срабатывает и на continue.",
+      "fixed_in": [
+        "fast_expiry_cleanup.py",
+        "tests/services/test_worker_iteration_budget.py"
+      ]
     },
     {
       "title": "Ошибка отступа: ветка bypass-only в fast_expiry_cleanup дополнительно пишет ложный аудит «подписка истекла и UUID удалён»",
@@ -2942,7 +2958,14 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "workers",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Отсчёт бюджета вынесен ДО цикла по батчам в fast_expiry_cleanup и auto_renewal. Раньше он стоял внутри и обнулялся на каждой сотне строк: заявленные 15 секунд на итерацию превращались в 15 секунд НА БАТЧ, и воркер мог держать event loop минутами. Добавлена проверка бюджета между батчами: без неё выбранный целиком батч всё равно тянул следующий. Тесты: tests/services/test_worker_iteration_budget.py (9 шт.).",
+      "fixed_in": [
+        "fast_expiry_cleanup.py",
+        "auto_renewal.py",
+        "tests/services/test_worker_iteration_budget.py"
+      ]
     },
     {
       "title": "Пропускная способность activation_worker ограничена примерно 30 активациями за 5 минут",
@@ -3631,6 +3654,23 @@
         "app/handlers/admin/_broadcast_send.py",
         "app/handlers/admin/__init__.py",
         "tests/services/test_access_split.py"
+      ]
+    },
+    {
+      "title": "Двойной учёт конца итерации в fast_expiry_cleanup: ручной вызов рядом с finally",
+      "severity": "P2",
+      "category": "bug",
+      "file": "fast_expiry_cleanup.py",
+      "line": 114,
+      "defect": "Ветка feature-flag вызывала log_worker_iteration_end вручную и делала continue; finally логировал конец итерации второй раз — каждая пропущенная итерация попадала в метрики дважды.",
+      "failure_scenario": "Метрика «сколько итераций отработал воркер» завышена ровно на число пропусков по kill-switch, и понять реальную частоту работы по ней нельзя.",
+      "proposed_action": "Сделано: ручной вызов убран, конец итерации логирует только finally.",
+      "source": "audit-followup",
+      "status": "fixed",
+      "resolution": "Ручной вызов удалён, причина пропуска передаётся через переменную iteration_reason в finally. Тест проверяет, что log_worker_iteration_end встречается в файле ровно один раз.",
+      "fixed_in": [
+        "fast_expiry_cleanup.py",
+        "tests/services/test_worker_iteration_budget.py"
       ]
     }
   ],

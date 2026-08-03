@@ -113,7 +113,19 @@ async def process_auto_renewals(bot: Bot):
     # This worker does not call VPN API (no httpx); only DB and Telegram.
     # Pool timeout is already configured (10s); acquire_connection uses pool.acquire() which respects that timeout.
     # For extra safety, we wrap acquire in wait_for to ensure cancellation if pool hangs.
+    # Бюджет времени на весь проход, а не на один батч. Раньше отсчёт стоял
+    # внутри цикла по батчам и обнулялся на каждой сотне подписок: заявленные
+    # 15 секунд превращались в 15 секунд НА БАТЧ, и воркер мог держать
+    # event loop минутами — ровно то, от чего лимит и должен защищать.
+    iteration_start = time.monotonic()
     while True:
+        if time.monotonic() - iteration_start > MAX_ITERATION_SECONDS:
+            logger.warning(
+                "auto_renewal: бюджет прохода исчерпан, остальные подписки — "
+                "в следующем цикле (они не потеряются: выборка идёт по окну "
+                "истечения, а не по курсору)"
+            )
+            break
         cm = acquire_connection(pool, "auto_renewal_main")
         try:
             conn = await asyncio.wait_for(cm.__aenter__(), timeout=10.0)
@@ -154,7 +166,6 @@ async def process_auto_renewals(bot: Bot):
                     f"Auto-renewal check: Found {len(subscriptions)} subscriptions expiring within {RENEWAL_WINDOW_HOURS} hours"
                 )
 
-                iteration_start = time.monotonic()
                 for i, sub_row in enumerate(subscriptions):
                     if i > 0 and i % 50 == 0:
                         await cooperative_yield()

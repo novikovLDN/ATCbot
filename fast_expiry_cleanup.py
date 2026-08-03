@@ -94,6 +94,8 @@ async def fast_expiry_cleanup_task(bot=None):
         items_processed = 0
         outcome = "success"
         iteration_error_type = None
+        # Причина пропуска итерации — уходит в метрики вместе с исходом.
+        iteration_reason = None
         
         # Множество для отслеживания UUID, которые мы уже обрабатываем (защита от race condition)
         # MEMORY_LEAK_FIX: Clear set at start of each iteration to prevent unbounded growth
@@ -111,26 +113,27 @@ async def fast_expiry_cleanup_task(bot=None):
             # Feature flag check
             from app.core.feature_flags import get_feature_flags
             feature_flags = get_feature_flags()
+            # Конец итерации логирует finally ниже — он срабатывает и на
+            # continue. Раньше эта ветка логировала его ещё и сама, поэтому
+            # каждая пропущенная итерация попадала в метрики дважды.
             if not feature_flags.background_workers_enabled:
                 logger.warning(
                     f"[FEATURE_FLAG] Background workers disabled, skipping iteration in fast_expiry_cleanup "
                     f"(iteration={iteration_number})"
                 )
                 outcome = "skipped"
-                reason = "background_workers_enabled=false"
-                log_worker_iteration_end(
-                    worker_name="fast_expiry_cleanup",
-                    outcome=outcome,
-                    items_processed=0,
-                    duration_ms=(time.time() - iteration_start_time) * 1000,
-                    reason=reason,
-                )
+                iteration_reason = "background_workers_enabled=false"
                 await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                 continue
-            
+
             # Simple DB readiness check
             if not database.DB_READY:
+                # Исход обязателен: раньше переменная оставалась "success",
+                # и в метриках пропущенная итерация выглядела успешной —
+                # то есть недоступность базы была не видна вовсе.
                 logger.warning("fast_expiry_cleanup: skipping — DB not ready")
+                outcome = "skipped"
+                iteration_reason = "db_not_ready"
                 await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                 continue
             
@@ -158,6 +161,13 @@ async def fast_expiry_cleanup_task(bot=None):
 
                     try:
                         last_seen_id = 0
+                        # Бюджет времени на всю итерацию, а не на один батч.
+                        # Раньше отсчёт стоял внутри цикла и обнулялся на
+                        # каждой сотне строк: заявленные 15 секунд на итерацию
+                        # превращались в 15 секунд НА БАТЧ, и воркер мог
+                        # держать event loop минутами — ровно то, от чего
+                        # лимит и должен защищать.
+                        loop_start = time.monotonic()
                         while True:
                             # POOL_STABILITY: Fetch batch with short-lived conn; release immediately (no HTTP inside).
                             async with acquire_connection(pool, "fast_expiry_fetch") as conn:
@@ -176,7 +186,12 @@ async def fast_expiry_cleanup_task(bot=None):
                                 break
 
                             logger.info(f"cleanup: FOUND_EXPIRED [count={len(rows)}]")
-                            loop_start = time.monotonic()
+                            if time.monotonic() - loop_start > MAX_ITERATION_SECONDS:
+                                logger.warning(
+                                    "fast_expiry_cleanup: бюджет итерации исчерпан, "
+                                    "остальные батчи — в следующем проходе"
+                                )
+                                break
                             for i, row in enumerate(rows):
                                 if i > 0 and i % 20 == 0:
                                     await cooperative_yield()
@@ -460,8 +475,9 @@ async def fast_expiry_cleanup_task(bot=None):
                     worker_name="fast_expiry_cleanup",
                     outcome=outcome,
                     items_processed=items_processed,
-                    error_type=iteration_error_type if 'iteration_error_type' in locals() else None,
-                    duration_ms=duration_ms
+                    error_type=iteration_error_type,
+                    duration_ms=duration_ms,
+                    reason=iteration_reason,
                 )
                 if outcome not in ("success", "cancelled", "skipped"):
                     await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
