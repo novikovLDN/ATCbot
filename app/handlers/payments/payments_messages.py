@@ -52,65 +52,17 @@ payments_router = Router()
 logger = logging.getLogger(__name__)
 
 
-# Типы покупок, у которых есть собственная ветка обработки в
-# process_successful_payment. Всё, что сюда не попало, финализируется как
-# VPN-подписка — поэтому забытый тип означает «деньги списаны, товар не выдан».
-_ROUTED_PURCHASE_TYPES = frozenset({
-    "gift", "telegram_premium", "telegram_stars", "steam",
-    "apple_id", "traffic_pack", "spotify", "proxy",
-})
-
-# Некоторые покупки опознаются по префиксу тарифа, а не по purchase_type:
-# так же, как это делает app/services/payments/confirmation.py для вебхуков.
-_TARIFF_PREFIX_ROUTES = (
-    ("spotify_", "spotify"),
-    ("steam_", "steam"),
-    ("apple_id_", "apple_id"),
+# Опознание типа покупки и суммы вынесено в отдельный модуль: им пользуется
+# и выдача товаров (goods_delivery), иначе модули замкнулись бы кольцом.
+# Имена реэкспортируются — на них ссылается существующий код и тесты.
+from app.handlers.payments import goods_delivery as goods
+from app.handlers.payments.goods_delivery import PaidPurchase
+from app.handlers.payments.purchase_routing import (  # noqa: F401
+    _ROUTED_PURCHASE_TYPES,
+    _TARIFF_PREFIX_ROUTES,
+    classify_purchase,
+    resolve_payment_amount_rubles,
 )
-
-
-def resolve_payment_amount_rubles(
-    total_amount: int, is_stars: bool, pending_purchase: Optional[dict]
-) -> float:
-    """Рублёвая сумма платежа.
-
-    Для Stars total_amount — это количество звёзд, а не рубли: записывать его
-    как рублёвую сумму нельзя, иначе выручка и реферальный кешбэк считаются
-    от числа звёзд. Берём цену, зафиксированную при создании покупки.
-    Для карты total_amount приходит в копейках.
-    """
-    if not is_stars:
-        return total_amount / 100.0
-
-    price_kopecks = (pending_purchase or {}).get("price_kopecks")
-    if price_kopecks:
-        return price_kopecks / 100.0
-
-    logger.error(
-        "STARS_PRICE_MISSING: у покупки нет price_kopecks, выручка будет занижена, stars=%s",
-        total_amount,
-    )
-    return float(total_amount)
-
-
-def classify_purchase(pending_purchase: Optional[dict]) -> str:
-    """Определить, как обрабатывать оплаченную покупку.
-
-    Возвращает 'subscription' только для настоящих VPN-подписок. Любой
-    товар со своей веткой обязан вернуть собственный тип, иначе оплата
-    уйдёт в финализацию подписки и товар не будет выдан.
-    """
-    purchase = pending_purchase or {}
-    purchase_type = (purchase.get("purchase_type") or "").strip()
-    if purchase_type in _ROUTED_PURCHASE_TYPES:
-        return purchase_type
-
-    tariff = str(purchase.get("tariff") or "")
-    for prefix, route in _TARIFF_PREFIX_ROUTES:
-        if tariff.startswith(prefix):
-            return route
-
-    return "subscription"
 
 
 @payments_router.pre_checkout_query()
@@ -634,355 +586,40 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         
     # Проверяем, является ли это подарочной подпиской
-    is_gift_purchase = pending_purchase.get("purchase_type") == "gift"
-
-    if is_gift_purchase:
-        # Подарочная подписка — финализируем напрямую через database
-        payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
-        try:
-            gift_result = await database.finalize_purchase(
-                purchase_id=purchase_id,
-                payment_provider=payment_provider_name,
-                amount_rubles=payment_amount_rubles,
-            )
-            if gift_result and gift_result.get("is_gift") and gift_result.get("gift_code"):
-                from app.handlers.callbacks.gift import _send_gift_success
-                await _send_gift_success(
-                    bot=message.bot,
-                    telegram_id=telegram_id,
-                    language=language,
-                    gift_code=gift_result["gift_code"],
-                    tariff=gift_result["gift_tariff"],
-                    period_days=gift_result["gift_period_days"],
-                )
-                logger.info(
-                    f"GIFT_PAYMENT_FINALIZED purchase_id={purchase_id} user={telegram_id} "
-                    f"code={gift_result['gift_code']}"
-                )
-                await state.clear()
-                duration_ms = (time.time() - start_time) * 1000
-                log_handler_exit(
-                    handler_name="process_successful_payment",
-                    outcome="success",
-                    telegram_id=telegram_id,
-                    operation="payment_finalization",
-                    duration_ms=duration_ms,
-                    payment_type="gift_subscription",
-                )
-                return
-            else:
-                logger.error(f"Gift finalization returned unexpected result: {gift_result}")
-                await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
-                return
-        except Exception as e:
-            logger.exception(f"Gift payment finalization failed: user={telegram_id}, error={e}")
-            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+    # Выдача товаров мини-магазина.
+    #
+    # Раньше здесь подряд шли семь веток `if is_gift_purchase:` … и так далее,
+    # на 290 строк, и все они делили локальные переменные обработчика. Теперь
+    # каждая живёт своей функцией в goods_delivery, а сюда передаётся один
+    # контекст. Функция сама проверяет, её ли это тип покупки, и возвращает
+    # True, если оплату обработала.
+    #
+    # Порядок в списке значения не имеет: типы взаимоисключающие. Важно, что
+    # список полный — забытый тип провалится ниже, в финализацию VPN-подписки,
+    # и это ловит предохранитель после цикла.
+    paid = PaidPurchase(
+        message=message,
+        state=state,
+        telegram_id=telegram_id,
+        language=language,
+        purchase_id=purchase_id,
+        pending_purchase=pending_purchase,
+        payment_amount_rubles=payment_amount_rubles,
+        is_stars_payment=is_stars_payment,
+        start_time=start_time,
+    )
+    for deliver in (
+        goods.deliver_gift,
+        goods.deliver_premium,
+        goods.deliver_stars,
+        goods.deliver_steam,
+        goods.deliver_spotify,
+        goods.deliver_apple_id,
+        goods.deliver_traffic_pack,
+    ):
+        if await deliver(paid):
             return
 
-    # --- Telegram Premium purchase: mark paid + send success + notify admin ---
-    is_premium_purchase = pending_purchase.get("purchase_type") == "telegram_premium"
-    if is_premium_purchase:
-        try:
-            # Комментарий «send BEFORE marking paid» описывал ложную заботу:
-            # данные покупки уже прочитаны в pending_purchase и доступны после
-            # пометки. Зато при сбое пометки человек и админ получали сообщения,
-            # а покупка оставалась pending — следующий вебхук слал их повторно.
-            if not await database.mark_pending_purchase_paid(purchase_id):
-                logger.info(
-                    "PREMIUM_ALREADY_FINALIZED purchase_id=%s — уведомления пропущены",
-                    purchase_id,
-                )
-                await state.clear()
-                return
-            from app.handlers.payments.telegram_premium import send_premium_success
-            await send_premium_success(
-                message.bot, telegram_id, purchase_id, pending_purchase,
-            )
-            logger.info(
-                "PREMIUM_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
-                purchase_id, telegram_id, payment_amount_rubles,
-            )
-        except Exception as e:
-            logger.exception("PREMIUM_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
-            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
-        await state.clear()
-        duration_ms = (time.time() - start_time) * 1000
-        log_handler_exit(
-            handler_name="process_successful_payment",
-            outcome="success",
-            telegram_id=telegram_id,
-            operation="payment_finalization",
-            duration_ms=duration_ms,
-            payment_type="telegram_premium",
-        )
-        return
-
-    # --- Telegram Stars purchase: mark paid + send success + notify admin ---
-    is_stars_purchase = pending_purchase.get("purchase_type") == "telegram_stars"
-    if is_stars_purchase:
-        try:
-            # Сначала помечаем покупку оплаченной, только потом уведомляем.
-            # mark_pending_purchase_paid возвращает False, если пометка уже
-            # стоит — это и есть защита от повторных уведомлений. При обратном
-            # порядке сбой пометки оставлял покупку в pending, хотя человек и
-            # админ уже получили сообщения, и следующий вебхук слал их заново.
-            if not await database.mark_pending_purchase_paid(purchase_id):
-                logger.info(
-                    "STARS_ALREADY_FINALIZED purchase_id=%s — уведомления пропущены",
-                    purchase_id,
-                )
-                await state.clear()
-                return
-            from app.handlers.payments.telegram_stars_purchase import send_stars_success
-            await send_stars_success(
-                message.bot, telegram_id, purchase_id, pending_purchase,
-            )
-            logger.info(
-                "STARS_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
-                purchase_id, telegram_id, payment_amount_rubles,
-            )
-        except Exception as e:
-            logger.exception("STARS_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
-            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
-        await state.clear()
-        duration_ms = (time.time() - start_time) * 1000
-        log_handler_exit(
-            handler_name="process_successful_payment",
-            outcome="success",
-            telegram_id=telegram_id,
-            operation="payment_finalization",
-            duration_ms=duration_ms,
-            payment_type="telegram_stars",
-        )
-        return
-
-    # --- Steam top-up: mark paid + send success + notify admin ---
-    is_steam_purchase = pending_purchase.get("purchase_type") == "steam"
-    if is_steam_purchase:
-        try:
-            # Порядок как в ветке Stars: пометка первой, она же защита от дублей.
-            if not await database.mark_pending_purchase_paid(purchase_id):
-                logger.info(
-                    "STEAM_ALREADY_FINALIZED purchase_id=%s — уведомления пропущены",
-                    purchase_id,
-                )
-                await state.clear()
-                return
-            from app.handlers.payments.steam_purchase import send_steam_success
-            await send_steam_success(
-                message.bot, telegram_id, purchase_id, pending_purchase,
-            )
-            logger.info(
-                "STEAM_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
-                purchase_id, telegram_id, payment_amount_rubles,
-            )
-        except Exception as e:
-            logger.exception("STEAM_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
-            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
-        await state.clear()
-        duration_ms = (time.time() - start_time) * 1000
-        log_handler_exit(
-            handler_name="process_successful_payment",
-            outcome="success",
-            telegram_id=telegram_id,
-            operation="payment_finalization",
-            duration_ms=duration_ms,
-            payment_type="steam",
-        )
-        return
-
-    # --- Spotify purchase: mark paid + send success + notify admin ---
-    # Без этой ветки оплата картой проваливалась в финализацию VPN-подписки:
-    # деньги списывались, Spotify не выдавался, заказ до админа не доходил.
-    # Ветка вебхуков (app/services/payments/confirmation.py) обрабатывала
-    # spotify корректно — расходилась только оплата через Telegram Payments.
-    if classify_purchase(pending_purchase) == "spotify":
-        try:
-            # Порядок как в остальных товарных ветках: пометка первой.
-            if not await database.mark_pending_purchase_paid(purchase_id):
-                logger.info(
-                    "SPOTIFY_ALREADY_FINALIZED purchase_id=%s — уведомления пропущены",
-                    purchase_id,
-                )
-                await state.clear()
-                return
-            from app.handlers.payments.spotify_purchase import send_spotify_success
-            await send_spotify_success(
-                message.bot, telegram_id, purchase_id, pending_purchase,
-            )
-            logger.info(
-                "SPOTIFY_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
-                purchase_id, telegram_id, payment_amount_rubles,
-            )
-        except Exception as e:
-            logger.exception("SPOTIFY_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
-            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
-        await state.clear()
-        duration_ms = (time.time() - start_time) * 1000
-        log_handler_exit(
-            handler_name="process_successful_payment",
-            outcome="success",
-            telegram_id=telegram_id,
-            operation="payment_finalization",
-            duration_ms=duration_ms,
-            payment_type="spotify",
-        )
-        return
-
-    # --- Apple ID purchase: mark paid + send success + notify admin ---
-    is_apple_purchase = pending_purchase.get("purchase_type") == "apple_id"
-    if is_apple_purchase:
-        try:
-            tariff = pending_purchase.get("tariff", "apple_id_usa_0")
-            tariff_parts = tariff.split("_")
-            region = tariff_parts[2] if len(tariff_parts) >= 3 else "usa"
-            nominal = int(tariff_parts[3]) if len(tariff_parts) >= 4 else 0
-
-            # Порядок как в остальных товарных ветках: пометка первой.
-            if not await database.mark_pending_purchase_paid(purchase_id):
-                logger.info(
-                    "APPLE_ALREADY_FINALIZED purchase_id=%s — уведомления пропущены",
-                    purchase_id,
-                )
-                await state.clear()
-                return
-            from app.handlers.callbacks.apple_id import send_apple_id_success
-            await send_apple_id_success(
-                message.bot, telegram_id, region, nominal, payment_amount_rubles,
-            )
-            logger.info("APPLE_PAYMENT_FINALIZED purchase_id=%s user=%s", purchase_id, telegram_id)
-        except Exception as e:
-            logger.exception("APPLE_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
-            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
-        await state.clear()
-        return
-
-    # --- Traffic pack purchase: finalize + add Remnawave traffic ---
-    is_traffic_pack = pending_purchase.get("purchase_type") == "traffic_pack"
-    if is_traffic_pack:
-        payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
-        try:
-            traffic_result = await database.finalize_purchase(
-                purchase_id=purchase_id,
-                payment_provider=payment_provider_name,
-                amount_rubles=payment_amount_rubles,
-            )
-            if traffic_result and traffic_result.get("is_traffic_pack"):
-                traffic_gb = traffic_result.get("traffic_gb", 0)
-                _tariff_tag = pending_purchase.get("tariff", "")
-                _is_bypass = _tariff_tag.startswith("bypass_")
-
-                # Bypass-only: ensure subscription row + Remnawave user exist
-                if _is_bypass:
-                    await database.ensure_bypass_only_subscription(telegram_id)
-
-                # Add traffic via Remnawave (create user if stale/missing)
-                rmn_success = False
-                pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
-                if pack:
-                    traffic_bytes = pack["bytes"]
-                    rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-                    if rmn_uuid:
-                        try:
-                            from app.services.remnawave_service import add_traffic
-                            rmn_success = await add_traffic(telegram_id, traffic_bytes)
-                        except Exception as rmn_err:
-                            logger.error(
-                                "TRAFFIC_PACK_REMNAWAVE_ERROR: user=%s gb=%s error=%s",
-                                telegram_id, traffic_gb, rmn_err,
-                            )
-                    if not rmn_success:
-                        # No UUID or stale (404) — clear and create fresh
-                        if rmn_uuid:
-                            await database.clear_remnawave_uuid(telegram_id)
-                        try:
-                            from app.services import remnawave_service
-                            # Локальный импорт datetime здесь делал имена datetime и
-                            # timezone локальными на всю функцию, из-за чего строка 210
-                            # падала с UnboundLocalError, а except Exception её глушил —
-                            # блок оценки состояния системы не работал никогда.
-                            far_future = datetime.now(timezone.utc) + timedelta(days=3650)
-                            await remnawave_service.create_remnawave_user(
-                                telegram_id, "basic", far_future,
-                                traffic_limit_override=traffic_bytes,
-                            )
-                            rmn_success = True
-                            logger.info("BYPASS_REMNAWAVE_USER_CREATED user=%s gb=%s", telegram_id, traffic_gb)
-                        except Exception as rmn_err:
-                            logger.error(
-                                "TRAFFIC_PACK_REMNAWAVE_CREATE_ERROR: user=%s gb=%s error=%s",
-                                telegram_id, traffic_gb, rmn_err,
-                            )
-                else:
-                    logger.error(
-                        "TRAFFIC_PACK_INVALID_GB: user=%s gb=%s purchase=%s",
-                        telegram_id, traffic_gb, purchase_id,
-                    )
-
-                # Bypass-only: activate 3-day trial if eligible
-                _trial_activated = False
-                if _is_bypass:
-                    try:
-                        from app.services.trials import service as trial_service
-                        if await trial_service.is_trial_available(telegram_id):
-                            await trial_service.activate_trial(telegram_id)
-                            _trial_activated = True
-                            logger.info("BYPASS_TRIAL_ACTIVATED user=%s", telegram_id)
-                    except Exception as trial_err:
-                        logger.warning("BYPASS_TRIAL_FAIL user=%s: %s", telegram_id, trial_err)
-
-                if _is_bypass:
-                    text = i18n_get_text(language, "bypass.purchase_success", gb=traffic_gb)
-                    if _trial_activated:
-                        text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
-                else:
-                    text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
-                if not rmn_success:
-                    text += "\n\n⚠️ Активация трафика задерживается. Обратитесь в поддержку, если не применится в течение часа."
-                    logger.error(
-                        "TRAFFIC_PACK_NOT_APPLIED: user=%s gb=%s purchase=%s — needs manual resolution",
-                        telegram_id, traffic_gb, purchase_id,
-                    )
-                if _is_bypass:
-                    kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
-                        [InlineKeyboardButton(
-                            text="Купить ещё ГБ",
-                            callback_data="buy_traffic",
-                            icon_custom_emoji_id="5199785165735367039",  # ⚡️
-                        )],
-                        [InlineKeyboardButton(text="← На главную", callback_data="menu_main")],
-                    ])
-                else:
-                    kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text=i18n_get_text(language, "common.back"),
-                            callback_data="menu_main",
-                        )],
-                    ])
-                await message.answer(text, reply_markup=kb, parse_mode="HTML")
-
-                logger.info(
-                    "TRAFFIC_PACK_PAYMENT_FINALIZED purchase_id=%s user=%s gb=%s",
-                    purchase_id, telegram_id, traffic_gb,
-                )
-            else:
-                logger.error(f"Traffic pack finalization unexpected result: {traffic_result}")
-                await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
-        except Exception as e:
-            logger.exception(f"Traffic pack payment finalization failed: user={telegram_id}, error={e}")
-            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
-        await state.clear()
-        duration_ms = (time.time() - start_time) * 1000
-        log_handler_exit(
-            handler_name="process_successful_payment",
-            outcome="success",
-            telegram_id=telegram_id,
-            operation="payment_finalization",
-            duration_ms=duration_ms,
-            payment_type="traffic_pack",
-        )
-        return
 
     # Предохранитель: всё, что ниже, финализируется как VPN-подписка.
     #

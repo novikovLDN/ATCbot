@@ -3593,6 +3593,25 @@
         "app/handlers/callbacks/balance_callbacks.py",
         "tests/services/test_access_split.py"
       ]
+    },
+    {
+      "title": "Разбивка process_successful_payment (1305 строк в одной функции)",
+      "severity": "P2",
+      "category": "refactor",
+      "file": "app/handlers/payments/payments_messages.py",
+      "line": 198,
+      "defect": "Обработчик успешной оплаты был одной функцией на 1305 строк: валидация, разбор payload, семь веток выдачи товаров подряд и финализация подписки. Ветки делили полтора десятка локальных переменных, и границу между ними задавали только комментарии.",
+      "failure_scenario": "Правка выдачи одного товара задевает соседний, потому что они делят локальные переменные; при этом это самый дорогой путь в проекте — здесь деньги уже списаны, и ошибка означает «оплачено, но не выдано».",
+      "proposed_action": "Сделано.",
+      "source": "audit-followup",
+      "status": "fixed",
+      "resolution": "Семь веток выдачи вынесены в app/handlers/payments/goods_delivery.py — по функции на тип (gift, telegram_premium, telegram_stars, steam, spotify, apple_id, traffic_pack). Границу выбирал не на глаз: AST-анализ показал, что все семь нуждаются ровно в одном и том же наборе из девяти локальных переменных, поэтому введён контекст-объект PaidPurchase, а обработчик стал циклом по списку функций. Каждая функция сама проверяет тип покупки и возвращает True, если обработала. Заодно опознание типа (classify_purchase, resolve_payment_amount_rubles и константы) вынесено в purchase_routing.py: им пользуются оба модуля, иначе получилось бы кольцо импортов. Старые имена реэкспортируются — на них ссылаются существующий код и тесты. payments_messages.py: 1502 → 1138 строк. Тесты (17 шт., tests/services/test_goods_delivery.py): каждая функция отказывается от чужого типа, проверка типа стоит до обращений к базе, список типов совпадает со списком функций, все функции подключены к диспетчеру, пометка «оплачено» идёт раньше уведомлений.",
+      "fixed_in": [
+        "app/handlers/payments/goods_delivery.py",
+        "app/handlers/payments/purchase_routing.py",
+        "app/handlers/payments/payments_messages.py",
+        "tests/services/test_goods_delivery.py"
+      ]
     }
   ],
   "refuted": [
