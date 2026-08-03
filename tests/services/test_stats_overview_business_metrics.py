@@ -30,7 +30,6 @@ async def test_overview_includes_business_metrics(monkeypatch):
             "approval_rate_percent": 97.5,
             "avg_subscription_lifetime_days": 63.2,
             "avg_renewals_per_user": 1.4,
-            "avg_payment_approval_time_seconds": 12.0,
         }),
     )
 

@@ -22,6 +22,7 @@ from aiogram.fsm.state import default_state
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.services.referrals import activate_referral
+from app.services.subscriptions import service as subscription_service
 from app.core.system_state import (
     SystemState,
     healthy_component,
@@ -357,8 +358,11 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
     if current_state == PromoCodeInput.waiting_for_promo.state:
         await state.clear()
 
-    # REAL-TIME EXPIRATION CHECK: Проверяем и отключаем истекшие подписки сразу
-    await database.check_and_disable_expired_subscription(callback.from_user.id)
+    # REAL-TIME EXPIRATION CHECK: Проверяем и отключаем истекшие подписки сразу.
+    #
+    # Через сервис, а не напрямую в database: обёртка гасит сбой Remnawave,
+    # иначе таймаут удаления пользователя ронял весь экран профиля.
+    await subscription_service.disable_if_expired(callback.from_user.id)
     telegram_id = callback.from_user.id
 
     # Немедленная обратная связь пользователю

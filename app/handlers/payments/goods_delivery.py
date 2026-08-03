@@ -37,6 +37,15 @@ import database
 from app.i18n import get_text as i18n_get_text
 from app.utils.logging_helpers import log_handler_exit
 from app.handlers.payments.purchase_routing import classify_purchase
+# Финализация покупки идёт только через сервисный слой.
+#
+# Прямой вызов database.finalize_purchase в обход сервиса означал, что часть
+# оплат (подарок и пакет трафика) не проходила через единую точку, где
+# проверяется результат, пишется лог и различаются доменные ошибки
+# («уже обработано» / «сумма не сошлась» / «покупка заперта»). Разные пути
+# — разное поведение при повторной оплате, а повторный вебхук у Telegram
+# штатная ситуация.
+from app.services.subscriptions import service as subscription_service
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +89,9 @@ async def deliver_gift(paid: PaidPurchase) -> bool:
     if classify_purchase(pending_purchase) != "gift":
         return False
 
-        # Подарочная подписка — финализируем напрямую через database
     payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
     try:
-        gift_result = await database.finalize_purchase(
+        gift_result = await subscription_service.finalize_purchase(
             purchase_id=purchase_id,
             payment_provider=payment_provider_name,
             amount_rubles=payment_amount_rubles,
@@ -398,7 +406,7 @@ async def deliver_traffic_pack(paid: PaidPurchase) -> bool:
 
     payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
     try:
-        traffic_result = await database.finalize_purchase(
+        traffic_result = await subscription_service.finalize_purchase(
             purchase_id=purchase_id,
             payment_provider=payment_provider_name,
             amount_rubles=payment_amount_rubles,
