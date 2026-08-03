@@ -4,6 +4,11 @@
 После снятия samopis xray это заглушка — она ничего не удаляла, лог рапортовал
 ORPHAN_PREVENTED, а сущность продолжала жить в панели. Пользователь не платил,
 но доступ у него оставался.
+
+Класс TestApprovePaymentCompensation удалён вместе с approve_payment_atomic:
+та функция была мёртвой веткой ручной модерации платежей без единого
+вызывающего. Живой путь — _finalize_purchase_locked — проверяется ниже,
+инвариант тот же.
 """
 import inspect
 
@@ -38,21 +43,6 @@ class TestFinalizePurchaseCompensation:
         src = _src(subs._finalize_purchase_locked)
         assert "ORPHAN_PREVENTED_REMOVAL_FAILED" in src
         assert "вручную" in src, "нужно явно сказать, что делать при сбое удаления"
-
-
-class TestApprovePaymentCompensation:
-    def test_deletes_through_panel_api(self):
-        src = _src(subs.approve_payment_atomic)
-        assert "remnawave_api.delete_user" in src
-
-    def test_no_longer_only_warns(self):
-        """Раньше здесь было только предупреждение «почистите вручную»."""
-        src = _src(subs.approve_payment_atomic)
-        assert "PURCHASE_FLOW_ORPHAN_NOT_CLEANED" not in src
-
-    def test_reports_manual_cleanup_on_failure(self):
-        src = _src(subs.approve_payment_atomic)
-        assert "ORPHAN_PREVENTED_REMOVAL_FAILED" in src
 
 
 class TestReissueCompensationUnchanged:

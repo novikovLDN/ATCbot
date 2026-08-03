@@ -112,11 +112,8 @@ from database.referrals import (  # noqa: F401
 
 # Subscriptions: payments, subscriptions, trials, access, finalize, promo, reminders
 from database.subscriptions import (  # noqa: F401
-    get_pending_payment_by_user,
-    create_payment,
     get_payment,
     get_last_approved_payment,
-    update_payment_status,
     check_and_disable_expired_subscription,
     get_subscription,
     get_subscription_any,
@@ -135,7 +132,6 @@ from database.subscriptions import (  # noqa: F401
     reissue_vpn_key_atomic,
     grant_access,
     _calculate_subscription_days,
-    approve_payment_atomic,
     get_pending_payments,
     is_user_first_purchase,
     get_admin_stats,

@@ -3203,7 +3203,15 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Удалены четыре функции мёртвого потока ручной модерации платежей (353 строки): approve_payment_atomic (250), create_payment (58), update_payment_status (29), get_pending_payment_by_user (16, звалась только из create_payment). Экспорты из database/__init__.py сняты. ВАЖНО — реестр в этой части был неточен: get_subscriptions_needing_reminder и mark_reminder_sent ЖИВЫЕ (переехали в database/reminders_queries.py при разбивке, зовутся из reminders.py), get_pending_payments тоже живой — его использует дашборд (app/api/dashboard/routes/payments.py). Они оставлены. Тесты TestApprovePaymentCompensation удалены вместе с функцией: тот же инвариант проверяется на живом пути в TestFinalizePurchaseCompensation. Обновлены докстринги subscriptions.py и routes/users.py, где функция упоминалась как существующая.",
+      "fixed_in": [
+        "database/subscriptions.py",
+        "database/__init__.py",
+        "app/api/dashboard/routes/users.py",
+        "tests/services/test_orphan_cleanup.py"
+      ]
     },
     {
       "title": "Разбиение database/subscriptions.py (5112 строк) по ответственностям",
@@ -3438,7 +3446,9 @@
       "defect": "У approve_payment_atomic нет ни одного вызывающего: grep даёт только определение и реэкспорт в database/__init__.py. Внутри — своя логика grant_access, синхронизации с Remnawave и публикации payment:approved, дублирующая finalize_purchase. Дублирующийся код расходится с рабочим путём при каждой правке.",
       "failure_scenario": "Разработчик правит финализацию платежа в одном месте из двух и считает задачу закрытой; вторая копия остаётся со старым поведением и однажды снова окажется на пути исполнения.",
       "proposed_action": "Удалить approve_payment_atomic вместе с реэкспортом, предварительно проверив, что ручное подтверждение платежа из админки идёт через finalize_purchase.",
-      "source": "audit-followup"
+      "source": "audit-followup",
+      "status": "fixed",
+      "resolution": "Закрыт вместе с пунктом 200: approve_payment_atomic удалён (250 строк дублирующей логики выдачи и синхронизации с панелью)."
     },
     {
       "title": "Автопродление комбо-тарифа берёт цену базового и не обновляет bypass-гигабайты",
