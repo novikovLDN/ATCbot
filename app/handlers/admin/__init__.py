@@ -1,3 +1,5 @@
+import logging
+
 from aiogram import Router
 
 from .base import admin_base_router
@@ -26,6 +28,8 @@ from .farm_storm import admin_farm_storm_router
 from .apple_id_delivery import apple_id_delivery_router
 from .spotify_delivery import spotify_delivery_router
 
+_admin_logger = logging.getLogger(__name__)
+
 router = Router()
 
 router.include_router(admin_base_router)
@@ -53,3 +57,45 @@ router.include_router(admin_stage_users_router)
 router.include_router(admin_farm_storm_router)
 router.include_router(apple_id_delivery_router)
 router.include_router(spotify_delivery_router)
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  Единая проверка «я админ» на входе в весь админский раздел
+# ──────────────────────────────────────────────────────────────────────
+#
+# Зачем middleware, когда проверка и так стоит в каждом обработчике.
+# Она стоит не в каждом: проверка написана руками 193 раза в виде
+# `if callback.from_user.id != config.ADMIN_TELEGRAM_ID: return`, и это
+# ровно тот случай, когда достаточно один раз забыть строчку в новом
+# обработчике, чтобы админская операция стала доступна кому угодно.
+# Найти такую дыру глазами в двадцати пяти модулях нельзя.
+#
+# Middleware на родительском роутере закрывает раздел целиком, включая
+# обработчики, которые напишут завтра. Существующие ручные проверки не
+# трогаем: они безвредны и работают как второй рубеж, а массовая замена
+# 193 мест — источник регрессий (у каждой свой хвост: где-то return,
+# где-то answer с текстом, где-то очистка FSM).
+#
+# Источник истины по «кто админ» — app.services.admin_auth.is_admin.
+# Из четырёх реализаций проверки эта остаётся единственной живой.
+async def _require_admin(handler, event, data: dict):
+    """Пропустить дальше только администратора.
+
+    Молчим в ответ чужому: админский раздел не должен подтверждать своё
+    существование посторонним. Telegram сам погасит «часики» на кнопке.
+    """
+    from app.services.admin_auth import is_admin
+
+    user = getattr(event, "from_user", None)
+    if user is not None and is_admin(user.id):
+        return await handler(event, data)
+
+    _admin_logger.warning(
+        "ADMIN_ACCESS_DENIED user=%s event=%s",
+        getattr(user, "id", None), type(event).__name__,
+    )
+    return None
+
+
+router.message.middleware(_require_admin)
+router.callback_query.middleware(_require_admin)

@@ -33,7 +33,6 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.utils.security import (
     validate_telegram_id,
-    require_admin,
     log_security_warning,
     log_audit_event,
 )

@@ -3310,7 +3310,16 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Главное: весь админский раздел закрыт middleware на родительском роутере (app/handlers/admin/__init__.py:_require_admin) — она действует и на сообщения, и на колбэки, включая обработчики, которые напишут завтра. Раньше единственной защитой были 193 ручные проверки в двадцати пяти модулях: достаточно один раз забыть строчку в новом обработчике. Реализация проверки теперь одна: app.services.admin_auth.is_admin. security.is_admin оставлен как валидирующая обёртка (в него прилетает telegram_id из внешних источников) и делегирует туда же; require_admin сведён к тонкой обёртке над is_admin — его реально зовёт app/handlers/admin/stats.py. Удалены мёртвые require_ownership и два неиспользуемых импорта require_admin. СОЗНАТЕЛЬНО НЕ СДЕЛАНО: механическая замена 193 инлайновых сравнений. У каждого свой хвост (где-то return, где-то answer с текстом, где-то очистка FSM), и массовая правка дала бы регрессии там, где сейчас работает. Как второй рубеж они безвредны. Тесты: tests/services/test_admin_gate.py (6 шт.), включая проверку fail-closed на событии без from_user и запрет на возврат собственного сравнения с ADMIN_TELEGRAM_ID.",
+      "fixed_in": [
+        "app/handlers/admin/__init__.py",
+        "app/utils/security.py",
+        "app/handlers/admin/base.py",
+        "app/handlers/admin/referral_screens.py",
+        "tests/services/test_admin_gate.py"
+      ]
     },
     {
       "title": "Смешанное обращение к слою: часть кода зовёт database.finalize_purchase напрямую в обход сервиса",

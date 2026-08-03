@@ -191,49 +191,41 @@ def validate_promo_code(promo_code: Optional[str]) -> Tuple[bool, Optional[str]]
 # STEP 4 — PART B: AUTHORIZATION GUARDS
 # ====================================================================================
 
-def is_admin(telegram_id: int) -> bool:
+def is_admin(telegram_id: Any) -> bool:
+    """Админ ли это. Единственный ответ на вопрос живёт в admin_auth.
+
+    Раньше проверка существовала в четырёх видах: здесь, в admin_auth и
+    двумя обёртками рядом. Разные реализации одного вопроса — это способ
+    однажды получить разные ответы, поэтому здесь остаётся только
+    валидация входа, а сам ответ берётся из app.services.admin_auth.
+
+    Валидация нужна: сюда прилетает telegram_id из внешних источников, и
+    сравнивать с ADMIN_TELEGRAM_ID строку или None бессмысленно — такой
+    вызов должен честно вернуть False, а не упасть.
     """
-    Check if user is admin.
-    
-    STEP 4 — PART B: AUTHORIZATION GUARDS
-    Explicit authorization check - fail closed.
-    
-    Args:
-        telegram_id: Telegram ID to check
-        
-    Returns:
-        True if user is admin, False otherwise
-    """
-    import config
-    
-    # Validate telegram_id first
+    from app.services.admin_auth import is_admin as _is_admin
+
     is_valid, error = validate_telegram_id(telegram_id)
     if not is_valid:
-        logger.warning(f"[SECURITY_WARNING] Invalid telegram_id in is_admin check: {error}")
+        logger.warning("[SECURITY_WARNING] Invalid telegram_id in is_admin check: %s", error)
         return False
-    
-    return telegram_id == config.ADMIN_TELEGRAM_ID
+    return _is_admin(int(telegram_id))
 
 
-def require_admin(telegram_id: int) -> Tuple[bool, Optional[str]]:
-    """
-    Require admin authorization (function form).
+def require_admin(telegram_id: Any) -> Tuple[bool, Optional[str]]:
+    """Проверка админа в форме «(можно, причина отказа)».
 
-    STEP 4 — PART B: AUTHORIZATION GUARDS
-    Explicit guard that fails closed.
-
-    Args:
-        telegram_id: Telegram ID to check
-
-    Returns:
-        Tuple of (is_authorized, error_message)
+    Тонкая обёртка над is_admin — нужна там, где обработчик сам решает, что
+    ответить пользователю, и не может воспользоваться декоратором
+    (app/handlers/admin/stats.py). Собственной логики «кто админ» здесь нет:
+    ответ по-прежнему один и тот же, из app.services.admin_auth.
     """
     if not is_admin(telegram_id):
         logger.warning(
-            f"[SECURITY_WARNING] Unauthorized admin access attempt: telegram_id={telegram_id}"
+            "[SECURITY_WARNING] Unauthorized admin access attempt: telegram_id=%s",
+            telegram_id,
         )
         return False, "Access denied"
-
     return True, None
 
 
@@ -305,30 +297,6 @@ def owns_resource(telegram_id: int, resource_telegram_id: int) -> bool:
         return False
     
     return telegram_id == resource_telegram_id
-
-
-def require_ownership(telegram_id: int, resource_telegram_id: int) -> Tuple[bool, Optional[str]]:
-    """
-    Require resource ownership.
-    
-    STEP 4 — PART B: AUTHORIZATION GUARDS
-    Explicit guard that fails closed.
-    
-    Args:
-        telegram_id: User's Telegram ID
-        resource_telegram_id: Resource owner's Telegram ID
-        
-    Returns:
-        Tuple of (is_authorized, error_message)
-    """
-    if not owns_resource(telegram_id, resource_telegram_id):
-        logger.warning(
-            f"[SECURITY_WARNING] Unauthorized resource access attempt: "
-            f"telegram_id={telegram_id}, resource_telegram_id={resource_telegram_id}"
-        )
-        return False, "Access denied"
-    
-    return True, None
 
 
 # ====================================================================================
