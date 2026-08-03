@@ -3130,7 +3130,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Из app/handlers/common/keyboards.py удалены девять устаревших копий админских клавиатур (114 строк) и реэкспорты из common/__init__.py. Построчный diff показал, что копии не просто дубли, а ОТСТАВШИЕ версии: в admin/keyboards.py у get_admin_user_keyboard есть параметр subscription_type и кнопки «Выдать Basic/Plus», у get_broadcast_segment_keyboard — сегмент «Холодные за 7 дней», у get_admin_dashboard_keyboard — группировка по категориям. Правка в common-копии не меняла ничего. Все админские модули и так импортируют из app.handlers.admin.keyboards — он остаётся единственным источником. Третья копия ушла вместе с handlers.py (пункт 195).",
+      "fixed_in": [
+        "app/handlers/common/keyboards.py",
+        "app/handlers/common/__init__.py"
+      ]
     },
     {
       "title": "app/utils/audit.py — 418 строк мёртвой параллельной подсистемы аудита",
@@ -3236,7 +3242,12 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "deadcode",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Удалены оба недостижимых тела в app/handlers/traffic.py (callback_bypass_pay_balance и callback_traffic_pay_balance) — 199 строк старой логики списания с баланса после return. Границы считались по AST, повторный скан подтверждает: недостижимого кода в файле не осталось. Сами обработчики оставлены: они отвечают алертом «метод больше недоступен», потому что кнопки в уже отправленных сообщениях живут вечно и молчать не должны. Старая логика доступна в git-истории.",
+      "fixed_in": [
+        "app/handlers/traffic.py"
+      ]
     },
     {
       "title": "audit_subs.py и audit_db_dates.py — почти клоны (1359 строк на два варианта одного аудита)",
