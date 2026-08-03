@@ -16,6 +16,7 @@ STEP 1.3 - EXTERNAL DEPENDENCIES POLICY:
 
 from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
+import config
 import database
 from app.services.subscriptions import service as subscription_service
 from app.services.payments.exceptions import (
@@ -233,30 +234,36 @@ async def verify_payment_payload(
 async def validate_payment_amount(
     actual_amount_rubles: float,
     expected_amount_rubles: float,
-    tolerance: float = 1.0
+    tolerance: Optional[float] = None,
 ) -> bool:
-    """
-    Validate that payment amount matches expected amount.
-    
+    """Совпадает ли присланная провайдером сумма с ожидаемой.
+
+    Допуск по умолчанию — общий для всего проекта,
+    config.payment_amount_tolerance: 0.5% от суммы, не меньше 50 копеек.
+    Здесь стоял свой, фиксированный ±1 ₽, и он расходился с проверкой в
+    finalize_purchase: на покупке в 199 ₽ платёж с расхождением ровно в
+    рубль проходил эту проверку и падал на следующей.
+
     Args:
-        actual_amount_rubles: Actual payment amount in rubles
-        expected_amount_rubles: Expected payment amount in rubles
-        tolerance: Allowed difference in rubles (default: 1.0)
-        
-    Returns:
-        True if amounts match within tolerance
-        
+        actual_amount_rubles: сколько прислал провайдер
+        expected_amount_rubles: сколько ожидали
+        tolerance: явное переопределение допуска, в рублях
+
     Raises:
-        PaymentAmountMismatchError: If amounts don't match
+        PaymentAmountMismatchError: расхождение больше допуска
     """
+    if tolerance is None:
+        tolerance = config.payment_amount_tolerance(expected_amount_rubles)
+
     amount_diff = abs(actual_amount_rubles - expected_amount_rubles)
-    
+
     if amount_diff > tolerance:
         raise PaymentAmountMismatchError(
             f"Payment amount mismatch: expected={expected_amount_rubles:.2f} RUB, "
-            f"actual={actual_amount_rubles:.2f} RUB, diff={amount_diff:.2f} RUB"
+            f"actual={actual_amount_rubles:.2f} RUB, diff={amount_diff:.2f} RUB "
+            f"(tolerance={tolerance:.2f} RUB)"
         )
-    
+
     return True
 
 

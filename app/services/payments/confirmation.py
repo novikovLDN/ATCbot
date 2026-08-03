@@ -23,6 +23,14 @@ from database.subscriptions import (
 
 logger = logging.getLogger(__name__)
 
+# Товары, которым здесь достаточно отметки «оплачено» и уведомления:
+# подписку они не продлевают, выдаёт их человек или отдельный обработчик.
+# Подмножество config.NON_SUBSCRIPTION_PURCHASE_TYPES — там же полный
+# перечень и объяснение, почему список должен быть один.
+MARK_PAID_ONLY_TYPES = (
+    "telegram_stars", "telegram_premium", "steam", "proxy", "spotify",
+)
+
 
 class TransientPaymentError(Exception):
     """Transient error during payment processing (DB timeout, connection error).
@@ -73,10 +81,17 @@ async def process_confirmed_payment(
         _purchase_type = pending.get("purchase_type") or "subscription"
         _tariff = pending.get("tariff") or ""
 
-        # Stars / Premium / Apple ID / Steam / Spotify / Proxy — just mark
-        # paid + send notifications (no subscription to finalize)
+        # Товары, которые не продлевают подписку: звёзды, Premium, Apple ID,
+        # Steam, Spotify, прокси. Здесь их только помечаем оплаченными и
+        # шлём уведомления — выдаёт их человек или отдельный обработчик.
+        #
+        # Раньше такой список существовал в трёх местах и в одном из них
+        # расходился с остальными — там не было steam и proxy. Полный
+        # перечень неподписочных типов теперь один,
+        # config.NON_SUBSCRIPTION_PURCHASE_TYPES; согласованность с ним
+        # проверяет tests/services/test_purchase_types.py.
         if (
-            _purchase_type in ("telegram_stars", "telegram_premium", "steam", "proxy", "spotify")
+            _purchase_type in MARK_PAID_ONLY_TYPES
             or _tariff.startswith("apple_id_")
             or _tariff.startswith("steam_")
             or _tariff.startswith("spotify_")

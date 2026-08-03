@@ -2600,15 +2600,46 @@ async def _finalize_purchase_locked(
         purchase_country = pending_purchase.get("country")
         is_combo_purchase = pending_purchase.get("is_combo", False)
         expected_amount_rubles = price_kopecks / 100.0
-        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift", "apple_id", "telegram_premium", "telegram_stars", "farm_effect"))
+        # Пополнение баланса — только по явному типу.
+        #
+        # Раньше здесь стояла ещё и эвристика «period_days == 0 и типа нет
+        # в списке исключений». Список был неполон: steam и proxy в нём
+        # отсутствовали, а создаются они ровно с period_days = 0. То есть
+        # оплата Steam на пять тысяч могла быть зачислена человеку на
+        # внутренний баланс, а Steam бы не пополнился — товар при этом
+        # выглядел оплаченным. Не срабатывало это лишь потому, что оба
+        # типа перехватывались раньше по дороге, в другом модуле.
+        #
+        # Полный список неподписочных типов — config.NON_SUBSCRIPTION_PURCHASE_TYPES.
+        is_balance_topup = (purchase_type == "balance_topup")
         is_gift_purchase = (purchase_type == "gift")
         is_traffic_pack = (purchase_type == "traffic_pack")
         is_apple_id = (purchase_type == "apple_id")
         is_farm_effect = (purchase_type == "farm_effect")
+
+        # Типы, которые сюда приходить не должны: Steam, Spotify, прокси,
+        # Telegram Premium и звёзды выдаются вручную или через отдельный
+        # путь, и своей ветки в этой функции у них нет. Если такой тип всё
+        # же дошёл, продолжать нельзя: покупка молча дойдёт до конца, не
+        # выдав ничего, и будет выглядеть успешной.
+        #
+        # Падаем громко — тип покупки известен, значит и путь для него надо
+        # добавить осознанно, а не обнаружить потом по жалобе покупателя.
+        _handled_here = ("balance_topup", "gift", "traffic_pack", "apple_id", "farm_effect")
+        if purchase_type in config.NON_SUBSCRIPTION_PURCHASE_TYPES and purchase_type not in _handled_here:
+            error_msg = (
+                f"finalize_purchase не умеет выдавать purchase_type={purchase_type!r}: "
+                f"purchase_id={purchase_id}, user={telegram_id}. Такие покупки "
+                f"обрабатываются отдельно (app/services/payments/confirmation.py)."
+            )
+            logger.error(f"finalize_purchase: UNSUPPORTED_PURCHASE_TYPE: {error_msg}")
+            raise ValueError(error_msg)
         amount_diff = abs(amount_rubles - expected_amount_rubles)
-        # SECURITY: Percentage-based tolerance (0.5%) instead of fixed ±1₽
-        # For 149₽ → max diff 0.75₽, for 1199₽ → max diff 6₽, minimum floor 0.50₽
-        max_tolerance = max(0.50, expected_amount_rubles * 0.005)
+        # Допуск общий для всего проекта — config.payment_amount_tolerance.
+        # Здесь стояла своя копия той же формулы, а в сервисном слое —
+        # фиксированный ±1 ₽; из-за расхождения платёж мог пройти одну
+        # проверку и упасть на второй.
+        max_tolerance = config.payment_amount_tolerance(expected_amount_rubles)
         if amount_diff > max_tolerance:
             error_msg = (
                 f"Payment amount mismatch: purchase_id={purchase_id}, user={telegram_id}, "

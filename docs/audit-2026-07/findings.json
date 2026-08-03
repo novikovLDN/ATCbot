@@ -278,7 +278,15 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "payments",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Порог сведён к одному: config.payment_amount_tolerance — 0.5% от суммы, не меньше 50 копеек. Его зовут и validate_payment_amount в сервисном слое (там был фиксированный ±1 ₽), и finalize_purchase (там жила копия той же формулы). Зоны, где платёж проходит одну проверку и падает на второй, больше нет.\nТретья копия порога в модулях провайдеров (platega/cryptobot/lava) исчезла раньше вместе с самими модулями — проверено поиском по репозиторию.\nЯвное переопределение tolerance у validate_payment_amount сохранено: им пользуются существующие тесты. Покрыто tests/services/test_purchase_types.py.",
+      "fixed_in": [
+        "config.py",
+        "app/services/payments/service.py",
+        "database/subscriptions.py",
+        "tests/services/test_purchase_types.py"
+      ]
     },
     {
       "title": "Блок определения деградации в successful_payment всегда падает с UnboundLocalError и никогда не работает",
@@ -306,7 +314,15 @@
       "risk": "средний",
       "confidence": "medium",
       "_dom": "payments",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Эвристика «period_days == 0 и типа нет в списке исключений» удалена — is_balance_topup определяется только по явному purchase_type. Список исключений был неполон (не было steam и proxy, а создаются они ровно с period_days = 0), и корректность держалась на том, что оба типа перехватывались раньше в другом модуле.\nПолный перечень неподписочных типов вынесен в config.NON_SUBSCRIPTION_PURCHASE_TYPES вместе с is_subscription_purchase; неизвестный тип считается подпиской, чтобы новая покупка падала заметно, а не зачислялась молча на баланс.\nДля типов из общего списка, у которых в finalize_purchase нет своей ветки (steam, spotify, proxy, telegram_*), добавлено явное падение с UNSUPPORTED_PURCHASE_TYPE: раньше такая покупка дошла бы до конца, не выдав ничего, и выглядела бы успешной.\nКопия списка в confirmation.py заменена на именованную константу MARK_PAID_ONLY_TYPES; тест проверяет, что она остаётся подмножеством общего списка, и что каждый создаваемый в коде purchase_type в этом списке описан.",
+      "fixed_in": [
+        "config.py",
+        "database/subscriptions.py",
+        "app/services/payments/confirmation.py",
+        "tests/services/test_purchase_types.py"
+      ]
     },
     {
       "title": "Инвойсы Lava живут 5 минут, а пользователю обещают 15",
