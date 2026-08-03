@@ -309,6 +309,10 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         expires_str = expires_at.strftime("%d.%m.%Y")
         keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
 
+        # Ключ автоуведомления, если текст берётся из реестра. Апгрейд и
+        # Business идут по своим текстам — им логировать нечего.
+        _autonotif_key_to_log = None
+
         if is_upgrade:
             _is_combo = _combo_gb_from_fsm > 0
             if _is_combo:
@@ -319,10 +323,10 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                 f"✅ Ваш тариф изменён на <b>{upgrade_label}</b>\n"
                 f"📅 До: {expires_str}"
             )
-            try:
-                await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-            except Exception as e:
-                logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
+            # Отправка — одна, общая, ниже по функции. Здесь стояла своя,
+            # без return после неё, поэтому при апгрейде тарифа человек
+            # получал два одинаковых сообщения подряд: это и следом ещё
+            # раз тот же text с той же клавиатурой.
         else:
             _is_combo = _combo_gb_from_fsm > 0
 
@@ -344,7 +348,6 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             from app.services.automated_notifications import (
                 is_notification_enabled as _autonotif_enabled,
                 get_notification_text as _autonotif_text,
-                log_notification_send as _autonotif_log,
             )
             _key = None
             _params: dict = {}
@@ -374,13 +377,14 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                     await _autonotif_text(_key, language=language, params=_params)
                 ) if _use_custom else None
                 text = _custom or i18n_get_text(language, _key, **_params)
-                try:
-                    await _autonotif_log(
-                        _key, telegram_id,
-                        status="sent" if _use_custom else "skipped_disabled",
-                    )
-                except Exception:
-                    pass
+                # Статистику пишем ПОСЛЕ отправки, по её результату —
+                # см. блок отправки ниже. Здесь запись стояла раньше и
+                # врала дважды: статус брался из того, включён ли
+                # кастомный текст, а не из того, дошло ли сообщение.
+                # При выключенном переопределении писалось
+                # skipped_disabled, хотя сообщение уходило всегда;
+                # при включённом — sent, даже если отправка падала.
+                _autonotif_key_to_log = _key
         # К этому моменту premium и bypass уже созданы в Remnawave, поэтому обе
         # ссылки показываем прямо в тексте успеха — покупателю не нужен лишний
         # переход. При продлении блок не нужен: ссылки не меняются.
@@ -418,14 +422,31 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                 f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
             )
 
+        delivered = False
         try:
             await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+            delivered = True
             logger.info(
                 f"NOTIFICATION_SENT [type=balance_purchase, payment_id={payment_id}, user={telegram_id}, "
                 f"scenario={'renewal' if is_renewal else 'first_purchase'}]"
             )
         except Exception as e_send:
             logger.error(f"Failed to send success message: user={telegram_id}, error={e_send}")
+
+        # Статистика автоуведомлений — по факту доставки.
+        if _autonotif_key_to_log:
+            try:
+                from app.services.automated_notifications import (
+                    log_notification_send as _autonotif_log,
+                )
+                await _autonotif_log(
+                    _autonotif_key_to_log, telegram_id,
+                    status="sent" if delivered else "failed",
+                )
+            except Exception:
+                # Статистика не должна влиять на покупку: подписка уже
+                # выдана, сообщение уже отправлено.
+                pass
         
         logger.info(
             f"Subscription activated from balance: user={telegram_id}, "

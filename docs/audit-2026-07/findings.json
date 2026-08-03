@@ -1751,7 +1751,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "notifications",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Код переехал в app/handlers/callbacks/pay_balance.py при разбивке платёжных экранов, дефект переехал вместе с ним. Ранняя отправка внутри ветки апгрейда удалена — текст собирается, а отправка остаётся одна, общая, ниже по функции.\nПокрыто tests/services/test_balance_purchase_notice.py: тест считает по AST именно отправки переменной text, не задевая соседние (ошибка списания, «активация в процессе») — у тех свои тексты и свои ранние return.",
+      "fixed_in": [
+        "app/handlers/callbacks/pay_balance.py",
+        "tests/services/test_balance_purchase_notice.py"
+      ]
     },
     {
       "title": "В уведомлении об автопродлении всегда написано 0 ₽",
@@ -1875,7 +1881,12 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "notifications",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Модуль удалён целиком вместе с админской панелью в боте: промо- и retention-рассылки живут в веб-дашборде. Проверено, что дефект не переехал — app/services/broadcast_sender.send_broadcast (его зовёт дашборд и планировщик) шлёт через asyncio.gather с семафором BROADCAST_CONCURRENCY и батчами, а промо-рассылка триальщикам (единственный оставшийся в боте экран рассылки) работает в фоновой задаче через asyncio.create_task.",
+      "fixed_in": [
+        "app/handlers/admin/notifications.py"
+      ]
     },
     {
       "title": "Ошибки Telegram при рассылках глушатся без логирования",
@@ -1992,7 +2003,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "notifications",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Код переехал в pay_balance.py, дефект вместе с ним. Запись в automated_notification_sends перенесена после реальной отправки, статус строится по её результату: sent / failed вместо sent / skipped_disabled. Прежняя формула врала в обе стороны — при выключенном переопределении писала skipped_disabled, хотя сообщение уходит всегда, а при включённом писала sent даже при упавшей отправке.\nКлюч логирования вынесен в переменную _autonotif_key_to_log, инициализированную None: у апгрейда и Business свои тексты не из реестра, им логировать нечего.",
+      "fixed_in": [
+        "app/handlers/callbacks/pay_balance.py",
+        "tests/services/test_balance_purchase_notice.py"
+      ]
     },
     {
       "title": "Массовые рассылки не обрабатывают TelegramRetryAfter и превышают лимит Telegram",
