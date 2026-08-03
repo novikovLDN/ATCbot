@@ -598,8 +598,8 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                 "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
                 extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
             )
-    if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
-        sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
+    if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_panel_sync_after_commit"):
+        sync_info = grant_result_for_removal["renewal_panel_sync_after_commit"]
         try:
             from app.services import purchase_flow
             await purchase_flow.sync_renewal_to_remnawave(sync_info)
@@ -836,8 +836,8 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
                 "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
                 extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
             )
-    if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
-        sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
+    if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_panel_sync_after_commit"):
+        sync_info = grant_result_for_removal["renewal_panel_sync_after_commit"]
         try:
             from app.services import purchase_flow
             await purchase_flow.sync_renewal_to_remnawave(sync_info)

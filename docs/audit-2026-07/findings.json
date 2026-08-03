@@ -859,7 +859,12 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "flow",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Удалён обработчик callback_combo_pay_balance (94 строки). Проверка перед удалением: поиск по всему репозиторию, включая дашборд на TypeScript, не нашёл ни одной кнопки с callback_data combo_pay_balance:. Оплата комбо с баланса идёт общим путём — callback_combo_period ведёт на show_payment_method_selection, оттуда на callback_pay_balance, и тот сам начисляет ГБ обхода по combo_bypass_gb из FSM (pay_balance.py:446-472). То есть сценарий не потерян, убран его дубль.",
+      "fixed_in": [
+        "app/handlers/callbacks/navigation.py"
+      ]
     },
     {
       "title": "Экран «Статус сервиса» недостижим из бота",
@@ -3685,7 +3690,17 @@
       "defect": "После удаления xray_sync.py и xray_api/ в дереве осталась цепочка: grant_access кладёт в результат ключ renewal_xray_sync_after_commit, auto_renewal и purchase_flow исполняют его в фазе B через vpn_utils.ensure_user_in_xray, а та ведёт в add_vless_user/update_vless_user — заглушки после перехода на Remnawave. Код выполняется, ничего не делает и создаёт впечатление работающей синхронизации.",
       "failure_scenario": "Разработчик видит вызов синхронизации после продления, считает её рабочей и строит на ней диагностику проблемы с доступом — а она no-op с самого cut-over.",
       "proposed_action": "Пройти цепочку целиком: убрать ключ renewal_xray_sync_after_commit из grant_access, обработку в auto_renewal (фаза B) и purchase_flow, затем удалить ensure_user_in_xray и заглушки add/update/remove_vless_user из vpn_utils. Делать отдельным проходом с тестами: это трогает выдачу доступа и продление.",
-      "source": "audit-followup"
+      "source": "audit-followup",
+      "status": "fixed",
+      "resolution": "Удалены ensure_user_in_xray (38 строк), check_xray_health (32) и reissue_vpn_access (73) — обе первые сводились к вызову соседних no-op заглушек, третью не вызывал никто и вызвать было нельзя: внутри она получала от заглушки пустой vless_url и сама же бросала на него VPNAPIError.\nИз auto_renewal убран блок B0, гонявший ensure_user_in_xray перед настоящим продлением через Remnawave (renew_remnawave_user_bg строкой ниже) — читался как рабочий код, не делал ничего.\nКлюч renewal_xray_sync_after_commit переименован в renewal_panel_sync_after_commit: он ЖИВОЙ (четыре потребителя зовут по нему purchase_flow.sync_renewal_to_remnawave), но имя обещало xray, которого нет. Заодно переписан комментарий про две фазы: он объяснял правило через ensure_user_in_xray, теперь — через настоящую причину (сетевой вызов внутри открытой транзакции держит соединение пула и блокировки строк).\nЗаглушки add_vless_user / update_vless_user / remove_vless_user оставлены: у первых двух есть тест-контракт (tests/test_vpn_utils_noop_cutover.py), remove_vless_user живой — его зовут очистка триалов и app/services/vpn/service.py.",
+      "fixed_in": [
+        "vpn_utils.py",
+        "auto_renewal.py",
+        "database/subscriptions.py",
+        "database/admin.py",
+        "database/balance_purchases.py",
+        "app/services/purchase_flow.py"
+      ]
     },
     {
       "title": "Разбивка app/handlers/admin/access.py (2283 строки) по ответственностям",

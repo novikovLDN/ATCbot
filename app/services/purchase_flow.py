@@ -288,7 +288,7 @@ async def sync_renewal_to_remnawave(sync_info: dict) -> None:
     has none yet (a legacy un-migrated subscriber renewing for the first
     time after the cut-over).
 
-    `sync_info` is the `renewal_xray_sync_after_commit` payload built by
+    `sync_info` is the `renewal_panel_sync_after_commit` payload built by
     grant_access: telegram_id, subscription_end, tariff, period_days.
     Raises on Remnawave failure so the caller can signal the webhook to
     return 5xx and let the payment provider retry.

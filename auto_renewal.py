@@ -425,7 +425,6 @@ async def process_auto_renewals(bot: Bot):
                             expires_str = expires_at.strftime("%d.%m.%Y")
                             duration_days = duration.days
                             # Собираем payload для Phase B (после commit) — без Telegram и без вложенного acquire
-                            xray_sync_info = result.get("renewal_xray_sync_after_commit")
                             notifications_to_send.append({
                                 "telegram_id": telegram_id,
                                 "payment_id": payment_id,
@@ -441,7 +440,6 @@ async def process_auto_renewals(bot: Bot):
                                 "combo_gb": combo_gb,
                                 "tariff_type": tariff_type,
                                 "period_days": period_days,
-                                "xray_sync": xray_sync_info,
                             })
                             logger.info(f"Auto-renewal successful: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={amount_rubles} RUB, expires_at={expires_str}")
 
@@ -486,22 +484,14 @@ async def process_auto_renewals(bot: Bot):
                 except Exception as alert_err:
                     logger.warning("auto_renewal: не удалось отправить алерт: %s", alert_err)
 
-            # PHASE B: после commit — xray sync + отправка уведомлений (без финансовых мутаций)
+            # PHASE B: после commit — продление в панели и уведомления
+            # (никаких финансовых мутаций: деньги уже списаны в фазе A).
             for item in notifications_to_send:
-                # B0: Xray sync deferred from grant_access (must run post-commit)
-                xray_sync = item.get("xray_sync")
-                if xray_sync:
-                    try:
-                        import vpn_utils
-                        await vpn_utils.ensure_user_in_xray(
-                            telegram_id=xray_sync["telegram_id"],
-                            uuid=xray_sync["uuid"],
-                            subscription_end=xray_sync["subscription_end"],
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"AUTO_RENEWAL_XRAY_SYNC_FAILED user={item['telegram_id']} error={e}"
-                        )
+                # Здесь был блок синхронизации с xray. Он вызывал
+                # vpn_utils.ensure_user_in_xray — заглушку, которая после
+                # снятия samopis только пишет строчку в лог. Настоящее
+                # продление идёт ниже, через Remnawave.
+                #
                 # Продление в панели. У комбо это не просто продление срока:
                 # вместе с подпиской человек оплатил пакет ГБ обхода, и его
                 # нужно начислить на новый период — ровно как при обычной

@@ -111,38 +111,9 @@ def _validate_api_url_security(api_url: str) -> None:
                 )
 
 
-async def check_xray_health() -> bool:
-    """
-    Проверить доступность XRAY API через health-check endpoint.
-    
-    Вызывает GET /health на XRAY API сервере.
-    Не бросает исключения - возвращает False при ошибках.
-    
-    Returns:
-        True если XRAY API доступен и отвечает, False в противном случае
-    """
-    if not config.VPN_ENABLED:
-        return False
-    
-    if not config.XRAY_API_URL or not config.XRAY_API_KEY:
-        return False
-    
-    api_url = config.XRAY_API_URL.rstrip('/')
-    health_url = f"{api_url}/health"
-    
-    try:
-        headers = {"X-API-Key": config.XRAY_API_KEY}
-        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
-            response = await client.get(health_url, headers=headers)
-            if response.status_code == 200:
-                logger.debug("XRAY health check: SUCCESS")
-                return True
-            else:
-                logger.warning(f"XRAY health check: FAILED [status={response.status_code}]")
-                return False
-    except Exception as e:
-        logger.debug(f"XRAY health check: FAILED [error={str(e)}]")
-        return False
+# Здесь была check_xray_health — GET /health на снятый с эксплуатации
+# сервер. Её никто не вызывал: живость панели проверяет healthcheck.py
+# через Remnawave.
 
 
 async def add_vless_user(
@@ -177,44 +148,15 @@ async def add_vless_user(
     }
 
 
-async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscription_end: datetime, tariff: str = "basic") -> Optional[str]:
-    """
-    Sync user to Xray. DB is source of truth for UUID.
-    1. If user has UUID: try update_user. If 404 → add_user with SAME uuid, return it.
-    2. If user has no UUID: cannot add (caller must generate and pass uuid).
-    Returns effective uuid (same as input) or None on failure (best-effort).
-    """
-    uuid_clean = str(uuid).strip() if uuid and str(uuid).strip() else None
-    uuid_preview = f"{uuid_clean[:8]}..." if uuid_clean and len(uuid_clean) > 8 else (uuid_clean or "N/A")
-
-    if uuid_clean:
-        _validate_uuid_no_prefix(uuid_clean)
-        logger.info(f"XRAY_UPDATE uuid={uuid_preview}")
-        try:
-            await update_vless_user(uuid=uuid_clean, subscription_end=subscription_end)
-            logger.info("XRAY_UPDATE_SUCCESS")
-            return uuid_clean
-        except InvalidResponseError as e:
-            if "Client not found" not in str(e) and "client not found" not in str(e).lower():
-                raise
-            logger.warning(f"XRAY_UPDATE_404_RECOVERY uuid={uuid_preview} → add_user (same UUID)")
-
-    # Update 404 fallback — add_user with SAME uuid (DB is source of truth)
-    if not uuid_clean:
-        logger.error("ensure_user_in_xray: cannot add without uuid; DB is source of truth")
-        return None
-    try:
-        await add_vless_user(
-            telegram_id=telegram_id,
-            subscription_end=subscription_end,
-            uuid=uuid_clean,
-            tariff=tariff,
-        )
-        logger.info(f"XRAY_UPDATE_FALLBACK_ADD uuid={uuid_preview} tariff={tariff}")
-        return uuid_clean
-    except Exception as add_e:
-        logger.critical(f"XRAY_ADD_FAILED uuid={uuid_preview} error={add_e}", exc_info=True)
-    return None
+# Здесь была ensure_user_in_xray — «синхронизировать пользователя с
+# xray»: попробовать update, при 404 добавить с тем же UUID. Обе её
+# ветки вели в заглушки выше и ниже по файлу, то есть вся функция
+# сводилась к записи в лог.
+#
+# Единственным её вызовом был блок в auto_renewal перед настоящим
+# продлением через Remnawave — читать его приходилось как рабочий код.
+# Продление подписки в панели делает app.services.purchase_flow.
+# sync_renewal_to_remnawave, его и зовут остальные места.
 
 
 async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
@@ -291,79 +233,13 @@ async def safe_remove_vless_user_with_retry(uuid: str, *, max_retries: int = 3) 
     raise VPNAPIError(f"Orphan cleanup failed after {max_retries} retries: {last_error}") from last_error
 
 
-async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: datetime) -> Tuple[str, str]:
-    """
-    Перевыпустить VPN доступ: удалить старый UUID и создать новый.
-    
-    КРИТИЧЕСКИ ВАЖНО:
-    - Если add-user упал → НЕ удалять старый UUID (он уже удалён)
-    - Если remove-user упал → прервать операцию, старый UUID остаётся
-    - Все шаги логируются
-    
-    Args:
-        old_uuid: Старый UUID для удаления
-        telegram_id: Telegram ID пользователя
-        subscription_end: Дата окончания подписки (expiryTime для нового ключа)
-    
-    Returns:
-        Новый UUID (str)
-    
-    Raises:
-        VPNAPIError: При ошибках VPN API
-        ValueError: При некорректных параметрах
-    """
-    if not old_uuid or not old_uuid.strip():
-        error_msg = "Invalid old_uuid provided for reissue"
-        logger.error(error_msg)
-        raise ValueError(error_msg)
-    
-    old_uuid_clean = old_uuid.strip()
-    uuid_preview = f"{old_uuid_clean[:8]}..." if old_uuid_clean and len(old_uuid_clean) > 8 else (old_uuid_clean or "N/A")
-    
-    logger.info(f"VPN key reissue: START [action=reissue, old_uuid={uuid_preview}]")
-    
-    # ШАГ 1: Удаляем старый UUID
-    try:
-        await remove_vless_user(old_uuid_clean)
-        logger.info(f"VPN key reissue: OLD_UUID_REMOVED [old_uuid={uuid_preview}]")
-    except Exception as e:
-        error_msg = f"Failed to remove old UUID during reissue: {str(e)}"
-        logger.error(f"VPN key reissue: REMOVE_FAILED [old_uuid={uuid_preview}, error={error_msg}]")
-        # КРИТИЧНО: Если не удалось удалить старый UUID - прерываем операцию
-        raise VPNAPIError(error_msg) from e
-    
-    # ШАГ 2: Generate UUID for API; Xray response overrides (Xray is source of truth)
-    import database
-    new_uuid = database._generate_subscription_uuid()
-    try:
-        vless_result = await add_vless_user(
-            telegram_id=telegram_id,
-            subscription_end=subscription_end,
-            uuid=new_uuid
-        )
-        uuid_from_api = vless_result.get("uuid")
-        vless_url = vless_result.get("vless_url")
-        if not uuid_from_api:
-            error_msg = "VPN API returned empty UUID during reissue"
-            logger.error(f"VPN key reissue: ADD_FAILED [error={error_msg}]")
-            raise VPNAPIError(error_msg)
-        if not vless_url:
-            error_msg = "VPN API did not return vless_link during reissue"
-            logger.error(f"VPN key reissue: ADD_FAILED [error={error_msg}]")
-            raise VPNAPIError(error_msg)
-        new_uuid = uuid_from_api  # HARD OVERRIDE — Xray is source of truth
-
-        new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
-        logger.info(f"VPN key reissue: SUCCESS [old_uuid={uuid_preview}, new_uuid={new_uuid_preview}]")
-
-        return new_uuid, vless_url
-        
-    except Exception as e:
-        error_msg = f"Failed to create new UUID during reissue: {str(e)}"
-        logger.error(f"VPN key reissue: ADD_FAILED [error={error_msg}]")
-        # КРИТИЧНО: Если не удалось создать новый UUID - старый уже удалён
-        # Это критическая ситуация, но мы не можем восстановить старый UUID
-        raise VPNAPIError(error_msg) from e
+# Здесь была reissue_vpn_access — «удалить старый UUID и создать
+# новый». Её никто не вызывал, и вызвать было нельзя: внутри она
+# обращается к заглушке add_vless_user, та возвращает пустой
+# vless_url, и функция сама же бросала на него VPNAPIError.
+#
+# Перевыпуск ключа делает database.reissue_subscription_key через
+# reissue_premium_user_entity в Remnawave.
 
 
 # ============================================================================

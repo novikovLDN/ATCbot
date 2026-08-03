@@ -563,101 +563,11 @@ async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
     await show_payment_method_selection(callback, base_tariff, period_days, price_kopecks)
 
 
-@router.callback_query(F.data.startswith("combo_pay_balance:"))
-async def callback_combo_pay_balance(callback: CallbackQuery):
-    """Оплата комбо с баланса: активация подписки + начисление трафика обхода."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    parts = callback.data.split(":")
-    if len(parts) != 3:
-        return
-    combo_type = parts[1]
-    try:
-        period_days = int(parts[2])
-    except (ValueError, IndexError):
-        return
-
-    if combo_type not in config.COMBO_TARIFFS:
-        return
-    info = config.COMBO_TARIFFS[combo_type].get(period_days)
-    if not info:
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    price = info["price"]
-    gb = info["gb"]
-    base_tariff = info["base_tariff"]
-
-    balance = await database.get_user_balance(telegram_id)
-    if balance < price:
-        text = i18n_get_text(language, "traffic.insufficient_balance")
-        buttons = [[InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"combo_period:{combo_type}:{period_days}",
-        )]]
-        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
-        return
-
-    # 1. Create pending purchase with base tariff
-    from app.services.subscriptions import service as subscription_service
-    price_kopecks = price * 100
-    try:
-        purchase_id = await subscription_service.create_subscription_purchase(
-            telegram_id=telegram_id,
-            tariff=base_tariff,
-            period_days=period_days,
-            price_kopecks=price_kopecks,
-            is_combo=True,
-        )
-    except Exception as e:
-        logger.error(f"Combo purchase creation failed: {e}")
-        text = "❌ Ошибка создания покупки. Попробуйте позже."
-        buttons = [[InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_combo")]]
-        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
-        return
-
-    # 2. Deduct balance
-    await database.decrease_balance(telegram_id, price, source="combo_purchase", description=f"Combo {base_tariff} {period_days}d + {gb}GB bypass")
-
-    # 3. Finalize purchase (activates subscription, creates VPN key, etc.)
-    try:
-        result = await subscription_service.finalize_purchase(
-            purchase_id=purchase_id,
-            payment_provider="balance",
-            amount_rubles=float(price),
-        )
-        if not result.get("success"):
-            logger.error(f"Combo finalize failed: {result}")
-    except Exception as e:
-        logger.error(f"Combo finalize error: {e}")
-
-    # 4. Add bypass traffic
-    from app.services import remnawave_service
-    traffic_bytes = gb * 1024**3
-    try:
-        rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
-        if not rmn_success:
-            logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_FAIL user={telegram_id} gb={gb}")
-    except Exception as traffic_err:
-        logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_ERROR user={telegram_id}: {traffic_err}")
-
-    # 5. Record traffic purchase + mark as combo
-    await database.record_traffic_purchase(telegram_id, gb, 0)
-    await database.set_combo_flag(telegram_id, True)
-
-    months = period_days // 30
-    text = i18n_get_text(language, "combo.purchase_success",
-                         tariff=base_tariff.capitalize(), months=months, gb=gb)
-    buttons = [
-        [InlineKeyboardButton(text="📲 Подключиться", callback_data="connect_instruction")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
-    ]
-    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
-
+# Обработчик combo_pay_balance удалён: ни одна кнопка его не выставляла.
+# Оплата комбо с баланса идёт общим путём — show_payment_method_selection
+# выше по файлу ведёт на callback_pay_balance, и тот сам начисляет ГБ
+# обхода по combo_bypass_gb из FSM. Вторая копия того же сценария молча
+# расходилась бы с первой.
 
 # ── Mini Shop ────────────────────────────────────────────────────
 

@@ -1341,7 +1341,7 @@ async def grant_access(
                     # tariff so bypass top-up uses plus-tier limits.
                     _upgrade_period_days = max(1, int(duration.total_seconds() // 86400))
                     if _caller_holds_transaction:
-                        result_dict["renewal_xray_sync_after_commit"] = {
+                        result_dict["renewal_panel_sync_after_commit"] = {
                             "telegram_id": telegram_id,
                             "uuid": uuid,
                             "subscription_end": subscription_end,
@@ -1411,7 +1411,7 @@ async def grant_access(
                 }
                 _downgrade_period_days = max(1, int(duration.total_seconds() // 86400))
                 if _caller_holds_transaction:
-                    result_dict["renewal_xray_sync_after_commit"] = {
+                    result_dict["renewal_panel_sync_after_commit"] = {
                         "telegram_id": telegram_id,
                         "uuid": uuid,
                         "subscription_end": subscription_end,
@@ -1467,10 +1467,17 @@ async def grant_access(
                     "Extending subscription WITHOUT calling VPN API /add-user"
                 )
                 
-                # B1 FIX: TWO-PHASE RENEWAL — DB first (source of truth), Xray sync OUTSIDE transaction.
-                # ensure_user_in_xray must NEVER run inside active DB transaction (pool exhaustion).
-                # When caller holds tx: return renewal_xray_sync_after_commit; callers run sync post-commit.
-                # When standalone: run ensure_user_in_xray after DB update (no tx held).
+                # ПРОДЛЕНИЕ В ДВЕ ФАЗЫ: сначала БД (источник истины),
+                # синхронизация с панелью — ВНЕ транзакции.
+                #
+                # Обращение к панели идёт по сети и может ждать секунды.
+                # Сделать его внутри открытой транзакции значит держать
+                # соединение пула и блокировки строк всё это время —
+                # при нескольких продлениях подряд пул исчерпывается.
+                #
+                # Поэтому: если транзакцию держит вызывающий, возвращаем
+                # ему renewal_panel_sync_after_commit, и он вызывает
+                # purchase_flow.sync_renewal_to_remnawave уже после commit.
                 assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
                 assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
                 expiry_ms = int(subscription_end.timestamp() * 1000)
@@ -1610,7 +1617,7 @@ async def grant_access(
                 if _caller_holds_transaction:
                     # provision_subscription opens its own connections — it
                     # MUST run post-commit, never inside the caller's tx.
-                    result_dict["renewal_xray_sync_after_commit"] = {
+                    result_dict["renewal_panel_sync_after_commit"] = {
                         "telegram_id": telegram_id,
                         "uuid": uuid,
                         "subscription_end": subscription_end,
@@ -3265,8 +3272,8 @@ async def _finalize_purchase_locked(
                     "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
                     extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
                 )
-        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
-            sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
+        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_panel_sync_after_commit"):
+            sync_info = grant_result_for_removal["renewal_panel_sync_after_commit"]
             try:
                 from app.services import purchase_flow
                 await purchase_flow.sync_renewal_to_remnawave(sync_info)

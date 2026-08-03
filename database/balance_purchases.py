@@ -306,8 +306,8 @@ async def finalize_balance_purchase(
                     "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
                     extra={"uuid": old_uuid[:8] + "...", "error": str(rem_err)[:200]}
                 )
-        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
-            sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
+        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_panel_sync_after_commit"):
+            sync_info = grant_result_for_removal["renewal_panel_sync_after_commit"]
             try:
                 from app.services import purchase_flow
                 await purchase_flow.sync_renewal_to_remnawave(sync_info)
