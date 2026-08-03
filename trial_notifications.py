@@ -468,6 +468,11 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
     trial_used_at = database._from_db_utc(row["trial_used_at"]) if row["trial_used_at"] else None
     trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
 
+    # Гасить premium-сущность в панели идём по сети, поэтому не отсюда, а
+    # после выхода из соединения: HTTP при занятом соединении съедает
+    # место в пуле на всё время запроса.
+    disable_premium_after_release = False
+
     async with pool.acquire() as conn:
         try:
             # PRODUCTION HOTFIX: Trial must NEVER revoke VPN or modify subscription if user has active paid.
@@ -507,15 +512,18 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
                 )
                 return
 
-            if uuid_val:
-                import vpn_utils
-                try:
-                    await vpn_utils.remove_vless_user(uuid_val)
-                    logger.info(f"trial_expired: VPN access revoked: user={telegram_id}, uuid={uuid_val[:8]}...")
-                except Exception as e:
-                    logger.warning(f"Failed to remove VPN UUID for expired trial: user={telegram_id}, error={e}")
-                    # Don't mark subscription as expired if VPN removal failed — retry next cycle
-                    return
+            # Триал закончился — premium-доступ надо отобрать.
+            #
+            # Здесь стоял вызов vpn_utils.remove_vless_user: после снятия
+            # samopis это заглушка, которая только пишет в лог. Она всегда
+            # «успешна», поэтому и ветка ниже с ранним return никогда не
+            # срабатывала — а premium-сущность в панели не отключалась вовсе.
+            #
+            # Обычно она гаснет сама: её создают с expireAt = концу триала.
+            # Но если триал продлевали, если ленивый провижининг выставил
+            # свою дату или админ трогал даты руками — сущность остаётся
+            # ACTIVE, и триальщик пользуется premium сколько угодно.
+            disable_premium_after_release = True
 
             # Check if user has Remnawave bypass traffic — keep it active
             has_remnawave = await conn.fetchval(
@@ -610,6 +618,26 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
             logger.warning(f"trial_expiry_skipped: user={telegram_id}, service_error={type(e).__name__}: {str(e)}")
         except Exception as e:
             logger.exception(f"Error expiring trial subscription for user {telegram_id}: {e}")
+
+    # Соединение отдано в пул — теперь можно идти по сети.
+    #
+    # Отдельно от bypass: та сущность своя и остаётся жить, если у
+    # человека есть гигабайты обхода. Гасим только premium.
+    if disable_premium_after_release:
+        try:
+            from app.services.remnawave_premium import disable_premium_user
+            if await disable_premium_user(telegram_id):
+                logger.info("trial_expired: PREMIUM_DISABLED user=%s", telegram_id)
+            else:
+                # Сущности нет, панель выключена или отказала. Строка в базе
+                # уже закрыта, но доступ по ссылке погаснет только на своём
+                # expireAt — поэтому предупреждение, а не отладка.
+                logger.warning(
+                    "trial_expired: PREMIUM_DISABLE_SKIPPED user=%s — "
+                    "сущность в панели могла остаться активной", telegram_id,
+                )
+        except Exception as e:
+            logger.warning("trial_expired: PREMIUM_DISABLE_FAIL user=%s %s", telegram_id, e)
 
 
 async def expire_trial_subscriptions(bot: Bot):

@@ -776,33 +776,16 @@ async def apply_reconciliation_fix(
                 )
             log_reason += " [panel-only fix — bot-DB untouched by design]"
 
-            log_id = await conn.fetchval(
-                """INSERT INTO subscription_reconciliation_log (
-                       telegram_id, old_expires_at, new_expires_at,
-                       old_days_from_now, new_days_from_now, days_removed,
-                       reason, proof_payment_ids, total_paid_days,
-                       admin_grant_days_kept, admin_telegram_id
-                   )
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                   RETURNING id""",
-                telegram_id,
-                _to_db_utc(old_expires_at) if old_expires_at else _to_db_utc(now),
-                _to_db_utc(new_expires_at),
-                (old_expires_at - now).days if old_expires_at else 0,
-                (new_expires_at - now).days,
-                days_removed,
-                log_reason,
-                proof_ids,
-                total_paid_days,
-                int(admin_grant_days or 0),
-                admin_telegram_id,
-            )
-
     # ── Remnawave panel: PATCH expireAt on the premium entity ────────
-    # Делается ПОСЛЕ commit'а DB-транзакции: если панель упадёт, у нас
-    # хотя бы bot-DB подрезан (и мы это увидим по panel_updated=False
-    # в возвращаемом словаре и на UI). Ретрай встроен в
-    # remnawave_premium.renew_premium_user (3 попытки с backoff).
+    #
+    # ЗДЕСЬ ЕДИНСТВЕННОЕ РЕАЛЬНОЕ ДЕЙСТВИЕ ЭТОЙ ФУНКЦИИ.
+    #
+    # Bot-DB expires_at мы намеренно не трогаем: это забота штатного
+    # grant_access / auto_renewal и часть bypass-only-дизайна. «Исправить»
+    # подрезает ровно одно — expireAt в панели, которым и управляется
+    # настоящий доступ.
+    #
+    # Ретрай встроен в remnawave_premium.renew_premium_user (3 попытки).
     panel_error: Optional[str] = None
     try:
         from app.services import remnawave_premium
@@ -816,6 +799,52 @@ async def apply_reconciliation_fix(
         logger.exception(
             "RECONCILIATION_PANEL_UPDATE_FAIL user=%s: %s", telegram_id, e,
         )
+
+    # ── Запись в журнал сверки — только после удавшегося патча ────────
+    #
+    # Раньше INSERT шёл внутри DB-транзакции ВЫШЕ, то есть коммитился до
+    # обращения к панели. При недоступной панели админ видел ошибку в
+    # интерфейсе, а в журнале уже лежала строка old→new с доказательными
+    # payment_ids. Повторные попытки плодили дубли, а последующий аудит по
+    # журналу считал этих людей исправленными — хотя доступ у них так и
+    # остался с прежним сроком.
+    #
+    # Комментарий на этом месте утверждал, что «bot-DB хотя бы подрезан»,
+    # но bot-DB здесь не трогается вовсе, и записывать было нечего.
+    log_id = None
+    if panel_updated:
+        try:
+            async with pool.acquire() as log_conn:
+                log_id = await log_conn.fetchval(
+                    """INSERT INTO subscription_reconciliation_log (
+                           telegram_id, old_expires_at, new_expires_at,
+                           old_days_from_now, new_days_from_now, days_removed,
+                           reason, proof_payment_ids, total_paid_days,
+                           admin_grant_days_kept, admin_telegram_id
+                       )
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                       RETURNING id""",
+                    telegram_id,
+                    _to_db_utc(old_expires_at) if old_expires_at else _to_db_utc(now),
+                    _to_db_utc(new_expires_at),
+                    (old_expires_at - now).days if old_expires_at else 0,
+                    (new_expires_at - now).days,
+                    days_removed,
+                    log_reason,
+                    proof_ids,
+                    total_paid_days,
+                    int(admin_grant_days or 0),
+                    admin_telegram_id,
+                )
+        except Exception as e:
+            # Панель уже исправлена — сообщать об ошибке всей операции
+            # нельзя, иначе админ повторит фикс. Но и молчать нельзя:
+            # исправление осталось без следа в журнале.
+            logger.error(
+                "RECONCILIATION_LOG_WRITE_FAIL user=%s new=%s: %s — "
+                "панель исправлена, записи в журнале нет",
+                telegram_id, new_expires_at.isoformat(), e,
+            )
 
     logger.info(
         "RECONCILIATION_FIX_APPLIED user=%s old=%s new=%s removed_days=%s "

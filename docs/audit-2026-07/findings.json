@@ -544,7 +544,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "INSERT в subscription_reconciliation_log перенесён из DB-транзакции наружу и выполняется только при panel_updated=True. Раньше запись коммитилась до обращения к панели: при недоступной панели админ видел ошибку, а в журнале уже лежала строка old→new с доказательными payment_ids — повторы плодили дубли, а аудит по журналу считал этих людей исправленными.\nlog_id стал nullable, тип в dashboard/src/lib/api.ts обновлён (потребителей поля в .tsx нет; проверку tsc выполнить не удалось — в dashboard/ нет node_modules).\nНеудачная запись в журнал при уже исправленной панели не роняет операцию — иначе админ повторил бы фикс, — но пишется ERROR RECONCILIATION_LOG_WRITE_FAIL.\nУстаревший комментарий про «bot-DB хотя бы подрезан» заменён: bot-DB здесь не трогается вовсе и записывать было нечего.",
+      "fixed_in": [
+        "database/reconciliation.py",
+        "dashboard/src/lib/api.ts"
+      ]
     },
     {
       "title": "app/services/vpn_client.py — модуль без единого потребителя",
@@ -621,7 +627,13 @@
       "risk": "средний",
       "confidence": "medium",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Вызов vpn_utils.remove_vless_user (заглушка) заменён на remnawave_premium.disable_premium_user. Вместе с ним убрана ветка «отзыв не удался — не помечаем подписку истёкшей»: заглушка не бросает исключений, ветка была недостижима.\nОтключение вынесено за пределы `async with pool.acquire()` — HTTP при занятом соединении съедает место в пуле на всё время запроса, а цикл идёт по всем истёкшим триалам подряд. Флаг ставится после перепроверки активной платной подписки, поэтому у оплатившего доступ не отбирается.\nСущность обхода не затрагивается: она отдельная и продолжает работать, если у человека остались гигабайты. Покрыто tests/services/test_trial_expiry_revokes_access.py.",
+      "fixed_in": [
+        "trial_notifications.py",
+        "tests/services/test_trial_expiry_revokes_access.py"
+      ]
     },
     {
       "title": "upgrade_vless_user и remove_plus_inbound: мёртвые и при этом НЕ закрытые флагом",

@@ -691,7 +691,9 @@ export const endpoints = {
   reconciliationFix: (telegram_id: number, reason?: string) =>
     api.post<{
       success: boolean;
-      log_id: number;
+      // null, если панель не приняла патч: журнал сверки пишется только по
+      // факту исправления, чтобы в нём не оставались записи о несделанном.
+      log_id: number | null;
       old_expires_at: string | null;
       new_expires_at: string;
       days_removed: number;
