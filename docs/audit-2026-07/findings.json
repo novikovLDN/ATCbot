@@ -3786,6 +3786,26 @@
         "fast_expiry_cleanup.py",
         "tests/services/test_worker_iteration_budget.py"
       ]
+    },
+    {
+      "title": "Оснастка завершённой миграции samopis → Remnawave осталась в дереве (2900 строк)",
+      "severity": "P2",
+      "category": "dead-code",
+      "file": "app/handlers/admin/migration.py",
+      "line": 1,
+      "defect": "Миграция на Remnawave завершена, xray выведен из эксплуатации, но её оснастка осталась: app/handlers/admin/migration.py (1171 строка, 21 обработчик), scripts/migrate_samopis_to_remnawave.py (581), scripts/verify_samopis_migration.py (377), app/handlers/admin/reconcile.py (392, вообще не подключён ни к одному роутеру) и два файла тестов. Проверено по всему репозиторию: ни одной кнопки, ведущей на admin:mig_*, не существует — экраны недостижимы.",
+      "failure_scenario": "Разработчик открывает админский раздел и видит 21 обработчик управления миграцией, пытается понять, когда они срабатывают, и тратит время на код, который не может выполниться. Хуже: сценарий «мигрировать ВСЕХ» остаётся в дереве и однажды может быть случайно подключён к кнопке.",
+      "proposed_action": "Сделано.",
+      "source": "simplification",
+      "status": "fixed",
+      "resolution": "Удалено 2894 строки: migration.py, reconcile.py, оба скрипта миграции, README и два файла тестов; роутер миграции отключён. Обработчиков в админском разделе стало 240 вместо 263. Проверка перед удалением: поиск по всему репозиторию (включая дашборд на TypeScript) не нашёл ни одной кнопки с callback_data admin:mig_*, а reconcile.py не был включён ни в один роутер. Сами миграции БД (migrations/*.sql) не тронуты — удалена только оснастка разового переезда данных между VPN-панелями. Заодно из ruff ушли две ошибки S108: они были на путях /tmp в этих скриптах.",
+      "fixed_in": [
+        "app/handlers/admin/migration.py",
+        "app/handlers/admin/reconcile.py",
+        "scripts/migrate_samopis_to_remnawave.py",
+        "scripts/verify_samopis_migration.py",
+        "app/handlers/admin/__init__.py"
+      ]
     }
   ],
   "refuted": [

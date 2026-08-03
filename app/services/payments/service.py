@@ -68,59 +68,6 @@ class PaymentPayloadInfo:
     promo_code: Optional[str]
 
 
-async def mark_payment_paid(
-    purchase_id: str,
-    telegram_id: int,
-    amount_rubles: float,
-    provider: str = "telegram",
-    invoice_id: Optional[str] = None
-) -> PaymentResult:
-    """
-    Mark payment as paid and activate subscription (idempotent).
-
-    Called from webhook handler after signature verification.
-    Uses finalize_subscription_payment internally.
-
-    Args:
-        purchase_id: Purchase ID from payload
-        telegram_id: User Telegram ID
-        amount_rubles: Actual payment amount
-        provider: Payment provider name
-        invoice_id: Provider invoice ID (for audit)
-
-    Returns:
-        PaymentResult with subscription details
-    """
-    return await finalize_subscription_payment(
-        purchase_id=purchase_id,
-        telegram_id=telegram_id,
-        payment_provider=provider,
-        amount_rubles=amount_rubles,
-        invoice_id=invoice_id
-    )
-
-
-async def mark_payment_failed(purchase_id: str) -> bool:
-    """
-    Mark pending purchase as expired (e.g. invoice expired).
-
-    Args:
-        purchase_id: Purchase ID to expire
-
-    Returns:
-        True if updated, False if not found or already processed
-    """
-    pool = await database.get_pool()
-    if not pool:
-        return False
-    async with pool.acquire() as conn:
-        result = await conn.execute(
-            "UPDATE pending_purchases SET status = 'expired' WHERE purchase_id = $1 AND status = 'pending'",
-            purchase_id
-        )
-        return result == "UPDATE 1"
-
-
 # ====================================================================================
 # Payment Payload Verification
 # ====================================================================================

@@ -1,7 +1,7 @@
 """Общая арифметика админских сверок.
 
-Дефект: четыре экрана сверки (audit_subs, audit_db_dates, recovery_premium,
-reconcile) содержали дословные копии одного и того же ядра — три копии
+Дефект: экраны сверки (audit_subs, audit_db_dates, recovery_premium)
+содержали дословные копии одного и того же ядра — три копии
 _compute_real_end и четыре копии разбора даты из панели. Функция считает
 ДЕНЬГИ в днях доступа: правка правила продления в одной копии оставляла три
 другие со старым поведением, и два админских экрана начинали показывать
@@ -95,7 +95,9 @@ def test_no_module_keeps_its_own_copy():
     import ast
     from pathlib import Path
 
-    for mod in ("audit_subs", "audit_db_dates", "recovery_premium", "reconcile"):
+    # reconcile.py удалён вместе с оснасткой завершённой миграции
+    # samopis → Remnawave: он не был подключён ни к одному роутеру.
+    for mod in ("audit_subs", "audit_db_dates", "recovery_premium"):
         src = Path(f"app/handlers/admin/{mod}.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         own = {

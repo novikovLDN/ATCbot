@@ -17,7 +17,6 @@ from app.utils.referral_link import build_referral_link
 from app.services.language_service import resolve_user_language
 from app.services.subscriptions.service import (
     get_subscription_status,
-    check_and_disable_expired_subscription as check_subscription_expiry_service,
 )
 from app.handlers.common.utils import safe_edit_text, sanitize_display_name
 from app.handlers.common.keyboards import (
@@ -363,11 +362,11 @@ async def show_profile(message_or_query, language: str):
 
     # REAL-TIME EXPIRATION CHECK: Проверяем и отключаем истекшие подписки сразу
     if telegram_id:
-        await check_subscription_expiry_service(telegram_id)
+        await database.check_and_disable_expired_subscription(telegram_id)
 
     try:
         # Дополнительная защита: проверка истечения подписки
-        await check_subscription_expiry_service(telegram_id)
+        await database.check_and_disable_expired_subscription(telegram_id)
 
         # Получаем данные пользователя
         user = await database.get_user(telegram_id)
