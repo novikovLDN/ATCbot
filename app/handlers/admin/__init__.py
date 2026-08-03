@@ -1,33 +1,49 @@
+"""Админская часть бота — только то, что удобнее делать прямо в чате.
+
+ЧТО ЗДЕСЬ ОСТАЛОСЬ И ПОЧЕМУ
+
+    base.py               вход /admin, ссылка на дашборд, сброс пароля и
+                          переписка с пользователем;
+    stats.py              статистика;
+    apple_id_delivery.py  выдача оплаченного заказа Apple ID;
+    spotify_delivery.py   выдача оплаченного заказа Spotify;
+    bonus.py              массовая выдача бонусов сегменту;
+    traffic_admin.py      выдача и списание ГБ обхода вручную;
+    farm_storm.py         консоль штормов фермы;
+    promo_trial.py        промо-рассылка тем, кто на пробном периоде.
+
+    Экраны выдачи заказов — не «панель»: админу приходит уведомление с
+    данными покупателя и кнопкой «Выполнено», и работать с ним удобнее
+    там же, где оно пришло. Последние четыре модуля остались потому, что
+    аналога в веб-дашборде у них пока нет.
+
+ЧЕГО ЗДЕСЬ БОЛЬШЕ НЕТ
+
+    Выдача и отзыв доступа, смена тарифа, скидки, баланс, VIP, кешбэк,
+    рассылки, промокоды, рефералы, экспорт, аудит, сверка подписок,
+    перевыпуск ключей — всё это живёт в веб-дашборде (app/api/dashboard
+    и dashboard/). Держать две реализации одного действия значит однажды
+    получить разное поведение: правку вносят в одну, а работает вторая.
+
+    Удалено 23 модуля, 11 111 строк. Экран можно достать из истории git,
+    но сначала стоит спросить, почему дашборда оказалось недостаточно.
+
+ПРОВЕРКА ДОСТУПА
+
+    Ниже висит middleware на весь раздел: она пускает дальше только
+    администратора. Ручные проверки внутри обработчиков остаются вторым
+    рубежом, но забыть их в новом экране больше не опасно.
+"""
 import logging
 
 from aiogram import Router
 
 from .base import admin_base_router
-from .promo_fsm import admin_promo_fsm_router
-from .activations import admin_activations_router
-from .audit import admin_audit_router
-from .export import admin_export_router
 from .stats import admin_stats_router
-from .broadcast_gifts import admin_broadcast_gifts_router
-from .referral_screens import admin_referral_router
-from .access import admin_access_router
-from .access_grant import admin_grant_router
-from .access_switch import admin_switch_router
-from .access_revoke import admin_revoke_router
-from .finance import admin_finance_router
-from .reissue import admin_reissue_router
-from .broadcast import admin_broadcast_router
-from .broadcast_manage import admin_broadcast_manage_router
-from .notifications import admin_notifications_router
-from .traffic_admin import admin_traffic_router
-from .bypass_gift import admin_bypass_gift_router
-from .recovery_premium import admin_premium_recovery_router
-from .audit_subs import admin_audit_subs_router
-from .audit_db_dates import admin_audit_db_dates_router
-from .promo_trial import admin_promo_trial_router
 from .bonus import admin_bonus_router
-from .stage_users import admin_stage_users_router
+from .traffic_admin import admin_traffic_router
 from .farm_storm import admin_farm_storm_router
+from .promo_trial import admin_promo_trial_router
 from .apple_id_delivery import apple_id_delivery_router
 from .spotify_delivery import spotify_delivery_router
 
@@ -36,31 +52,11 @@ _admin_logger = logging.getLogger(__name__)
 router = Router()
 
 router.include_router(admin_base_router)
-router.include_router(admin_promo_fsm_router)
-router.include_router(admin_activations_router)
-router.include_router(admin_audit_router)
-router.include_router(admin_export_router)
 router.include_router(admin_stats_router)
-router.include_router(admin_broadcast_gifts_router)
-router.include_router(admin_referral_router)
-router.include_router(admin_access_router)
-router.include_router(admin_grant_router)
-router.include_router(admin_switch_router)
-router.include_router(admin_revoke_router)
-router.include_router(admin_finance_router)
-router.include_router(admin_reissue_router)
-router.include_router(admin_broadcast_router)
-router.include_router(admin_broadcast_manage_router)
-router.include_router(admin_notifications_router)
-router.include_router(admin_traffic_router)
-router.include_router(admin_bypass_gift_router)
-router.include_router(admin_premium_recovery_router)
-router.include_router(admin_audit_subs_router)
-router.include_router(admin_audit_db_dates_router)
-router.include_router(admin_promo_trial_router)
 router.include_router(admin_bonus_router)
-router.include_router(admin_stage_users_router)
+router.include_router(admin_traffic_router)
 router.include_router(admin_farm_storm_router)
+router.include_router(admin_promo_trial_router)
 router.include_router(apple_id_delivery_router)
 router.include_router(spotify_delivery_router)
 
@@ -70,20 +66,15 @@ router.include_router(spotify_delivery_router)
 # ──────────────────────────────────────────────────────────────────────
 #
 # Зачем middleware, когда проверка и так стоит в каждом обработчике.
-# Она стоит не в каждом: проверка написана руками 193 раза в виде
+# Она стоит не в каждом: проверка написана руками десятки раз в виде
 # `if callback.from_user.id != config.ADMIN_TELEGRAM_ID: return`, и это
 # ровно тот случай, когда достаточно один раз забыть строчку в новом
 # обработчике, чтобы админская операция стала доступна кому угодно.
-# Найти такую дыру глазами в двадцати пяти модулях нельзя.
 #
 # Middleware на родительском роутере закрывает раздел целиком, включая
-# обработчики, которые напишут завтра. Существующие ручные проверки не
-# трогаем: они безвредны и работают как второй рубеж, а массовая замена
-# 193 мест — источник регрессий (у каждой свой хвост: где-то return,
-# где-то answer с текстом, где-то очистка FSM).
+# обработчики, которые напишут завтра.
 #
 # Источник истины по «кто админ» — app.services.admin_auth.is_admin.
-# Из четырёх реализаций проверки эта остаётся единственной живой.
 async def _require_admin(handler, event, data: dict):
     """Пропустить дальше только администратора.
 

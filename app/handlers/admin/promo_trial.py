@@ -51,7 +51,7 @@ from aiogram.types import (
 import config
 import database
 from app.handlers.admin.keyboards import get_admin_back_keyboard
-from app.handlers.admin.broadcast import (
+from app.services.broadcast_delivery import (
     BROADCAST_CONCURRENCY,
     BROADCAST_BATCH_SIZE,
     BROADCAST_BATCH_PAUSE,

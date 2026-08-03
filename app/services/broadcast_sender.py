@@ -28,7 +28,7 @@ from aiogram.types import InlineKeyboardMarkup
 
 import database
 from app.events import bus
-from app.handlers.admin.broadcast import (
+from app.services.broadcast_delivery import (
     BROADCAST_CONCURRENCY,
     BROADCAST_BATCH_SIZE,
     BROADCAST_BATCH_PAUSE,

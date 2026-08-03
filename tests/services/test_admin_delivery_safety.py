@@ -44,27 +44,12 @@ def test_admin_chat_does_not_overwrite_the_order_card():
     assert "callback.message.answer(" in block
 
 
-def test_grant_report_reflects_actual_delivery():
-    """«Пользователь уведомлён» должно означать, что отправка состоялась."""
-    src = Path("app/handlers/admin/access_grant.py").read_text(encoding="utf-8")
-    block = src[src.index("notified = False"):]
-    block = block[: block.index("await safe_edit_text") + 200]
-
-    assert "if not vpn_key:" in block, "нет ветки «ключа ещё нет»"
-    assert "notified = bool(await admin_notifications.send_user_notification" in block, (
-        "результат отправки не учитывается"
-    )
-    assert "if notified:" in block, "отчёт снова строится по намерению, а не по факту"
-    assert "НЕ отправлено" in block, "админ не узнает о неудаче"
-
-
-def test_grant_notification_is_localized():
-    """Раньше текст собирался русской f-строкой независимо от языка."""
-    src = Path("app/handlers/admin/access_grant.py").read_text(encoding="utf-8")
-    block = src[src.index("notified = False"):]
-    block = block[:2000]
-    assert "resolve_user_language(user_id)" in block, "язык получателя не запрашивается"
-    assert "admin.user_granted_access" in block
+# Дефекты 3 и 4 (отчёт «уведомлён» по намерению вместо факта и русская
+# f-строка вместо перевода) жили в app/handlers/admin/access_grant.py.
+# Экран выдачи доступа удалён целиком — выдача идёт через веб-дашборд,
+# поэтому проверять там нечего. Проверка переводов ниже осталась: ключ
+# admin.user_granted_access продолжает использоваться в уведомлении,
+# которое шлёт дашборд, и пустой перевод сломал бы его так же.
 
 
 @pytest.mark.parametrize("lang", ["ru", "en", "de", "ar", "kk", "tj", "uz"])

@@ -129,12 +129,11 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
     ~StateFilter(PromoTrialFSM.waiting_for_photo),
 )
 async def log_incoming_photo_file_id(message: Message):
-    """Log file_id of incoming photos for later use (e.g. loyalty images). Does not send reply.
+    """Записать file_id входящего фото в лог. Ответа не шлёт.
 
-    Excludes FSM states that legitimately consume an admin-attached
-    photo (broadcast wizard, trial-promo photo attach), so the
-    intended handler in that router gets the message instead of us
-    silently swallowing it for a log line.
+    Исключаем состояния, в которых приложенное админом фото штатно
+    ждёт другой обработчик, — иначе мы проглотим сообщение ради строчки
+    в логе, и админ увидит, что бот на фото не отреагировал.
     """
     try:
         telegram_id = message.from_user.id if message.from_user else 0

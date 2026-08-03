@@ -93,22 +93,15 @@ def test_strip_markup_keeps_the_content():
     assert _strip_markup("без тегов") == "без тегов"
 
 
-def test_admin_broadcasts_log_their_failures():
+def test_broadcast_delivery_logs_its_failures():
     """Пустой except прячет причину: заблокирован бот или битый HTML —
-    разные вещи, вторая ломает рассылку всем."""
-    src = Path("app/handlers/admin/notifications.py").read_text(encoding="utf-8")
-    assert "NOTIFY_SEND_FAILED" in src
-    assert "NOTIFY_USER_FAILED" in src
-    for silent in ("except Exception:\n                        failed_count += 1",
-                   "except Exception:\n                        pass"):
-        assert silent not in src, "остался перехват без логирования"
+    разные вещи, вторая ломает рассылку всем.
 
-
-def test_x2_broadcast_counts_failures():
-    """Раньше счётчика неудач не существовало: «Отправлено N/M» без
-    объяснения, куда делись остальные."""
-    src = Path("app/handlers/admin/notifications.py").read_text(encoding="utf-8")
-    # Берём окно после заголовка: обрывать по первой скобке нельзя —
-    # внутри f-строки они свои.
-    block = src[src.index("Рассылка x2 кешбэк завершена"):][:400]
-    assert "failed_count" in block, "админ не видит число недоставленных"
+    Дефект 3 жил в app/handlers/admin/notifications.py — экран удалён,
+    рассылки идут через дашборд. Но слой доставки под ними тот же, и
+    молчаливый перехват в нём стоит ровно столько же: счётчик покажет
+    «отправлено N из M», а куда делись остальные — не узнает никто.
+    """
+    src = Path("app/services/broadcast_delivery.py").read_text(encoding="utf-8")
+    assert "BROADCAST_SEND_FAILED" in src, "неудача отправки нигде не логируется"
+    assert "except Exception:\n" not in src, "остался перехват без причины"

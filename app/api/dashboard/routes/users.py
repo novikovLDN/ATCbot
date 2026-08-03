@@ -207,6 +207,7 @@ class GrantRequest(BaseModel):
 
     days: int = Field(..., gt=0, le=3650)
     tariff: str = Field("basic")
+    notify: bool = Field(True)
 
     @field_validator("tariff")
     @classmethod
@@ -214,6 +215,57 @@ class GrantRequest(BaseModel):
         if v not in config.GRANTABLE_TARIFF_TYPES:
             raise ValueError(f"invalid tariff: {v}")
         return v
+
+
+async def _notify_granted(
+    telegram_id: int, value: int, unit_key: str, vpn_key: str, expires_at,
+) -> bool:
+    """Сказать человеку, что ему выдали доступ. Вернуть, дошло ли.
+
+    ЗАЧЕМ ЭТО ЗДЕСЬ
+        Пока выдача жила в боте, уведомление отправлял тот же экран.
+        Экран уехал в дашборд — уведомление обязано было уехать с ним,
+        иначе человеку выдают доступ, а он об этом не узнаёт и не
+        получает ключ.
+
+    ЧТО ЛЕГКО СЛОМАТЬ
+        Отчитываться «уведомлён» по намерению, а не по факту. Отправка
+        не удаётся регулярно и по бытовым причинам: человек заблокировал
+        бота, никогда ему не писал, удалил аккаунт. Поэтому возвращаем
+        РЕЗУЛЬТАТ отправки, и он уходит в ответ endpoint'а флагом
+        notify_sent — админ видит, что надо связаться иначе.
+
+        Сама выдача уже в БД. Неудача уведомления её не отменяет и не
+        должна ронять запрос — отсюда широкий except.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from app.api import telegram_webhook
+        bot = getattr(telegram_webhook, "_bot", None)
+        if bot is None:
+            logger.warning("GRANT_NOTIFY_NO_BOT tg=%s", telegram_id)
+            return False
+
+        from app.i18n import get_text
+        from app.services.language_service import resolve_user_language
+        from app.utils.telegram_safe import safe_send_message
+
+        # Язык получателя, а не язык админа: раньше текст собирался
+        # русской f-строкой независимо от того, на каком языке человек
+        # пользуется ботом.
+        language = await resolve_user_language(telegram_id)
+        text = get_text(
+            language, "admin.user_granted_access",
+            value=value,
+            unit=get_text(language, unit_key),
+            vpn_key=vpn_key or "—",
+            date=expires_at.strftime("%d.%m.%Y") if hasattr(expires_at, "strftime") else expires_at,
+        )
+        return bool(await safe_send_message(bot, telegram_id, text))
+    except Exception:
+        logger.exception("GRANT_NOTIFY_FAILED tg=%s", telegram_id)
+        return False
 
 
 @router.post("/{telegram_id}/grant")
@@ -235,15 +287,21 @@ async def user_grant(
         "days": body.days,
         "tariff": body.tariff,
     })
+    notify_sent = (
+        await _notify_granted(telegram_id, body.days, "units.days", vpn_key, expires_at)
+        if body.notify else False
+    )
     return {
         "ok": True,
         "expires_at": expires_at.isoformat() if hasattr(expires_at, "isoformat") else expires_at,
         "vpn_key": vpn_key,
+        "notify_sent": notify_sent,
     }
 
 
 class GrantMinutesRequest(BaseModel):
     minutes: int = Field(..., gt=0, le=525600)  # ≤ 1 year
+    notify: bool = Field(True)
 
 
 @router.post("/{telegram_id}/grant-minutes")
@@ -264,10 +322,15 @@ async def user_grant_minutes(
         "by": admin.get("sub"),
         "minutes": body.minutes,
     })
+    notify_sent = (
+        await _notify_granted(telegram_id, body.minutes, "units.minutes", vpn_key, expires_at)
+        if body.notify else False
+    )
     return {
         "ok": True,
         "expires_at": expires_at.isoformat() if hasattr(expires_at, "isoformat") else expires_at,
         "vpn_key": vpn_key,
+        "notify_sent": notify_sent,
     }
 
 

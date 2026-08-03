@@ -3806,6 +3806,25 @@
         "scripts/verify_samopis_migration.py",
         "app/handlers/admin/__init__.py"
       ]
+    },
+    {
+      "title": "Админская панель в боте дублирует веб-дашборд: 23 модуля, 11 111 строк",
+      "severity": "P2",
+      "category": "simplification",
+      "file": "app/handlers/admin/__init__.py",
+      "line": 1,
+      "source": "simplification",
+      "defect": "Одни и те же операции были реализованы дважды: выдача и отзыв доступа, смена тарифа, скидки, баланс, VIP, кешбэк, рассылки, промокоды, рефералы, экспорт, аудит, сверка подписок, перевыпуск ключей — и в боте (23 модуля в app/handlers/admin), и в веб-дашборде (app/api/dashboard + dashboard/). Покрытие дашборда проверено по всем маршрутам перед удалением.",
+      "failure_scenario": "Две реализации одного действия расходятся: правку вносят в одну, а используют вторую. Проверено на живом примере — экран выдачи доступа в боте уведомлял пользователя («Вам выдан доступ», ключ, дата, на его языке), а дашбордный POST /users/{id}/grant не уведомлял вовсе. Клиент, которому выдали доступ через дашборд, не узнавал об этом и не получал ключ.",
+      "status": "fixed",
+      "resolution": "Удалено 23 модуля и 11 111 строк. Остались восемь: base (вход, сброс пароля, переписка с пользователем), stats, apple_id_delivery, spotify_delivery (выдача заказов — админу приходит уведомление с данными покупателя и кнопкой «Выполнено», работать с ним удобнее там же, где оно пришло) и четыре без аналога в дашборде: bonus, traffic_admin, farm_storm, promo_trial. Обработчиков в разделе стало 64 вместо 240.\nЧто уцелело при удалении: слой доставки рассылок (_broadcast_send.py) переехал в app/services/broadcast_delivery.py — он нужен и промо-рассылке триальщикам, и broadcast_sender; заодно из него убрана мёртвая копия сборки клавиатуры (её строит дашборд) и добавлено логирование неудачной отправки вместо молчаливого except.\nЧто восстановлено: уведомление о выдаче доступа теперь шлёт дашборд (_notify_granted в routes/users.py) — на языке получателя, с ключом и датой, а флаг notify_sent в ответе строится по факту отправки, а не по намерению. Покрыто tests/services/test_dashboard_grant_notify.py.\nТесты, проверявшие сохранность удалённых экранов, сокращены до выжившего: test_access_split.py → test_payments_split.py, test_audit_base.py удалён (его модуль ушёл, а арифметика сверок в database/reconciliation.py покрыта test_reconciliation_clamp.py).",
+      "fixed_in": [
+        "app/handlers/admin/__init__.py",
+        "app/services/broadcast_delivery.py",
+        "app/api/dashboard/routes/users.py",
+        "tests/services/test_dashboard_grant_notify.py",
+        "tests/services/test_payments_split.py"
+      ]
     }
   ],
   "refuted": [
