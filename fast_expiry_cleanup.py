@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 import asyncpg
 import database
 import config
-from app.services.vpn import service as vpn_service
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -240,45 +239,29 @@ async def fast_expiry_cleanup_task(bot=None):
 
                                 try:
                                     logger.info(
-                                        f"cleanup: REMOVING_UUID [user={telegram_id}, uuid={uuid_preview}, "
+                                        f"cleanup: EXPIRING [user={telegram_id}, uuid={uuid_preview}, "
                                         f"expires_at={expires_at.isoformat()}]"
                                     )
-                                    # POOL_STABILITY: VPN HTTP call OUTSIDE any DB connection.
-                                    uuid_removed = await vpn_service.remove_uuid_if_needed(
-                                        uuid=uuid,
-                                        subscription_status='active',
-                                        subscription_expired=True
-                                    )
-                                    if uuid_removed:
-                                        logger.info(f"cleanup: VPN_API_REMOVED [user={telegram_id}, uuid={uuid_preview}]")
-                                    else:
-                                        vpn_api_disabled = not vpn_service.is_vpn_api_available()
-                                        if vpn_api_disabled:
-                                            logger.warning(
-                                                f"cleanup: VPN_API_DISABLED [user={telegram_id}, uuid={uuid_preview}] - "
-                                                "VPN API is not configured, UUID removal skipped but DB will be cleaned"
-                                            )
-                                        else:
-                                            logger.debug(
-                                                f"cleanup: UUID_REMOVAL_SKIPPED [user={telegram_id}, uuid={uuid_preview}] - "
-                                                "Service layer decided not to remove UUID"
-                                            )
-                                            processing_uuids.discard(uuid)
-                                            continue
-
-                                    try:
-                                        await database._log_vpn_lifecycle_audit_async(
-                                            action="vpn_expire",
-                                            telegram_id=telegram_id,
-                                            uuid=uuid,
-                                            source="auto-expiry",
-                                            result="success",
-                                            details=f"Auto-expired subscription, expires_at={expires_at.isoformat()}"
-                                        )
-                                    except Exception as e:
-                                        logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")
+                                    # ПОРЯДОК ДЕЙСТВИЙ: сначала база, потом панель.
+                                    #
+                                    # Здесь стоял вызов vpn_service.remove_uuid_if_needed —
+                                    # он вёл в no-op заглушку и возвращал True, ничего не
+                                    # отключив, а следом писался аудит vpn_expire с
+                                    # result=success. То есть запись «доступ закрыт»
+                                    # появлялась до всякой проверки, что подписку и правда
+                                    # закрывают: строкой ниже мог сработать SKIP_RENEWED —
+                                    # человек продлился, аудит уже соврал.
+                                    #
+                                    # Теперь premium-сущность гасится ПОСЛЕ успешного
+                                    # UPDATE, и только там пишется аудит. Bypass-сущность
+                                    # это не трогает: она отдельная и продолжает работать,
+                                    # если у человека остались гигабайты обхода.
 
                                     # POOL_STABILITY: DB update with dedicated short-lived conn (no conn held during HTTP).
+                                    # Панель гасим не здесь, а после выхода из соединения:
+                                    # HTTP внутри открытой транзакции держал бы соединение
+                                    # пула и блокировки строк всё время запроса.
+                                    disable_premium_after_commit = False
                                     try:
                                         async with acquire_connection(pool, "fast_expiry_update") as conn:
                                             async with conn.transaction():
@@ -354,6 +337,10 @@ async def fast_expiry_cleanup_task(bot=None):
                                                                 telegram_id, uuid
                                                             )
                                                         if update_result == "UPDATE 1":
+                                                            # Подписка действительно закрыта — можно гасить
+                                                            # premium в панели. До этой строки дойти нельзя,
+                                                            # если человек успел продлиться (SKIP_RENEWED выше).
+                                                            disable_premium_after_commit = True
                                                             logger.info(
                                                                 f"cleanup: SUBSCRIPTION_EXPIRED [user={telegram_id}, uuid={uuid_preview}, "
                                                                 f"expires_at={expires_at.isoformat()}]"
@@ -391,28 +378,36 @@ async def fast_expiry_cleanup_task(bot=None):
                                                         f"cleanup: UUID_ALREADY_CLEANED [user={telegram_id}, uuid={uuid_preview}] - "
                                                         "UUID was already removed or subscription is no longer active"
                                                     )
+
+                                        # Соединение отдано в пул, транзакция закрыта —
+                                        # теперь можно идти по сети.
+                                        if disable_premium_after_commit:
+                                            try:
+                                                from app.services.remnawave_premium import disable_premium_user
+                                                if await disable_premium_user(telegram_id):
+                                                    logger.info(
+                                                        "cleanup: PREMIUM_DISABLED [user=%s]", telegram_id,
+                                                    )
+                                                else:
+                                                    # Сущности нет, панель выключена или отказала.
+                                                    # База уже закрыта — доступ по ссылке погаснет
+                                                    # сам по expireAt, но раньше он не погаснет,
+                                                    # поэтому это предупреждение, а не отладка.
+                                                    logger.warning(
+                                                        "cleanup: PREMIUM_DISABLE_SKIPPED [user=%s] — "
+                                                        "сущность в панели могла остаться активной",
+                                                        telegram_id,
+                                                    )
+                                            except Exception as rmn_err:
+                                                logger.warning(
+                                                    "cleanup: PREMIUM_DISABLE_FAIL [user=%s] %s",
+                                                    telegram_id, rmn_err,
+                                                )
                                     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
                                         logger.warning(f"fast_expiry_cleanup: Database temporarily unavailable during DB update: {type(e).__name__}: {str(e)[:100]}")
                                     except Exception as e:
                                         logger.error(f"fast_expiry_cleanup: Unexpected error during DB update: {type(e).__name__}: {str(e)[:100]}")
                                         logger.debug(f"fast_expiry_cleanup: Full traceback for DB update", exc_info=True)
-
-                                except vpn_service.VPNRemovalError as e:
-                                    logger.error(
-                                        f"cleanup: VPN_REMOVAL_ERROR [user={telegram_id}, uuid={uuid_preview}, error={str(e)}, "
-                                        f"error_type={type(e).__name__}] - will retry in next cycle"
-                                    )
-                                    try:
-                                        await database._log_vpn_lifecycle_audit_async(
-                                            action="vpn_expire",
-                                            telegram_id=telegram_id,
-                                            uuid=uuid,
-                                            source="auto-expiry",
-                                            result="error",
-                                            details=f"Failed to remove UUID via VPN API: {str(e)}, will retry"
-                                        )
-                                    except Exception:
-                                        pass
 
                                 except ValueError as e:
                                     logger.error(

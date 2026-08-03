@@ -599,7 +599,15 @@
       "risk": "средний",
       "confidence": "high",
       "_dom": "vpn",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Воркер звал vpn_service.remove_uuid_if_needed, тот делегировал в no-op заглушку и возвращал True, ничего не отключив. Premium-сущность в панели оставалась активной и гасла сама по своему expireAt — то есть человек с подрезанной админом датой или после перехода в bypass-only (там expires_at ставится на десять лет вперёд) продолжал пользоваться платным VPN, а лог утверждал обратное.\nЗаменено на remnawave_premium.disable_premium_user. Bypass-сущность не затрагивается: она отдельная и продолжает работать, если у человека остались гигабайты обхода.\nЗаодно исправлен порядок: отключение панели и аудит vpn_expire/success шли ДО проверки, что подписку и правда закрывают — строкой ниже мог сработать SKIP_RENEWED, и запись уже соврала. Теперь панель гасится после успешного UPDATE и вне открытой транзакции: HTTP внутри неё держал бы соединение пула и блокировки строк всё время запроса.\napp/services/vpn удалён целиком (200 строк). Ссылка на VPNServiceError снята из app/utils/logging_helpers.py. Тест истечения переписан: он проверял вызов заглушки и заканчивался на `pass`, то есть не выполнял ничего; теперь проверяет реальное отключение, порядок относительно SKIP_RENEWED, положение вызова вне транзакции и единственность записи vpn_expire.",
+      "fixed_in": [
+        "fast_expiry_cleanup.py",
+        "app/services/vpn/service.py",
+        "app/utils/logging_helpers.py",
+        "tests/integration/test_vpn_entitlement.py"
+      ]
     },
     {
       "title": "Истечение триала не отключает premium-сущность",
@@ -3046,7 +3054,12 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "workers",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Преждевременная запись vpn_expire/result=success удалена вместе с вызовом заглушки, который её порождал. Осталась одна запись — после успешного UPDATE. Подробнее в находке по app/services/vpn/service.py.",
+      "fixed_in": [
+        "fast_expiry_cleanup.py"
+      ]
     },
     {
       "title": "Мёртвая ветка ACTIVATION_SKIP_VPN_UNAVAILABLE и бессмысленный try/except вокруг двух присваиваний",

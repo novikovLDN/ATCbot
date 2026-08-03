@@ -119,48 +119,87 @@ class TestDuplicateWebhookIdempotency:
 
 
 class TestExpiredSubscriptionRemoved:
-    """Test 3: Expired subscription triggers remove."""
+    """Истечение подписки должно гасить premium-сущность в панели.
 
-    @pytest.mark.asyncio
-    async def test_fast_expiry_cleanup_calls_remove_for_expired(self):
-        """Expired subscription (expires_at < now) → remove_uuid_if_needed called."""
-        removed = []
+    ЧТО ЛОМАЛОСЬ
 
-        async def fake_remove_uuid_if_needed(*, uuid, subscription_status, subscription_expired):
-            removed.append(uuid)
-            return True
+        Воркер звал vpn_service.remove_uuid_if_needed — тот делегировал в
+        no-op заглушку и возвращал True, ничего не отключив. По этому
+        True тут же писался аудит vpn_expire с result=success, а строка в
+        базе обнулялась. В панели сущность оставалась активной и гасла
+        сама по своему expireAt — то есть человек с подрезанной админом
+        датой или после перехода в bypass-only (там expires_at ставится
+        на десять лет вперёд) продолжал пользоваться платным VPN. Лог при
+        этом утверждал обратное.
 
-        with patch("fast_expiry_cleanup.database.get_pool") as mock_pool:
-            with patch("fast_expiry_cleanup.vpn_service.remove_uuid_if_needed", side_effect=fake_remove_uuid_if_needed):
-                conn = MagicMock()
-                past = datetime(2020, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-                conn.fetch = AsyncMock(return_value=[{
-                    "telegram_id": 123, "uuid": "test-uuid-123", "expires_at": past,
-                    "status": "active", "source": "payment"
-                }])
-                conn.fetchrow = AsyncMock(return_value={
-                    "uuid": "test-uuid-123", "expires_at": past, "status": "active"
-                })
-                conn.execute = AsyncMock(return_value="UPDATE 1")
-                conn.transaction = MagicMock()
-                tx = MagicMock()
-                tx.__aenter__ = AsyncMock()
-                tx.__aexit__ = AsyncMock(return_value=None)
-                conn.transaction.return_value = tx
-                pool = MagicMock()
-                acq = MagicMock()
-                acq.__aenter__ = AsyncMock(return_value=conn)
-                acq.__aexit__ = AsyncMock(return_value=None)
-                pool.acquire.return_value = acq
-                mock_pool.return_value = pool
+        Второй дефект того же места: аудит «доступ закрыт» писался ДО
+        проверки, что подписку и правда закрывают. Строкой ниже мог
+        сработать SKIP_RENEWED — человек успел продлиться, а запись уже
+        соврала.
 
-                with patch("fast_expiry_cleanup.database.get_active_paid_subscription", AsyncMock(return_value=None)):
-                    with patch("fast_expiry_cleanup.database._to_db_utc", side_effect=lambda x: x):
-                        with patch("fast_expiry_cleanup.database._from_db_utc", side_effect=lambda x: x):
-                            pass  # Structural test; full run would need event loop
+    ПОРЯДОК, КОТОРЫЙ ПРОВЕРЯЕМ
 
-        # Expired subscription path: remove_uuid_if_needed is called by fast_expiry_cleanup
-        assert True
+        UPDATE в базе → и только затем отключение в панели, вне открытой
+        транзакции: HTTP внутри неё держал бы соединение пула и
+        блокировки строк всё время запроса.
+    """
+
+    def _source(self):
+        import inspect
+        import fast_expiry_cleanup
+        return inspect.getsource(fast_expiry_cleanup)
+
+    def test_panel_entity_is_actually_disabled(self):
+        src = self._source()
+        assert "disable_premium_user" in src, (
+            "истечение снова никак не отражается в панели"
+        )
+        assert "remove_uuid_if_needed" not in src.replace(
+            "# Здесь стоял вызов vpn_service.remove_uuid_if_needed", "",
+        ), "вернулся вызов заглушки, которая ничего не отключает"
+
+    def test_panel_is_disabled_only_after_the_row_is_closed(self):
+        """Иначе гасим доступ человеку, который успел продлиться."""
+        src = self._source()
+        flag_set = src.index("disable_premium_after_commit = True")
+        renewed_check = src.index("SKIP_RENEWED")
+        call = src.index("await disable_premium_user(telegram_id)")
+
+        assert renewed_check < flag_set, "флаг ставится до проверки продления"
+        assert flag_set < call, "панель гасится раньше, чем закрыта строка в БД"
+
+    def test_panel_call_is_outside_the_transaction(self):
+        """Сетевой вызов внутри транзакции держит соединение и блокировки.
+
+        Проверяем по отступу: ветка `if disable_premium_after_commit:`
+        обязана стоять на том же уровне, что и сам `async with
+        acquire_connection`, — то есть за пределами блока соединения.
+        """
+        src = self._source()
+
+        def _indent_of(needle: str) -> int:
+            pos = src.index(needle)
+            line_start = src.rindex("\n", 0, pos) + 1
+            return pos - line_start
+
+        tx_indent = _indent_of('async with acquire_connection(pool, "fast_expiry_update")')
+        guard_indent = _indent_of("if disable_premium_after_commit:")
+
+        assert guard_indent == tx_indent, (
+            f"вызов панели оказался вложен в блок соединения "
+            f"(отступ {guard_indent} против {tx_indent})"
+        )
+
+    def test_success_audit_is_written_once_and_after_the_update(self):
+        """Раньше vpn_expire/success писался дважды: до проверки и после."""
+        src = self._source()
+        successes = [
+            i for i in range(len(src))
+            if src.startswith('action="vpn_expire"', i)
+        ]
+        assert len(successes) == 1, (
+            f"записей vpn_expire стало {len(successes)} — вернулся преждевременный аудит"
+        )
 
 
 # Reconciliation worker removed: DB is source of truth; no background Xray state diffing.
