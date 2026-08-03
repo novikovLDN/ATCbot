@@ -73,6 +73,15 @@ def _get_trial_flag_query(flag_name: str) -> str:
     return query
 
 # Расписание уведомлений получается из service layer
+# Расписание legacy-уведомлений о триале намеренно пустое: дублирующие
+# сообщения (60h/71h) убраны, потому что летели в тот же слот, что и
+# основные reminder_24h/3h — человек получал два письма об одном и том
+# же в течение пяти минут. Сам код, который его перебирал, удалён:
+# около 90 строк, которые не могли выполниться ни разу.
+#
+# Константу оставляем: get_notification_schedule() — часть публичного
+# интерфейса сервиса триалов, и явное пустое расписание честнее
+# молчаливого отсутствия.
 TRIAL_NOTIFICATION_SCHEDULE = trial_service.get_notification_schedule()
 
 # STEP 3 — PART B: WORKER LOOP SAFETY
@@ -307,7 +316,6 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
     reason_final = None
     payload_final = None
     final_reminder_config = None
-    pending_notifications: list[tuple] = []
 
     async with pool.acquire() as conn:
         try:
@@ -338,44 +346,6 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
                     f"reason={reason_final}"
                 )
 
-            if not should_send_final:
-                notification_flags = {
-                    "trial_notif_6h_sent": row.get("trial_notif_6h_sent", False),
-                    "trial_notif_60h_sent": row.get("trial_notif_60h_sent", False),
-                    "trial_notif_71h_sent": row.get("trial_notif_71h_sent", False),
-                }
-                for notification in TRIAL_NOTIFICATION_SCHEDULE:
-                    try:
-                        should_send, reason = await trial_service.should_send_notification(
-                            telegram_id=telegram_id,
-                            trial_expires_at=trial_expires_at,
-                            subscription_expires_at=subscription_expires_at,
-                            notification_schedule=notification,
-                            notification_flags=notification_flags,
-                            now=now,
-                            conn=conn
-                        )
-                        if not should_send:
-                            if reason:
-                                logger.debug(
-                                    f"trial_reminder_skipped: user={telegram_id}, notification={notification['key']}, "
-                                    f"reason={reason}"
-                                )
-                            continue
-                        payload = trial_service.prepare_notification_payload(
-                            notification_key=notification["key"],
-                            has_button=notification["has_button"]
-                        )
-                        db_flag = notification.get("db_flag", f"trial_notif_{notification['hours']}h_sent")
-                        pending_notifications.append((notification, payload, db_flag))
-                        # Optimistically mark sent to prevent duplicate sends within this run
-                        notification_flags[db_flag] = True
-                    except trial_service.TrialServiceError as e:
-                        logger.warning(
-                            f"trial_reminder_skipped: user={telegram_id}, notification={notification['key']}, "
-                            f"service_error={type(e).__name__}: {str(e)}"
-                        )
-                        continue
         except trial_service.TrialServiceError as e:
             logger.warning(
                 f"trial_reminder_skipped: user={telegram_id}, notification=final_6h_before_expiry, "
@@ -384,103 +354,6 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
             return
     # conn released — Telegram I/O below does NOT hold a DB connection
 
-    # Phase 2+3: Telegram I/O then DB write for final reminder
-    if should_send_final:
-        from app.services.automated_notifications import (
-            is_notification_enabled, get_notification_text,
-            log_notification_send,
-        )
-        _key = payload_final["notification_key"]
-        # Если админ отключил в дашборде — пометим flag и skip.
-        if not await is_notification_enabled(_key):
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    _get_trial_flag_query(final_reminder_config['db_flag']),
-                    telegram_id,
-                )
-            await log_notification_send(_key, telegram_id, status="skipped_disabled")
-            logger.info(f"trial_final_reminder_skipped_disabled: user={telegram_id}, key={_key}")
-            return
-        # Только для ru: в automated_notifications нет переводов, и для
-        # остальных языков send_trial_notification возьмёт текст из i18n.
-        _lang = await resolve_user_language(telegram_id)
-        _custom = await get_notification_text(_key, language=_lang)
-        success, status = await send_trial_notification(
-            bot, pool, telegram_id, _key, payload_final["has_button"],
-            custom_text=_custom,
-        )
-        timing = trial_service.calculate_trial_timing(trial_expires_at, now)
-        async with pool.acquire() as conn:
-            final_flag_query = _get_trial_flag_query(final_reminder_config['db_flag'])
-            if success:
-                await conn.execute(final_flag_query, telegram_id)
-                await log_notification_send(_key, telegram_id, status="sent")
-                logger.info(
-                    f"trial_reminder_sent: user={telegram_id}, notification=final_6h_before_expiry, "
-                    f"hours_until_expiry={timing['hours_until_expiry']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
-                )
-            elif status == "failed_permanently":
-                await conn.execute(final_flag_query, telegram_id)
-                await log_notification_send(_key, telegram_id, status="blocked")
-                logger.warning(
-                    f"trial_reminder_failed_permanently: user={telegram_id}, notification=final_6h_before_expiry, "
-                    f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, will_not_retry=True"
-                )
-            else:
-                await log_notification_send(_key, telegram_id, status="failed")
-                logger.warning(
-                    f"trial_reminder_failed_temporary: user={telegram_id}, notification=final_6h_before_expiry, "
-                    f"reason=temporary_error, will_retry=True"
-                )
-        return
-
-    # Phase 2+3: Telegram I/O then DB write for notification schedule
-    from app.services.automated_notifications import (
-        is_notification_enabled as _is_enabled_impl,
-        get_notification_text as _get_text_impl,
-        log_notification_send as _log_send_impl,
-    )
-    for notification, payload, db_flag in pending_notifications:
-        _key = payload["notification_key"]
-        # Legacy notif-keys like trial.notification_60h/71h — если админ
-        # выключил, помечаем flag и пропускаем.
-        if not await _is_enabled_impl(_key):
-            async with pool.acquire() as conn:
-                await conn.execute(_get_trial_flag_query(db_flag), telegram_id)
-            await _log_send_impl(_key, telegram_id, status="skipped_disabled")
-            logger.info(f"trial_schedule_skipped_disabled: user={telegram_id}, key={_key}")
-            continue
-        _lang = await resolve_user_language(telegram_id)
-        _custom = await _get_text_impl(_key, language=_lang)
-        success, status = await send_trial_notification(
-            bot, pool, telegram_id, _key, payload["has_button"],
-            custom_text=_custom,
-        )
-        timing = trial_service.calculate_trial_timing(trial_expires_at, now)
-        flag_query = _get_trial_flag_query(db_flag)
-        if success:
-            async with pool.acquire() as conn:
-                await conn.execute(flag_query, telegram_id)
-            await _log_send_impl(_key, telegram_id, status="sent")
-            logger.info(
-                f"trial_reminder_sent: user={telegram_id}, notification={notification['key']}, "
-                f"hours_since_activation={timing['hours_since_activation']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
-            )
-        elif status == "failed_permanently":
-            async with pool.acquire() as conn:
-                await conn.execute(flag_query, telegram_id)
-            await _log_send_impl(_key, telegram_id, status="blocked")
-            logger.warning(
-                f"trial_reminder_failed_permanently: user={telegram_id}, notification={notification['key']}, "
-                f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, "
-                f"will_not_retry=True"
-            )
-        else:
-            await _log_send_impl(_key, telegram_id, status="failed")
-            logger.warning(
-                f"trial_reminder_failed_temporary: user={telegram_id}, notification={notification['key']}, "
-                f"reason=temporary_error, will_retry=True"
-            )
 
 
 async def process_trial_notifications(bot: Bot):

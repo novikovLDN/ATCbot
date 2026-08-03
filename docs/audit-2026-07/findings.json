@@ -1838,7 +1838,14 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "notifications",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Недостижимая ветка REMINDER_24H удалена из reminders.py, ключ subscription.reminder_24h снят с реестра. Окно «24 часа до истечения» целиком занято REMINDER_1D (should_send_reminder не возвращает REMINDER_24H ни в одной ветке), поэтому тумблер в дашборде управлял текстом, который никогда не отправляется. На месте ветки оставлен комментарий с объяснением — чтобы её не вернули.",
+      "fixed_in": [
+        "reminders.py",
+        "app/services/automated_notifications/registry.py",
+        "tests/services/test_notification_registry_live.py"
+      ]
     },
     {
       "title": "Три ключа реестра автоуведомлений не читаются кодом — тумблеры в дашборде ничего не делают",
@@ -1851,7 +1858,14 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "notifications",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Три мёртвых тумблера сняты с реестра: subscription.reminder_24h (окно занято), trial.reminder_6h (расписание пустое), referral.reward_notification (текст кешбэка собирается из ШЕСТИ i18n-ключей — одним полем им управлять нельзя, админ отредактировал бы часть, а отправилась бы склейка). Четвёртый, gift.activated_welcome, наоборот подключён по-настоящему: подарочное приветствие идёт через реестр с фолбэком на i18n для нерусских языков. Правило записано в шапке registry.py. Тест tests/services/test_notification_registry_live.py сверяет реестр с реальными обращениями из кода — зарегистрировать ключ «чтобы был» больше нельзя.",
+      "fixed_in": [
+        "app/services/automated_notifications/registry.py",
+        "app/handlers/user/start.py",
+        "tests/services/test_notification_registry_live.py"
+      ]
     },
     {
       "title": "trigger_config для подписочных напоминаний игнорируется — окна захардкожены",
@@ -1877,7 +1891,13 @@
       "risk": "низкий",
       "confidence": "high",
       "_dom": "notifications",
-      "_status": "не проверено"
+      "_status": "не проверено",
+      "status": "fixed",
+      "resolution": "Удалён недостижимый код legacy-расписания триала: цикл по TRIAL_NOTIFICATION_SCHEDULE (расписание пустое осознанно — дубли летели в тот же слот, что и основные напоминания) и вся фаза 2+3, около 90 строк. trial_notifications.py: 898 → 808 строк. Сама константа оставлена с объяснением: get_notification_schedule() — часть публичного интерфейса сервиса триалов, и явное пустое расписание честнее молчаливого отсутствия.",
+      "fixed_in": [
+        "trial_notifications.py",
+        "tests/services/test_notification_registry_live.py"
+      ]
     },
     {
       "title": "Воркер напоминаний тянет все активные подписки без лимита и может обрываться по таймауту",

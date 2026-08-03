@@ -294,11 +294,22 @@ async def cmd_start(message: Message, state: FSMContext):
                             period_text = f"{months} месяцев"
 
                         if is_new_user:
-                            # Новый пользователь: приветствие + активация + выбор языка
-                            text = i18n_get_text(
-                                language, "gift.activated_welcome",
-                                tariff_name=tariff_name,
-                                period=period_text,
+                            # Новый пользователь: приветствие + активация + выбор языка.
+                            #
+                            # Текст проходит через реестр автоуведомлений: у
+                            # админа в дашборде есть тумблер и поле для этого
+                            # ключа, и раньше они не делали ничего — сообщение
+                            # брали напрямую из i18n. Для нерусских языков
+                            # реестр возвращает None (там хранится только
+                            # русский), и тогда берём перевод, как и раньше.
+                            from app.services.automated_notifications import (
+                                get_notification_text as _autonotif_text,
+                            )
+                            _params = {"tariff_name": tariff_name, "period": period_text}
+                            text = await _autonotif_text(
+                                "gift.activated_welcome", language=language, params=_params,
+                            ) or i18n_get_text(
+                                language, "gift.activated_welcome", **_params,
                             )
                             await message.answer(
                                 text,

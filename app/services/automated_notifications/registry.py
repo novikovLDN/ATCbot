@@ -74,6 +74,20 @@ def all_specs() -> List[NotificationSpec]:
 
 # ── Известные уведомления ────────────────────────────────────────────
 
+# ЧЕГО ЗДЕСЬ СОЗНАТЕЛЬНО НЕТ
+#
+# Сообщения, которые собираются из НЕСКОЛЬКИХ i18n-ключей: например,
+# уведомление о реферальном кешбэке склеивается из шести кусков (заголовок,
+# сумма, срок подписки, размер кешбэка, уровень, прогресс до следующего).
+# Один тумблер и одно поле текста таким сообщением управлять не могут:
+# админ отредактировал бы часть, а отправилась бы склейка.
+#
+# Регистрировать такой ключ «чтобы был» нельзя — в дашборде появляется
+# живой на вид переключатель, который ничего не делает. Так здесь и было с
+# referral.reward_notification, subscription.reminder_24h (окно занято
+# reminder_1d) и trial.reminder_6h (расписание пустое): три тумблера,
+# которые админ мог щёлкать без всякого эффекта.
+
 # Триал — reminders. Дефолты из ru.py 783-784 — оставлены синхронно.
 register_notification(NotificationSpec(
     key="trial.reminder_24h",
@@ -93,26 +107,6 @@ register_notification(NotificationSpec(
     ),
     template_vars=[],
     default_trigger={"before_expiry_hours": 24, "tolerance_hours": 1},
-))
-
-register_notification(NotificationSpec(
-    key="trial.reminder_6h",
-    title="Триал: за 6 часов до истечения (legacy 71h-slot)",
-    description=(
-        "Старая ветка (i18n main.trial_notification_71h) — «через 6 часов "
-        "пробный доступ завершится». Работает параллельно с новым "
-        "trial.reminder_3h. Wire-up идёт через TRIAL_NOTIFICATION_SCHEDULE "
-        "в app/services/trials — при желании можно отключить через "
-        "тумблер тут, чтобы не дублировать 3h reminder."
-    ),
-    category="trial",
-    default_text_ru=(
-        "🔔 Через 6 часов пробный доступ завершится и VPN отключится\n\n"
-        "Не теряйте защиту — подключите подписку от 199₽ и пользуйтесь "
-        "без ограничений 💎"
-    ),
-    template_vars=[],
-    default_trigger={"before_expiry_hours": 6, "tolerance_hours": 0.5},
 ))
 
 register_notification(NotificationSpec(
@@ -206,25 +200,6 @@ register_notification(NotificationSpec(
     default_trigger={"before_expiry_hours": 24, "tolerance_hours": 2},
 ))
 
-register_notification(NotificationSpec(
-    key="subscription.reminder_24h",
-    title="Подписка: за 24 часа (legacy)",
-    description=(
-        "Старая ветка reminder-логики — 24 часа до истечения. "
-        "Действует одновременно с reminder_1d, обычно один из них "
-        "выигрывает первым. Оставлен для BC."
-    ),
-    category="subscription",
-    default_text_ru=(
-        "<tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> "
-        "Осталось менее 24 часов подписки\n\n"
-        "Продлите сейчас одним нажатием, чтобы VPN продолжил работать "
-        "без перерыва 🛡"
-    ),
-    template_vars=[],
-    default_trigger={"before_expiry_hours": 24, "tolerance_hours": 1},
-))
-
 # ── Payment success (event-triggered, окно не применимо) ─────────────
 register_notification(NotificationSpec(
     key="payment.success_welcome_basic",
@@ -300,24 +275,6 @@ register_notification(NotificationSpec(
         "Подписка уже активна.\nВыберите язык интерфейса:"
     ),
     template_vars=["tariff_name", "period"],
-    default_trigger={},
-))
-
-register_notification(NotificationSpec(
-    key="referral.reward_notification",
-    title="Реферальный кэшбэк начислен",
-    description=(
-        "Отправляется юзеру-рефереру когда его приглашённый оформил "
-        "подписку и начислился кэшбэк на баланс."
-    ),
-    category="referral",
-    default_text_ru=(
-        "🔥 Вам начислен реферальный кешбэк!\n\n"
-        "Ваш друг оформил подписку.\n"
-        "💰 Начислено: {amount:.2f} ₽\n"
-        "Баланс: {balance:.2f} ₽"
-    ),
-    template_vars=["amount", "balance"],
     default_trigger={},
 ))
 

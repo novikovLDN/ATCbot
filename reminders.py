@@ -195,11 +195,13 @@ async def send_smart_reminders(bot: Bot):
                     keyboard = get_renewal_keyboard_1d(language)
                     audit_message = "Paid subscription reminder (1d before expiry)"
 
-                elif reminder_type == ReminderType.REMINDER_24H:
-                    notif_key = "subscription.reminder_24h"
-                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_24h")
-                    keyboard = get_renewal_keyboard(language)
-                    audit_message = "Paid subscription reminder (24h before expiry)"
+                # Ветки REMINDER_24H здесь нет намеренно: окно «24 часа до
+                # истечения» полностью занято REMINDER_1D (см.
+                # app/services/notifications/service.py:should_send_reminder —
+                # 24h с допуском 1 час). should_send_reminder не возвращает
+                # REMINDER_24H ни в одном случае, поэтому ветка была
+                # недостижима, а тумблер subscription.reminder_24h в дашборде
+                # управлял текстом, который никогда не отправляется.
 
                 elif reminder_type == ReminderType.REMINDER_3H:
                     notif_key = "subscription.reminder_3h"
