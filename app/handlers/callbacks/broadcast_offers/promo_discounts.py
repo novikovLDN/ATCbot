@@ -79,7 +79,15 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
         from app.handlers.common.screens import show_tariffs_main_screen
         await show_tariffs_main_screen(callback, state, force_new_message=True)
 
-        language = await resolve_user_language(telegram_id)
+        # ДОЛГ: подтверждение захардкожено по-русски, а экран уходит
+        # живому человеку — казахо- и таджикоязычные читают его чужим
+        # языком. Ключа i18n под этот текст нет, и завести его мало:
+        # discount_label — свободная строка, которую админ вбил в
+        # дашборде по-русски («7 дней»), так что переводить придётся
+        # вместе с ней. Это работа владельца по переписыванию текстов
+        # экранов. До неё resolve_user_language здесь только лишний
+        # запрос в БД на каждый клик по рассылке — язык всё равно
+        # некуда подставить.
         await callback.message.answer(
             f"🎁 Скидка {discount_percent}% автоматически применена! Действует {discount_label}.",
             parse_mode="HTML",
