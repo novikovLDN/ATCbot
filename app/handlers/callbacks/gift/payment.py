@@ -24,9 +24,15 @@
     покупатель не получит ссылку на оплаченный подарок.
 
     Автоудаление счёта общее для всех платёжных экранов
-    (_invoice_cleanup). Своя копия здесь уже была — шестая по счёту, с
-    тем же телом, но без логов; пока копии расходились, правка таймаута
-    попадала в один-два файла из шести.
+    (_invoice_cleanup). Своих копий здесь уже было две: сначала
+    _schedule_invoice_deletion (шестая по счёту), потом
+    _auto_delete_lava_msg (седьмая) — с тем же телом, но без логов и со
+    своей константой 15 минут. Пока копии расходились, правка таймаута
+    попадала в один-два файла из семи. Ветка Lava теперь ходит в общую
+    функцию: её таймаут (config.INVOICE_TIMEOUT_SECONDS = 900) совпадает
+    со сроком жизни счёта, который бот запрашивает у провайдера
+    (lava_service.create_invoice(expire=...)), — отдельный параметр не
+    нужен, и заводить его значит снова развести два числа.
 """
 import asyncio
 import logging
@@ -55,17 +61,6 @@ from app.handlers.callbacks._invoice_cleanup import _schedule_invoice_deletion
 
 router = Router()
 logger = logging.getLogger(__name__)
-
-LAVA_INVOICE_TIMEOUT = 15 * 60  # 15 minutes
-
-
-async def _auto_delete_lava_msg(bot, chat_id: int, msg):
-    """Delete Lava invoice message after timeout."""
-    try:
-        await asyncio.sleep(LAVA_INVOICE_TIMEOUT)
-        await bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-    except Exception:
-        pass
 
 
 @router.callback_query(F.data == "gift_pay:balance", GiftState.choose_payment_method)
@@ -468,7 +463,7 @@ async def callback_gift_pay_lava(callback: CallbackQuery, state: FSMContext):
         ])
 
         lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, lava_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg))
         await callback.answer()
         await state.set_state(None)
         await state.clear()

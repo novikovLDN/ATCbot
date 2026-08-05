@@ -53,8 +53,6 @@ from app.handlers.callbacks.gift.wizard import (  # noqa: F401,E402
     callback_gift_tariff,
 )
 from app.handlers.callbacks.gift.payment import (  # noqa: F401,E402
-    LAVA_INVOICE_TIMEOUT,
-    _auto_delete_lava_msg,
     _schedule_invoice_deletion,
     _send_gift_success,
     callback_gift_pay_balance,
@@ -78,8 +76,6 @@ __all__ = [
     "_schedule_invoice_deletion",
     "_tariff_display_name",
     "_period_display",
-    "_auto_delete_lava_msg",
-    "LAVA_INVOICE_TIMEOUT",
     "GIFTS_PER_PAGE",
     "callback_gift_start",
     "callback_gift_tariff",

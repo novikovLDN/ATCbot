@@ -115,6 +115,70 @@ def test_shared_and_gift_cleanup_are_the_same_object():
     assert gift._schedule_invoice_deletion is _invoice_cleanup._schedule_invoice_deletion
 
 
+def _sleeps_then_deletes(func: ast.AST) -> bool:
+    """Признак самодельного автоудаления: в одном теле и sleep, и delete_message.
+
+    Копию узнаём не по имени (её звали и _schedule_invoice_deletion, и
+    _auto_delete_lava_msg), а по повадке: подождать и удалить сообщение.
+    """
+    sleeps = deletes = False
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Call):
+            continue
+        attr = node.func.attr if isinstance(node.func, ast.Attribute) else None
+        if attr == "sleep":
+            sleeps = True
+        elif attr == "delete_message":
+            deletes = True
+    return sleeps and deletes
+
+
+def test_gift_payment_has_no_second_auto_delete_implementation():
+    """Седьмая копия автоудаления не должна вернуться в экран подарка.
+
+    В gift/payment.py жил _auto_delete_lava_msg: то же тело, что у общего
+    _schedule_invoice_deletion, но со своей константой 15 минут и без
+    логов. Из-за него ветка Lava молча расходилась с остальными
+    способами оплаты: правка config.INVOICE_TIMEOUT_SECONDS её не
+    задевала, а исчезнувший счёт не оставлял в логах INVOICE_EXPIRED.
+    """
+    tree = ast.parse((CALLBACKS / "gift" / "payment.py").read_text(encoding="utf-8"))
+    homegrown = [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _sleeps_then_deletes(node)
+    ]
+    assert not homegrown, (
+        f"в gift/payment.py снова своя реализация автоудаления счёта: {homegrown}. "
+        "Нужен общий _invoice_cleanup._schedule_invoice_deletion; если провайдеру "
+        "нужен другой срок — передайте его параметром timeout."
+    )
+
+
+def test_gift_lava_branch_schedules_deletion_through_the_shared_helper():
+    """Счёт Lava в подарках удаляет общая функция — и с её таймаутом.
+
+    Проверяем именно вызов: удалить копию, но забыть переключить ветку
+    Lava — значит оставить просроченный счёт висеть в чате навсегда.
+    """
+    tree = ast.parse((CALLBACKS / "gift" / "payment.py").read_text(encoding="utf-8"))
+    lava = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "callback_gift_pay_lava"
+    )
+    scheduled = [
+        arg.func.id
+        for node in ast.walk(lava)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and node.func.attr == "create_task"
+        for arg in node.args
+        if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
+    ]
+    assert scheduled == ["_schedule_invoice_deletion"], (
+        f"ветка Lava в подарках планирует удаление счёта не общей функцией: {scheduled}"
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────
 #  Слой доставки рассылок
 # ──────────────────────────────────────────────────────────────────────
