@@ -50,7 +50,7 @@ from typing import Any, Dict, List
 import asyncpg
 
 import config
-from app.utils.security import mask_secret
+from app.utils.security import scrub_secrets
 from database.core import get_pool, _to_db_utc
 
 logger = logging.getLogger(__name__)
@@ -89,24 +89,11 @@ _BROADCAST_FAILURE_PERCENT = 20
 # Без \b в начале сознательно: в тексте он стоит вплотную к «bot» из
 # api.telegram.org/bot<токен>/sendMessage, границы слова там нет, и с \b
 # выражение не срабатывало вовсе.
-_BOT_TOKEN_RE = re.compile(r"\d{6,}:[A-Za-z0-9_\-]{30,}")
-
-
-def _scrub_secrets(text: Any, limit: int = 200) -> str | None:
-    """Убрать из текста то, что не должно уехать наружу, и укоротить.
-
-    Применяется ко всему, что пришло из текста исключения: last_error
-    отложенной рассылки, details записи аудита. В проекте уже была утечка
-    через логи (пароль и почта на уровне INFO), и текст ошибки — ровно
-    такой же канал, только ведёт он сразу в браузер.
-    """
-    if text is None:
-        return None
-    s = str(text)
-    s = _BOT_TOKEN_RE.sub(lambda m: mask_secret(m.group(0)), s)
-    if len(s) > limit:
-        s = s[: limit - 1] + "…"
-    return s
+# Очистка текстов исключений от секретов — общая с ошибками платежей
+# (app/utils/security.py). Здесь только псевдоним: копия этой функции
+# разошлась бы с оригиналом на первом же добавленном шаблоне, и разошлась
+# бы молча — пропущенный секрет виден только тому, кто открыл экран.
+_scrub_secrets = scrub_secrets
 
 
 async def get_summary_subscription_counts() -> Dict[str, int]:

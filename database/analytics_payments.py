@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import database.core as _core
+from app.utils.security import scrub_secrets
 from database.core import get_pool, _to_db_utc, _from_db_utc
 
 logger = logging.getLogger(__name__)
@@ -233,8 +234,22 @@ async def get_recent_payment_errors(
     provider: Optional[str] = None,
     stage: Optional[str] = None,
 ) -> list:
-    """Recent payment_errors rows, newest first. Returns [] if the
-    table doesn't exist yet."""
+    """Несостоявшиеся платежи, свежие сверху. [] — если таблицы ещё нет.
+
+    ЧТО НЕ УХОДИТ НАРУЖУ
+
+        raw_payload — тело вебхука провайдера целиком, до 8000 символов
+        JSON. Там подписи запроса и служебные поля провайдера. Раньше
+        запрос был `SELECT pe.*`, то есть колонка ехала в браузер
+        администратора и оседала в логах прокси по дороге; на экране её
+        при этом никто не показывал. Сейчас колонок нет ни одного лишнего
+        — перечислены явно, и добавление новой колонки в таблицу больше не
+        начинает молча её отдавать.
+
+        error_message пишется из текста исключения, а туда попадает URL
+        метода Telegram вместе с токеном бота. Прогоняем через
+        scrub_secrets — ту же функцию, что и тексты ошибок на сводке.
+    """
     pool = await get_pool()
     if pool is None:
         return []
@@ -251,8 +266,13 @@ async def get_recent_payment_errors(
         where.append(f"stage = ${len(params)}")
     params.append(limit)
     limit_idx = len(params)
+    # Колонки перечислены явно. raw_payload здесь нет намеренно — см.
+    # докстринг. `SELECT pe.*` вернул бы и его, и любую колонку, которую
+    # добавят в таблицу завтра.
     sql = f"""
-        SELECT pe.*, u.username
+        SELECT pe.id, pe.telegram_id, pe.purchase_id, pe.payment_provider,
+               pe.amount_rubles, pe.stage, pe.error_code, pe.error_message,
+               pe.created_at, u.username
         FROM payment_errors pe
         LEFT JOIN users u ON u.telegram_id = pe.telegram_id
         WHERE {' AND '.join(where)}
@@ -275,6 +295,12 @@ async def get_recent_payment_errors(
                 d["amount_rubles"] = float(d["amount_rubles"])
             except Exception:
                 d["amount_rubles"] = None
+        # Текст исключения уходит прямо на экран администратора.
+        # Ограничение длиннее, чем на сводке: здесь это основной способ
+        # понять, почему платёж не прошёл, и обрезать его до строчки
+        # значит оставить разбор без причины.
+        if d.get("error_message"):
+            d["error_message"] = scrub_secrets(d["error_message"], limit=1000)
         out.append(d)
     return out
 

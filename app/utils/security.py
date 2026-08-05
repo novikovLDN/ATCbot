@@ -326,6 +326,43 @@ def mask_secret(secret: Optional[str], visible_chars: int = 4) -> str:
     return "*" * (len(secret) - visible_chars) + secret[-visible_chars:]
 
 
+# Токен бота в тексте: "123456789:AAH-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".
+# Попадает в текст исключения вместе с URL метода Telegram — то есть в
+# last_error рассылки, в details аудита, в error_message платежа.
+_BOT_TOKEN_RE = re.compile(r"\d{6,}:[A-Za-z0-9_\-]{30,}")
+
+
+def scrub_secrets(text: Any, limit: int = 200) -> Optional[str]:
+    """Убрать из текста то, что не должно уехать наружу, и укоротить.
+
+    ЗАЧЕМ
+
+        Применяется ко всему, что пришло из текста исключения и уходит на
+        экран или в лог: last_error отложенной рассылки, details записи
+        аудита, error_message несостоявшегося платежа. В проекте уже была
+        утечка через логи (пароль и почта на уровне INFO). Текст ошибки —
+        такой же канал, только ведёт он сразу в браузер администратора, а
+        по дороге оседает в логах прокси.
+
+    ПОЧЕМУ ЗДЕСЬ, А НЕ РЯДОМ С ВЫЗОВОМ
+
+        Функция была написана для сводки и лежала в database/dashboard_summary.
+        Ровно та же нужда есть у списка ошибок платежей. Вторая копия
+        разошлась бы с первой на первом же добавленном шаблоне, и разошлась
+        бы молча: пропущенный секрет виден только тому, кто открыл экран.
+
+    limit — не косметика: текст исключения бывает в тысячи символов, и
+    целиком он не нужен ни на экране, ни в логе.
+    """
+    if text is None:
+        return None
+    s = str(text)
+    s = _BOT_TOKEN_RE.sub(lambda m: mask_secret(m.group(0)), s)
+    if len(s) > limit:
+        s = s[: limit - 1] + "…"
+    return s
+
+
 def sanitize_for_logging(data: Any, sensitive_keys: Optional[list] = None) -> Any:
     """
     Sanitize data for logging (remove secrets).
