@@ -19,7 +19,6 @@
     состояние choose_payment_method потом отвечало бы «сессия истекла» на
     следующем шаге.
 """
-import asyncio
 import logging
 
 import config
@@ -35,8 +34,17 @@ from app.core.rate_limit import check_rate_limit
 from app.handlers.common.utils import get_promo_session
 from app.handlers.common.states import PurchaseState
 
-# Автоудаление инвойса — общее для всех платёжных экранов.
-from app.handlers.callbacks._invoice_cleanup import _schedule_invoice_deletion
+# ЗДЕСЬ АВТОУДАЛЕНИЯ СЧЁТА НЕТ — и это не забытая строка.
+#
+# Импорт _schedule_invoice_deletion стоял здесь с комментарием «общее для
+# всех платёжных экранов», но функция ни разу не вызывалась: сообщение со
+# ссылкой на оплату остаётся в чате навсегда. Импорт убран, чтобы он не
+# читался как работающий механизм.
+#
+# Включать ли удаление — решение владельца (реестр, followup-2026-08-05).
+# Если включать, то с 1800 с, а не с общими 900: столько живёт счёт
+# CryptoBot (cryptobot_service.py:46, expires_in=1800), и таймаут по
+# умолчанию убил бы сообщение на середине жизни счёта.
 
 router = Router()
 logger = logging.getLogger(__name__)
