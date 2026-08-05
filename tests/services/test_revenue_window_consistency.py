@@ -26,6 +26,7 @@ import database.admin as admin_mod
 import database.admin_reports as admin_reports_mod
 import database.admin_users as admin_users_mod
 import database.analytics as analytics_mod
+import database.analytics_revenue as analytics_revenue_mod
 
 
 class _FakeConn:
@@ -77,7 +78,9 @@ def conn(monkeypatch):
     # Ряды переехали в admin_reports, карточка пользователя — в admin_users.
     monkeypatch.setattr(admin_reports_mod, "get_pool", _get_pool)
     monkeypatch.setattr(admin_users_mod, "get_pool", _get_pool)
-    monkeypatch.setattr(analytics_mod, "get_pool", _get_pool)
+    # Выручка за период переехала в analytics_revenue — фасад
+    # database/analytics.py запросов не видит.
+    monkeypatch.setattr(analytics_revenue_mod, "get_pool", _get_pool)
     return c
 
 

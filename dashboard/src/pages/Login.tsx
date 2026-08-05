@@ -96,21 +96,14 @@ export function Login({ onDone }: { onDone: () => void }) {
 
       <div
         className={
-          "relative z-10 w-full max-w-md animate-mount-card " +
-          (phase === "success" ? "animate-lift-out pointer-events-none" : "")
+          // Появление карточки — обычный fade. Прежние mount-card и
+          // lift-out (масштаб + уезд вверх) были декорацией входа: экран
+          // логина видят раз в сессию, а анимации жили в общем конфиге.
+          "relative z-10 w-full max-w-md animate-fade-in " +
+          (phase === "success" ? "pointer-events-none opacity-0 transition-opacity duration-300" : "")
         }
       >
-        {/* Лаймовое halo за карточкой — медленное вращение */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -inset-10 -z-10 opacity-50 animate-glow-rotate"
-          style={{
-            background:
-              "conic-gradient(from 0deg, rgba(245,245,245,0.22), rgba(220,220,220,0.16), rgba(245,245,245,0.06), rgba(245,245,245,0.22))",
-            filter: "blur(80px)",
-          }}
-        />
-
+        {/* Убрано: conic-градиент, вращавшийся 18 секунд за карточкой. */}
         <div className="relative overflow-hidden rounded-3xl border border-border bg-bg-card/85 p-8 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
           {/* Лаймовый штрих сверху */}
           <div
@@ -180,7 +173,10 @@ export function Login({ onDone }: { onDone: () => void }) {
             </div>
           )}
 
-          <form onSubmit={submit} className="space-y-3">
+          {/* mt-6: раньше зазор между подзаголовком и первым полем набирался
+              высотой строки старой шкалы. Новая шкала плотнее (14/20 вместо
+              16/24), и без явного отступа подпись «Логин» прилипала к тексту. */}
+          <form onSubmit={submit} className="mt-6 space-y-3">
             <LightField icon={User} label="Логин">
               <input
                 className="light-input pl-9"
@@ -322,18 +318,8 @@ function AuroraDarkBackground() {
         </defs>
         <rect width="100%" height="100%" fill="url(#grid-dark)" mask="url(#md)" />
       </svg>
-      <div
-        className="absolute left-[8%] top-[12%] h-72 w-72 rounded-full blur-3xl opacity-40 animate-blob-slow"
-        style={{ background: "radial-gradient(circle, rgba(245,245,245,0.30), transparent 60%)" }}
-      />
-      <div
-        className="absolute right-[12%] top-[40%] h-80 w-80 rounded-full blur-3xl opacity-35 animate-blob-slow-2"
-        style={{ background: "radial-gradient(circle, rgba(220,220,220,0.24), transparent 60%)" }}
-      />
-      <div
-        className="absolute left-[30%] bottom-[8%] h-72 w-72 rounded-full blur-3xl opacity-25 animate-blob-slow-3"
-        style={{ background: "radial-gradient(circle, rgba(245,245,245,0.20), transparent 60%)" }}
-      />
+      {/* Убраны три aurora-blob (16, 19 и 22 секунды бесконечного дрейфа).
+          Они крутились всё время, пока открыт логин, и ничего не сообщали. */}
     </div>
   );
 }
@@ -343,16 +329,11 @@ function SuccessOverlay({ name }: { name: string }) {
     <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center bg-bg/80 backdrop-blur-md animate-fade-in">
       <div className="flex flex-col items-center gap-5">
         <div className="relative grid h-24 w-24 place-items-center">
-          <span className="absolute inset-0 rounded-full ring-2 ring-accent/50 animate-ring-pulse" />
+          <span className="absolute inset-0 rounded-full ring-2 ring-accent/50" />
           <span className="relative grid h-16 w-16 place-items-center rounded-full bg-accent text-bg shadow-[0_0_30px_-2px_rgba(245,245,245,0.45)]">
             <svg viewBox="0 0 24 24" className="h-7 w-7" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
               <path
                 d="M5 12l4.5 4.5L19 7"
-                style={{
-                  strokeDasharray: 24,
-                  strokeDashoffset: 24,
-                  animation: "check-draw 0.45s cubic-bezier(0.65, 0, 0.35, 1) forwards 0.15s",
-                }}
               />
             </svg>
           </span>

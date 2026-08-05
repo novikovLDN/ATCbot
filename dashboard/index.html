@@ -8,7 +8,10 @@
 
     <!-- PWA / iOS standalone -->
     <link rel="manifest" href="/dashboard/manifest.webmanifest" />
-    <meta name="theme-color" content="#0A0A0A" />
+    <!-- Цвет системной панели совпадает с фоном страницы в каждой теме:
+         ступень 2 нейтральной шкалы в светлой, ступень 1 в тёмной. -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F8F9FB" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0C0E12" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Atlas Admin" />
@@ -20,13 +23,17 @@
          our icons are vector and Safari maps them automatically. -->
     <link rel="icon" type="image/svg+xml" href="/dashboard/icon.svg" />
     <link rel="apple-touch-icon" href="/dashboard/apple-touch-icon.png" />
-    <link rel="mask-icon" href="/dashboard/icon-mono.svg" color="#D7FF67" />
+    <link rel="mask-icon" href="/dashboard/icon-mono.svg" color="#2A5BD7" />
 
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Urbanist (brand-deck primary) + JetBrains Mono для логов/ID.
-         Geist / Inter оставлены fallback'ом на случай блокировки CDN. -->
-    <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- Шрифты лежат локально (public/fonts), @font-face — в
+         src/styles/tokens.css. Google Fonts убран сознательно: панель должна
+         открываться там, где к чужим доменам доступа нет, и не сообщать
+         стороннему серверу, кто и когда зашёл в админку.
+         Предзагружаем два сабсета из семи — кириллицу Inter (на ней весь
+         интерфейс) и латиницу Inter (цифры, ID, названия провайдеров).
+         Остальные браузер возьмёт по unicode-range, когда встретит символ. -->
+    <link rel="preload" as="font" type="font/woff2" href="/dashboard/fonts/inter-cyrillic.woff2" crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href="/dashboard/fonts/inter-latin.woff2" crossorigin />
   </head>
   <body class="bg-bg text-fg antialiased">
     <div id="root"></div>

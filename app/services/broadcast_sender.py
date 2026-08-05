@@ -81,9 +81,21 @@ async def send_broadcast(
         if needs_key:
             try:
                 bypass_url = await get_user_bypass_url(uid)
-            except Exception:
+            except Exception as key_err:
                 bypass_url = None
+                logger.warning(
+                    "BROADCAST_BYPASS_KEY_FAIL user=%s broadcast_id=%s err=%s",
+                    uid, broadcast_id, key_err,
+                )
             if not bypass_url:
+                # Наверху этот None посчитается неудачной ОТПРАВКОЙ, хотя
+                # отправки не было вовсе: подставить в текст нечего. Без
+                # записи причина не отличалась от «заблокировал бота».
+                logger.warning(
+                    "BROADCAST_SKIPPED_NO_BYPASS_KEY user=%s broadcast_id=%s — "
+                    "в шаблоне есть {bypass_key}, ключа у человека нет",
+                    uid, broadcast_id,
+                )
                 return (uid, variant, None)
             safe_url = _html.escape(bypass_url, quote=False)
             if msg:
@@ -134,16 +146,26 @@ async def send_broadcast(
                         await database.log_broadcast_send(
                             broadcast_id, uid, "sent", v, message_id=msg_id,
                         )
-                    except Exception:
-                        pass
+                    except Exception as log_err:
+                        # message_id нужен, чтобы потом отозвать рассылку.
+                        # Потеря записи означает неудаляемое сообщение — и об
+                        # этом не оставалось ни строки.
+                        logger.warning(
+                            "BROADCAST_SEND_RECORD_LOST broadcast_id=%s user=%s "
+                            "message_id=%s err=%s — отозвать это сообщение будет нечем",
+                            broadcast_id, uid, msg_id, log_err,
+                        )
                 else:
                     failed_count += 1
                     try:
                         await database.log_broadcast_send(
                             broadcast_id, uid, "failed", v,
                         )
-                    except Exception:
-                        pass
+                    except Exception as log_err:
+                        logger.warning(
+                            "BROADCAST_FAIL_RECORD_LOST broadcast_id=%s user=%s err=%s",
+                            broadcast_id, uid, log_err,
+                        )
 
             processed += len(batch)
             bus.publish({
@@ -176,8 +198,11 @@ async def send_broadcast(
                 f"Broadcast ID: {broadcast_id}, "
                 f"Sent: {sent_count}, Failed: {failed_count}",
             )
-        except Exception:
-            pass
+        except Exception as audit_err:
+            logger.warning(
+                "BROADCAST_AUDIT_WRITE_FAILED broadcast_id=%s sent=%s failed=%s err=%s",
+                broadcast_id, sent_count, failed_count, audit_err,
+            )
         return {"sent": sent_count, "failed": failed_count, "total": total}
 
     except Exception as e:

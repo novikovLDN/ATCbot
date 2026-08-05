@@ -4,6 +4,16 @@
 выносятся в отдельные модули, но весь существующий код годами обращался
 к ним через database.<name> и database.subscriptions.<name> — оба пути
 обязаны продолжать работать.
+
+Вторая волна довела файл с 3367 строк до фасада: выдача, оплата,
+перевыпуск, цена, чтения, состояние и журнал разъехались по семи модулям
+(см. SUBSCRIPTION_HOMES ниже).
+
+ЗАЧЕМ ЭТОТ ФАЙЛ ВООБЩЕ
+    Потерянный реэкспорт не роняет импорт. Он роняет вызов — на живом
+    платеже или на выдаче доступа, через сутки после релиза. Здесь
+    закреплено, что каждое имя доступно и по старому пути, и по новому,
+    и что это ОДИН И ТОТ ЖЕ объект, а не копия.
 """
 import pytest
 
@@ -368,8 +378,160 @@ def test_split_modules_import_cleanly():
                 "database.reminders_queries", "database.trials_queries",
                 "database.pending_purchases", "database.broadcasts",
                 "database.analytics", "database.discounts",
-                "database.referrals"):
+                "database.referrals",
+                "database.subscription_audit", "database.subscription_queries",
+                "database.subscription_state", "database.subscription_reissue",
+                "database.subscription_grant", "database.subscription_pricing",
+                "database.purchase_finalization"):
         importlib.import_module(mod)
+
+
+# ── Разбивка database/subscriptions.py (было 3367 строк) ────────────────
+#
+# Каждая пара «имя → модуль» ниже — это граница, проведённая осознанно.
+# Тест ловит не опечатку, а тихую потерю реэкспорта: функция исчезает из
+# фасада, импорт при этом проходит, и падает всё на первом вызове —
+# то есть на живом платеже или на выдаче доступа.
+
+SUBSCRIPTION_HOMES = {
+    # журнал жизненного цикла — только пишет следы, ничего не решает
+    "_notify_watchdog_expires_at": "database.subscription_audit",
+    "_log_audit_event_atomic": "database.subscription_audit",
+    "_log_audit_event_atomic_standalone": "database.subscription_audit",
+    "_log_vpn_lifecycle_audit_async": "database.subscription_audit",
+    "_log_vpn_lifecycle_audit_fire_and_forget": "database.subscription_audit",
+    "_log_subscription_history_atomic": "database.subscription_audit",
+    # чтения
+    "get_payment": "database.subscription_queries",
+    "get_last_approved_payment": "database.subscription_queries",
+    "get_pending_payments": "database.subscription_queries",
+    "get_subscription": "database.subscription_queries",
+    "get_subscription_any": "database.subscription_queries",
+    "get_active_subscription": "database.subscription_queries",
+    "get_all_active_subscriptions": "database.subscription_queries",
+    "has_any_subscription": "database.subscription_queries",
+    "has_any_payment": "database.subscription_queries",
+    "is_user_first_purchase": "database.subscription_queries",
+    "get_admin_stats": "database.subscription_queries",
+    # состояние одной строки подписки
+    "check_and_disable_expired_subscription": "database.subscription_state",
+    "ensure_bypass_only_subscription": "database.subscription_state",
+    "set_combo_flag": "database.subscription_state",
+    "set_bypass_only_flag": "database.subscription_state",
+    "admin_switch_tariff": "database.subscription_state",
+    "update_subscription_uuid": "database.subscription_state",
+    # перевыпуск ключа
+    "reissue_subscription_key": "database.subscription_reissue",
+    "reissue_vpn_key_atomic": "database.subscription_reissue",
+    # выдача и продление
+    "grant_access": "database.subscription_grant",
+    # цена
+    "calculate_final_price": "database.subscription_pricing",
+    "_calculate_subscription_days": "database.subscription_pricing",
+    # проведение оплаты
+    "finalize_purchase": "database.purchase_finalization",
+    "_finalize_purchase_locked": "database.purchase_finalization",
+    "_publish_payment_approved": "database.purchase_finalization",
+    "PaymentAlreadyProcessed": "database.purchase_finalization",
+    "PaymentAmountMismatch": "database.purchase_finalization",
+    "PurchaseLocked": "database.purchase_finalization",
+    "PurchaseInvalidStatus": "database.purchase_finalization",
+}
+
+
+@pytest.mark.parametrize("name", sorted(SUBSCRIPTION_HOMES))
+def test_subscription_name_available_via_subscriptions(name):
+    """Фасад database.subscriptions обязан отдавать всё, что отдавал."""
+    import database.subscriptions as subs
+    assert hasattr(subs, name), (
+        f"database.subscriptions.{name} исчез после разбивки — "
+        "упадёт не импорт, а первый вызов"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(SUBSCRIPTION_HOMES))
+def test_subscription_name_defined_in_its_module(name):
+    """И лежит там, где задумано, а не расползлось обратно."""
+    import importlib
+    mod = importlib.import_module(SUBSCRIPTION_HOMES[name])
+    assert hasattr(mod, name)
+
+
+@pytest.mark.parametrize("name", sorted(SUBSCRIPTION_HOMES))
+def test_subscription_name_is_the_same_object(name):
+    """Реэкспорт отдаёт ту же функцию, а не копию: иначе подмена в тестах
+    и любая проверка identity начнут врать."""
+    import importlib
+    import database.subscriptions as subs
+    mod = importlib.import_module(SUBSCRIPTION_HOMES[name])
+    assert getattr(subs, name) is getattr(mod, name)
+
+
+PACKAGE_LEVEL_SUBSCRIPTION_NAMES = [
+    # ровно то, что перечислено в database/__init__.py — уберёшь оттуда,
+    # и импорт пакета упадёт при старте бота
+    "get_payment", "get_last_approved_payment",
+    "check_and_disable_expired_subscription", "get_subscription",
+    "get_subscription_any", "admin_switch_tariff", "has_any_subscription",
+    "has_any_payment", "get_active_subscription", "update_subscription_uuid",
+    "get_all_active_subscriptions", "reissue_subscription_key",
+    "_log_audit_event_atomic", "_log_vpn_lifecycle_audit_async",
+    "_log_vpn_lifecycle_audit_fire_and_forget",
+    "_log_subscription_history_atomic", "_log_audit_event_atomic_standalone",
+    "reissue_vpn_key_atomic", "grant_access", "_calculate_subscription_days",
+    "get_pending_payments", "is_user_first_purchase", "get_admin_stats",
+    "calculate_final_price", "finalize_purchase", "set_combo_flag",
+    "set_bypass_only_flag", "ensure_bypass_only_subscription",
+]
+
+
+@pytest.mark.parametrize("name", PACKAGE_LEVEL_SUBSCRIPTION_NAMES)
+def test_subscription_name_available_via_package(name):
+    import database
+    assert hasattr(database, name), f"database.{name} исчез после разбивки"
+
+
+def test_subscriptions_facade_holds_no_implementation():
+    """В subscriptions.py не должно остаться ни одной функции.
+
+    Иначе граница поплывёт обратно: кто-то допишет «маленький хелпер»
+    рядом с реэкспортами, и через год файл снова будет на три тысячи строк.
+    """
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path("database/subscriptions.py").read_text(encoding="utf-8"))
+    defined = [
+        n.name for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ]
+    assert defined == [], f"в фасаде завелась реализация: {defined}"
+
+
+def test_grant_and_finalize_are_not_in_one_file_anymore():
+    """Две самые длинные функции проекта занимали половину файла вдвоём.
+    Держать их порознь — весь смысл этой разбивки."""
+    import database.subscription_grant as g
+    import database.purchase_finalization as f
+    assert hasattr(g, "grant_access") and not hasattr(g, "finalize_purchase")
+    assert hasattr(f, "finalize_purchase") and "grant_access" in dir(f), (
+        "finalize_purchase зовёт grant_access — импорт обязан остаться"
+    )
+
+
+def test_audit_module_never_raises_by_design():
+    """Функции журнала глушат ошибки намеренно: аудит не имеет права
+    отменить выдачу доступа или уже проведённый платёж. Проверяем, что
+    try/except из них не «почистили», чтобы увидеть ошибку."""
+    import inspect
+    import database.subscription_audit as a
+
+    for name in ("_log_audit_event_atomic", "_log_audit_event_atomic_standalone",
+                 "_log_vpn_lifecycle_audit_async",
+                 "_log_vpn_lifecycle_audit_fire_and_forget",
+                 "_notify_watchdog_expires_at"):
+        src = inspect.getsource(getattr(a, name))
+        assert "except" in src, f"{name} потеряла защиту от исключений"
 
 
 def test_same_object_everywhere():

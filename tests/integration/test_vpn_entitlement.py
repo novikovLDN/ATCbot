@@ -1,10 +1,12 @@
 """Интеграционные проверки выдачи VPN-доступа.
 
 ВАЖНО ПРО ЦЕЛИ ПАТЧЕЙ
-    Патчить нужно database.subscriptions.<имя>, а не database.<имя>:
-    пакет database только реэкспортирует функции, а исполняются они внутри
-    подмодуля и берут зависимости из его пространства имён. Патч по имени
-    пакета молча не срабатывает — тест проходит мимо проверяемого кода.
+    Патчить нужно модуль, где функция ОПРЕДЕЛЕНА, — здесь это
+    database.purchase_finalization. Ни database.<имя>, ни
+    database.subscriptions.<имя> не годятся: и пакет, и файл подписок
+    только реэкспортируют, а исполняется код внутри своего модуля и берёт
+    зависимости из его пространства имён. Патч мимо места молча не
+    срабатывает — тест проходит, не проверив ничего.
 
 Что проверяется:
 
@@ -37,7 +39,7 @@ class TestOrphanPreventionOnDBFailure:
     async def test_rollback_reports_orphan_instead_of_calling_samopis(self, caplog):
         import logging
 
-        import database.subscriptions as subs
+        import database.purchase_finalization as subs
 
         conn = MagicMock()
         conn.fetchrow = AsyncMock(return_value={
@@ -69,7 +71,7 @@ class TestOrphanPreventionOnDBFailure:
                           AsyncMock(side_effect=fake_remove)), \
              patch.object(subs, "grant_access",
                           AsyncMock(side_effect=Exception("Simulated DB failure"))):
-            with caplog.at_level(logging.WARNING, logger="database.subscriptions"):
+            with caplog.at_level(logging.WARNING, logger="database.purchase_finalization"):
                 # grant_access поднимает именно это исключение — ловим его,
                 # а не любое, иначе тест пройдёт и на посторонней ошибке.
                 with pytest.raises(Exception, match="Simulated DB failure"):
@@ -91,7 +93,7 @@ class TestDuplicateWebhookIdempotency:
     @pytest.mark.asyncio
     async def test_duplicate_webhook_raises_already_processed(self):
         """Same purchase_id, status already 'paid' → ValueError."""
-        with patch("database.subscriptions.get_pool") as mock_pool:
+        with patch("database.purchase_finalization.get_pool") as mock_pool:
             conn = MagicMock()
             conn.fetchrow = AsyncMock(return_value={
                 "purchase_id": "p1", "telegram_id": 123, "status": "paid",  # already paid

@@ -39,8 +39,13 @@ def _money_lines(path: Path):
             yield num, line
 
 
+# Проверять надо файлы, где лежат САМИ запросы. database/analytics.py стал
+# фасадом-реэкспортом: если оставить в списке только его, тест начнёт
+# проходить впустую — искать будет нечего.
 @pytest.mark.parametrize("path", [
-    Path("database/analytics.py"),
+    Path("database/analytics_revenue.py"),
+    Path("database/analytics_payments.py"),
+    Path("database/analytics_stats.py"),
     Path("database/admin.py"),
 ])
 def test_every_paid_query_declares_its_revenue_intent(path):
@@ -90,6 +95,6 @@ def test_migration_adds_provider_column_and_backfills():
 def test_definition_is_documented_next_to_the_queries():
     """Правило должно быть записано рядом с кодом, иначе следующий отчёт
     напишут без фильтра и расхождение снова никто не заметит."""
-    src = Path("database/analytics.py").read_text(encoding="utf-8")
+    src = Path("database/analytics_revenue.py").read_text(encoding="utf-8")
     assert "REVENUE_EXTERNAL_ONLY_SQL" in src
     assert "ВНЕШНИЕ ПОСТУПЛЕНИЯ" in src

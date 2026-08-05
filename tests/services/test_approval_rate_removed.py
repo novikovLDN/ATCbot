@@ -35,6 +35,7 @@ from pathlib import Path
 import pytest
 
 import database.analytics as analytics_mod
+import database.analytics_stats as analytics_stats_mod
 from app.api.dashboard.routes import stats as stats_route
 
 DEAD_KEY = "approval_rate_percent"
@@ -81,7 +82,9 @@ async def test_payload_no_longer_carries_the_key(monkeypatch):
     async def _get_pool():
         return _Pool()
 
-    monkeypatch.setattr(analytics_mod, "get_pool", _get_pool)
+    # Подменять get_pool надо в модуле, где функция ОБЪЯВЛЕНА:
+    # database/analytics.py теперь фасад, и его get_pool запросы не видят.
+    monkeypatch.setattr(analytics_stats_mod, "get_pool", _get_pool)
     out = await analytics_mod.get_business_metrics()
 
     assert DEAD_KEY not in out

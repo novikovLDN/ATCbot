@@ -79,7 +79,9 @@ class TestPaymentApprovedEvent:
         под локом: там транзакция ещё не закоммичена."""
         from pathlib import Path
 
-        src = Path("database/subscriptions.py").read_text(encoding="utf-8")
+        # finalize_purchase и её тело под локом переехали в
+        # database/purchase_finalization.py; в subscriptions.py остался фасад.
+        src = Path("database/purchase_finalization.py").read_text(encoding="utf-8")
         wrapper = src[src.index("async def finalize_purchase("):
                      src.index("async def _finalize_purchase_locked(")]
         assert "_publish_payment_approved(" in wrapper

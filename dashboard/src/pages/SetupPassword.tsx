@@ -82,7 +82,7 @@ export function SetupPassword({ bootstrapToken, onDone }: {
       <div className="card relative w-full max-w-md overflow-hidden p-8 animate-slide-up">
         <div className="pointer-events-none absolute -top-32 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full bg-accent/15 blur-3xl" />
         <div className="relative">
-          <div className="mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-accent to-secondary text-white shadow-glow">
+          <div className="mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-accent-9 text-white">
             <ShieldCheck className="h-5 w-5" strokeWidth={2.5} />
           </div>
 
@@ -223,7 +223,7 @@ function PasskeyStep({ onDone }: { onDone: () => void }) {
       <div className="card relative w-full max-w-md overflow-hidden p-8 animate-slide-up">
         <div className="pointer-events-none absolute -top-32 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full bg-accent/15 blur-3xl" />
         <div className="relative">
-          <div className="mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-accent to-secondary text-white shadow-glow">
+          <div className="mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-accent-9 text-white">
             <Fingerprint className="h-5 w-5" strokeWidth={2.5} />
           </div>
 

@@ -878,17 +878,8 @@ function HeroCard({
     <section
       className={`relative overflow-hidden rounded-2xl border border-border bg-bg-card p-5 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_16px_-8px_rgba(0,0,0,0.06)] ${className}`}
     >
-      {/* Subtle conic glow вращается медленно — премиум-ощущение, не
-          отвлекает: opacity 0.5, прозрачный через mask. */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -right-32 -top-32 h-72 w-72 opacity-50 animate-glow-rotate"
-        style={{
-          background:
-            "conic-gradient(from 0deg, rgba(245,245,245,0.12), rgba(215,215,215,0.10), rgba(180,180,180,0.08), rgba(245,245,245,0.12))",
-          filter: "blur(40px)",
-        }}
-      />
+      {/* Убран вращавшийся 18 секунд conic-градиент в углу карточки:
+          он лежал под главным числом и не сообщал о нём ничего (§8.3). */}
       <div className="relative z-10">
         <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-fg-subtle">
           {label}
@@ -2318,7 +2309,7 @@ function Stagger({
 }) {
   return (
     <div
-      className="animate-fade-up"
+      className="animate-fade-in"
       style={{ animationDelay: `${index * 60}ms` }}
     >
       {children}

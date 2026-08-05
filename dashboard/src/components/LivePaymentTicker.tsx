@@ -16,9 +16,13 @@ let tickCounter = 0;
 
 /**
  * Живая горизонтальная лента последних одобренных платежей.
- * Слушает `payment:approved` из WS, копит буфер до 30 записей и
- * рендерит их дважды подряд с `animate-ticker` — эффект бесконечной
- * прокрутки. Пустое состояние — placeholder «ожидаем платежи…».
+ * Слушает `payment:approved` из WS и копит буфер до 30 записей.
+ *
+ * Была бесконечная marquee-прокрутка на 32 секунды (список рендерился
+ * дважды, чтобы шов не был виден). Убрана: движущийся текст нельзя
+ * прочитать не подгадывая момент, а бесконечная анимация держит композитор
+ * занятым всё время, пока панель открыта (research §3.6, §8.8).
+ * Теперь это обычная прокручиваемая полоса — новое слева, старое справа.
  *
  * Не блокирует layout: sticky/absolute не используется, вставляется
  * как обычный виджет-полоска в главную страницу.
@@ -55,7 +59,7 @@ export function LivePaymentTicker() {
 
   if (ticks.length === 0) {
     return (
-      <div className="glass-panel flex items-center gap-3 px-4 py-2.5 text-xs text-fg-muted">
+      <div className="card flex items-center gap-3 px-4 py-2.5 text-xs text-fg-muted">
         <span className="pulse-live" />
         <span>
           Ожидаю платежи в реальном времени · подключение к событиям активно
@@ -64,21 +68,19 @@ export function LivePaymentTicker() {
     );
   }
 
-  // Дублируем массив, чтобы marquee выглядел бесконечным без разрыва.
-  const doubled = [...ticks, ...ticks];
-
   return (
-    <div className="glass-panel relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-16 bg-gradient-to-r from-bg to-transparent" />
-      <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-16 bg-gradient-to-l from-bg to-transparent" />
+    <div className="card relative overflow-hidden">
       <div className="flex items-center gap-2 px-4 py-2.5">
         <span className="pulse-live shrink-0" />
-        <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-info">
+        <span className="shrink-0 text-2xs font-medium uppercase tracking-[0.16em] text-info">
           LIVE
         </span>
-        <div className="relative flex-1 overflow-hidden">
-          <div className="flex gap-6 animate-ticker whitespace-nowrap">
-            {doubled.map((t, i) => (
+        {/* Прокрутка мышью/пальцем вместо автопрокрутки: справа виден
+            обрезанный элемент — по NN/g это лучшая подсказка о том, что
+            содержимое продолжается (ux-patterns §4.5). */}
+        <div className="relative flex-1 overflow-x-auto">
+          <div className="flex gap-6 whitespace-nowrap">
+            {ticks.map((t, i) => (
               <span
                 key={`${t.id}-${i}`}
                 className="inline-flex items-center gap-1.5 text-xs text-fg-muted"

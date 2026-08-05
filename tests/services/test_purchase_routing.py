@@ -87,10 +87,17 @@ class TestUnhandledRouteGuard:
             "app/handlers/payments/payments_messages.py"
         ).read_text(encoding="utf-8")
 
+    # Сам вызов сервиса переехал в subscription_finalize.py, а обработчик
+    # зовёт его через finalize_subscription(...). Ищем именно этот вызов:
+    # искать «payment_service.finalize_subscription_payment» в обработчике
+    # больше нельзя — строка осталась бы только в комментарии, и тест
+    # проходил бы, даже если предохранитель убрать.
+    _FINALIZE_CALL = "await finalize_subscription("
+
     def test_guard_runs_before_subscription_finalization(self):
         src = self._source()
         guard = src.index('_route != "subscription"')
-        finalize = src.index("payment_service.finalize_subscription_payment")
+        finalize = src.index(self._FINALIZE_CALL)
         assert guard < finalize, (
             "предохранитель должен стоять ДО финализации подписки, "
             "иначе неопознанный товар всё равно станет VPN-подпиской"
@@ -99,7 +106,7 @@ class TestUnhandledRouteGuard:
     def test_guard_logs_critical_and_marks_purchase_paid(self):
         src = self._source()
         guard_block = src[src.index('_route != "subscription"'):]
-        guard_block = guard_block[:guard_block.index("payment_service.finalize_subscription_payment")]
+        guard_block = guard_block[:guard_block.index(self._FINALIZE_CALL)]
         assert "PURCHASE_ROUTE_UNHANDLED" in guard_block, "нужен искомый маркер в логах"
         assert "mark_pending_purchase_paid" in guard_block, "факт оплаты нельзя терять"
         assert "alert_payment_failure" in guard_block, "админ обязан узнать о зависшем заказе"

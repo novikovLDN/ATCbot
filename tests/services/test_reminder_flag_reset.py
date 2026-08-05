@@ -13,7 +13,11 @@ grant_access перечислял только старые флаги. Итог
 import re
 from pathlib import Path
 
-SRC = Path("database/subscriptions.py")
+# grant_access переехала в database/subscription_grant.py при разбивке
+# database/subscriptions.py; сброс флагов живёт в её SQL. Через фасад
+# database/subscriptions.py читать нельзя — там теперь только реэкспорты,
+# и тест молча нашёл бы ноль блоков.
+SRC = Path("database/subscription_grant.py")
 
 # Все флаги напоминаний об окончании подписки. trial_notif_* — отдельная
 # группа со своим сбросом, здесь не участвует.

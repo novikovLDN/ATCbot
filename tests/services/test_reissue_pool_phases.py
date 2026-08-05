@@ -87,8 +87,15 @@ class _FakePool:
 
 
 def _install(monkeypatch, rows):
-    """Подменить пул и всё, что ходит наружу, вернув трекер занятости пула."""
-    import database.subscriptions as subs
+    """Подменить пул и всё, что ходит наружу, вернув трекер занятости пула.
+
+    Подменяем атрибуты database.subscription_reissue — модуля, где
+    reissue_vpn_key_atomic ОПРЕДЕЛЕНА. Через database.subscriptions она
+    по-прежнему доступна, но патч по имени пакета-фасада не подействует:
+    функция берёт get_pool из своего пространства имён. Тест при этом
+    продолжит проходить, проверяя не тот код, — поэтому патчим по месту.
+    """
+    import database.subscription_reissue as subs
     from app.services import remnawave_premium, remnawave_api
 
     tracker = _Tracker()

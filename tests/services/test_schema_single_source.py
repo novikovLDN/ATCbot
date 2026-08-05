@@ -12,16 +12,22 @@ ACCESS EXCLUSIVE на свою таблицу: одна висящая idle-in-t
 Теперь блок выполняется только при LEGACY_SCHEMA_BOOTSTRAP=1 (аварийный
 бутстрап для локальной разработки), а всё, что жило только в нём, перенесено
 в migrations/073_schema_source_of_truth.sql.
+
+Сам DDL с тех пор уехал из database/core.py в database/legacy_schema.py.
+Читаем оба файла: если оставить один core.py, тест начнёт проходить впустую —
+искать в нём будет нечего, а колонка, добавленная только в код, снова
+проедет незамеченной.
 """
 import re
 from pathlib import Path
 
 CORE = Path("database/core.py")
+LEGACY = Path("database/legacy_schema.py")
 MIGRATIONS = Path("migrations")
 
 
 def _core_source() -> str:
-    return CORE.read_text(encoding="utf-8")
+    return CORE.read_text(encoding="utf-8") + "\n" + LEGACY.read_text(encoding="utf-8")
 
 
 def _all_migrations_sql() -> str:

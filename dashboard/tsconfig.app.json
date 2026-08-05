@@ -10,6 +10,9 @@
     "isolatedModules": true,
     "moduleDetection": "force",
     "noEmit": true,
+    // vite/client даёт типы для import.meta.env — без него import.meta.env.DEV
+    // не проходит проверку типов.
+    "types": ["vite/client"],
     "jsx": "react-jsx",
     "strict": true,
     "noUnusedLocals": false,

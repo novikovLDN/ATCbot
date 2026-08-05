@@ -4,7 +4,10 @@ Database package — backward-compatible re-export of all public symbols.
 Split into submodules for maintainability:
 - database.core         — Pool management, init, helpers, DB_READY (~1135 lines)
 - database.users        — Users, balance, farm, withdrawals, referrals (~1680 lines)
-- database.subscriptions — Subscriptions, payments, trials, access, promo (~4290 lines)
+- database.subscriptions — тонкий фасад над семью модулями подписок:
+    subscription_audit / subscription_queries / subscription_state /
+    subscription_reissue / subscription_grant / subscription_pricing /
+    purchase_finalization. Сам файл — только реэкспорты.
 - database.admin        — Admin, analytics, broadcasts, exports, gifts, VIP (~2480 lines)
 
 All existing code does `import database; database.get_user(...)` — this __init__.py

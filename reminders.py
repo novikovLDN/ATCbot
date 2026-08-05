@@ -310,8 +310,17 @@ async def send_smart_reminders(bot: Bot) -> int:
                         await log_notification_send(
                             notif_key, telegram_id, status="skipped_disabled",
                         )
-                    except Exception:
-                        pass
+                    except Exception as mark_err:
+                        # Под pass уходила не только метрика, но и сама пометка
+                        # reminder_sent — та, ради которой этот блок и написан
+                        # («чтобы next-cycle тоже не спамил»). Если пометка не
+                        # встала, напоминание уйдёт повторно на следующем витке,
+                        # и узнать об этом было неоткуда.
+                        logger.warning(
+                            "REMINDER_SKIP_MARK_FAILED user=%s key=%s type=%s err=%s — "
+                            "пометка могла не встать, возможен повтор на следующем витке",
+                            telegram_id, notif_key, reminder_type, mark_err,
+                        )
                     logger.info(
                         "reminder_skipped_disabled: user=%s key=%s",
                         telegram_id, notif_key,

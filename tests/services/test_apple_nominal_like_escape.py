@@ -12,6 +12,7 @@ tariff разбирался по '_' позиционно, с обращение
 import pytest
 
 import database.analytics as analytics_mod
+import database.analytics_revenue as analytics_revenue_mod
 
 
 class _FakeConn:
@@ -61,7 +62,10 @@ def _install(monkeypatch, apple_rows):
     async def _get_pool():
         return pool
 
-    monkeypatch.setattr(analytics_mod, "get_pool", _get_pool)
+    # Подменять get_pool надо в модуле, где функция ОБЪЯВЛЕНА:
+    # database/analytics.py теперь фасад, реэкспорт отдаёт ту же функцию с
+    # globals() модуля-реализации, и подмена на фасаде до неё не дойдёт.
+    monkeypatch.setattr(analytics_revenue_mod, "get_pool", _get_pool)
     return conn
 
 

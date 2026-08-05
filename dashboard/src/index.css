@@ -1,3 +1,7 @@
+/* Токены (шрифты, цвет, тени) — до Tailwind, потому что базовый слой ниже
+   уже ими пользуется. */
+@import "./styles/tokens.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -10,51 +14,48 @@
   }
 
   body {
-    font-feature-settings: "ss01", "ss02", "cv11";
-    /* WHITE THEME 2026/2027 — warm off-white канвас с тонкими colored halo
-       по углам (info/special/success по 3%). Плюс субтильная dot-grid
-       12px и SVG-turbulence noise-плёнка — даёт «paper texture» вместо
-       плоского белого, снижает нагрузку на глаз при долгом просмотре. */
-    background:
-      radial-gradient(ellipse 60% 40% at 100% 0%, rgba(37, 99, 235, 0.045), transparent 65%),
-      radial-gradient(ellipse 55% 45% at 0% 100%, rgba(124, 58, 237, 0.035), transparent 60%),
-      radial-gradient(ellipse 40% 35% at 100% 100%, rgba(16, 185, 129, 0.030), transparent 60%),
-      radial-gradient(rgba(15, 23, 32, 0.055) 1px, transparent 1px),
-      #FBFBF9;
-    background-size: auto, auto, auto, 12px 12px, auto;
+    /* Табличные цифры на всём приложении: без tnum суммы в колонке и живые
+       счётчики дёргаются по горизонтали при каждом обновлении (research §3.4,
+       §5). Раньше здесь стояли ss01/ss02/cv11 — стилистические сеты Urbanist,
+       которые ничего не решали. */
+    font-variant-numeric: tabular-nums;
+    /* Сплошная поверхность из токенов. Убраны четыре радиальных градиента,
+       dot-grid 12px и SVG-шум с mix-blend-mode: multiply — всё это лежало под
+       цифрами и мешало их читать (§3.1, §10.4). */
+    background-color: rgb(var(--surface-page));
+    color: rgb(var(--fg-default));
     min-height: 100vh;
-    letter-spacing: -0.01em;
-    color: #0F1720;
-    position: relative;
-    /* Safe-area-friendly для iOS PWA (notch, home-indicator) */
+    /* Safe-area для iOS PWA (вырез и полоса «домой»). */
     padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom);
-    -webkit-tap-highlight-color: transparent; /* убрать серый flash на tap */
+    -webkit-tap-highlight-color: transparent;
   }
-  /* Ультратонкая plâter-текстура. Opacity 0.035, multiply — не серит
-     карточки (у них своё pure white), только оживляет фон.
-     iOS Safari корректно рендерит SVG data-uri. */
-  body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 0;
-    opacity: 0.035;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.85'/></svg>");
-    mix-blend-mode: multiply;
+
+  /* Моноширинные значения — ID, хеши, суммы в логах: перечёркнутый ноль,
+     чтобы 0 не путался с O (§10.1). */
+  code,
+  kbd,
+  pre,
+  samp,
+  .font-mono,
+  [class*="font-mono"] {
+    font-variant-numeric: tabular-nums slashed-zero;
   }
-  #root {
-    position: relative;
-    z-index: 1;
+
+  /* Фокус виден всегда и одинаково: 2px кольцо акцентной ступени 8 с отступом
+     2px (§10.4). Ступень 8 подобрана так, чтобы дать ≥3:1 к любой поверхности
+     — проверяется scripts/check-contrast.mjs. :focus-visible, а не :focus,
+     чтобы кольцо не вспыхивало на каждый клик мышью. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--c-a8));
+    outline-offset: 2px;
+    border-radius: 2px;
   }
 
   ::selection {
-    background-color: rgba(37, 99, 235, 0.18);   /* info-blue tint */
-    color: #0F1720;
+    background-color: rgb(var(--c-a9) / 0.18);
   }
 
-  /* Scrollbar — тонкий slate на light canvas. */
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -63,367 +64,320 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(15, 23, 32, 0.15);
+    background: rgb(var(--c-n8));
     border-radius: 8px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(15, 23, 32, 0.25);
+    background: rgb(var(--c-n9));
     background-clip: padding-box;
-    border: 2px solid transparent;
   }
 
-  /* Big headlines feel right in the reference — tighter tracking,
-     heavier optical weight. */
-  h1, h2, h3 {
-    letter-spacing: -0.02em;
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.014em;
+  }
+
+  /* Уважаем системную настройку «меньше движения»: анимация в панели носит
+     служебную роль, и без неё интерфейс остаётся работоспособным. Не
+     отключаем совсем, а сводим к мгновенной смене состояния — иначе ломаются
+     обработчики animationend. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
 @layer components {
+  /* ═══════════════════════════════════════════════════════════════════════
+     СЛОЙ СОВМЕСТИМОСТИ.
+
+     Классы ниже используются существующими экранами (16 страниц, ~15 тыс.
+     строк). Они не удалены, но переписаны на новые токены: декоративные
+     эффекты — стекло, вращающиеся conic-градиенты, блики по карточке,
+     ambient-градиент — вычищены, поведение осталось.
+
+     Новый код должен брать примитивы из src/components/ui/, а не эти классы.
+     Слой уходит вместе с переделкой экранов (этап 3 и дальше).
+     ═══════════════════════════════════════════════════════════════════════ */
+
   .card {
-    @apply rounded-2xl border border-border bg-bg-card shadow-card;
+    /* Карточка = поверхность + граница. Тени нет: §10.4 — все разделители
+       границы, тень только у плавающих слоёв. */
+    @apply rounded-lg border border-border bg-bg-card;
   }
   .card-hover {
-    @apply transition-all duration-200
-           hover:border-accent/40 hover:shadow-glow-sm;
+    @apply transition-colors duration-150 hover:border-border-strong;
   }
   .row-hover {
     @apply transition-colors hover:bg-bg-subtle;
   }
   .focus-ring {
-    @apply focus:outline-none focus:ring-2 focus:ring-accent/50 focus:ring-offset-0;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-8;
   }
   .link-accent {
-    @apply text-accent transition-colors hover:text-accent-hover;
+    @apply text-accent-text underline-offset-2 transition-colors hover:underline;
   }
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2
-           text-sm font-medium tracking-tight transition-all duration-150
+    @apply inline-flex min-h-tap items-center justify-center gap-2 rounded-md px-3 py-2
+           text-base font-medium transition-colors duration-100
+           focus-visible:outline-2 focus-visible:outline-offset-2
            disabled:cursor-not-allowed disabled:opacity-50;
   }
-  /* Primary CTA на dark canvas — лаймовый акцент с тёмным текстом
-     (как «Dashboard» pill в нижнем navbar из brand-deck). Контраст и
-     активная роль очевидны мгновенно; тень — мягкое лаймовое glow. */
   .btn-primary {
-    @apply btn bg-accent text-bg font-semibold
-           shadow-glow
-           hover:bg-accent-hover
-           active:translate-y-px;
+    @apply btn bg-accent-9 text-white hover:bg-accent-10;
   }
   .btn-secondary {
-    @apply btn border border-border bg-bg-card text-fg
-           hover:border-fg-subtle/40 hover:bg-bg-subtle;
+    @apply btn border border-border-control bg-bg-card text-fg hover:bg-bg-subtle;
   }
   .btn-danger {
-    @apply btn border border-danger/30 bg-danger/10 text-danger
-           hover:bg-danger/20 hover:border-danger/50;
+    /* Опасное действие — сплошная заливка, а не бледный контур: цена ошибки
+       здесь выше цены лишнего внимания (§2.2 ux-patterns). */
+    @apply btn bg-danger text-bg-card hover:opacity-90;
   }
   .btn-ghost {
     @apply btn text-fg-muted hover:bg-bg-subtle hover:text-fg;
   }
   .btn-info {
-    @apply btn border border-secondary/30 bg-secondary/10 text-secondary
-           hover:bg-secondary/20 hover:border-secondary/50;
+    @apply btn border border-border-control bg-bg-card text-info hover:bg-bg-subtle;
   }
 
   .input {
-    @apply w-full rounded-xl border border-border bg-bg-card px-4 py-2.5
-           text-sm text-fg placeholder:text-fg-subtle outline-none
-           transition-colors focus:border-accent focus:ring-2 focus:ring-accent/20;
+    @apply min-h-tap w-full rounded-md border border-border-control bg-bg-card px-3 py-2
+           text-base text-fg placeholder:text-fg-subtle outline-none
+           transition-colors focus-visible:border-accent-9
+           focus-visible:outline-2 focus-visible:outline-offset-2;
   }
-
-  /* Auth-input — Login на dark canvas. Тоньше .input, тёмная
-     pill-форма (bg-elevated), фокусный ring лаймовый. */
+  /* Раньше — отдельное «тёмное» поле для логина. Теперь отличий нет: тема
+     одна на всё приложение. */
   .light-input {
-    @apply w-full rounded-xl border border-border bg-bg-elevated px-4 py-2.5
-           text-sm text-fg outline-none transition-all duration-200
-           placeholder:text-fg-subtle
-           focus:border-accent/60 focus:ring-2 focus:ring-accent/25;
+    @apply input;
   }
 
   .badge {
-    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1
+    @apply inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5
            text-xs font-medium;
   }
   .badge-success {
-    @apply badge bg-success/12 text-success ring-1 ring-success/20;
+    @apply badge bg-success/12 text-success;
   }
   .badge-danger {
-    @apply badge bg-danger/12 text-danger ring-1 ring-danger/20;
+    @apply badge bg-danger/12 text-danger;
   }
   .badge-warning {
-    @apply badge bg-warning/12 text-warning ring-1 ring-warning/20;
+    @apply badge bg-warning/12 text-warning;
   }
   .badge-muted {
-    @apply badge bg-bg-subtle text-fg-muted ring-1 ring-border;
+    @apply badge bg-bg-subtle text-fg-muted;
   }
   .badge-accent {
-    @apply badge bg-accent/15 text-accent ring-1 ring-accent/25;
+    @apply badge bg-accent-3 text-accent-text;
   }
-  .badge-info {
-    @apply badge bg-secondary/12 text-secondary ring-1 ring-secondary/25;
+  .badge-info,
+  .badge-live {
+    @apply badge bg-info/12 text-info;
   }
-  /* Holo-style category tags — used for tariff / status / segment chips. */
+  .badge-special {
+    @apply badge bg-accent-3 text-accent-text;
+  }
+
+  /* tag-* были пятью декоративными цветами поверх шести смысловых состояний
+     (§4.4). Имена оставлены ради экранов, но цвета теперь семантические. */
   .tag-purple {
-    @apply badge bg-tagpurple/15 text-tagpurple ring-1 ring-tagpurple/25;
+    @apply badge bg-accent-3 text-accent-text;
   }
   .tag-blue {
-    @apply badge bg-tagblue/15 text-tagblue ring-1 ring-tagblue/25;
+    @apply badge bg-info/12 text-info;
   }
   .tag-green {
-    @apply badge bg-taggreen/15 text-taggreen ring-1 ring-taggreen/25;
+    @apply badge bg-success/12 text-success;
   }
   .tag-amber {
-    @apply badge bg-tagamber/15 text-tagamber ring-1 ring-tagamber/25;
+    @apply badge bg-warning/12 text-warning;
   }
   .tag-rose {
-    @apply badge bg-tagrose/15 text-tagrose ring-1 ring-tagrose/25;
+    @apply badge bg-danger/12 text-danger;
   }
 
-  /* Big stat number — matches the +2.3h / 15.1 h / 8h 35m feel.
-     Lighter optical weight than ui-text via tightened tracking. */
   .stat-num {
-    /* Was text-3xl/4xl — too big for long Russian ruble values on
-       cards, the number truncated to "65 4..." on Payments / 24h
-       tiles. text-2xl/3xl reads as a hero KPI without overflow. */
-    @apply text-2xl font-semibold tracking-[-0.03em] text-fg md:text-3xl;
+    @apply text-2xl font-semibold text-fg md:text-3xl;
   }
   .stat-pill {
-    @apply inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5
-           text-[11px] font-semibold text-bg shadow-glow-sm;
+    @apply inline-flex items-center gap-1 rounded-sm bg-accent-3 px-1.5 py-0.5
+           text-2xs font-medium text-accent-text;
   }
 
-  /* Pill-tabs — segmented control как в brand-deck (бирка
-     "Light / Dark" сверху или "Dashboard ▪ Payments…" в нав-баре):
-     полностью круглые края, тёмный bg-elevated подложка, active
-     элемент — лаймовая пилюля с тёмным текстом и тонким glow.
-     Не sliding indicator (для этого используется SegPill в .tsx),
-     а статичные стили для прямых случаев — chip-row фильтров и т.п. */
   .pill-tabs {
-    @apply inline-flex items-center gap-0.5 rounded-full border border-border
-           bg-bg-elevated p-0.5 text-xs font-medium;
+    @apply inline-flex items-center gap-0.5 rounded-md border border-border
+           bg-bg-subtle p-0.5 text-xs font-medium;
   }
   .pill-tab {
-    @apply rounded-full px-3 py-1.5 text-fg-muted transition-colors
-           hover:text-fg;
+    @apply rounded-sm px-2.5 py-1 text-fg-muted transition-colors hover:text-fg;
   }
   .pill-tab-active {
-    @apply rounded-full bg-accent px-3 py-1.5 font-semibold text-bg
-           shadow-glow-sm;
+    @apply rounded-sm bg-bg-card px-2.5 py-1 font-medium text-fg;
   }
 
-  /* Icon-btn — круглая кнопка-иконка из brand-deck (bell с красной
-     точкой, settings cog, search). Тёмная заливка, тонкий border,
-     hover — лёгкое осветление + лаймовый ring. Размер задаётся
-     извне через w-/h- классы (по умолчанию h-10 w-10). */
   .icon-btn {
-    @apply relative inline-flex h-10 w-10 items-center justify-center
-           rounded-full border border-border bg-bg-card text-fg-muted
-           transition-all duration-200
-           hover:border-accent/40 hover:bg-bg-elevated hover:text-fg
-           focus:outline-none focus:ring-2 focus:ring-accent/35;
+    @apply relative inline-flex h-9 w-9 items-center justify-center
+           rounded-md border border-border bg-bg-card text-fg-muted
+           transition-colors hover:bg-bg-subtle hover:text-fg;
   }
   .icon-btn-sm {
     @apply h-8 w-8;
   }
-  /* Notification-dot — маленький лаймовый/красный dot в правом-
-     верхнем углу .icon-btn. Использовать как абсолютный child. */
   .icon-btn-dot {
     @apply pointer-events-none absolute right-1.5 top-1.5 h-2 w-2
-           rounded-full bg-danger ring-2 ring-bg;
+           rounded-full bg-danger-solid ring-2 ring-bg-card;
   }
   .icon-btn-dot-accent {
     @apply pointer-events-none absolute right-1.5 top-1.5 h-2 w-2
-           rounded-full bg-accent ring-2 ring-bg shadow-glow-sm;
+           rounded-full bg-accent-9 ring-2 ring-bg-card;
   }
 
-  /* Card-accent — лаймовая выделенная карточка (как Nvidia в
-     Investments из brand-deck). Лайм фон, тёмный текст, soft glow.
-     Используется для «выбран» / «top performer» / «recommended»
-     состояний — не для CTA. */
   .card-accent {
-    @apply rounded-2xl bg-accent text-bg shadow-glow;
+    @apply rounded-lg border border-accent-7 bg-accent-3 text-fg;
   }
 
-  /* Shimmer-скелетон — лёгкий лаймовый блик на тёмном bg-elevated.
-     Используется в скелетонах карточек и графиков вместо обычного
-     pulse — даёт ощущение «живого» loading. */
+  /* Скелетон: подложка + движущийся блик. Движение здесь обязательно —
+     оно сообщает «страница не зависла» (Carbon, §3.3 ux-patterns). */
   .skeleton {
-    @apply rounded-md bg-bg-elevated;
+    @apply rounded-sm bg-bg-subtle;
     background-image: linear-gradient(
       90deg,
       transparent 0%,
-      rgba(215, 255, 103, 0.10) 50%,
+      rgb(var(--c-n8) / 0.35) 50%,
       transparent 100%
     );
     background-size: 200% 100%;
     @apply animate-shimmer;
   }
 
-  /* Hover-lift — subtle подъём + тёмный drop для интерактивных
-     карточек на dark canvas. */
+  /* Было: подъём карточки + тень + смена цвета границы. Осталась граница:
+     подъём на hover в плотной таблице сдвигает соседние строки в восприятии. */
   .hover-lift {
-    @apply transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]
-           hover:-translate-y-0.5
-           hover:shadow-[0_10px_28px_-14px_rgba(0,0,0,0.7)]
-           hover:border-accent/35;
+    @apply transition-colors duration-150 hover:border-border-strong;
   }
 
-  /* Glass panel — матовая полупрозрачная поверхность с backdrop-blur.
-     Использовать для «плавающих» слоёв (модалки, popover, sticky top-bar).
-     Слегка вложенный inset-block сверху даёт «стеклянный» рельеф. */
+  /* Было «стекло» с backdrop-blur. Стекло над данными снижает контраст
+     (§3.1, §8.4) — теперь это обычная плавающая панель с тенью. */
   .glass-panel {
-    @apply rounded-2xl border border-white/[0.06] bg-bg-card/70
-           backdrop-blur-xl shadow-matte;
+    @apply rounded-xl border border-border bg-bg-card shadow-md;
   }
 
-  /* Tech-card — карточка с медленно вращающимся conic-gradient
-     под тонким border'ом. Даёт живой tech-look для VIP/hero-виджетов.
-     Внутри — стандартный .card content; wrapper даёт animated ring.
-     Требует p-[1px] и вложенного div для контента. */
+  /* Было: вращающийся conic-градиент 14 секунд под границей. Осталась
+     граница акцентного тона. */
   .tech-border-wrap {
-    @apply relative rounded-2xl p-[1px] overflow-hidden;
-  }
-  .tech-border-wrap::before {
-    content: "";
-    position: absolute;
-    inset: -60%;
-    background:
-      conic-gradient(from 0deg, transparent 0deg, rgba(245,245,245,0.55) 60deg, transparent 120deg, transparent 180deg, rgba(125,211,252,0.35) 240deg, transparent 300deg);
-    animation: spin-slow 14s linear infinite;
-    z-index: 0;
-    filter: blur(0.5px);
-  }
-  .tech-border-wrap > * {
-    position: relative;
-    z-index: 1;
+    @apply relative overflow-hidden rounded-lg border border-accent-7;
   }
 
-  /* Pulse-live — 8×8 dot для real-time индикатора (info-cyan цвет).
-     Используется рядом с заголовками виджетов, у которых есть SSE. */
+  /* Индикатор живого соединения. Цвет — не единственный канал: рядом с точкой
+     всегда стоит слово (§4.11). */
   .pulse-live {
-    @apply inline-block h-2 w-2 rounded-full bg-info animate-pulse-live;
+    @apply inline-block h-2 w-2 rounded-full bg-info-solid animate-pulse-live;
   }
   .pulse-live-danger {
-    @apply inline-block h-2 w-2 rounded-full bg-danger;
-    animation: pulse-live 1.8s ease-in-out infinite;
-    box-shadow: 0 0 0 0 rgba(255,107,107,0.55);
+    @apply inline-block h-2 w-2 rounded-full bg-danger-solid animate-pulse-live;
   }
 
-  /* Stat-shine — hover-эффект «блика по card'у». Работает через
-     absolute-child, у которого animation-play-state paused по умолчанию,
-     а на hover — running. Плюс parent должен быть overflow-hidden. */
+  /* Было: блик, пробегающий по карточке на hover. Декорация, удалена —
+       класс оставлен пустым обрезателем, чтобы не править разметку. */
   .stat-shine {
     @apply relative overflow-hidden;
   }
-  .stat-shine::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 40%;
-    background: linear-gradient(
-      100deg,
-      transparent 0%,
-      rgba(255,255,255,0.06) 45%,
-      rgba(255,255,255,0.10) 50%,
-      rgba(255,255,255,0.06) 55%,
-      transparent 100%
-    );
-    transform: translateX(-120%);
-    opacity: 0;
-    transition: opacity 0.2s;
-    pointer-events: none;
-  }
-  .stat-shine:hover::after {
-    opacity: 1;
-    animation: sweep 1.2s cubic-bezier(0.16, 1, 0.3, 1);
-  }
 
-  /* Info / Special tinted badges — дополняем набор badge'ей
-     сдержанными cyan / violet цветами. */
-  .badge-live {
-    @apply badge bg-info/12 text-info ring-1 ring-info/25;
-  }
-  .badge-special {
-    @apply badge bg-special/12 text-special ring-1 ring-special/25;
-  }
-
-  /* Route-transition — обёртка страницы с fade+slide-in.
-     Компонент RouteTransition применяет этот класс на mount. */
   .route-in {
-    animation: route-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: fade-in 0.2s ease-out both;
   }
-
-  /* Subtle noise-overlay для body — очень слабая zern-текстура,
-     чтобы «плоский dark» ощущался матовым, не пластиковым.
-     Применяем как ::before на body в base-слое. */
-
-  /* Num-tick — анимация обновления числового счётчика. Задаётся
-     компонентом CountUp через inline animation. */
   .num-tick {
-    animation: num-tick 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    animation: num-tick 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .attention-pulse {
+    animation: attention 0.9s cubic-bezier(0.4, 0, 0.2, 1) 1;
   }
 
-  /* ═══════════════════════════════════════════════════════════════
-     DESIGN 2026 — bento grid, frosted cards, motion primitives
-     ═══════════════════════════════════════════════════════════════ */
-
-  /* Bento-card — базовая карточка Bento-грида. Pure white surface,
-     hair-line border, hover-lift + subtle scale, focus-ring для
-     клавиатурной навигации. */
   .bento-card {
-    @apply relative overflow-hidden rounded-2xl border border-border
-           bg-bg-card shadow-card transition-all duration-300 ease-out;
+    @apply relative overflow-hidden rounded-lg border border-border bg-bg-card;
   }
   .bento-card-hover {
-    @apply hover:-translate-y-0.5 hover:border-fg/15
-           hover:shadow-[0_0_0_1px_rgba(15,23,32,0.08),0_8px_24px_-12px_rgba(15,23,32,0.16)];
+    @apply transition-colors duration-150 hover:border-border-strong;
   }
-
-  /* Bento-tile-hero — большая карточка для главной KPI (2 col на md).
-     С subtle ambient-gradient и слегка увеличенным padding.  */
+  /* Было: два радиальных градиента и ambient-анимация 20 секунд под главным
+     KPI. Под числом теперь ровная поверхность (§8.3 — градиент под данными
+     размывает границу между значениями). */
   .bento-hero {
-    @apply bento-card p-5 md:p-7;
-    background:
-      radial-gradient(ellipse 80% 60% at 100% 0%, rgba(37, 99, 235, 0.055), transparent 60%),
-      radial-gradient(ellipse 60% 45% at 0% 100%, rgba(124, 58, 237, 0.040), transparent 60%),
-      #FFFFFF;
-    background-size: 200% 200%;
-    animation: ambient 20s ease-in-out infinite;
+    @apply bento-card p-5 md:p-6;
+  }
+  .bento-in {
+    animation: fade-in 0.2s ease-out both;
+  }
+  /* Каскад появления. Шаг уменьшен с 50 до 25 мс и оборван на шестой
+     карточке: ждать полсекунды, пока «доедет» последняя плитка, в рабочей
+     панели нечем оправдать. */
+  .bento-grid > *:nth-child(2) {
+    animation-delay: 25ms;
+  }
+  .bento-grid > *:nth-child(3) {
+    animation-delay: 50ms;
+  }
+  .bento-grid > *:nth-child(4) {
+    animation-delay: 75ms;
+  }
+  .bento-grid > *:nth-child(5) {
+    animation-delay: 100ms;
+  }
+  .bento-grid > *:nth-child(n + 6) {
+    animation-delay: 125ms;
   }
 
-  /* Tap-scale — тактильный отклик на клик (mobile-first). */
+  .stagger-children > * {
+    animation: fade-in 0.2s ease-out both;
+  }
+  .stagger-children > *:nth-child(2) {
+    animation-delay: 25ms;
+  }
+  .stagger-children > *:nth-child(3) {
+    animation-delay: 50ms;
+  }
+  .stagger-children > *:nth-child(4) {
+    animation-delay: 75ms;
+  }
+  .stagger-children > *:nth-child(n + 5) {
+    animation-delay: 100ms;
+  }
+
   .tap-scale {
-    @apply transition-transform duration-100 active:scale-[0.98];
+    @apply transition-transform duration-100 active:scale-[0.99];
   }
 
-  /* Coloured chip — маленький пилюль для «today +12%» / «-5%». */
   .chip-success {
-    @apply inline-flex items-center gap-0.5 rounded-full bg-success/12
-           px-2 py-0.5 text-[11px] font-semibold text-success ring-1 ring-success/25;
+    @apply inline-flex items-center gap-0.5 rounded-sm bg-success/12
+           px-1.5 py-0.5 text-2xs font-medium text-success;
   }
   .chip-danger {
-    @apply inline-flex items-center gap-0.5 rounded-full bg-danger/12
-           px-2 py-0.5 text-[11px] font-semibold text-danger ring-1 ring-danger/25;
+    @apply inline-flex items-center gap-0.5 rounded-sm bg-danger/12
+           px-1.5 py-0.5 text-2xs font-medium text-danger;
   }
   .chip-info {
-    @apply inline-flex items-center gap-0.5 rounded-full bg-info/12
-           px-2 py-0.5 text-[11px] font-semibold text-info ring-1 ring-info/25;
+    @apply inline-flex items-center gap-0.5 rounded-sm bg-info/12
+           px-1.5 py-0.5 text-2xs font-medium text-info;
   }
 
-  /* Collapsible — раскрывающаяся секция. Header + опциональный chevron.
-     Открытие анимируется через grid-template-rows 0fr → 1fr (без JS-
-     измерения высоты, чисто CSS). Работает на всех современных
-     браузерах (Chrome 117+, Safari 17+, Firefox 120+ — iOS PWA OK). */
+  /* Раскрытие секции через grid-template-rows 0fr → 1fr: без замера высоты
+     в JS. Chrome 117+, Safari 17+, Firefox 120+. */
   .collapsible {
     display: grid;
     grid-template-rows: 0fr;
-    transition: grid-template-rows 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: grid-template-rows 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   }
   .collapsible[data-open="true"] {
     grid-template-rows: 1fr;
@@ -432,78 +386,23 @@
     overflow: hidden;
     min-height: 0;
   }
-  .collapsible[data-open="true"] > .collapsible-inner {
-    animation: collapse-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-  }
 
-  /* Tooltip-hint — inline (?) иконка с hover-подсказкой.
-     На мобильных tap раскрывает; на десктопе — hover. */
   .hint-dot {
-    @apply relative inline-flex h-4 w-4 shrink-0 items-center justify-center
-           rounded-full bg-bg-elevated text-[10px] font-bold text-fg-subtle
-           ring-1 ring-border cursor-help transition-colors
-           hover:bg-info/15 hover:text-info hover:ring-info/30;
+    @apply relative inline-flex h-4 w-4 shrink-0 cursor-help items-center
+           justify-center rounded-full bg-bg-subtle text-2xs font-medium
+           text-fg-muted ring-1 ring-border transition-colors hover:text-fg;
   }
 
-  /* Tap-highlight-off — для интерактивов, где мы сами анимируем tap. */
   .no-tap-highlight {
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
   }
 
-  /* Sticky-top-bar — mobile-first sticky header страницы.
-     Frosted-glass, безопасное перекрытие безнотчей iOS. */
+  /* Липкая шапка страницы. Была frosted-glass с backdrop-blur — заменена на
+     сплошную поверхность: полупрозрачность над таблицей делает нечитаемой
+     первую строку при прокрутке. */
   .sticky-top-bar {
-    @apply sticky top-0 z-30 -mx-4 md:-mx-8 border-b border-border/70
-           bg-bg/80 px-4 py-3 backdrop-blur-xl md:px-8;
-  }
-
-  /* Bento-in animation — mount карточки Bento. */
-  .bento-in {
-    animation: bento-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) backwards;
-  }
-  /* Stagger для bento-grid, до 12 карточек. */
-  .bento-grid > *:nth-child(1)  { animation-delay: 0ms; }
-  .bento-grid > *:nth-child(2)  { animation-delay: 50ms; }
-  .bento-grid > *:nth-child(3)  { animation-delay: 100ms; }
-  .bento-grid > *:nth-child(4)  { animation-delay: 150ms; }
-  .bento-grid > *:nth-child(5)  { animation-delay: 200ms; }
-  .bento-grid > *:nth-child(6)  { animation-delay: 250ms; }
-  .bento-grid > *:nth-child(7)  { animation-delay: 300ms; }
-  .bento-grid > *:nth-child(8)  { animation-delay: 350ms; }
-  .bento-grid > *:nth-child(9)  { animation-delay: 400ms; }
-  .bento-grid > *:nth-child(10) { animation-delay: 450ms; }
-  .bento-grid > *:nth-child(11) { animation-delay: 500ms; }
-  .bento-grid > *:nth-child(12) { animation-delay: 550ms; }
-
-  /* Attention pulse — вспышка на карточке когда через WS пришло
-     событие (например, revenue вырос). Инициируется JS: .classList.add
-     на 900мс, потом remove. */
-  .attention-pulse {
-    animation: attention 0.9s cubic-bezier(0.4, 0, 0.2, 1) 1;
-  }
-
-  /* Staggered fade-up для children — секций главной. backwards
-     animation-fill-mode (через keyframes config) гарантирует, что
-     при mount элементы стартуют с opacity:0, не моргают. */
-  .stagger-children > * {
-    animation: fade-up 0.55s cubic-bezier(0.16, 1, 0.3, 1) backwards;
-  }
-  .stagger-children > *:nth-child(1)  { animation-delay: 0ms; }
-  .stagger-children > *:nth-child(2)  { animation-delay: 60ms; }
-  .stagger-children > *:nth-child(3)  { animation-delay: 120ms; }
-  .stagger-children > *:nth-child(4)  { animation-delay: 180ms; }
-  .stagger-children > *:nth-child(5)  { animation-delay: 240ms; }
-  .stagger-children > *:nth-child(6)  { animation-delay: 300ms; }
-  .stagger-children > *:nth-child(7)  { animation-delay: 360ms; }
-  .stagger-children > *:nth-child(8)  { animation-delay: 420ms; }
-  .stagger-children > *:nth-child(9)  { animation-delay: 480ms; }
-  .stagger-children > *:nth-child(10) { animation-delay: 540ms; }
-  .stagger-children > *:nth-child(11) { animation-delay: 600ms; }
-  .stagger-children > *:nth-child(12) { animation-delay: 660ms; }
-
-  @keyframes fade-up {
-    from { opacity: 0; transform: translateY(12px); }
-    to   { opacity: 1; transform: translateY(0); }
+    @apply sticky top-0 z-30 -mx-4 border-b border-border bg-bg
+           px-4 py-3 md:-mx-8 md:px-8;
   }
 }

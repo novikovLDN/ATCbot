@@ -76,7 +76,7 @@ export function ReconciliationSection() {
   };
 
   return (
-    <section className="animate-fade-up rounded-2xl border border-border bg-bg-card p-5 md:p-6">
+    <section className="animate-fade-in rounded-2xl border border-border bg-bg-card p-5 md:p-6">
       <header className="mb-4 flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.18em] text-fg-subtle">

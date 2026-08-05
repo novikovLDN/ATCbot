@@ -101,7 +101,10 @@ def test_finalize_refunds_when_shield_not_applied():
     иначе при сбое останется списание без компенсации."""
     from pathlib import Path
 
-    src = Path("database/subscriptions.py").read_text(encoding="utf-8")
+    # Ветка farm_effect живёт в _finalize_purchase_locked, а та переехала
+    # в database/purchase_finalization.py при разбивке subscriptions.py.
+    # В фасаде теперь только реэкспорты — index() там упадёт.
+    src = Path("database/purchase_finalization.py").read_text(encoding="utf-8")
     start = src.index("if is_farm_effect:")
     block = src[start:start + 6000]
     assert "farm_shield_refund" in block, "нет возврата на баланс"

@@ -96,6 +96,16 @@ async def _safe_send_with_buttons(
             except TelegramRetryAfter as e:
                 # Ждём ровно столько, сколько попросил Telegram, плюс секунда
                 # запаса. Без этого следующая попытка приходит в тот же лимит.
+                #
+                # Записи здесь не было ни одной. Если все попытки упёрлись в
+                # лимит, функция возвращает None, наверху это станет просто
+                # failed_count += 1 — и причина «нас затормозил Telegram»
+                # неотличима от «человек заблокировал бота». Соседняя ветка
+                # except Exception логирует, эта молчала.
+                logger.warning(
+                    "BROADCAST_RATE_LIMITED user=%s attempt=%s retry_after=%ss",
+                    user_id, _attempt + 1, e.retry_after,
+                )
                 await asyncio.sleep(e.retry_after + 1)
 
             except Exception as e:

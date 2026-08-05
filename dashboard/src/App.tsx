@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { auth, captureMagicLink } from "@/lib/auth";
@@ -43,10 +43,24 @@ type Stage =
   | { kind: "login" }
   | { kind: "ready" };
 
+// Витрина примитивов. Грузится динамически и только в dev: в продовой сборке
+// import.meta.env.DEV — константа false, ветка ниже недостижима, и страница в
+// бандл не попадает. Открывается по /dashboard/ui-kit мимо авторизации —
+// удобно смотреть компоненты, когда бэкенд не поднят.
+const UiKit = import.meta.env.DEV ? lazy(() => import("@/pages/UiKit")) : null;
+
 export default function App() {
   useEffect(() => {
     captureMagicLink();
   }, []);
+
+  if (UiKit && window.location.pathname.startsWith("/dashboard/ui-kit")) {
+    return (
+      <Suspense fallback={null}>
+        <UiKit />
+      </Suspense>
+    );
+  }
 
   const [stage, setStage] = useState<Stage>({ kind: "loading" });
 
@@ -152,7 +166,7 @@ function Splash() {
   return (
     <div className="grid h-full place-items-center">
       <div className="card flex items-center gap-3 px-4 py-3 text-sm text-fg-muted">
-        <span className="h-2 w-2 animate-pulse-glow rounded-full bg-accent" />
+        <span className="h-2 w-2 animate-pulse-live rounded-full bg-info-solid" />
         Подключаюсь...
       </div>
     </div>

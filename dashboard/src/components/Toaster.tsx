@@ -11,14 +11,28 @@ const ICONS = {
 const STYLES = {
   success: "border-success/30 bg-success/10 text-success",
   error: "border-danger/30 bg-danger/10 text-danger",
-  info: "border-accent/30 bg-accent/10 text-accent",
+  info: "border-info/30 bg-info/10 text-info",
 };
 
+/**
+ * Тосты — только для сообщений, на которые ничего не нужно делать: «сохранено»,
+ * «код скопирован». Всё, что предлагает действие (в первую очередь отмену),
+ * идёт в `UndoBanner` из `@/components/ui`: самоисчезающее сообщение с кнопкой
+ * внутри нарушает WCAG 2.2.1 Timing Adjustable — у человека нет способа
+ * дотянуться до кнопки за отведённые секунды (ux-patterns §2.4).
+ *
+ * Контейнер живой области существует в DOM всегда, даже когда тостов нет: если
+ * вставить его вместе с сообщением, скринридер ничего не озвучит.
+ */
 export function Toaster() {
   const items = useToasts((s) => s.items);
   const dismiss = useToasts((s) => s.dismiss);
   return (
-    <div className="fixed right-4 top-4 z-50 flex w-[360px] max-w-[90vw] flex-col gap-2">
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed right-4 top-4 z-50 flex w-[360px] max-w-[90vw] flex-col gap-2"
+    >
       {items.map((t) => {
         const Icon = ICONS[t.kind];
         return (
