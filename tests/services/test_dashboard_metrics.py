@@ -90,3 +90,68 @@ def test_analytics_labels_say_what_is_measured(label, hint):
     assert f'hint="{hint}"' in window, (
         f"карточка {label}: подпись не объясняет знаменатель"
     )
+
+
+class TestPaidSubscriptionCountIncludesCombo:
+    """Комбо считается платной подпиской — во всех счётчиках сразу.
+
+    ЧТО БЫЛО
+
+        Список тарифов был выписан руками в двух местах, и в одном из них
+        (database/analytics_stats.py) не было combo_basic и combo_plus.
+        Комбо — отдельные продукты со своей ценой, а не «plus с добавкой»,
+        и в колонке subscription_type у них два представления:
+        историческое 'plus' + is_combo=TRUE и явное 'combo_*'. Первое
+        попадало в счёт через 'plus', второе не попадало никуда.
+
+        Заметить это по числу нельзя: счётчик не ломается, он просто
+        показывает меньше, чем есть. А когда счётчиков стало два — на
+        сводке и на аналитике, — они начали расходиться, и понять, какой
+        прав, можно было только чтением обоих запросов.
+    """
+
+    def test_config_defines_one_list_and_combo_is_in_it(self):
+        import config
+
+        assert set(config.COMBO_TARIFF_TYPES) <= set(config.PAID_SUBSCRIPTION_TYPES), (
+            "комбо выпало из списка платных тарифов — комбо-подписчиков "
+            "перестанут считать, и число просто станет другим"
+        )
+        assert set(config.VALID_SUBSCRIPTION_TYPES) <= set(config.PAID_SUBSCRIPTION_TYPES)
+
+    def test_both_counters_read_the_same_list(self):
+        """Разные списки = два разных ответа на один вопрос."""
+        import config
+        import database.dashboard_summary as summary
+
+        assert summary._PAID_SUBSCRIPTION_TYPES is config.PAID_SUBSCRIPTION_TYPES, (
+            "сводка снова держит свою копию списка тарифов"
+        )
+
+    def test_the_query_does_not_hardcode_tariffs(self):
+        """Список внутри SQL — это третья копия, которая разъедется следом."""
+        import inspect
+
+        import database.analytics_stats as stats
+
+        src = inspect.getsource(stats.get_active_paid_subscriptions_count)
+        assert "'basic'" not in src and '"basic"' not in src, (
+            "тарифы снова перечислены прямо в запросе"
+        )
+        assert "PAID_SUBSCRIPTION_TYPES" in src
+
+    def test_a_failed_count_is_not_reported_as_zero(self):
+        """Ноль неотличим от «никто не платит».
+
+        Вызывающий (/stats/overview) умеет обработать отказ — он
+        подставляет active_subscriptions. Свой перехват отбирал у него эту
+        возможность: до запасного варианта дело не доходило.
+        """
+        import inspect
+
+        import database.analytics_stats as stats
+
+        src = inspect.getsource(stats.get_active_paid_subscriptions_count)
+        assert "return 0" not in src.split('"""')[-1], (
+            "вернулся перехват, превращающий отказ запроса в ноль на экране"
+        )

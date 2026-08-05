@@ -32,6 +32,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+import config
 import database.core as _core
 from database.core import get_pool, _to_db_utc
 
@@ -222,33 +223,43 @@ async def get_analytics_by_period(
 
 
 async def get_active_paid_subscriptions_count() -> int:
-    """Count of subscriptions that are paid, not bypass-only, not trial,
-    with expires_at in the future. This is the number an admin actually
-    cares about — get_extended_bot_stats's active_subscriptions also
-    includes trial rows and bypass-only entries, which inflates it."""
+    """Сколько людей прямо сейчас платят за VPN.
+
+    Не то же самое, что active_subscriptions из get_extended_bot_stats: там
+    в счёт попадают триалы и bypass-only строки, и число получается больше
+    реального.
+
+    СПИСОК ТАРИФОВ — ИЗ config, А НЕ ЗДЕСЬ
+        Он был выписан прямо в запросе, и в нём не было combo_basic и
+        combo_plus. Комбо — отдельные продукты со своей ценой, а не
+        «plus с добавкой»; у них два представления в колонке
+        subscription_type, и явное в счёт не попадало. То есть
+        комбо-подписчиков просто не считали. Заметить это по числу нельзя:
+        оно не ломается, оно становится другим.
+
+    ОШИБКУ НЕ ГЛУШИМ
+        Раньше здесь стоял `except: return 0`. Ноль неотличим от честного
+        «никто не платит», а вызывающий (/stats/overview) как раз умеет
+        обработать отказ — он подставляет active_subscriptions. Свой
+        перехват отбирал у него эту возможность: до запасного варианта
+        дело не доходило, на экран уезжал ноль.
+    """
     pool = await get_pool()
     if pool is None:
         return 0
     now = _to_db_utc(datetime.now(timezone.utc))
-    try:
-        async with pool.acquire() as conn:
-            n = await conn.fetchval(
-                """SELECT COUNT(*) FROM subscriptions
-                   WHERE status = 'active'
-                     AND expires_at > $1
-                     AND COALESCE(is_bypass_only, FALSE) = FALSE
-                     AND COALESCE(source, '') != 'trial'
-                     AND subscription_type IN (
-                         'basic', 'plus', 'biz_starter', 'biz_team',
-                         'biz_business', 'biz_pro', 'biz_enterprise',
-                         'biz_ultimate'
-                     )""",
-                now,
-            )
-            return int(n or 0)
-    except Exception as e:
-        logger.warning("get_active_paid_subscriptions_count failed: %s", e)
-        return 0
+    async with pool.acquire() as conn:
+        n = await conn.fetchval(
+            """SELECT COUNT(*) FROM subscriptions
+               WHERE status = 'active'
+                 AND expires_at > $1
+                 AND COALESCE(is_bypass_only, FALSE) = FALSE
+                 AND COALESCE(source, '') != 'trial'
+                 AND subscription_type = ANY($2::text[])""",
+            now,
+            list(config.PAID_SUBSCRIPTION_TYPES),
+        )
+        return int(n or 0)
 
 
 async def get_extended_bot_stats() -> Dict[str, Any]:

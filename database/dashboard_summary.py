@@ -49,6 +49,7 @@ from typing import Any, Dict, List
 
 import asyncpg
 
+import config
 from app.utils.security import mask_secret
 from database.core import get_pool, _to_db_utc
 
@@ -59,11 +60,12 @@ logger = logging.getLogger(__name__)
 # это отдельные продукты со своей ценой, а не «plus с добавкой». Второе
 # представление комбо — subscription_type='plus' + is_combo=TRUE — попадает
 # в счёт само, через 'plus'.
-_PAID_SUBSCRIPTION_TYPES = (
-    "basic", "plus", "combo_basic", "combo_plus",
-    "biz_starter", "biz_team", "biz_business",
-    "biz_pro", "biz_enterprise", "biz_ultimate",
-)
+#
+# Список берётся из config, а не выписывается здесь. Ровно из-за второй
+# копии, выписанной руками, в database/analytics_stats.py потерялось комбо:
+# два счётчика активных подписок показывали разные числа, и понять, какое
+# из них верное, можно было только чтением обоих запросов.
+_PAID_SUBSCRIPTION_TYPES = config.PAID_SUBSCRIPTION_TYPES
 
 # Сколько платёж может висеть в pending, прежде чем это станет поводом
 # посмотреть. Меньше — в список полезут живые, ещё не оплаченные счета.
