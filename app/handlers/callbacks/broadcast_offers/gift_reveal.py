@@ -132,26 +132,46 @@ async def callback_broadcast_gift_reveal(callback: CallbackQuery, state: FSMCont
         except Exception:
             pass
 
-        # 4) reveal-сообщение с динамическим процентом
-        await callback.bot.send_message(
-            chat_id,
-            f"<b>Для тебя подарок {percent}% скидка на любую подписку!</b> {_GIFT_REVEAL_PRESENT}",
-            parse_mode="HTML",
-        )
-
-        # 5) применяем скидку %/48ч
+        # 4) применяем скидку %/48ч — ДО обещания. Порядок был обратный:
+        # человек читал «для тебя подарок N%», а create_user_discount
+        # возвращала False (глотает исключение внутри, отдаёт False при
+        # неготовой базе) — и подарка не существовало ни в базе, ни в логе.
         expires_at = datetime.now(timezone.utc) + timedelta(hours=_GIFT_REVEAL_HOURS)
-        await database.create_user_discount(
+        created = await database.create_user_discount(
             telegram_id=telegram_id,
             discount_percent=percent,
             expires_at=expires_at,
             created_by=config.ADMIN_TELEGRAM_ID,
         )
 
-        # 5) короткая пауза перед экраном тарифов — отделить визуально
+        # 5) reveal-сообщение с динамическим процентом — только если подарок
+        # действительно лёг в базу.
+        if created:
+            logger.info(
+                "GIFT_REVEAL_DISCOUNT_APPLIED broadcast_id=%s user=%s pct=%s hours=%s",
+                broadcast_id, telegram_id, percent, _GIFT_REVEAL_HOURS,
+            )
+            await callback.bot.send_message(
+                chat_id,
+                f"<b>Для тебя подарок {percent}% скидка на любую подписку!</b> {_GIFT_REVEAL_PRESENT}",
+                parse_mode="HTML",
+            )
+        else:
+            logger.error(
+                "GIFT_REVEAL_DISCOUNT_NOT_CREATED broadcast_id=%s user=%s pct=%s — "
+                "скидки в базе нет, экран тарифов покажет полную цену",
+                broadcast_id, telegram_id, percent,
+            )
+            await callback.bot.send_message(
+                chat_id,
+                "Подарок не удалось применить, попробуйте позже.",
+                parse_mode="HTML",
+            )
+
+        # 6) короткая пауза перед экраном тарифов — отделить визуально
         await asyncio.sleep(0.03)
 
-        # 6) показываем экран выбора тарифов — get_user_discount внутри
+        # 7) показываем экран выбора тарифов — get_user_discount внутри
         # автоматически подставит -20% на basic / plus / combo_basic /
         # combo_plus. Маркер `from_broadcast=True` нужен, чтобы кнопка
         # «Назад» с экрана выбора периода возвращала на этот же экран

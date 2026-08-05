@@ -45,7 +45,8 @@ async def finalize_balance_purchase(
     amount_rubles: float,
     description: Optional[str] = None,
     promo_code: Optional[str] = None,
-    country: Optional[str] = None
+    country: Optional[str] = None,
+    is_combo: bool = False,
 ) -> Dict[str, Any]:
     """
     Атомарно обработать покупку подписки с баланса.
@@ -63,7 +64,10 @@ async def finalize_balance_purchase(
         amount_rubles: Сумма платежа в рублях
         description: Описание платежа (опционально)
         promo_code: Промокод (опционально, потребляется внутри транзакции)
-    
+        is_combo: Куплен комбо-тариф (подписка + пакет ГБ обхода). Пишется
+            в subscriptions.is_combo после коммита — это единственный след
+            комбо-покупки, переживающий перезапуск бота.
+
     Returns:
         {
             "success": bool,
@@ -280,15 +284,23 @@ async def finalize_balance_purchase(
                     "new_balance": new_balance,
                     "referral_reward": referral_reward_result,
                     "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
+                    "is_combo": is_combo,
                 }
         except Exception as e:
             if uuid_to_cleanup_on_failure:
                 try:
+                    # Компенсация мнимая: safe_remove_vless_user_with_retry ведёт
+                    # в заглушку снятого xray и ничего не удаляет. ORPHAN_PREVENTED
+                    # писался CRITICAL-ом и читался как «поймали и починили», а
+                    # сущность фазы 1 оставалась в панели — доступ без оплаты.
+                    # Настоящее удаление умеет remnawave_api.delete_user, так это
+                    # сделано в database/purchase_finalization.py.
                     await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
                     uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
                     logger.critical(
-                        f"ORPHAN_PREVENTED uuid={uuid_preview} reason=finalize_balance_purchase_tx_failed "
-                        f"user={telegram_id} error={e}"
+                        f"ORPHAN_NOT_CLEANED uuid={uuid_preview} reason=finalize_balance_purchase_tx_failed "
+                        f"user={telegram_id} error={e} — сущность осталась в панели, "
+                        f"удалите её вручную по этому uuid"
                     )
                 except Exception as remove_err:
                     uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
@@ -315,6 +327,22 @@ async def finalize_balance_purchase(
                 logger.critical(
                     "RENEWAL_REMNAWAVE_SYNC_FAILED",
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
+                )
+        if ret_val is not None:
+            # Признак комбо — в базу, ровно как это делает оплата картой
+            # (database/purchase_finalization.py). Раньше след покупки комбо
+            # с баланса жил только в FSM: бот перезапустился — и восстановить
+            # было неоткуда, гигабайты пропадали без единой ошибки в логе.
+            #
+            # После коммита и в своём try: подписка уже выдана, деньги списаны,
+            # и падение на пометке не должно откатывать покупку.
+            try:
+                from database.subscription_state import set_combo_flag
+                await set_combo_flag(telegram_id, is_combo)
+            except Exception as cf_err:
+                logger.warning(
+                    "finalize_balance_purchase: COMBO_FLAG_FAIL user=%s is_combo=%s: %s",
+                    telegram_id, is_combo, cf_err,
                 )
         return ret_val
 

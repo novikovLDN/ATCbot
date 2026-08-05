@@ -216,12 +216,24 @@ async def renew_remnawave_user(
         far_future = datetime.now(timezone.utc) + timedelta(days=3650)
         expire_str = far_future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        await remnawave_api.update_user(
+        # update_user отдаёт None на любой отказ панели и не бросает
+        # (см. контракт в app/services/remnawave_api.py). Результат не читался,
+        # и REMNAWAVE_RENEWED ниже утверждал начисление оплаченного трафика,
+        # которого панель не приняла.
+        updated = await remnawave_api.update_user(
             api_uuid,
             trafficLimitBytes=new_limit,
             expireAt=expire_str,
             deviceLimit=_device_limit_for_tariff(tariff),
         )
+        if updated is None:
+            logger.error(
+                "REMNAWAVE_RENEW_REJECTED: tg=%s uuid=%s old_limit=%d new_limit=%d — "
+                "панель не приняла продление, оплаченный трафик не начислен, "
+                "нужен ручной разбор",
+                telegram_id, api_uuid[:8], current_limit, new_limit,
+            )
+            return
         # Re-enable if disabled
         if user_data.get("status") != "ACTIVE":
             await remnawave_api.update_user(api_uuid, status="ACTIVE")
@@ -265,7 +277,15 @@ async def extend_remnawave_for_bypass(telegram_id: int) -> None:
 
         from datetime import timedelta
         far_future = (datetime.now(timezone.utc) + timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        await remnawave_api.update_user(api_uuid, expireAt=far_future, status="ACTIVE")
+        updated = await remnawave_api.update_user(api_uuid, expireAt=far_future, status="ACTIVE")
+        if updated is None:
+            logger.error(
+                "REMNAWAVE_BYPASS_EXTEND_REJECTED: tg=%s uuid=%s — панель не приняла "
+                "запрос, срок остался прежним: обход погаснет вместе со старой датой, "
+                "хотя гигабайты оплачены",
+                telegram_id, api_uuid[:8],
+            )
+            return
         logger.info("REMNAWAVE_BYPASS_EXTENDED: tg=%s uuid=%s — expiry set to +10 years", telegram_id, api_uuid[:8])
     except Exception as e:
         logger.error("REMNAWAVE_BYPASS_EXTEND_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
@@ -297,12 +317,27 @@ async def disable_remnawave_user(telegram_id: int) -> None:
         if traffic_limit > 0 and traffic_used < traffic_limit:
             # User still has bypass GB — extend instead of disable
             far_future = (datetime.now(timezone.utc) + timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            await remnawave_api.update_user(api_uuid, expireAt=far_future, status="ACTIVE")
+            updated = await remnawave_api.update_user(api_uuid, expireAt=far_future, status="ACTIVE")
+            if updated is None:
+                logger.error(
+                    "REMNAWAVE_KEEP_ACTIVE_REJECTED: tg=%s uuid=%s used=%d limit=%d — "
+                    "панель не приняла запрос, обход с оплаченными гигабайтами погаснет "
+                    "по старой дате",
+                    telegram_id, api_uuid[:8], traffic_used, traffic_limit,
+                )
+                return
             logger.info("REMNAWAVE_KEPT_ACTIVE: tg=%s uuid=%s — bypass traffic remaining (%d/%d bytes)",
                         telegram_id, api_uuid[:8], traffic_used, traffic_limit)
             return
 
-        await remnawave_api.update_user(api_uuid, status="DISABLED")
+        disabled = await remnawave_api.update_user(api_uuid, status="DISABLED")
+        if disabled is None:
+            logger.error(
+                "REMNAWAVE_DISABLE_REJECTED: tg=%s uuid=%s — панель не приняла запрос, "
+                "доступ остаётся включённым после истечения подписки, отключите вручную",
+                telegram_id, api_uuid[:8],
+            )
+            return
         logger.info("REMNAWAVE_DISABLED: tg=%s uuid=%s", telegram_id, api_uuid[:8])
     except Exception as e:
         logger.error("REMNAWAVE_DISABLE_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
@@ -324,8 +359,20 @@ async def delete_remnawave_user(telegram_id: int) -> None:
             return
         user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
         api_uuid = (user_data.get("uuid") if user_data else None) or rmn_uuid
-        await remnawave_api.delete_user(api_uuid)
+        # delete_user, как и update_user, отдаёт None на отказ и не бросает.
+        # Ссылку в базе чистим в любом случае (так было и раньше) — но если
+        # панель отказала, сущность остаётся в ней без ссылки из базы, и
+        # найти её потом можно только по этой записи.
+        deleted = await remnawave_api.delete_user(api_uuid)
         await database.clear_remnawave_uuid(telegram_id)
+        if deleted is None:
+            logger.error(
+                "REMNAWAVE_DELETE_REJECTED: tg=%s uuid=%s — панель не приняла удаление, "
+                "ссылка из базы стёрта: сущность осталась в панели, удалите вручную "
+                "по этому uuid",
+                telegram_id, api_uuid[:8],
+            )
+            return
         logger.info("REMNAWAVE_DELETED: tg=%s uuid=%s", telegram_id, api_uuid[:8])
     except Exception as e:
         logger.error("REMNAWAVE_DELETE_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
@@ -427,11 +474,19 @@ async def update_tariff(telegram_id: int, new_tariff: str, period_days: int = 30
         if not user_data:
             return
         api_uuid = user_data.get("uuid") or rmn_uuid
-        await remnawave_api.update_user(
+        updated = await remnawave_api.update_user(
             api_uuid,
             trafficLimitBytes=new_limit,
             deviceLimit=new_devices,
         )
+        if updated is None:
+            logger.error(
+                "REMNAWAVE_TARIFF_UPDATE_REJECTED: tg=%s uuid=%s tariff=%s limit=%d "
+                "devices=%d — панель не приняла смену тарифа, человек оплатил новый, "
+                "а лимиты остались от старого",
+                telegram_id, api_uuid[:8], new_tariff, new_limit, new_devices,
+            )
+            return
         logger.info("REMNAWAVE_TARIFF_UPDATED: tg=%s tariff=%s", telegram_id, new_tariff)
     except Exception as e:
         logger.error("REMNAWAVE_TARIFF_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)

@@ -123,9 +123,12 @@ async def process_promo_code(message: Message, state: FSMContext):
         text = i18n_get_text(language, "main.promo_applied")
         await message.answer(text, parse_mode="HTML")
 
+        # old_purchases_cancelled=True было прямой ложью: отмены pending-покупок
+        # в этой ветке нет и не задумано (см. комментарий выше). По записи разбор
+        # уходил искать, почему отмена не сработала, вместо «отмены нет by design».
         logger.info(
             f"promo_applied: user={telegram_id}, promo_code={promo_code}, "
-            f"discount_percent={discount_percent}%, old_purchases_cancelled=True"
+            f"discount_percent={discount_percent}%, pending_purchases_left_intact=True"
         )
         
         # CRITICAL FIX: Используем каноничный экран тарифов вместо локального render

@@ -138,18 +138,30 @@ async def _handle_share_discount_start(
     keep_existing = bool(
         existing and existing.get("discount_percent", 0) >= _SHARE_DISCOUNT_PERCENT
     )
+    # create_user_discount возвращает bool и глотает исключение внутри
+    # (database/discounts.py). Результат не читался: ниже писалось
+    # REFDC_CLAIMED pct=30 константой, а скидки в базе могло не быть — при
+    # том что claim одноразовый на всю жизнь аккаунта и уже израсходован.
+    discount_created = False
     if not keep_existing:
         try:
-            await database.create_user_discount(
+            discount_created = bool(await database.create_user_discount(
                 telegram_id=telegram_id,
                 discount_percent=_SHARE_DISCOUNT_PERCENT,
                 expires_at=expires_at,
                 created_by=referrer_id,
-            )
+            ))
         except Exception:
             logger.exception("REFDC_DISCOUNT_CREATE_FAIL user=%s", telegram_id)
             # Не критично — продолжаем, claim всё равно фиксируем чтобы
             # юзер не мог попытаться снова и снова.
+        if not discount_created:
+            logger.error(
+                "REFDC_DISCOUNT_NOT_CREATED user=%s referrer=%s pct=%s — скидки в базе "
+                "нет, а одноразовый claim будет израсходован; вернуть её тем же путём "
+                "человек не сможет, нужна ручная выдача",
+                telegram_id, referrer_id, _SHARE_DISCOUNT_PERCENT,
+            )
 
     recorded = await database.record_referral_share_discount_claim(
         telegram_id=telegram_id,
@@ -170,16 +182,26 @@ async def _handle_share_discount_start(
         await show_tariffs_main_screen(message, state)
         return True
 
+    # Скидка у человека есть в двух случаях: мы её создали или у него уже
+    # была не хуже. Пишем оба признака — иначе по записи не отличить
+    # выданную скидку от невыданной.
+    has_discount = discount_created or keep_existing
     logger.info(
-        "REFDC_CLAIMED user=%s referrer=%s pct=%s hours=%s",
+        "REFDC_CLAIMED user=%s referrer=%s pct=%s hours=%s discount_created=%s "
+        "kept_existing=%s",
         telegram_id, referrer_id, _SHARE_DISCOUNT_PERCENT, _SHARE_DISCOUNT_HOURS,
+        discount_created, keep_existing,
     )
 
     # Notice об активации + экран тарифов. _open_buy_screen внутри
     # show_tariffs_main_screen сам подтянет get_user_discount и
     # отрисует уже скидочные цены — двойной работы нет.
+    # Текст «скидка активирована» уходит только когда она действительно
+    # есть: раньше он шёл безусловно, и человек шёл платить за обещанием,
+    # которого база не подтверждала.
     await message.answer(
-        i18n_get_text(language, "share_discount.activated"),
+        i18n_get_text(language, "share_discount.activated") if has_discount
+        else i18n_get_text(language, "errors.try_later"),
         parse_mode="HTML",
     )
     await show_tariffs_main_screen(message, state)

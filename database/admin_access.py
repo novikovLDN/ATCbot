@@ -606,11 +606,20 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
         if uuid_to_remove:
             try:
                 await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_remove)
-                logger.info("ADMIN_REVOKE_UUID_REMOVED", extra={"uuid": uuid_to_remove[:8] + "..."})
+                # Под вызовом нет действия: vpn_utils.remove_vless_user —
+                # заглушка снятого с эксплуатации xray. ADMIN_REVOKE_UUID_REMOVED
+                # утверждала удаление, которого не бывает никогда, и при разборе
+                # «отозвали, а VPN работает» уводила в «человек путает».
+                # Настоящий отзыв — disable_premium_user выше по функции.
+                logger.info(
+                    "ADMIN_REVOKE_LEGACY_UUID_CLEARED user=%s uuid=%s — xray-заглушка, "
+                    "ничего не удалено; доступ снимает disable_premium_user",
+                    telegram_id, uuid_to_remove[:8],
+                )
             except Exception as e:
                 logger.critical(
-                    "ADMIN_REVOKE_UUID_REMOVAL_FAILED",
-                    extra={"uuid": uuid_to_remove[:8] + "...", "error": str(e)[:200]}
+                    "ADMIN_REVOKE_UUID_REMOVAL_FAILED user=%s uuid=%s error=%s",
+                    telegram_id, uuid_to_remove[:8], str(e)[:200],
                 )
     return ret
 

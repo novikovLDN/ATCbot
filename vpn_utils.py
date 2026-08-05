@@ -124,13 +124,19 @@ async def remove_vless_user(uuid: str) -> None:
 
 
 async def safe_remove_vless_user_with_retry(uuid: str, *, max_retries: int = 3) -> None:
-    """
-    Remove UUID from Xray with retry for orphan cleanup.
-    Used when Phase 2 (DB tx) fails after Phase 1 (add_vless_user) succeeded.
+    """Компенсация отката, оставшаяся без исполнителя: удалять здесь нечем.
 
-    Retries on: httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError.
-    Exponential backoff: 1s → 2s → 4s.
-    If all retries fail → raises (caller must not suppress).
+    Внутри цикла зовётся remove_vless_user — заглушка выше по файлу: xray
+    снят с эксплуатации, HTTP-вызова нет, исключений нет, retry никогда не
+    срабатывает. Функция сохранена, потому что её ещё зовут пути отката
+    (activation, balance_purchases, admin_access, subscription_state).
+
+    ВАЖНО ПРО ЗАПИСИ: успешный выход из этой функции НЕ означает, что
+    сущность где-то удалена. Раньше здесь стояло ORPHAN_CLEANUP_SUCCESS, и
+    вызывающие писали поверх «удалено» / «сирота предотвращена» — все эти
+    записи были ложны всегда, потому что под ними не было действия.
+    Настоящее удаление делает remnawave_api.delete_user (образец —
+    database/purchase_finalization.py, компенсация фазы 2).
     """
     uuid_clean = str(uuid).strip() if uuid else ""
     if not uuid_clean:
@@ -152,7 +158,12 @@ async def safe_remove_vless_user_with_retry(uuid: str, *, max_retries: int = 3) 
                 )
                 await asyncio.sleep(delay)
             await remove_vless_user(uuid_clean)
-            logger.info("ORPHAN_CLEANUP_SUCCESS", extra={"uuid": uuid_preview})
+            logger.info(
+                "ORPHAN_CLEANUP_NOOP: uuid=%s — xray-заглушка, ничего не удалено; "
+                "если сущность создавалась в панели, её чистит вызывающий через "
+                "remnawave_api.delete_user либо админ вручную по этому uuid",
+                uuid_preview,
+            )
             return
         except (httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError) as e:
             last_error = e

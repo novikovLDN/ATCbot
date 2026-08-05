@@ -257,8 +257,11 @@ async def process_successful_payment(message: Message, state: FSMContext):
     if fin is None:
         return
 
-    if not await announce_success(message, env, ctx, fin, start_time):
+    # delivered — ушёл ли человеку экран с ключом. Его читает finish_payment:
+    # аудит-строка в дашборде раньше утверждала vpn_key_sent=True константой.
+    proceed, delivered = await announce_success(message, env, ctx, fin, start_time)
+    if not proceed:
         return
 
     await grant_combo_and_bypass_traffic(state, env, ctx, fin)
-    await finish_payment(state, env, ctx, fin, start_time)
+    await finish_payment(state, env, ctx, fin, start_time, delivered)

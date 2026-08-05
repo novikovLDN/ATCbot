@@ -79,6 +79,10 @@ class PendingSubscription:
     subscription_type: Optional[str] = None
     amount_rubles: Optional[float] = None
     period_days: Optional[int] = None
+    # Комбо: подписка вместе с пакетом ГБ обхода. Признак берётся из строки
+    # оплаченной покупки, а не из subscriptions.is_combo, — вместе с ним нужен
+    # period_days той же покупки, иначе пакет посчитается не за тот срок.
+    is_combo: bool = False
 
 
 # ====================================================================================
@@ -203,17 +207,25 @@ async def _fetch_pending_subscriptions(
     max_attempts: int,
     limit: int
 ) -> List[PendingSubscription]:
-    """Internal helper to fetch pending subscriptions"""
+    """Внутренний помощник: строки, ждущие активации.
+
+    Оплаченная покупка подтягивается боковым join'ом и ограничена сутками:
+    отложенная активация живёт минуты (max_attempts × интервал воркера), а
+    без ограничения сюда попадала бы ЛЮБАЯ прошлая покупка человека. Для
+    админского алерта это была бы неверная сумма, а для комбо — пакет ГБ,
+    посчитанный за срок позапрошлой покупки.
+    """
     rows = await conn.fetch(
         """SELECT s.telegram_id, s.id, s.activation_attempts, s.last_activation_error,
                   s.expires_at, s.activated_at, s.subscription_type,
                   lp.price_kopecks, lp.period_days
            FROM subscriptions s
            LEFT JOIN LATERAL (
-               SELECT pp.price_kopecks, pp.period_days
+               SELECT pp.price_kopecks, pp.period_days, COALESCE(pp.is_combo, FALSE) AS is_combo
                FROM pending_purchases pp
                WHERE pp.telegram_id = s.telegram_id
                  AND pp.status = 'paid'
+                 AND pp.created_at > NOW() - INTERVAL '1 day'
                ORDER BY pp.created_at DESC
                LIMIT 1
            ) lp ON true
@@ -237,6 +249,7 @@ async def _fetch_pending_subscriptions(
             subscription_type=row.get("subscription_type"),
             amount_rubles=price_kopecks / 100.0 if price_kopecks is not None else None,
             period_days=row.get("period_days"),
+            is_combo=bool(row.get("is_combo")),
         ))
     
     return result
@@ -436,14 +449,26 @@ async def _attempt_activation_no_conn_hold(
             if not recheck_row:
                 raise ActivationFailedError(f"Subscription {subscription_id} not found")
             if recheck_row["activation_status"] == "active":
+                # safe_remove_vless_user_with_retry ведёт в заглушку снятого
+                # xray и ничего не удаляет. ACTIVATION_ORPHAN_PREVENTED писался
+                # CRITICAL-ом и читался как «поймали и починили», а сущность,
+                # созданная фазой 1 в панели, оставалась жить. Удалять умеет
+                # remnawave_api.delete_user (образец —
+                # database/purchase_finalization.py), здесь его нет, поэтому
+                # запись честно называет uuid для ручной чистки.
                 try:
                     await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
                     logger.critical(
-                        "ACTIVATION_ORPHAN_PREVENTED",
+                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
+                        "удалите вручную по uuid",
                         extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "concurrent_activation"}
                     )
-                except Exception:
-                    pass
+                except Exception as remove_err:
+                    logger.critical(
+                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
+                        "удалите вручную по uuid",
+                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "concurrent_activation", "remove_error": str(remove_err)[:200]}
+                    )
                 return ActivationResult(
                     success=True,
                     uuid=recheck_row.get("uuid"),
@@ -456,11 +481,16 @@ async def _attempt_activation_no_conn_hold(
                 try:
                     await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
                     logger.critical(
-                        "ACTIVATION_ORPHAN_PREVENTED",
+                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
+                        "удалите вручную по uuid",
                         extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "state_changed"}
                     )
-                except Exception:
-                    pass
+                except Exception as remove_err:
+                    logger.critical(
+                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
+                        "удалите вручную по uuid",
+                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "state_changed", "remove_error": str(remove_err)[:200]}
+                    )
                 raise ActivationNotAllowedError(
                     f"Subscription {subscription_id} is not pending (status={recheck_row['activation_status']})"
                 )
@@ -483,13 +513,15 @@ async def _attempt_activation_no_conn_hold(
                 try:
                     await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
                     logger.critical(
-                        "ACTIVATION_ORPHAN_PREVENTED",
+                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
+                        "удалите вручную по uuid",
                         extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "error": str(tx_err)[:200]}
                     )
                 except Exception as remove_err:
                     logger.critical(
-                        "ACTIVATION_ORPHAN_PREVENTED_REMOVAL_FAILED",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "remove_error": str(remove_err)[:200]}
+                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
+                        "удалите вручную по uuid",
+                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "error": str(tx_err)[:200], "remove_error": str(remove_err)[:200]}
                     )
                 raise ActivationFailedError(f"Failed to update subscription after VPN API success: {tx_err}") from tx_err
 
@@ -511,11 +543,16 @@ async def _attempt_activation_no_conn_hold(
                 try:
                     await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
                     logger.critical(
-                        "ACTIVATION_ORPHAN_PREVENTED",
+                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
+                        "удалите вручную по uuid",
                         extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "concurrent_activation"}
                     )
-                except Exception:
-                    pass
+                except Exception as remove_err:
+                    logger.critical(
+                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
+                        "удалите вручную по uuid",
+                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "concurrent_activation", "remove_error": str(remove_err)[:200]}
+                    )
                 raise ActivationFailedError(f"Failed to update subscription {subscription_id} (concurrent modification)")
             return ActivationResult(
                 success=True,

@@ -16,9 +16,11 @@
     но не получит два. Обратный порядок даёт дубли на каждом повторном
     вебхуке Telegram, а повторы — штатная ситуация.
 
-    Возврат False из announce_success. Он означает «уведомление уже ушло
-    раньше, дальше по сценарию идти нельзя». Проигнорируете — начисления
-    комбо-трафика и очистка FSM выполнятся повторно.
+    Возврат announce_success. Первый элемент — «идём дальше»: False значит
+    «уведомление уже ушло раньше», и остальной хвост сценария выполнять
+    нельзя. Проигнорируете — начисления комбо-трафика и очистка FSM
+    выполнятся повторно. Второй элемент — факт доставки экрана; его читает
+    finish_payment, чтобы аудит не утверждал выдачу ключа, которой не было.
 """
 import logging
 import time
@@ -44,9 +46,13 @@ async def announce_success(
     ctx: PurchaseContext,
     fin: FinalizedSubscription,
     start_time: float,
-) -> bool:
-    """Показать экран «оплачено». False = уведомление уже уходило раньше,
-    остальной хвост сценария выполнять нельзя.
+) -> tuple[bool, bool]:
+    """Показать экран «оплачено». Возвращает (идём_дальше, доставлено).
+
+    идём_дальше=False — уведомление уже уходило раньше, остальной хвост
+    сценария выполнять нельзя. доставлено — ушло ли сообщение человеку на
+    самом деле: подписка активна в обоих случаях, а вот ключ человек видит
+    только при True. По этому флагу пишутся VPN_KEY_SENT и аудит.
 
     Параметр назван с подчёркиванием намеренно: ниже он читается внутри
     try/except NameError — так было в исходном обработчике, где переменная
@@ -107,8 +113,13 @@ async def announce_success(
             duration_ms=duration_ms,
             reason="idempotent_skip"
         )
-        return False
-    
+        return False, False
+
+    # Доставку экрана считаем по факту: обе ветки ниже (апгрейд тарифа и
+    # обычная покупка) шлют сообщение в try, и оно может не уйти. Раньше
+    # флага не было вовсе, а записи ниже утверждали отправку константой.
+    delivered = False
+
     # Один компактный экран: текст + кнопки копирования и профиль (без отдельной отправки ключей)
     is_upgrade = getattr(result, "is_basic_to_plus_upgrade", False)
     if is_upgrade:
@@ -124,6 +135,7 @@ async def announce_success(
         keyboard = get_payment_success_keyboard(language, subscription_type="plus", is_renewal=True)
         try:
             await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+            delivered = True
         except Exception as e:
             logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
     else:
@@ -177,7 +189,7 @@ async def announce_success(
                     f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success, payment_id={payment_id}, user={telegram_id}]"
                 )
                 # Already sent by concurrent handler — skip
-                return False
+                return False, False
         except Exception as e:
             logger.error(
                 f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
@@ -191,6 +203,7 @@ async def announce_success(
             except NameError:
                 pass
             await message.answer(text + degradation, reply_markup=keyboard, parse_mode="HTML")
+            delivered = True
             logger.info(
                 f"NOTIFICATION_SENT [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
                 f"purchase_id={purchase_id}]"
@@ -199,13 +212,26 @@ async def announce_success(
             logger.error(f"Failed to send payment success message: user={telegram_id}, error={e}")
             try:
                 await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                delivered = True
             except Exception as fallback_err:
                 logger.error(f"Fallback also failed: user={telegram_id}, error={fallback_err}")
 
-    logger.info(
-        f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "
-        f"purchase_id={purchase_id}, expires_at={expires_str}, subscription_type={subscription_type}]"
-    )
+    # Запись о выдаче ключа — по факту доставки. Раньше VPN_KEY_SENT стояла
+    # безусловно, сразу за ERROR-ом об упавшей отправке: при разборе
+    # обращения «оплатил, ключ не пришёл» админ видел два противоречащих
+    # утверждения и верил тому, что говорит «отправлено».
+    if delivered:
+        logger.info(
+            f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "
+            f"purchase_id={purchase_id}, expires_at={expires_str}, subscription_type={subscription_type}]"
+        )
+    else:
+        logger.error(
+            f"process_successful_payment: PAYMENT_CONFIRMATION_UNDELIVERED [user={telegram_id}, "
+            f"payment_id={payment_id}, purchase_id={purchase_id}, expires_at={expires_str}, "
+            f"subscription_type={subscription_type}] — подписка активна, человек об этом не знает, "
+            f"экран нужно переслать вручную"
+        )
 
     # Кешбэк рефереру начислен внутри finalize_purchase (process_referral_reward),
     # но сообщение отправляет вызывающий код. Формат периода и разбор словаря —
@@ -221,13 +247,16 @@ async def announce_success(
     )
 
     
+    # vpn_key_sent и subscription_visible были строковыми литералами: они не
+    # вычислялись никогда и держались True даже после провала обеих попыток
+    # отправки. Осталось одно поле и оно считается.
     logger.info(
         f"process_successful_payment: PAYMENT_COMPLETE [user={telegram_id}, payment_id={payment_id}, "
         f"tariff={tariff_type}, period_days={period_days}, amount={payment_amount_rubles} RUB, "
-        f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_sent=True, subscription_visible=True]"
+        f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_sent={delivered}]"
     )
 
-    return True
+    return True, delivered
 
 
 async def finish_payment(
@@ -236,8 +265,13 @@ async def finish_payment(
     ctx: PurchaseContext,
     fin: FinalizedSubscription,
     start_time: float,
+    delivered: bool,
 ) -> None:
     """Убрать за собой: промо-сессия, FSM, запись в аудит, выходной лог.
+
+    delivered приходит из announce_success и означает «экран с ключом ушёл
+    человеку». Аудит-строка попадает в журнал дашборда — именно её админ
+    открывает первой при разборе обращения, и врать в ней дороже всего.
 
     Всё здесь обёрнуто в try: платёж уже состоялся и товар выдан, ронять
     обработчик из-за неудачной уборки нельзя — Telegram повторит событие, и
@@ -267,22 +301,26 @@ async def finish_payment(
             "telegram_payment_successful",
             config.ADMIN_TELEGRAM_ID,
             telegram_id,
-            f"Telegram payment successful: payment_id={payment_id}, payload={payload}, amount={payment_amount_rubles} RUB, purchase_id={purchase_id}, vpn_key_sent=True"
+            f"Telegram payment successful: payment_id={payment_id}, payload={payload}, amount={payment_amount_rubles} RUB, purchase_id={purchase_id}, vpn_key_sent={delivered}"
         )
     except Exception as e:
         logger.error(f"Failed to log audit event: {e}")
     
-    # STEP 2 — OBSERVABILITY: Structured logging for handler exit (success)
+    # STEP 2 — OBSERVABILITY: Structured logging for handler exit
     # PART E — SLO SIGNAL IDENTIFICATION: Payment success rate
-    # This handler exit log (outcome="success") is an SLO signal for payment success rate.
     # Track: outcome="success" vs outcome="failed" for payment_finalization operations.
+    # outcome был захардкожен в "success": подписка выдана, но экран с ключом
+    # мог не уйти — по метрике такой платёж не отличался от полностью
+    # доставленного. degraded здесь означает ровно это (тот же приём, что в
+    # app/handlers/payments/goods_delivery.py).
     duration_ms = (time.time() - start_time) * 1000
     log_handler_exit(
         handler_name="process_successful_payment",
-        outcome="success",
+        outcome="success" if delivered else "degraded",
         telegram_id=telegram_id,
         operation="payment_finalization",
         duration_ms=duration_ms,
         payment_id=payment_id,
-        purchase_id=purchase_id
+        purchase_id=purchase_id,
+        notification_delivered=delivered,
     )

@@ -111,9 +111,16 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
     if uuid_to_remove:
         try:
             await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_remove)
+            # Под этим вызовом нет действия: vpn_utils.remove_vless_user —
+            # заглушка, xray снят с эксплуатации. EXPIRY_REMOVE_SUCCESS и
+            # аудит result="success" утверждали снятие доступа, которого
+            # не происходило, — и не «иногда», а всегда.
+            # Фактический отзыв делает disable_remnawave_user_bg ниже, уже
+            # после того как строка в базе закрыта.
             logger.info(
-                "EXPIRY_REMOVE_SUCCESS",
-                extra={"telegram_id": telegram_id, "uuid": uuid_to_remove[:8] + "..."}
+                "EXPIRY_LEGACY_UUID_CLEARED telegram_id=%s uuid=%s — xray-заглушка, "
+                "ничего не удалено; фактический отзыв идёт через Remnawave фазой 3",
+                telegram_id, uuid_to_remove[:8],
             )
             try:
                 expires_at_str = (subscription.get("expires_at") or "").isoformat() if subscription else "N/A"
@@ -122,8 +129,17 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     telegram_id=telegram_id,
                     uuid=uuid_to_remove,
                     source="auto-expiry",
+                    # result ограничен CHECK-ом ('success'|'error',
+                    # migrations/007_add_audit_log_fields.sql), третьего
+                    # значения туда не положить — поэтому правда о том, что
+                    # именно произошло, идёт в details. Раньше строка читалась
+                    # как «доступ снят», хотя снимать было нечем.
                     result="success",
-                    details=f"Real-time expiration check, expires_at={expires_at_str}"
+                    details=(
+                        f"Real-time expiration check, expires_at={expires_at_str}; "
+                        f"legacy xray uuid cleared (no-op stub, nothing removed); "
+                        f"фактический отзыв в панели — disable_remnawave_user_bg"
+                    ),
                 )
             except Exception as e:
                 logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")

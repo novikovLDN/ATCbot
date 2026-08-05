@@ -67,7 +67,11 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
         # Auto-apply discount to user with configured duration
         from datetime import timedelta
         expires_at = datetime.now(timezone.utc) + timedelta(hours=discount_hours)
-        await database.create_user_discount(
+        # create_user_discount возвращает bool и глотает исключение внутри
+        # (database/discounts.py), а при неготовой базе молча отдаёт False.
+        # Результат не читался вовсе: человеку уходило «скидка применена»
+        # при нулевом результате, и в логе не оставалось ни строки.
+        created = await database.create_user_discount(
             telegram_id=telegram_id,
             discount_percent=discount_percent,
             expires_at=expires_at,
@@ -78,6 +82,23 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
         # остаётся (юзер видит, на какой именно акции кликнул).
         from app.handlers.common.screens import show_tariffs_main_screen
         await show_tariffs_main_screen(callback, state, force_new_message=True)
+
+        if not created:
+            logger.error(
+                "BROADCAST_DISCOUNT_NOT_CREATED user=%s broadcast_id=%s pct=%s hours=%s — "
+                "скидки в базе нет, экран тарифов покажет полную цену",
+                telegram_id, broadcast_id, discount_percent, discount_hours,
+            )
+            await callback.answer(
+                "Скидку применить не удалось, попробуйте позже",
+                show_alert=True,
+            )
+            return
+
+        logger.info(
+            "BROADCAST_DISCOUNT_APPLIED user=%s broadcast_id=%s pct=%s hours=%s",
+            telegram_id, broadcast_id, discount_percent, discount_hours,
+        )
 
         # ДОЛГ: подтверждение захардкожено по-русски, а экран уходит
         # живому человеку — казахо- и таджикоязычные читают его чужим
@@ -119,12 +140,29 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
             # Apply 1-day traffic discount
             from datetime import timedelta
             expires_at = datetime.now(timezone.utc) + timedelta(days=1)
-            await database.create_user_traffic_discount(
+            # create_user_traffic_discount отдаёт False при неготовой базе и
+            # при отсутствующем пуле — молча, без записи. Результат не
+            # читался: ниже рисовались зачёркнутые цены и текст «скидка
+            # применена», а оплата шла по полному прайсу. Обнуляем процент,
+            # чтобы экран показывал ту цену, которую человек и заплатит.
+            created = await database.create_user_traffic_discount(
                 telegram_id=telegram_id,
                 discount_percent=discount_percent,
                 expires_at=expires_at,
                 created_by=config.ADMIN_TELEGRAM_ID,
             )
+            if not created:
+                logger.error(
+                    "BROADCAST_TRAFFIC_DISCOUNT_NOT_CREATED user=%s broadcast_id=%s pct=%s — "
+                    "скидки в базе нет, показываем полные цены",
+                    telegram_id, broadcast_id, discount_percent,
+                )
+                discount_percent = 0
+            else:
+                logger.info(
+                    "BROADCAST_TRAFFIC_DISCOUNT_APPLIED user=%s broadcast_id=%s pct=%s hours=24",
+                    telegram_id, broadcast_id, discount_percent,
+                )
 
         # Build traffic packs message with discount applied
         language = await resolve_user_language(telegram_id)
