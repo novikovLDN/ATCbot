@@ -24,11 +24,10 @@ import logging
 import time
 
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message
 
 import config
 import database
-from app.i18n import get_text as i18n_get_text
 from app.handlers.common.keyboards import get_payment_success_keyboard
 from app.handlers.common.utils import clear_promo_session
 from app.handlers.notifications import notify_referral_cashback

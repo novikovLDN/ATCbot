@@ -2,7 +2,11 @@
 Database package — backward-compatible re-export of all public symbols.
 
 Split into submodules for maintainability:
-- database.core         — Pool management, init, helpers, DB_READY (~1135 lines)
+- database.core         — Pool management, init_db, DB_READY (~550 lines)
+  - database.db_helpers    — время, UUID, NULL-safe приведения (ничего не импортирует из core)
+  - database.legacy_schema — аварийный DDL-бутстрап под LEGACY_SCHEMA_BOOTSTRAP=1
+- database.analytics    — фасад отчётного слоя, реализация в analytics_revenue /
+  analytics_payments / analytics_stats
 - database.users        — Users, balance, farm, withdrawals, referrals (~1680 lines)
 - database.subscriptions — тонкий фасад над семью модулями подписок:
     subscription_audit / subscription_queries / subscription_state /

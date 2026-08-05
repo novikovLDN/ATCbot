@@ -422,8 +422,9 @@ async def init_db() -> bool:
     async with _pool.acquire() as conn:
         # ── Fast-fail on schema locks ──────────────────────────────────
         # Migrations 001–053 have already created every table and column
-        # below. The 100+ `CREATE TABLE / ALTER TABLE … IF NOT EXISTS`
-        # statements that follow are idempotent legacy fallbacks for
+        # that the legacy bootstrap knows about. The 100+ `CREATE TABLE /
+        # ALTER TABLE … IF NOT EXISTS` statements it runs (they live in
+        # database/legacy_schema.py now) are idempotent fallbacks for
         # bootstrapping a virgin DB. Each one still asks Postgres for
         # ACCESS EXCLUSIVE LOCK on its table — and on a 350k-user prod
         # base, if even one transaction (autovacuum, idle-in-tx) holds

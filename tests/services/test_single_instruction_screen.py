@@ -58,7 +58,13 @@ def test_command_and_button_open_the_same_screen():
     cmd = inspect.getsource(support.cmd_instruction)
     assert "_open_connect_screen" in cmd, "команда ведёт на другой экран"
 
-    btn = inspect.getsource(connect_guide.callback_connect_instruction)
+    # Обработчик переехал в подмодуль при разбивке пакета: инструкция
+    # была одним файлом на 1071 строку. Импортируем по месту, а не
+    # через пакет — так тест сломается, если модуль исчезнет, и не
+    # пройдёт впустую.
+    from app.handlers.callbacks.connect_guide import device_select
+
+    btn = inspect.getsource(device_select.callback_connect_instruction)
     assert "_open_connect_screen" in btn, "кнопка ведёт мимо общей функции"
 
 
