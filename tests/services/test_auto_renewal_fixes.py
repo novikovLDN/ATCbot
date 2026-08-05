@@ -100,9 +100,12 @@ class TestComboRenewal:
         )
 
     def test_bypass_gb_are_topped_up_after_commit(self, source):
+        """Начисление вынесено в app/services/combo_traffic — одну функцию на
+        все пути оплаты. Здесь проверяем, что автопродление её зовёт: своей
+        копии расчёта тут быть не должно, копии расходились молча."""
         phase_b = source[source.index("# PHASE B:"):]
-        assert "add_bypass_traffic(" in phase_b, "ГБ обхода не начисляются при продлении"
-        assert "record_traffic_purchase(" in phase_b
+        assert "grant_combo_traffic(" in phase_b, "ГБ обхода не начисляются при продлении"
+        assert "add_bypass_traffic(" not in source, "вернулась своя копия начисления"
 
     def test_unknown_combo_period_degrades_to_plain_subscription(self, source):
         """Периода нет в таблице комбо — продлеваем как обычную подписку,

@@ -280,37 +280,31 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
     if is_combo_grant and ret_val is not None:
         expires_at_granted = ret_val[0] if isinstance(ret_val, tuple) else None
         try:
-            from app.constants import tariffs as tariff_ref
             from database.subscriptions import set_combo_flag
 
+            # Флаг ставим до начисления и независимо от его исхода: даже если
+            # пакет ГБ не доехал, подписка остаётся комбо — иначе автопродление
+            # спишет цену обычного тарифа.
             await set_combo_flag(telegram_id, True)
 
-            bypass_gb = tariff_ref.combo_bypass_gb(requested_tariff, days)
-            if bypass_gb > 0:
-                from app.services.remnawave_service import add_bypass_traffic
-                ok = await add_bypass_traffic(
-                    telegram_id,
-                    extra_bytes=bypass_gb * 1024 ** 3,
-                    subscription_type=tariff_normalized,
-                    subscription_end=expires_at_granted,
-                    period_days=days,
-                )
-                if ok:
-                    logger.info(
-                        "ADMIN_GRANT_COMBO_OK user=%s tariff=%s bypass_gb=%s",
-                        telegram_id, requested_tariff, bypass_gb,
-                    )
-                else:
-                    logger.error(
-                        "ADMIN_GRANT_COMBO_BYPASS_FAILED user=%s tariff=%s bypass_gb=%s "
-                        "— подписка выдана, трафик нужно доначислить вручную",
-                        telegram_id, requested_tariff, bypass_gb,
-                    )
-            else:
-                logger.warning(
-                    "ADMIN_GRANT_COMBO_NO_GB user=%s tariff=%s days=%s — в таблице "
-                    "COMBO_TARIFFS нет пакета ГБ для такого срока",
-                    telegram_id, requested_tariff, days,
+            # Объём пакета считает app/services/combo_traffic — единственное
+            # место, где он берётся из COMBO_TARIFFS. Здесь была своя копия
+            # расчёта и начисления; копии расходились молча.
+            from app.services.combo_traffic import grant_combo_traffic
+            outcome = await grant_combo_traffic(
+                telegram_id,
+                requested_tariff,
+                days,
+                is_combo=True,
+                purchase_id=f"admin_grant_{telegram_id}",
+                subscription_end=expires_at_granted,
+                source="admin_grant",
+            )
+            if not outcome.granted:
+                logger.error(
+                    "ADMIN_GRANT_COMBO_BYPASS_FAILED user=%s tariff=%s days=%s reason=%s "
+                    "— подписка выдана, трафик нужно доначислить вручную",
+                    telegram_id, requested_tariff, days, outcome.reason,
                 )
         except Exception as e:
             logger.error(

@@ -268,7 +268,6 @@ async def process_auto_renewals(bot: Bot):
                         # обхода — человек платил за комбо, а получал голую подписку.
                         is_combo_sub = bool(subscription.get("is_combo"))
                         combo_key = f"combo_{tariff_type}" if is_combo_sub else None
-                        combo_gb = tariffs.combo_bypass_gb(combo_key, period_days) if combo_key else 0
                         combo_price = tariffs.combo_price_rubles(combo_key, period_days) if combo_key else None
                         if is_combo_sub and combo_price is None:
                             # Периода нет в таблице комбо (например, тариф купили
@@ -280,7 +279,6 @@ async def process_auto_renewals(bot: Bot):
                                 telegram_id, combo_key, period_days,
                             )
                             is_combo_sub = False
-                            combo_gb = 0
 
                         # Цену считает общий калькулятор, а не своя формула.
                         #
@@ -475,7 +473,6 @@ async def process_auto_renewals(bot: Bot):
                                 # в тексте уведомления были недостижимы, и
                                 # комбо-подписчик читал про обычный тариф.
                                 "is_combo": is_combo_sub,
-                                "combo_gb": combo_gb,
                                 "tariff_type": tariff_type,
                                 "period_days": period_days,
                             })
@@ -562,28 +559,23 @@ async def process_auto_renewals(bot: Bot):
                 # голую подписку без гигабайтов.
                 _ar_tariff = item.get("tariff_type", "basic")
                 _ar_expires = item.get("expires_at")
-                _ar_combo_gb = int(item.get("combo_gb") or 0)
+                _ar_combo = bool(item.get("is_combo"))
                 try:
-                    if _ar_combo_gb > 0 and _ar_expires:
-                        from app.services import remnawave_service
-                        added = await remnawave_service.add_bypass_traffic(
+                    if _ar_combo and _ar_expires:
+                        # Объём пакета считает app/services/combo_traffic —
+                        # то же место, что и при обычной покупке комбо. Своей
+                        # копии расчёта здесь быть не должно: расходились они
+                        # молча, и заметить это можно было только по жалобе.
+                        from app.services.combo_traffic import grant_combo_traffic
+                        await grant_combo_traffic(
                             item["telegram_id"],
-                            _ar_combo_gb * 1024 ** 3,
-                            subscription_type=_ar_tariff,
+                            _ar_tariff,
+                            item.get("period_days", 30),
+                            is_combo=True,
+                            purchase_id=f"auto_renewal_{item['payment_id']}",
                             subscription_end=_ar_expires,
-                            period_days=item.get("period_days", 30),
+                            source="auto_renewal",
                         )
-                        if added:
-                            await database.record_traffic_purchase(item["telegram_id"], _ar_combo_gb, 0)
-                            logger.info(
-                                "AUTO_RENEWAL_COMBO_GB_ADDED user=%s gb=%s",
-                                item["telegram_id"], _ar_combo_gb,
-                            )
-                        else:
-                            logger.warning(
-                                "AUTO_RENEWAL_COMBO_GB_FAIL user=%s gb=%s — нужен ручной разбор",
-                                item["telegram_id"], _ar_combo_gb,
-                            )
                     elif _ar_tariff in ("basic", "plus") and _ar_expires:
                         from app.services.remnawave_service import renew_remnawave_user_bg
                         renew_remnawave_user_bg(

@@ -759,36 +759,38 @@ async def _send_confirmation(
         except Exception as rmn_err:
             logger.warning("REMNAWAVE_HOOK_FAIL: provider=%s tg=%s %s", provider, telegram_id, rmn_err)
 
-        # Combo: add bypass traffic (was missing for webhook payments!)
-        if is_combo:
-            _pd = result.get("period_days", 30) or 30
-            combo_key = f"combo_{subscription_type}"
-            combo_info = config.COMBO_TARIFFS.get(combo_key, {}).get(_pd)
-            if not combo_info:
-                logger.error("COMBO_TARIFF_NOT_FOUND: provider=%s user=%s combo_key=%s period=%s",
-                             provider, telegram_id, combo_key, _pd)
-                raise TransientPaymentError(
-                    f"combo tariff config missing: {combo_key}/{_pd}d"
-                )
-            combo_gb = combo_info["gb"]
-            traffic_bytes = combo_gb * 1024**3
-            from app.services.remnawave_service import add_bypass_traffic
-            rmn_ok = await add_bypass_traffic(
-                telegram_id,
-                traffic_bytes,
-                subscription_type=subscription_type,
-                subscription_end=expires_at,
-                period_days=_pd,
+        # Комбо: гигабайты обхода. Объём считает app/services/combo_traffic —
+        # единственное место, где он берётся из COMBO_TARIFFS.
+        #
+        # Отложенная активация сюда не идёт: подписка ещё не выдана, панель
+        # обычно и есть причина отсрочки, а начисление сделает
+        # activation_worker при активации. Начислять в обоих местах нельзя —
+        # человек получит пакет дважды.
+        if is_combo and result.get("activation_status") == "pending":
+            logger.info(
+                "COMBO_TRAFFIC_DEFERRED: provider=%s user=%s purchase_id=%s "
+                "— активация отложена, ГБ начислит activation_worker",
+                provider, telegram_id, purchase_id,
             )
-            if not rmn_ok:
-                logger.error("COMBO_BYPASS_TRAFFIC_FAIL: provider=%s user=%s gb=%s — webhook will retry",
-                             provider, telegram_id, combo_gb)
+        elif is_combo:
+            from app.services.combo_traffic import grant_combo_traffic
+            outcome = await grant_combo_traffic(
+                telegram_id,
+                subscription_type,
+                result.get("period_days", 30) or 30,
+                is_combo=True,
+                purchase_id=purchase_id,
+                subscription_end=expires_at,
+                source=f"webhook:{provider}",
+            )
+            if not outcome.granted:
+                # На вебхуке отказ обязан подниматься: провайдер повторит
+                # запрос. Интерактивные пути так делать не могут — там деньги
+                # уже взяты и экран успеха уже показан.
                 raise TransientPaymentError(
-                    f"combo bypass-traffic add failed: user={telegram_id} gb={combo_gb}"
+                    f"combo bypass-traffic not granted ({outcome.reason}): "
+                    f"user={telegram_id} gb={outcome.gb}"
                 )
-            await database.record_traffic_purchase(telegram_id, combo_gb, 0)
-            logger.info("COMBO_BYPASS_TRAFFIC_ADDED: provider=%s user=%s gb=%s",
-                        provider, telegram_id, combo_gb)
 
 
 async def _handle_traffic_pack_confirmation(

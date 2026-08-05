@@ -57,6 +57,7 @@ def _pending(count):
             amount_rubles=199,
             subscription_type="basic",
             period_days=30,
+            is_combo=False,
         )
         for i in range(count)
     ]

@@ -92,6 +92,10 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
     country = fsm_data.get("country")  # Страна для бизнес-тарифов
+    # Комбо и bypass-only читаем здесь, пока FSM цел: ниже он очищается, а
+    # признак комбо нужен ещё и для записи в базу (finalize_balance_purchase).
+    _combo_gb_from_fsm = fsm_data.get("combo_bypass_gb", 0) or 0
+    _bypass_gb_from_fsm = fsm_data.get("bypass_only_gb", 0) or 0
 
     if not tariff_type or not period_days or not final_price_kopecks:
         error_text = i18n_get_text(language, "errors.session_expired")
@@ -169,7 +173,11 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             amount_rubles=final_price_rubles,
             description=transaction_description,
             promo_code=promo_code_from_session,  # CRITICAL: Промокод потребляется внутри транзакции
-            country=country
+            country=country,
+            # Признак комбо обязан попасть в базу. Раньше он жил только в FSM:
+            # бот перезапустился или человек открыл другое меню — и следа
+            # покупки комбо не оставалось нигде, доначислить ГБ было неоткуда.
+            is_combo=_combo_gb_from_fsm > 0,
         )
         
         if not result or not result.get("success"):
@@ -221,6 +229,69 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             if subscription and subscription.get("vpn_key"):
                 vpn_key = subscription["vpn_key"]
         
+        # Комбо и bypass-only: гигабайты обхода.
+        #
+        # Начисляем ЗДЕСЬ, до всех ранних выходов ниже. Раньше блок стоял в
+        # самом конце обработчика, за двумя return'ами — по отложенной
+        # активации и по «уведомление уже отправлено». Оба срабатывали при
+        # успешной оплате, и человек оставался с подпиской и нулём гигабайтов.
+        #
+        # Отличие от карточных путей: у покупки с баланса нет строки в
+        # pending_purchases, поэтому activation_worker её не подхватит и
+        # доначислить будет некому — начисляем сразу, даже если активация
+        # подписки отложена (add_bypass_traffic сам создаёт bypass-сущность).
+        _is_combo = bool(result.get("is_combo") or _combo_gb_from_fsm > 0)
+        if _is_combo:
+            try:
+                from app.services.combo_traffic import grant_combo_traffic
+                await grant_combo_traffic(
+                    telegram_id,
+                    subscription_type,
+                    period_days,
+                    is_combo=True,
+                    purchase_id=f"balance_purchase_{payment_id}",
+                    subscription_end=expires_at,
+                    source="balance",
+                )
+            except Exception as traffic_err:
+                logger.error(
+                    "COMBO_TRAFFIC_UNEXPECTED user=%s payment_id=%s: %s",
+                    telegram_id, payment_id, traffic_err,
+                )
+
+        # Bypass-only — отдельный продукт (пакет ГБ без подписки): объём
+        # приходит из FSM, в COMBO_TARIFFS его нет.
+        if _bypass_gb_from_fsm > 0:
+            try:
+                from app.services import remnawave_service
+                rmn_success = await remnawave_service.add_bypass_traffic(
+                    telegram_id,
+                    _bypass_gb_from_fsm * 1024**3,
+                    subscription_type=subscription_type,
+                    subscription_end=expires_at,
+                    period_days=period_days,
+                )
+                if rmn_success:
+                    await database.record_traffic_purchase(telegram_id, _bypass_gb_from_fsm, 0)
+                    logger.info(
+                        "BYPASS_ONLY_TRAFFIC_ADDED_BALANCE user=%s gb=%s",
+                        telegram_id, _bypass_gb_from_fsm,
+                    )
+                else:
+                    logger.error(
+                        "BYPASS_ONLY_TRAFFIC_FAIL_BALANCE user=%s gb=%s — оплачено, не начислено",
+                        telegram_id, _bypass_gb_from_fsm,
+                    )
+                await database.set_bypass_only_flag(telegram_id, True)
+                from app.services.trials import service as trial_service
+                if await trial_service.is_trial_available(telegram_id):
+                    await trial_service.activate_trial(telegram_id)
+            except Exception as bypass_err:
+                logger.error(
+                    "BYPASS_ONLY_TRAFFIC_ERROR_BALANCE user=%s gb=%s: %s",
+                    telegram_id, _bypass_gb_from_fsm, bypass_err,
+                )
+
         # Проверяем статус активации подписки
         subscription_check = await database.get_subscription_any(telegram_id)
         is_pending_activation = (
@@ -276,16 +347,6 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             return
         
         # API is source of truth — vpn_key from API, no local validation
-        # КРИТИЧНО: Читаем combo данные из FSM ДО очистки
-        _combo_gb_from_fsm = 0
-        _bypass_gb_from_fsm = 0
-        try:
-            _pre_clear_fsm = await state.get_data()
-            _combo_gb_from_fsm = _pre_clear_fsm.get("combo_bypass_gb", 0)
-            _bypass_gb_from_fsm = _pre_clear_fsm.get("bypass_only_gb", 0)
-        except Exception:
-            pass
-
         # КРИТИЧНО: Удаляем промо-сессию после успешной оплаты
         await clear_promo_session(state)
         
@@ -314,7 +375,6 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         _autonotif_key_to_log = None
 
         if is_upgrade:
-            _is_combo = _combo_gb_from_fsm > 0
             if _is_combo:
                 upgrade_label = "Комбо Plus" if subscription_type == "plus" else "Комбо Basic"
             else:
@@ -328,8 +388,6 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             # получал два одинаковых сообщения подряд: это и следом ещё
             # раз тот же text с той же клавиатурой.
         else:
-            _is_combo = _combo_gb_from_fsm > 0
-
             if config.is_biz_tariff(subscription_type):
                 tariff_label, tariff_icon = "Business", "🏢"
             elif subscription_type == "plus" and _is_combo:
@@ -462,48 +520,6 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                 renew_remnawave_user_bg(telegram_id, subscription_type, expires_at, period_days=period_days)
         except Exception as rmn_err:
             logger.warning("REMNAWAVE_HOOK_FAIL: balance tg=%s %s", telegram_id, rmn_err)
-
-        # Combo/Bypass: начисляем трафик обхода если покупка через комбо или bypass-only
-        combo_bypass_gb = _combo_gb_from_fsm
-        bypass_only_gb = _bypass_gb_from_fsm
-
-        if combo_bypass_gb > 0 or bypass_only_gb > 0:
-            from app.services import remnawave_service
-            gb = combo_bypass_gb or bypass_only_gb
-            traffic_bytes = gb * 1024**3
-
-            try:
-                rmn_success = await remnawave_service.add_bypass_traffic(
-                    telegram_id,
-                    traffic_bytes,
-                    subscription_type=subscription_type,
-                    subscription_end=expires_at,
-                    period_days=period_days,
-                )
-                if not rmn_success:
-                    logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL_BALANCE user={telegram_id} gb={gb}")
-                await database.record_traffic_purchase(telegram_id, gb, 0)
-                logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED_BALANCE user={telegram_id} gb={gb}")
-            except Exception as traffic_err:
-                logger.warning(f"COMBO_BYPASS_TRAFFIC_ERROR_BALANCE user={telegram_id}: {traffic_err}")
-
-            # Mark subscription as combo (OUTSIDE traffic try block)
-            if combo_bypass_gb > 0:
-                try:
-                    await database.set_combo_flag(telegram_id, True)
-                    logger.info(f"COMBO_FLAG_SET_BALANCE user={telegram_id}")
-                except Exception as flag_err:
-                    logger.warning(f"COMBO_FLAG_FAIL_BALANCE user={telegram_id}: {flag_err}")
-
-            # Bypass-only: mark flag + activate trial if eligible
-            if bypass_only_gb > 0:
-                try:
-                    await database.set_bypass_only_flag(telegram_id, True)
-                    from app.services.trials import service as trial_service
-                    if await trial_service.is_trial_available(telegram_id):
-                        await trial_service.activate_trial(telegram_id)
-                except Exception:
-                    pass
 
     except Exception as e:
         logger.exception(f"CRITICAL: Unexpected error in callback_pay_balance: {e}")

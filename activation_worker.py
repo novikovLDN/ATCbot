@@ -255,6 +255,36 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str, str | None]:
                         f"user={telegram_id}, uuid={uuid_preview}, attempt={result.attempts}, "
                         f"latency_ms={activation_duration_ms:.2f}]"
                     )
+
+                    # Комбо: подписка выдана с опозданием — гигабайты обхода
+                    # тоже. Пути оплаты при отложенной активации их НЕ
+                    # начисляют (панель, из-за которой активация и отложена,
+                    # начисление всё равно бы не приняла), поэтому здесь
+                    # единственное место, где комбо-покупатель их получает.
+                    #
+                    # Признак и срок берутся из оплаченной покупки в базе, а
+                    # не из FSM: между оплатой и активацией проходят минуты,
+                    # и никакого состояния в памяти уже нет. Объём считает
+                    # app/services/combo_traffic — единственный источник.
+                    if pending_sub.is_combo:
+                        try:
+                            from app.services.combo_traffic import grant_combo_traffic
+                            await grant_combo_traffic(
+                                telegram_id,
+                                pending_sub.subscription_type,
+                                pending_sub.period_days,
+                                is_combo=True,
+                                purchase_id=f"subscription_{subscription_id}",
+                                subscription_end=expires_at,
+                                source="activation_worker",
+                            )
+                        except Exception as combo_err:
+                            logger.error(
+                                "COMBO_TRAFFIC_UNEXPECTED [subscription_id=%s, user=%s]: %s "
+                                "— подписка активирована, гигабайты не начислены",
+                                subscription_id, telegram_id, combo_err,
+                            )
+
                     try:
                         async with acquire_connection(pool, "activation_notification_check") as conn:
                             subscription_check = await conn.fetchrow(
