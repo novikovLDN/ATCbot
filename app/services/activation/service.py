@@ -83,6 +83,12 @@ class PendingSubscription:
     # оплаченной покупки, а не из subscriptions.is_combo, — вместе с ним нужен
     # period_days той же покупки, иначе пакет посчитается не за тот срок.
     is_combo: bool = False
+    # Идентификатор той же оплаченной покупки. Нужен как ключ
+    # идемпотентности начисления: повторный вебхук провайдера и этот воркер
+    # начисляют один и тот же пакет, и без общего ключа человек получил бы
+    # его дважды. None бывает у покупок с баланса — у них строки в
+    # pending_purchases нет вовсе.
+    purchase_id: Optional[str] = None
 
 
 # ====================================================================================
@@ -215,13 +221,19 @@ async def _fetch_pending_subscriptions(
     админского алерта это была бы неверная сумма, а для комбо — пакет ГБ,
     посчитанный за срок позапрошлой покупки.
     """
+    # is_combo и purchase_id обязаны быть в ВЕРХНЕМ списке колонок, а не
+    # только внутри бокового запроса: строка, которую вернёт asyncpg, знает
+    # ровно то, что перечислено здесь. Пока is_combo перечислен не был,
+    # row.get("is_combo") молча отдавал None — комбо-покупатель с отложенной
+    # активацией не получал гигабайтов вовсе и без единой ошибки в логе.
     rows = await conn.fetch(
         """SELECT s.telegram_id, s.id, s.activation_attempts, s.last_activation_error,
                   s.expires_at, s.activated_at, s.subscription_type,
-                  lp.price_kopecks, lp.period_days
+                  lp.price_kopecks, lp.period_days, lp.is_combo, lp.purchase_id
            FROM subscriptions s
            LEFT JOIN LATERAL (
-               SELECT pp.price_kopecks, pp.period_days, COALESCE(pp.is_combo, FALSE) AS is_combo
+               SELECT pp.price_kopecks, pp.period_days, pp.purchase_id,
+                      COALESCE(pp.is_combo, FALSE) AS is_combo
                FROM pending_purchases pp
                WHERE pp.telegram_id = s.telegram_id
                  AND pp.status = 'paid'
@@ -250,6 +262,7 @@ async def _fetch_pending_subscriptions(
             amount_rubles=price_kopecks / 100.0 if price_kopecks is not None else None,
             period_days=row.get("period_days"),
             is_combo=bool(row.get("is_combo")),
+            purchase_id=row.get("purchase_id"),
         ))
     
     return result

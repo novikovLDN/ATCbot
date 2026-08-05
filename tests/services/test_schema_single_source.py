@@ -21,6 +21,8 @@ ACCESS EXCLUSIVE на свою таблицу: одна висящая idle-in-t
 import re
 from pathlib import Path
 
+import pytest
+
 CORE = Path("database/core.py")
 LEGACY = Path("database/legacy_schema.py")
 MIGRATIONS = Path("migrations")
@@ -88,14 +90,27 @@ def test_every_column_from_code_exists_in_migrations():
     )
 
 
-def test_bootstrap_migration_is_idempotent():
-    """Она проедет и по боевой базе, где объекты давно созданы кодом."""
-    raw = (MIGRATIONS / "073_schema_source_of_truth.sql").read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    "name",
+    [
+        "073_schema_source_of_truth.sql",
+        # 075 добавляет колонку и уникальный индекс в traffic_purchases —
+        # таблицу, которая на бою живёт с миграции 038. Неидемпотентный
+        # оператор здесь останавливает применение миграций целиком, то есть
+        # не даёт боту подняться.
+        "075_traffic_purchases_purchase_id.sql",
+    ],
+)
+def test_migration_is_idempotent(name):
+    """Она проедет и по боевой базе, где объекты давно созданы."""
+    raw = (MIGRATIONS / name).read_text(encoding="utf-8")
     # Комментарии не выполняются — из них и берутся ложные срабатывания.
     sql = "\n".join(
         line for line in raw.split("\n") if not line.strip().startswith("--")
     )
     creates = re.findall(r"CREATE TABLE(?!\s+IF NOT EXISTS)", sql, re.I)
     alters = re.findall(r"ADD COLUMN(?!\s+IF NOT EXISTS)", sql, re.I)
+    indexes = re.findall(r"CREATE (?:UNIQUE )?INDEX(?!\s+IF NOT EXISTS)", sql, re.I)
     assert not creates, "CREATE TABLE без IF NOT EXISTS упадёт на боевой базе"
     assert not alters, "ADD COLUMN без IF NOT EXISTS упадёт на боевой базе"
+    assert not indexes, "CREATE INDEX без IF NOT EXISTS упадёт на боевой базе"

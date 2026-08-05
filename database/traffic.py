@@ -434,31 +434,93 @@ async def record_traffic_purchase(
     gb_amount: int,
     price_rub: int,
     payment_method: str = "balance",
+    purchase_id: Optional[str] = None,
 ) -> Optional[int]:
+    """Записать выданный пакет ГБ.
+
+    purchase_id — ключ идемпотентности начисления (см. миграцию 075). Его
+    передаёт только тот, у кого он есть и у кого он уникален на покупку:
+    вебхуки провайдеров и воркер отложенной активации. Для покупок пакетов
+    ГБ и bypass-only он остаётся None — там нет идентификатора покупки, и
+    выдумывать его нельзя: мнимый ключ хуже отсутствующего.
+
+    Запись делается ПОСЛЕ того, как панель приняла начисление. Порядок
+    менять нельзя: строка здесь — это утверждение «гигабайты выданы», и
+    если написать её заранее, повтор увидит ключ и не доначислит ничего.
+    """
     if not _core.DB_READY:
         return None
     pool = await get_pool()
     if pool is None:
         return None
     async with pool.acquire() as conn:
-        _has_pm_col = await conn.fetchval(
-            """SELECT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'traffic_purchases' AND column_name = 'payment_method'
-            )"""
+        # Обе колонки добавлялись миграциями поверх живой таблицы, и код
+        # обязан пережить базу, до которой миграция ещё не доехала: без
+        # проверки INSERT упал бы на несуществующей колонке и потерял бы
+        # запись о начислении вместе с ключом.
+        _cols = await conn.fetch(
+            """SELECT column_name FROM information_schema.columns
+               WHERE table_name = 'traffic_purchases'
+                 AND column_name IN ('payment_method', 'purchase_id')"""
         )
-        if _has_pm_col:
-            return await conn.fetchval(
-                """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, payment_method)
-                   VALUES ($1, $2, $3, $4) RETURNING id""",
-                telegram_id, gb_amount, price_rub, payment_method,
-            )
-        else:
-            return await conn.fetchval(
-                """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub)
-                   VALUES ($1, $2, $3) RETURNING id""",
-                telegram_id, gb_amount, price_rub,
-            )
+        _names = {r["column_name"] for r in _cols}
+
+        fields = ["telegram_id", "gb_amount", "price_rub"]
+        values: list = [telegram_id, gb_amount, price_rub]
+        if "payment_method" in _names:
+            fields.append("payment_method")
+            values.append(payment_method)
+        if purchase_id is not None and "purchase_id" in _names:
+            fields.append("purchase_id")
+            values.append(purchase_id)
+
+        placeholders = ", ".join(f"${i}" for i in range(1, len(values) + 1))
+        # ON CONFLICT DO NOTHING — по частичному уникальному индексу на
+        # purchase_id. Два одновременных вебхука на одну покупку не должны
+        # ронять начисление ошибкой уникальности: ключ уже занят, значит
+        # запись о выдаче есть, и это ровно то, чего мы добивались.
+        return await conn.fetchval(
+            f"""INSERT INTO traffic_purchases ({", ".join(fields)})
+                VALUES ({placeholders})
+                ON CONFLICT DO NOTHING
+                RETURNING id""",
+            *values,
+        )
+
+
+async def combo_traffic_already_granted(purchase_id: str) -> Optional[bool]:
+    """Начислялись ли уже гигабайты за покупку purchase_id.
+
+    True  — начислялись, повторять нельзя;
+    False — не начислялись;
+    None  — узнать не удалось (нет базы, нет колонки, запрос упал).
+
+    None — не «нет». Вызывающий обязан различать: на неизвестности мы не
+    начисляем. Иначе моргнувшая база превращается в раздачу вторых пакетов,
+    а вот отказ начислить виден и покупателю, и в payment_errors, и на
+    вебхуке приводит к повтору.
+    """
+    if not purchase_id or not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                """SELECT EXISTS (
+                    SELECT 1 FROM traffic_purchases WHERE purchase_id = $1
+                )""",
+                purchase_id,
+            ))
+    except Exception as e:
+        logger.error(
+            "COMBO_TRAFFIC_KEY_LOOKUP_FAILED purchase_id=%s error=%s: %s "
+            "— проверить, начислялись ли ГБ, не удалось; начисление будет "
+            "отложено до повтора",
+            purchase_id, type(e).__name__, e,
+        )
+        return None
 
 
 # ── Queries for traffic monitor worker ─────────────────────────────────

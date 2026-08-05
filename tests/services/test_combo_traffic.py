@@ -124,16 +124,36 @@ def test_every_payment_path_calls_the_single_grant(rel):
 
 @pytest.fixture
 def panel(monkeypatch):
-    """Панель и учёт: запоминаем вызовы, наружу ничего не ходит."""
-    calls = SimpleNamespace(bytes=None, ok=True, recorded=[], flags=[])
+    """Панель и учёт: запоминаем вызовы, наружу ничего не ходит.
+
+    Панель здесь ведёт себя как настоящая: add_bypass_traffic ПРИБАВЛЯЕТ
+    гигабайты (total_bytes), поэтому второе начисление за ту же покупку
+    видно как удвоенный объём, а не как лишняя строчка в списке.
+
+    Учёт покупок трафика — тоже настоящий: записанный purchase_id ложится
+    в keys, и проверка ключа идемпотентности читает именно его.
+    """
+    calls = SimpleNamespace(
+        bytes=None, ok=True, recorded=[], flags=[], total_bytes=0, keys=set(),
+    )
 
     async def _add(telegram_id, extra_bytes, **kwargs):
         calls.bytes = extra_bytes
         calls.kwargs = kwargs
-        return calls.ok
+        if not calls.ok:
+            # Отказ панели ничего не прибавляет — иначе тест на второй
+            # пакет считал бы гигабайты, которых человек не получил.
+            return False
+        calls.total_bytes += extra_bytes
+        return True
 
-    async def _record(telegram_id, gb, price):
+    async def _record(telegram_id, gb, price, purchase_id=None):
         calls.recorded.append((telegram_id, gb))
+        if purchase_id is not None:
+            calls.keys.add(purchase_id)
+
+    async def _already_granted(purchase_id):
+        return purchase_id in calls.keys
 
     async def _flag(telegram_id, value=True):
         calls.flags.append((telegram_id, value))
@@ -142,6 +162,9 @@ def panel(monkeypatch):
         "app.services.remnawave_service.add_bypass_traffic", _add, raising=False
     )
     monkeypatch.setattr(database, "record_traffic_purchase", _record)
+    monkeypatch.setattr(
+        database, "combo_traffic_already_granted", _already_granted, raising=False,
+    )
     monkeypatch.setattr(database, "set_combo_flag", _flag)
     return calls
 
@@ -222,6 +245,136 @@ def test_success_is_logged_only_after_the_panel_accepted():
     refusal = src.index("COMBO_TRAFFIC_FAILED")
     assert panel_call < granted_log, "успех пишется до вызова панели"
     assert refusal < granted_log, "отказ панели не разбирается до записи об успехе"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Ключ идемпотентности: повтор не выдаёт второй пакет
+# ─────────────────────────────────────────────────────────────────────
+#
+# add_bypass_traffic ПРИБАВЛЯЕТ гигабайты к лимиту в панели. Пока отказ
+# начисления никуда не поднимался, второго вызова не случалось — терялись
+# только оплаченные ГБ. Теперь отказ доводится до 5xx и провайдер повторяет
+# запрос, и цена ошибки поменяла знак: без ключа повтор раздавал бы вторые
+# пакеты, а на лишние гигабайты никто не жалуется — заметить было бы нечем.
+
+COMBO_30_GB = config.COMBO_TARIFFS["combo_plus"][30]["gb"]
+
+
+async def test_repeat_with_the_same_key_does_not_grant_a_second_package(panel):
+    """ГЛАВНЫЙ ТЕСТ. Он защищает не от старого дефекта, а от нового: от
+    того, что включённый повтор вебхука начнёт раздавать пакеты даром."""
+    first = await combo_traffic.grant_combo_traffic(
+        7, "plus", 30, is_combo=True, purchase_id="p-77", idempotency_key="p-77",
+    )
+    second = await combo_traffic.grant_combo_traffic(
+        7, "plus", 30, is_combo=True, purchase_id="p-77", idempotency_key="p-77",
+    )
+
+    assert first.granted is True and first.already_granted is False
+    assert second.granted is True, "повтор обязан сказать, что ГБ у человека есть"
+    assert second.already_granted is True, (
+        "повтор молчит о том, что начисление было пропущено"
+    )
+    assert second.reason == "already_granted"
+    assert panel.total_bytes == COMBO_30_GB * 1024 ** 3, (
+        "панель получила второй пакет — ключ идемпотентности не работает"
+    )
+    assert panel.recorded == [(7, COMBO_30_GB)], "покупка трафика записана дважды"
+
+
+async def test_the_key_is_taken_only_after_the_panel_accepted(panel):
+    """Отказ панели не должен занимать ключ.
+
+    Займи его заранее — и повтор увидит «уже начислено», а гигабайты не
+    доедут никогда: ровно тот исход, ради которого всё это и делается.
+    """
+    panel.ok = False
+    first = await combo_traffic.grant_combo_traffic(
+        8, "plus", 30, is_combo=True, purchase_id="p-88", idempotency_key="p-88",
+    )
+    assert first.granted is False
+    assert panel.keys == set(), "ключ занят отказавшимся начислением"
+
+    panel.ok = True
+    second = await combo_traffic.grant_combo_traffic(
+        8, "plus", 30, is_combo=True, purchase_id="p-88", idempotency_key="p-88",
+    )
+    assert second.granted is True and second.already_granted is False
+    assert panel.total_bytes == COMBO_30_GB * 1024 ** 3
+
+
+async def test_unknown_key_state_grants_nothing(monkeypatch, panel):
+    """Проверить ключ не удалось — не начисляем.
+
+    Fail-closed: отказ обратим (вебхук ответит 5xx, провайдер повторит,
+    строка ляжет в payment_errors), а выданный второй пакет — нет.
+    """
+    async def _unknown(purchase_id):
+        return None
+
+    monkeypatch.setattr(database, "combo_traffic_already_granted", _unknown)
+
+    outcome = await combo_traffic.grant_combo_traffic(
+        9, "plus", 30, is_combo=True, purchase_id="p-99", idempotency_key="p-99",
+    )
+    assert outcome.granted is False
+    assert outcome.reason == "idempotency_unknown"
+    assert outcome.gb == COMBO_30_GB, "объём нужен админу для ручного доначисления"
+    assert panel.total_bytes == 0, "начислили, не зная, начислено ли уже"
+
+
+async def test_without_a_key_there_is_no_protection(panel):
+    """Ключ передают только пути, которые умеют повторяться.
+
+    Остальные (экран оплаты, оплата с баланса, админская выдача) отдают
+    purchase_id лишь меткой для лога — у них он либо не уникален на
+    покупку, либо повторов не бывает вовсе. Защита у них мнимая, и здесь
+    это записано прямо, чтобы её никому не пришлось искать.
+    """
+    await combo_traffic.grant_combo_traffic(10, "plus", 30, is_combo=True, purchase_id="p-10")
+    await combo_traffic.grant_combo_traffic(10, "plus", 30, is_combo=True, purchase_id="p-10")
+    assert panel.total_bytes == 2 * COMBO_30_GB * 1024 ** 3
+
+
+async def test_failed_grant_is_listed_in_payment_errors(monkeypatch, panel):
+    """Пострадавших надо уметь перечислить, а не находить по жалобе.
+
+    На путях Telegram-инвойса и Stars отказ никуда не поднимается — деньги
+    взяты, экран успеха показан, повторять платёж некому. Единственный
+    след — строка в payment_errors: она попадает на страницу платежей в
+    дашборде вместе с telegram_id и purchase_id.
+    """
+    rows = []
+
+    async def _log(**kwargs):
+        rows.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(database, "log_payment_error", _log)
+    panel.ok = False
+
+    await combo_traffic.grant_combo_traffic(
+        42, "plus", 30, is_combo=True, purchase_id="p-42", source="telegram_stars",
+    )
+
+    assert rows, "невыданный пакет не попал в payment_errors — списка пострадавших нет"
+    assert rows[0]["stage"] == "combo_traffic_not_granted"
+    assert rows[0]["telegram_id"] == 42
+    assert rows[0]["purchase_id"] == "p-42"
+    assert rows[0]["error_code"] == "panel_rejected"
+
+
+async def test_successful_grant_writes_nothing_to_payment_errors(monkeypatch, panel):
+    """Иначе список пострадавших перестанет быть списком пострадавших."""
+    rows = []
+
+    async def _log(**kwargs):
+        rows.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(database, "log_payment_error", _log)
+    await combo_traffic.grant_combo_traffic(43, "plus", 30, is_combo=True, purchase_id="p-43")
+    assert rows == []
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -448,6 +601,7 @@ def _pending_sub(**over):
         subscription_type="plus",
         period_days=30,
         is_combo=True,
+        purchase_id="p-deferred-1",
     )
     base.update(over)
     return SimpleNamespace(**base)
@@ -509,6 +663,14 @@ def test_pending_query_carries_the_combo_flag_and_bounds_the_purchase():
     src = inspect.getsource(activation_service._fetch_pending_subscriptions)
     assert "is_combo" in src, "воркер не видит признак комбо"
     assert "INTERVAL '1 day'" in src, "боковой join не ограничен по времени"
+    # Мало объявить колонку в боковом запросе — её надо ещё выбрать
+    # наружу. Пока lp.is_combo не было в верхнем списке, строка результата
+    # такого поля не содержала: row.get("is_combo") молча отдавал None, и
+    # отложенная активация не начисляла комбо-гигабайты никогда.
+    assert "lp.is_combo" in src, "признак комбо не доезжает до строки результата"
+    # purchase_id — общий с вебхуками ключ идемпотентности начисления.
+    # Без него воркер и повторный вебхук выдали бы по пакету каждый.
+    assert "lp.purchase_id" in src, "ключ идемпотентности не доезжает до воркера"
 
 
 # ─────────────────────────────────────────────────────────────────────

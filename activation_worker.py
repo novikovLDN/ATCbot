@@ -266,6 +266,15 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str, str | None]:
                     # не из FSM: между оплатой и активацией проходят минуты,
                     # и никакого состояния в памяти уже нет. Объём считает
                     # app/services/combo_traffic — единственный источник.
+                    #
+                    # Ключ идемпотентности — purchase_id той же оплаченной
+                    # покупки. Он общий с вебхуками: повтор вебхука от
+                    # провайдера тоже доначисляет комбо-гигабайты, и без
+                    # общего ключа человек получил бы пакет дважды —
+                    # молча, потому что на лишние ГБ не жалуются. Метку
+                    # subscription_<id> ключом делать нельзя: она одна и та
+                    # же у всех продлений этой подписки, и второй законной
+                    # покупке комбо она отказала бы в пакете.
                     if pending_sub.is_combo:
                         try:
                             from app.services.combo_traffic import grant_combo_traffic
@@ -275,6 +284,7 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str, str | None]:
                                 pending_sub.period_days,
                                 is_combo=True,
                                 purchase_id=f"subscription_{subscription_id}",
+                                idempotency_key=pending_sub.purchase_id,
                                 subscription_end=expires_at,
                                 source="activation_worker",
                             )

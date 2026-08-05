@@ -390,18 +390,26 @@ def test_purchase_tariff_lookup_failure_is_logged():
     assert "except Exception:\n        pass" not in src
 
 
-def test_swallowed_retry_signal_is_reported():
+def test_retry_signal_is_reported_and_not_swallowed():
     """_send_confirmation бросает TransientPaymentError, чтобы вебхук ответил
     5xx и провайдер повторил платёж. Общий `except Exception` гасил сигнал
     записью «payment was successful»: человек оплачивал комбо, гигабайты не
-    приходили, повтора не было."""
+    приходили, повтора не было.
+
+    Теперь сигнал не гасится, а пробрасывается, — маркер переименован
+    вместе с поведением: «SILENTLY» больше не про что писать. Запись
+    осталась: отказ выдачи обязан быть виден, даже когда повтор его чинит.
+    """
     from app.services.payments import confirmation
 
     src = inspect.getsource(confirmation.process_confirmed_payment)
     assert "except TransientPaymentError" in src, (
-        "проглоченный сигнал на повтор должен разбираться отдельной веткой"
+        "сигнал на повтор должен разбираться отдельной веткой"
     )
-    assert "PAYMENT_DELIVERY_FAILED_SILENTLY" in src
+    assert "PAYMENT_DELIVERY_FAILED" in src
+    assert "PAYMENT_DELIVERY_FAILED_SILENTLY" not in src, (
+        "сигнал на повтор снова проглатывается"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────

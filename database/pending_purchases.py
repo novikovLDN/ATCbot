@@ -263,6 +263,32 @@ async def get_pending_purchase_by_id(purchase_id: str, check_expiry: bool = Fals
         return dict(row) if row else None
 
 
+async def get_paid_purchase_by_id(purchase_id: str) -> Optional[Dict[str, Any]]:
+    """Уже проведённая покупка — та, которую get_pending_purchase_by_id не отдаёт.
+
+    Зачем отдельная функция. После finalize_purchase строка переходит в
+    status='paid', и запрос выше её больше не видит. Для повторного вебхука
+    это выглядело как «покупки не существует»: провайдер получал 200 с
+    not_found, а повтор — единственный шанс доставить то, что не доехало с
+    первого раза (комбо-гигабайты при моргнувшей панели).
+
+    Отдельная функция, а не флаг у существующей: у той два вызывающих
+    смысла («покупка ждёт оплаты»), и расширение статусов молча изменило бы
+    их поведение.
+    """
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM pending_purchases WHERE purchase_id = $1 AND status = 'paid'",
+            purchase_id,
+        )
+        return dict(row) if row else None
+
+
 async def cancel_pending_purchases(telegram_id: int, reason: str = "user_action") -> None:
     """
     Отменить все pending покупки пользователя

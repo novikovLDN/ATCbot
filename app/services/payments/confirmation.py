@@ -213,6 +213,12 @@ async def process_confirmed_payment(
         is_gift = bool(result.get("is_gift") and result.get("gift_code"))
         is_farm_effect = bool(result.get("is_farm_effect"))
 
+        # Сорванная выдача товара. Не бросаем сразу: сначала доделываем то,
+        # что от неё не зависит (синхронизация на сайт ниже), — повтора
+        # вебхука эти шаги уже не увидят, он останавливается на
+        # lookup_pending_purchase. Бросок в самом конце блока.
+        delivery_error: Optional[TransientPaymentError] = None
+
         # Notification failure must NOT fail the payment — DB is already committed
         try:
             if is_gift:
@@ -285,21 +291,25 @@ async def process_confirmed_payment(
             #
             # _send_confirmation вызывается внутри этого try и бросает
             # TransientPaymentError, когда комбо-тарифу не удалось начислить
-            # bypass-трафик: расчёт был на то, что вебхук ответит 5xx и
-            # провайдер повторит платёж. Но except ниже ловит любое
-            # Exception, и сигнал гасился записью «payment was successful» —
-            # человек оплачивал комбо, гигабайты не приходили, повтора не
-            # было, и в логах это выглядело как неудавшееся уведомление.
+            # bypass-трафик. Расчёт на то, что вебхук ответит 5xx и провайдер
+            # повторит запрос — но except ниже ловит любое Exception, и
+            # сигнал гасился записью «payment was successful»: человек
+            # оплачивал комбо, гигабайты не приходили, повтора не было, а в
+            # логах это выглядело как неудавшееся уведомление.
             #
-            # Поведение здесь намеренно не меняется (это отдельный дефект,
-            # см. отчёт) — но запись обязана называть вещи своими именами:
-            # товар не выдан, и разбирать это придётся руками.
-            logger.critical(
-                "PAYMENT_DELIVERY_FAILED_SILENTLY: provider=%s, user=%s, "
-                "purchase_id=%s, payment_id=%s, error=%s — оплата принята, товар "
-                "НЕ выдан; сигнал на повтор вебхука проглочен, нужен ручной разбор",
+            # Поэтому пробрасываем — но не отсюда, а после блока синка на
+            # сайт: тот к выдаче гигабайтов отношения не имеет, а второго
+            # шанса выполниться у него не будет. Повтор теперь безопасен:
+            # начисление защищено ключом идемпотентности (purchase_id), и
+            # второго пакета он не выдаст. Дальше по стеку исключение обязано
+            # пройти НЕТРОНУТЫМ — внизу для этого стоит отдельный except.
+            logger.error(
+                "PAYMENT_DELIVERY_FAILED: provider=%s, user=%s, purchase_id=%s, "
+                "payment_id=%s, error=%s — оплата принята, товар НЕ выдан; "
+                "отвечаем 5xx, чтобы провайдер повторил",
                 provider, telegram_id, purchase_id, payment_id, combo_err,
             )
+            delivery_error = combo_err
         except Exception as notif_err:
             logger.error(
                 f"PAYMENT_NOTIFICATION_FAILED: provider={provider}, user={telegram_id}, "
@@ -328,6 +338,24 @@ async def process_confirmed_payment(
         except Exception as sync_err:
             logger.warning("SITE_SYNC_FIRE_AND_FORGET_ERROR: %s", sync_err)
 
+        # Товар не выдан — просим провайдера повторить. Позже уведомлений и
+        # синка намеренно: они уже отработали, а повтор до них не дойдёт.
+        if delivery_error is not None:
+            raise delivery_error
+
+    except TransientPaymentError:
+        # Просьба к провайдеру повторить запрос. Ловим здесь ровно затем,
+        # чтобы не поймать ниже: `except Exception` в конце цепочки
+        # превращал её в PAYMENT_PERMANENT_ERROR и HTTP 200, и повтора не
+        # происходило никогда. Уберёте этот блок — вернёте потерю товара:
+        # и комбо-гигабайты (raise из _send_confirmation), и сорванную
+        # синхронизацию Remnawave (raise по remnawave_sync_failed выше)
+        # снова станут «успешной оплатой».
+        #
+        # Причина уже записана там, где возникла; второй записи не делаем,
+        # алерт не шлём — иначе на каждый повтор провайдера админ получит
+        # по сообщению.
+        raise
     except (PurchaseLocked, PurchaseInvalidStatus, PaymentAmountMismatch) as e:
         # Раньше все эти причины попадали в общий except ValueError вместе с
         # «уже обработано»: провайдеру уходил HTTP 200 already_processed, повтора
@@ -407,6 +435,18 @@ async def process_confirmed_payment(
             raise TransientPaymentError(
                 f"Replay resync to Remnawave failed: {resync_err}"
             ) from resync_err
+
+        # Комбо-гигабайты, не доехавшие с первого раза.
+        #
+        # Сюда попадает повтор, обогнавший коммит первого вебхука: тот успел
+        # финализировать покупку, но выдать пакет ГБ не смог (панель
+        # моргнула) и ответил 5xx. Ресинк выше лечит только премиум-подписку;
+        # про гигабайты он не знает, и без этого вызова повтор был бы
+        # бесполезен — ровно то, из-за чего оплаченные ГБ пропадали навсегда.
+        #
+        # Повтор безопасен: ключом служит purchase_id, и второй пакет он не
+        # выдаст. Отказ снова поднимется 5xx — провайдер попробует ещё раз.
+        await _top_up_combo_traffic_on_replay(provider, purchase_id, pending)
         return {"status": "already_processed"}
     except PaymentFinalizationError as e:
         # Сервисная обёртка приводит ЛЮБУЮ ошибку выдачи к своему типу, в
@@ -515,12 +555,33 @@ async def lookup_pending_purchase(
     Returns:
         {"status": "ok", "purchase": dict, "telegram_id": int} on success
         {"status": "not_found"|"already_processed"} on failure
+
+    Повтор от провайдера доходит именно сюда и дальше не идёт: покупка уже
+    в статусе 'paid'. Поэтому здесь же доначисляются комбо-гигабайты, если
+    первая попытка их не выдала, — другого места на этом пути нет.
     """
     pending_purchase = await database.get_pending_purchase_by_id(
         purchase_id, check_expiry=False
     )
 
     if not pending_purchase:
+        # «Не найдено» — ещё не значит, что покупки нет.
+        #
+        # get_pending_purchase_by_id отдаёт только 'pending' и 'expired', а
+        # проведённая покупка — 'paid'. Повторный вебхук от провайдера
+        # выглядел из-за этого как платёж по несуществующей покупке: в лог
+        # уходило warning, провайдеру — 200, и всё останавливалось. Пока
+        # повторов не просили, это было безобидно; теперь повтор — это наш
+        # второй шанс выдать комбо-гигабайты, и терять его нельзя.
+        paid_purchase = await database.get_paid_purchase_by_id(purchase_id)
+        if paid_purchase:
+            logger.info(
+                "%s webhook: replay of a finalized purchase: purchase_id=%s",
+                provider, purchase_id,
+            )
+            await _top_up_combo_traffic_on_replay(provider, purchase_id, paid_purchase)
+            return {"status": "already_processed"}
+
         logger.warning(f"{provider} webhook: purchase not found: purchase_id={purchase_id}")
         return {"status": "not_found"}
 
@@ -552,6 +613,78 @@ async def lookup_pending_purchase(
         "purchase": pending_purchase,
         "telegram_id": telegram_id,
     }
+
+
+async def _top_up_combo_traffic_on_replay(
+    provider: str,
+    purchase_id: str,
+    purchase: Optional[Dict[str, Any]],
+) -> None:
+    """Доначислить комбо-гигабайты на повторном вебхуке.
+
+    ЗАЧЕМ. Первый вебхук проводит покупку в базе, а потом идёт в панель за
+    гигабайтами. Между этими шагами панель может ответить отказом — деньги
+    приняты, подписка выдана, пакет ГБ не выдан. Вебхук отвечает 5xx,
+    провайдер повторяет, и повтор обязан доделать ровно недостающее.
+
+    ПОЧЕМУ ЭТО НЕ ВЫДАСТ ВТОРОЙ ПАКЕТ. Начисление ходит с ключом
+    идемпотентности — purchase_id. Если пакет уже выдан (первым вебхуком,
+    воркером отложенной активации — кем угодно), grant_combo_traffic
+    возвращает already_granted и в панель не идёт. Уберёте ключ — каждый
+    повтор провайдера станет бесплатной раздачей гигабайтов, и заметить это
+    будет неоткуда: на лишние ГБ не жалуются.
+
+    ЧТО НЕ ДЕЛАЕМ. Не шлём человеку второе «оплата получена» и не трогаем
+    подписку: и то и другое уже сделал первый вебхук. Здесь только товар,
+    который не доехал.
+
+    Отказ поднимается TransientPaymentError — следующий повтор попробует
+    ещё раз. Молчание здесь означало бы 200 и конец попыток.
+    """
+    if not purchase or not purchase.get("is_combo"):
+        return
+
+    telegram_id = purchase.get("telegram_id")
+    if not telegram_id:
+        return
+
+    # Срок подписки нужен только на случай, когда bypass-сущности в панели
+    # ещё нет и её придётся создать: без него она получит запас в 10 лет.
+    subscription_end = None
+    try:
+        sub = await database.get_subscription(telegram_id)
+        subscription_end = sub.get("expires_at") if sub else None
+    except Exception as sub_err:
+        logger.warning(
+            "COMBO_REPLAY_SUB_LOOKUP_FAILED provider=%s user=%s purchase_id=%s: %s",
+            provider, telegram_id, purchase_id, sub_err,
+        )
+
+    from app.services.combo_traffic import grant_combo_traffic
+
+    outcome = await grant_combo_traffic(
+        telegram_id,
+        purchase.get("tariff"),
+        purchase.get("period_days") or 30,
+        is_combo=True,
+        purchase_id=purchase_id,
+        idempotency_key=purchase_id,
+        subscription_end=subscription_end,
+        source=f"webhook:{provider}:replay",
+    )
+    if outcome.already_granted:
+        return
+    if outcome.granted:
+        logger.info(
+            "COMBO_TRAFFIC_TOPPED_UP_ON_REPLAY provider=%s user=%s purchase_id=%s gb=%s "
+            "— гигабайты, не доехавшие с первого вебхука, начислены",
+            provider, telegram_id, purchase_id, outcome.gb,
+        )
+        return
+    raise TransientPaymentError(
+        f"combo bypass-traffic still not granted on replay ({outcome.reason}): "
+        f"user={telegram_id} gb={outcome.gb}"
+    )
 
 
 async def _lookup_purchase_tariff(purchase_id: str) -> tuple:
@@ -780,6 +913,11 @@ async def _send_confirmation(
                 result.get("period_days", 30) or 30,
                 is_combo=True,
                 purchase_id=purchase_id,
+                # Ключ идемпотентности. Здесь он обязателен: отказ ниже
+                # доводится до 5xx, провайдер повторяет запрос, а
+                # add_bypass_traffic прибавляет гигабайты — без ключа повтор
+                # выдал бы второй пакет.
+                idempotency_key=purchase_id,
                 subscription_end=expires_at,
                 source=f"webhook:{provider}",
             )
