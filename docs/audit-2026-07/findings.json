@@ -4144,6 +4144,54 @@
       "failure_scenario": "Импорт с комментарием «используется всеми экранами» читается как факт, хотя вызова нет. Разбор уходит по ложному следу.",
       "proposed_action": "Включить F401 и разобрать, что всплывёт. Ожидается шум в __init__.py, где реэкспорты — это и есть смысл файла; там нужен per-file-ignores, а не глобальное выключение правила.",
       "status": null
+    },
+    {
+      "title": "ORPHAN_PREVENTED утверждает предотвращение, которого не было (4 места)",
+      "severity": "P2",
+      "category": "observability",
+      "file": "database/purchase_finalization.py",
+      "line": 949,
+      "source": "followup-2026-08-05",
+      "defect": "Компенсация отката зовёт заглушку снятого с эксплуатации xray и ничего не удаляет, но пишет ORPHAN_PREVENTED — «сирота предотвращена». Те же записи: subscription_reissue.py:299, admin_access.py:210, плюс ADMIN_DELETE_UUID_REMOVED (admin_access.py:724) и OLD_UUID_REMOVED_AFTER_COMMIT (purchase_finalization.py:963, balance_purchases.py:315). В balance_purchases.py:301 уже переименовано в ORPHAN_NOT_CLEANED — образец, как надо.",
+      "failure_scenario": "Разбор инцидента «у человека есть доступ, а оплаты нет» читает ORPHAN_PREVENTED и считает вопрос закрытым. Сущность при этом жива в панели, и доступ у неоплатившего остаётся до истечения её срока.",
+      "proposed_action": "Переименовать по образцу balance_purchases.py:301 и оставить в записи uuid, по которому админ вычистит вручную.",
+      "status": null
+    },
+    {
+      "title": "Компенсация отката мнимая: зовётся заглушка вместо remnawave_api.delete_user",
+      "severity": "P1",
+      "category": "vpn",
+      "file": "database/balance_purchases.py",
+      "line": 296,
+      "source": "followup-2026-08-05",
+      "defect": "Откат транзакции после создания сущности в панели зовёт заглушку vpn_utils, а не remnawave_api.delete_user — как это уже сделано в database/purchase_finalization.py:947. Те же места: app/services/activation/service.py:459, 481, 513, 543. Это логика, а не запись: правка логов её не касалась.",
+      "failure_scenario": "Оплата не прошла, деньги не списаны, транзакция откачена — а сущность в панели создана и не удалена. Человек пользуется платным VPN, не заплатив, пока не истечёт срок сущности.",
+      "proposed_action": "Заменить вызов заглушки на remnawave_api.delete_user по образцу purchase_finalization.py:947, с проверкой результата.",
+      "status": null
+    },
+    {
+      "title": "Аудит vpn_expire пишется до UPDATE, который может не сработать",
+      "severity": "P2",
+      "category": "observability",
+      "file": "database/subscription_state.py",
+      "line": 127,
+      "source": "followup-2026-08-05",
+      "defect": "Запись result=success ставится в фазе 2, а закрытие подписки — в фазе 3, и та может выйти по EXPIRED_SKIPPED_RENEWED (:227). Тот же дефект в fast_expiry_cleanup.py уже вылечен переносом записи после UPDATE и закреплён test_vpn_entitlement.py::test_success_audit_is_written_once_and_after_the_update.",
+      "failure_scenario": "Человек успел продлиться в момент истечения. Подписка активна, а в журнале стоит «истекла». Разбор жалобы уходит искать несуществующее истечение.",
+      "proposed_action": "Перенести запись после UPDATE, по образцу fast_expiry_cleanup.py.",
+      "status": null
+    },
+    {
+      "title": "audit_log.result не позволяет записать третий исход",
+      "severity": "P3",
+      "category": "schema",
+      "file": "migrations/007_add_audit_log_fields.sql",
+      "line": 18,
+      "source": "followup-2026-08-05",
+      "defect": "CHECK (result IN ('success','error')) — исхода «сделано частично / действия под записью не было» записать нечем, поэтому правду про заглушку пришлось прятать в поле details. Дубль ограничения: database/legacy_schema.py:447.",
+      "failure_scenario": "Фильтр журнала по result=error не покажет случаи, где действие не выполнено, — они помечены success с оговоркой в тексте.",
+      "proposed_action": "Добавить третье значение (например 'noop') миграцией и разнести существующие записи. Решение владельца: менять ли схему журнала.",
+      "status": null
     }
   ],
   "refuted": [
