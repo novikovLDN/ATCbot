@@ -61,8 +61,11 @@ _GIFT_REVEAL_PERCENT_DEFAULT = 20  # fallback для рассылок без gif
 # работает на все основные тарифы (basic / plus / combo_basic /
 # combo_plus) автоматически на экране тарифов через `get_user_discount`.
 
+# Набор допустимых процентов (20/25/30/35/40) здесь не нужен: выбор
+# делает админ в дашборде, и проверяет его дашборд же —
+# app/api/dashboard/routes/broadcasts/send.py. Экран принимает любое
+# число из БД, у него другая забота — fallback, когда там пусто.
 _GIFT_REVEAL_HOURS = 48
-_GIFT_REVEAL_PERCENT_CHOICES = (20, 25, 30, 35, 40)
 _GIFT_REVEAL_EMOJI = '<tg-emoji emoji-id="5210956306952758910">👀</tg-emoji>'
 _GIFT_REVEAL_PRESENT = '<tg-emoji emoji-id="5449800250032143374">🎁</tg-emoji>'
 

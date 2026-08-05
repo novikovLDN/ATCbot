@@ -36,39 +36,6 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
-# ── Preset: maintenance broadcast with bypass key + 20% traffic discount ──
-# Lives here as a literal so the admin can fire it from the dashboard
-# without retyping. {bypass_key} is substituted per recipient in _send_one.
-_PRESET_MAINTENANCE_TITLE = (
-    "![🛠](tg://emoji?id=5462921117423384478) "
-    "<b>Тех. работы на основных серверах</b>"
-)
-_PRESET_MAINTENANCE_TEXT = (
-    "До <b>25.05</b> просим временно использовать наши <b>серверы обхода "
-    "белых списков</b> — они работают стабильно.\n\n"
-    "![🎁](tg://emoji?id=5384578448633129482) <b>Скидка 20% на ГБ обхода</b> "
-    "— забрать по кнопке <b>«Купить трафик»</b> ниже.\n\n"
-    "━━━━━━━━━━━━━━\n"
-    "![🔑](tg://emoji?id=5465443379917629504) <b>Ваш ключ обхода</b>\n\n"
-    "<code>{bypass_key}</code>\n\n"
-    "<i>Нажмите, чтобы скопировать.</i>\n"
-    "━━━━━━━━━━━━━━\n\n"
-    "📲 <b>Подключение через Happ</b>\n"
-    "<blockquote>"
-    "![1️⃣](tg://emoji?id=5382322671679708881) Скопируйте ключ выше одним "
-    "нажатием по нему\n"
-    "![2️⃣](tg://emoji?id=5381990043642502553) Откройте приложение\n"
-    "![3️⃣](tg://emoji?id=5381879959335738545) Справа сверху нажмите "
-    "<b>«+»</b> → <b>«Вставить из буфера»</b>\n"
-    "![4️⃣](tg://emoji?id=5382054253403577563) Выберите сервера с пометкой "
-    "<b>LTE</b> и включите соединение"
-    "</blockquote>\n\n"
-    "По окончании работ всё вернётся автоматически — переключать обратно "
-    "не нужно. Спасибо за понимание "
-    "![🧩](tg://emoji?id=5265120027853481187)"
-)
-
-
 @router.callback_query(F.data.startswith("broadcast_promo_buy:"))
 async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContext):
     """Пользователь нажал 'Купить со скидкой' в уведомлении — автоматически применяем скидку"""
