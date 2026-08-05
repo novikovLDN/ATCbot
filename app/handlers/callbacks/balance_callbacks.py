@@ -202,7 +202,7 @@ async def callback_topup_stars(callback: CallbackQuery):
             prices=[LabeledPrice(label=i18n_get_text(language, "payment.stars_invoice_label"), amount=stars_amount)]
         )
         await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id))
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error sending Stars invoice for balance topup: {e}")

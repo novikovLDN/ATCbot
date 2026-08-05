@@ -36,7 +36,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_callback
-from ._shared import _auto_delete_lava_msg
+# Автоудаление счёта — общее для всех платёжных экранов, см. модуль.
+from app.handlers.callbacks._invoice_cleanup import _schedule_invoice_deletion
 
 pay_traffic_router = Router()
 logger = logging.getLogger(__name__)
@@ -290,7 +291,7 @@ async def callback_traffic_pay_lava(callback: CallbackQuery):
         ])
 
         lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, lava_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg.message_id))
         await callback.answer()
 
     except Exception as e:

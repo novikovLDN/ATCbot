@@ -40,6 +40,11 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.states import SteamPurchaseState
 from app.core.rate_limit import check_rate_limit
+# Автоудаление счёта — одна общая реализация на весь бот.
+# Здесь была своя копия (INVOICE_TIMEOUT + _schedule_invoice_deletion с тем же
+# телом, но без записи INVOICE_EXPIRED в лог): срок жизни счёта правился в
+# config, а до этого экрана не доезжал, и пропавший счёт не оставлял следа.
+from app.handlers.callbacks._invoice_cleanup import _schedule_invoice_deletion
 
 steam_purchase_router = Router()
 logger = logging.getLogger(__name__)
@@ -57,8 +62,6 @@ SUPPORT_URL = "https://t.me/atlas_suppbot"
 # Steam login: 3-32 chars, [A-Za-z0-9_-]. Steam allows additional characters
 # in display names but the login (account name) follows this stricter rule.
 _STEAM_LOGIN_RE = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
-
-INVOICE_TIMEOUT = getattr(config, "INVOICE_TIMEOUT_SECONDS", 900)
 
 
 def _all_amounts() -> list:
@@ -80,14 +83,6 @@ def _is_valid_steam_login(text: str) -> bool:
     if not text or len(text) > 64:
         return False
     return bool(_STEAM_LOGIN_RE.match(text))
-
-
-async def _schedule_invoice_deletion(bot: Bot, chat_id: int, message_id: int, timeout: int = INVOICE_TIMEOUT):
-    try:
-        await asyncio.sleep(timeout)
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception:
-        pass
 
 
 # ── Keyboards ─────────────────────────────────────────────────────────

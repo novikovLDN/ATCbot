@@ -224,7 +224,7 @@ async def callback_gift_pay_card(callback: CallbackQuery, state: FSMContext):
             text=i18n_get_text(language, "payment.invoice_timeout"),
             parse_mode="HTML",
         )
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id))
         await state.set_state(GiftState.processing_payment)
         await callback.answer()
 
@@ -297,7 +297,7 @@ async def callback_gift_pay_stars(callback: CallbackQuery, state: FSMContext):
             text=i18n_get_text(language, "payment.invoice_timeout"),
             parse_mode="HTML",
         )
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id))
         await state.set_state(GiftState.processing_payment)
         await callback.answer()
 
@@ -463,7 +463,7 @@ async def callback_gift_pay_lava(callback: CallbackQuery, state: FSMContext):
         ])
 
         lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg.message_id))
         await callback.answer()
         await state.set_state(None)
         await state.clear()

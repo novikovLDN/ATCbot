@@ -118,8 +118,12 @@ def test_shared_and_gift_cleanup_are_the_same_object():
 def _sleeps_then_deletes(func: ast.AST) -> bool:
     """Признак самодельного автоудаления: в одном теле и sleep, и delete_message.
 
-    Копию узнаём не по имени (её звали и _schedule_invoice_deletion, и
-    _auto_delete_lava_msg), а по повадке: подождать и удалить сообщение.
+    Копию узнаём не по имени, а по повадке: подождать и удалить сообщение.
+    Имя ненадёжно — те же самые семь копий звались _schedule_invoice_deletion,
+    _auto_delete_lava_msg, _auto_delete, _del и _del_invoice, а две последние
+    были вообще вложенными функциями внутри обработчика. Поэтому ищем не
+    объявление с известным именем, а поведение, и ищем через ast.walk —
+    вложенные функции он тоже обходит.
     """
     sleeps = deletes = False
     for node in ast.walk(func):
@@ -133,25 +137,125 @@ def _sleeps_then_deletes(func: ast.AST) -> bool:
     return sleeps and deletes
 
 
-def test_gift_payment_has_no_second_auto_delete_implementation():
-    """Седьмая копия автоудаления не должна вернуться в экран подарка.
+# Единственная реализация отложенного удаления счёта плюс те места, где
+# «поспать и удалить сообщение» означает совсем другое. Whitelist именно
+# явный: строка сюда добавляется только вместе с причиной, и причина
+# «мне так удобнее» не годится — восьмая копия автоудаления счёта должна
+# упираться в красный тест, а не тихо появляться.
+AUTO_DELETE_WHITELIST = {
+    # ТА САМАЯ реализация. Всё остальное в боте зовёт её.
+    ("app/handlers/callbacks/_invoice_cleanup.py", "_schedule_invoice_deletion"):
+        "единственная реализация автоудаления счёта",
+    # Ниже — не таймеры счёта: пауза измеряется секундами и меньше,
+    # сообщение удаляется тут же, в том же обработчике, и никакой
+    # create_task его не переживает.
+    ("app/handlers/callbacks/broadcast_offers/gift_1y40.py", "callback_broadcast_gift_1y_40"):
+        "пауза 2 с ради эффекта: показать 👀 и убрать перед экраном тарифов",
+    ("app/handlers/callbacks/broadcast_offers/gift_reveal.py", "callback_broadcast_gift_reveal"):
+        "та же интрига с 👀 в рассылке-подарке",
+    ("app/services/broadcast_deleter.py", "delete_broadcast_from_users"):
+        "пауза между пачками при массовом удалении рассылки — защита от rate limit",
+}
 
-    В gift/payment.py жил _auto_delete_lava_msg: то же тело, что у общего
-    _schedule_invoice_deletion, но со своей константой 15 минут и без
-    логов. Из-за него ветка Lava молча расходилась с остальными
-    способами оплаты: правка config.INVOICE_TIMEOUT_SECONDS её не
-    задевала, а исчезнувший счёт не оставлял в логах INVOICE_EXPIRED.
+
+def test_app_has_one_auto_delete_implementation():
+    """Во всём app/ ровно одно место, которое ждёт и удаляет сообщение счёта.
+
+    Копий было семь: общая в _invoice_cleanup плюс шесть самодельных — в
+    traffic/_shared.py, proxy.py, steam_purchase.py, telegram_premium.py,
+    telegram_stars_purchase.py, spotify_purchase.py и apple_id.py (в
+    последнем сразу две). Часть держала свою константу 15 минут вместо
+    config.INVOICE_TIMEOUT_SECONDS, часть — голый asyncio.sleep(15 * 60)
+    без имени вовсе, и ни одна не писала INVOICE_EXPIRED в лог.
+
+    Чем это било. Правка срока жизни счёта доезжала до одних способов
+    оплаты и не доезжала до других, хотя тот же срок lava_service шлёт
+    провайдеру в поле expire — сообщение и счёт протухали в разное время.
+    А по жалобе «счёт исчез, я не успел оплатить» половину случаев нельзя
+    было поднять в логах: копии молчали.
+
+    Если провайдеру нужен ДРУГОЙ срок — это аргумент timeout у общей
+    функции, а не повод завести вторую реализацию.
     """
-    tree = ast.parse((CALLBACKS / "gift" / "payment.py").read_text(encoding="utf-8"))
-    homegrown = [
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _sleeps_then_deletes(node)
-    ]
+    homegrown = {}
+    for path in sorted(Path("app").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not _sleeps_then_deletes(node):
+                continue
+            if (path.as_posix(), node.name) in AUTO_DELETE_WHITELIST:
+                continue
+            homegrown[f"{path.as_posix()}:{node.lineno}"] = node.name
+
     assert not homegrown, (
-        f"в gift/payment.py снова своя реализация автоудаления счёта: {homegrown}. "
-        "Нужен общий _invoice_cleanup._schedule_invoice_deletion; если провайдеру "
-        "нужен другой срок — передайте его параметром timeout."
+        f"снова своя реализация автоудаления сообщения: {homegrown}. "
+        "Нужен общий app.handlers.callbacks._invoice_cleanup._schedule_invoice_deletion; "
+        "если провайдеру нужен другой срок — передайте его параметром timeout."
+    )
+
+
+def test_auto_delete_whitelist_has_no_stale_entries():
+    """Whitelist не должен переживать код, ради которого его завели.
+
+    Иначе он тихо разрастается: функцию переименовали или удалили, строка
+    осталась — и однажды прикроет собой настоящую копию с тем же именем.
+    """
+    stale = []
+    for (path, name), reason in AUTO_DELETE_WHITELIST.items():
+        p = Path(path)
+        if not p.exists():
+            stale.append(f"{path} (файла нет)")
+            continue
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        found = [
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == name and _sleeps_then_deletes(node)
+        ]
+        if not found:
+            stale.append(f"{path}::{name} ({reason})")
+    assert not stale, f"мёртвые исключения в AUTO_DELETE_WHITELIST: {stale}"
+
+
+def test_deletion_is_scheduled_by_message_id_not_by_message_object():
+    """Вызывающий передаёт message_id, а не сам Message.
+
+    Задача уходит в фон и живёт ещё 15 минут после выхода из обработчика.
+    Message тянет за собой bot, chat и from_user — состояние, устаревшее
+    сразу; обращение к нему через четверть часа — гонка. Ровно из-за
+    расхождения сигнатур (Message против message_id: int) копии в своё
+    время и не свели.
+
+    Проверка нужна ещё и потому, что ошибка здесь молчит: передать Message
+    туда, где ждут int, — это TypeError внутри try/except общей функции
+    через 15 минут, в фоне. Счёт просто останется висеть в чате.
+    """
+    bad = []
+    for path in sorted(Path("app").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                continue
+            if node.func.id != "_schedule_invoice_deletion":
+                continue
+            # (bot, chat_id, message_id) — третий позиционный и проверяем.
+            if len(node.args) < 3:
+                bad.append(f"{path.as_posix()}:{node.lineno} (аргументов меньше трёх)")
+                continue
+            target = node.args[2]
+            ok = (
+                (isinstance(target, ast.Attribute) and target.attr == "message_id")
+                or (isinstance(target, ast.Name) and target.id.endswith("message_id"))
+            )
+            if not ok:
+                bad.append(f"{path.as_posix()}:{node.lineno} ({ast.unparse(target)})")
+
+    assert not bad, (
+        f"автоудалению счёта передают не message_id: {bad}. "
+        "Нужен именно идентификатор (msg.message_id): фоновая задача живёт "
+        "дольше обработчика и не должна держать устаревший объект Message."
     )
 
 

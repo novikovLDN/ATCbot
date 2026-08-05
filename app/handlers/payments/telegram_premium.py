@@ -31,6 +31,11 @@ from app.core.rate_limit import check_rate_limit
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.states import TelegramPremiumState
 from app.handlers.common.utils import safe_edit_text
+# Автоудаление счёта — одна общая реализация на весь бот.
+# Здесь была своя копия (INVOICE_TIMEOUT + _schedule_invoice_deletion с тем же
+# телом, но без записи INVOICE_EXPIRED в лог): срок жизни счёта правился в
+# config, а до этого экрана не доезжал, и пропавший счёт не оставлял следа.
+from app.handlers.callbacks._invoice_cleanup import _schedule_invoice_deletion
 
 premium_router = Router()
 logger = logging.getLogger(__name__)
@@ -46,8 +51,6 @@ PREMIUM_PLANS = {
     180: {"price_rubles": 2690, "label_key": "premium.period_6m", "period_text": "6 мес."},
     365: {"price_rubles": 3790, "label_key": "premium.period_12m", "period_text": "12 мес."},
 }
-
-INVOICE_TIMEOUT = getattr(config, "INVOICE_TIMEOUT_SECONDS", 900)
 
 
 # ─── helpers ───
@@ -84,14 +87,6 @@ def _get_back_to_main_kb(language: str) -> InlineKeyboardMarkup:
             callback_data="menu_main",
         )],
     ])
-
-
-async def _schedule_invoice_deletion(bot: Bot, chat_id: int, message_id: int, timeout: int = INVOICE_TIMEOUT):
-    try:
-        await asyncio.sleep(timeout)
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception:
-        pass
 
 
 # ─── Screen 1: Enter username ───

@@ -1,28 +1,25 @@
 """Мелкие помощники экранов трафика, нужные сразу нескольким модулям.
 
 ПОЧЕМУ ОТДЕЛЬНО
-    Форматирование объёма и полоса прогресса нужны экрану расхода, а
-    автоудаление сообщения Lava — обоим checkout-модулям. Держать их внутри
-    одного из экранов значит заставить соседа импортировать чужой модуль
-    целиком и получить кольцо импортов.
+    Форматирование объёма и полоса прогресса нужны и экрану расхода, и обоим
+    checkout-модулям. Держать их внутри одного из экранов значит заставить
+    соседа импортировать чужой модуль целиком и получить кольцо импортов.
+
+ЧЕГО ЗДЕСЬ БОЛЬШЕ НЕТ
+    Тут жила пара LAVA_INVOICE_TIMEOUT + _auto_delete_lava_msg — точный
+    близнец общего _schedule_invoice_deletion, только со своей константой
+    15 минут и без записи INVOICE_EXPIRED в лог. Оба checkout-модуля теперь
+    зовут app.handlers.callbacks._invoice_cleanup напрямую. Не заводите
+    здесь автоудаление заново: срок жизни счёта задаёт
+    config.INVOICE_TIMEOUT_SECONDS, и его же lava_service шлёт провайдеру
+    в поле expire — вторая константа рядом означает, что сообщение и счёт
+    протухают в разное время.
 
 ЧТО ЛЕГКО СЛОМАТЬ
     _strikethrough клеит U+0336 к каждому символу — это единственный способ
     показать зачёркнутую старую цену в подписи КНОПКИ: HTML-разметка внутри
     подписи кнопки Telegram не работает, теги вылезут пользователю как текст.
 """
-import asyncio
-
-LAVA_INVOICE_TIMEOUT = 15 * 60  # 15 minutes
-
-
-async def _auto_delete_lava_msg(bot, chat_id: int, msg):
-    """Delete Lava invoice message after timeout."""
-    try:
-        await asyncio.sleep(LAVA_INVOICE_TIMEOUT)
-        await bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-    except Exception:
-        pass
 
 
 def _strikethrough(text: str) -> str:

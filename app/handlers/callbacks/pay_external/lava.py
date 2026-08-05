@@ -157,7 +157,7 @@ async def callback_pay_lava(callback: CallbackQuery, state: FSMContext):
         ])
 
         lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg.message_id))
         await callback.answer()
 
         # Очищаем FSM state

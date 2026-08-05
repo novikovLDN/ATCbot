@@ -42,6 +42,10 @@ from aiogram.types import (
 import config
 import database
 from app.handlers.common.states import SpotifyPurchaseState
+# Автоудаление счёта — одна общая реализация на весь бот. Здесь стояла
+# вложенная функция с зашитым asyncio.sleep(15 * 60) — даже без имени
+# константы, так что правка config.INVOICE_TIMEOUT_SECONDS её не задевала.
+from app.handlers.callbacks._invoice_cleanup import _schedule_invoice_deletion
 
 spotify_purchase_router = Router()
 logger = logging.getLogger(__name__)
@@ -636,13 +640,7 @@ async def cb_pay_card(callback: CallbackQuery, state: FSMContext):
             prices=[LabeledPrice(label=label, amount=price_kopecks)],
         )
 
-        async def _del(bot, cid, msg):
-            try:
-                await asyncio.sleep(15 * 60)
-                await bot.delete_message(chat_id=cid, message_id=msg.message_id)
-            except Exception:
-                pass
-        asyncio.create_task(_del(callback.bot, telegram_id, invoice_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id))
     except Exception as e:
         logger.exception("SPOTIFY_CARD_ERROR user=%s: %s", telegram_id, e)
         await callback.answer("Ошибка создания платежа", show_alert=True)

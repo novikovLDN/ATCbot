@@ -40,6 +40,12 @@ from app.handlers.common.keyboards import (
     get_service_status_keyboard,
     get_connect_keyboard,
 )
+# Автоудаление счёта — одна общая реализация на весь бот. Здесь было две
+# вложенные копии (_del для Lava и _del_invoice для карты) с зашитым
+# asyncio.sleep(15 * 60): срок жизни счёта правился в config, а до этих
+# двух веток не доезжал, и пропавший счёт не оставлял в логах следа.
+from app.handlers.callbacks._invoice_cleanup import _schedule_invoice_deletion
+
 router = Router()
 
 logger = logging.getLogger(__name__)
@@ -247,13 +253,7 @@ async def callback_apple_pay_lava(callback: CallbackQuery):
 
     lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
-    async def _del(bot, cid, msg):
-        try:
-            await asyncio.sleep(15 * 60)
-            await bot.delete_message(chat_id=cid, message_id=msg.message_id)
-        except Exception:
-            pass
-    asyncio.create_task(_del(callback.bot, telegram_id, lava_msg))
+    asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg.message_id))
 
 
 async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int, price_rub: float):
@@ -353,13 +353,7 @@ async def callback_apple_pay_card(callback: CallbackQuery):
             parse_mode="HTML",
         )
 
-        async def _del_invoice(bot, cid, msg):
-            try:
-                await asyncio.sleep(15 * 60)
-                await bot.delete_message(chat_id=cid, message_id=msg.message_id)
-            except Exception:
-                pass
-        asyncio.create_task(_del_invoice(callback.bot, telegram_id, invoice_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id))
         await callback.answer()
     except Exception as e:
         logger.exception("APPLE_CARD_INVOICE_ERROR user=%s: %s", telegram_id, e)

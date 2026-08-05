@@ -24,11 +24,14 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import safe_edit_text
 from app.utils.telegram_safe import safe_send_message
+# Автоудаление счёта — одна общая реализация на весь бот. Здесь была своя,
+# с константой _LAVA_INVOICE_TIMEOUT = 15*60 и без лога INVOICE_EXPIRED:
+# счёт на прокси пропадал молча, и жалобу «не успел оплатить» по логам было
+# не поднять.
+from app.handlers.callbacks._invoice_cleanup import _schedule_invoice_deletion
 
 proxy_router = Router()
 logger = logging.getLogger(__name__)
-
-_LAVA_INVOICE_TIMEOUT = 15 * 60  # seconds
 
 
 # Numbered MTProto proxy endpoints shown on the delivery screen, in
@@ -265,20 +268,11 @@ async def callback_proxy_pay_lava(callback: CallbackQuery):
             [InlineKeyboardButton(text="← Назад", callback_data="proxy_menu")],
         ])
         lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        asyncio.create_task(_auto_delete(callback.bot, telegram_id, lava_msg.message_id))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg.message_id))
         await callback.answer()
     except Exception as e:
         logger.exception("PROXY_LAVA_ERROR user=%s: %s", telegram_id, e)
         await callback.answer("Не удалось создать платёж. Попробуйте позже.", show_alert=True)
-
-
-async def _auto_delete(bot, chat_id: int, message_id: int):
-    """Delete a Lava invoice message after it expires."""
-    try:
-        await asyncio.sleep(_LAVA_INVOICE_TIMEOUT)
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception:
-        pass
 
 
 async def send_proxy_success(bot, telegram_id: int, purchase_id: str, pending: dict):

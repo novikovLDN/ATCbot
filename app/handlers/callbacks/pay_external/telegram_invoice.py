@@ -166,7 +166,7 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
             prices=prices
         )
         await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id))
 
         # КРИТИЧНО: Переводим в состояние processing_payment
         await state.set_state(PurchaseState.processing_payment)
@@ -341,7 +341,7 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
             prices=prices
         )
         await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id))
 
         await state.set_state(PurchaseState.processing_payment)
 
@@ -480,7 +480,7 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
             prices=prices
         )
         await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id))
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error sending invoice: {e}")
