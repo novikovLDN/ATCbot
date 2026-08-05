@@ -28,7 +28,10 @@ from pathlib import Path
 import pytest
 
 
-DASHBOARD_ROUTE = Path("app/api/dashboard/routes/broadcasts.py")
+# Сборка клавиатуры переехала сюда, когда роут рассылок разрезали на пакет
+# (был файл на 1033 строки). Путь читается напрямую: тест сознательно не
+# импортирует FastAPI, чтобы работать на голом дереве исходников.
+DASHBOARD_ROUTE = Path("app/api/dashboard/routes/broadcasts/keyboard.py")
 
 
 def _dashboard_broadcast_buttons() -> set:
@@ -85,15 +88,23 @@ def test_offer_screens_are_not_behind_the_admin_guard():
         f"экраны предложений снова в админском разделе: {path}"
     )
 
-    src = path.read_text(encoding="utf-8")
-    assert "app.handlers.admin" not in src, "модуль тянет админский раздел"
+    # Предложения разрезаны на пакет (акция на модуль), поэтому проверяем
+    # каждый модуль: проверка, заехавшая в один из них, накрыла бы свою
+    # акцию так же тихо, как раньше middleware накрывала весь раздел.
+    for module in sorted(path.parent.glob("*.py")):
+        src = module.read_text(encoding="utf-8")
+        assert "app.handlers.admin" not in src, (
+            f"{module.name} тянет админский раздел"
+        )
 
-    # Именно ПРОВЕРКА доступа, а не упоминание админа: created_by=
-    # config.ADMIN_TELEGRAM_ID в записи о скидке — это атрибуция «кем
-    # выдана», она к правам нажавшего отношения не имеет.
-    guards = re.findall(r"if\s+[^\n]*from_user\.id\s*!=\s*config\.ADMIN_TELEGRAM_ID", src)
-    guards += re.findall(r"is_admin\(", src)
-    assert not guards, f"внутри осталась проверка на админа: {guards}"
+        # Именно ПРОВЕРКА доступа, а не упоминание админа: created_by=
+        # config.ADMIN_TELEGRAM_ID в записи о скидке — это атрибуция «кем
+        # выдана», она к правам нажавшего отношения не имеет.
+        guards = re.findall(
+            r"if\s+[^\n]*from_user\.id\s*!=\s*config\.ADMIN_TELEGRAM_ID", src,
+        )
+        guards += re.findall(r"is_admin\(", src)
+        assert not guards, f"в {module.name} осталась проверка на админа: {guards}"
 
 
 def test_offer_router_is_included_in_the_package():
@@ -110,10 +121,11 @@ def test_offer_router_is_included_in_the_package():
 def test_admin_only_wizard_handlers_did_not_come_back():
     """Выбор процента при СОЗДАНИИ рассылки — часть мастера, который
     переехал в дашборд. У дашборда свой список процентов."""
-    src = Path("app/handlers/callbacks/broadcast_offers.py").read_text(encoding="utf-8")
-    tree = ast.parse(src)
-    names = {
-        n.name for n in ast.walk(tree)
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+    names = set()
+    for module in sorted(Path("app/handlers/callbacks/broadcast_offers").glob("*.py")):
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        names |= {
+            n.name for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
     assert "callback_gift_reveal_percent_select" not in names

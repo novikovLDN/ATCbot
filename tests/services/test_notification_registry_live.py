@@ -78,7 +78,8 @@ def test_dead_keys_stay_removed(key):
 
 def test_gift_welcome_goes_through_the_registry():
     """Тумблер должен влиять на текст, а не висеть для вида."""
-    src = Path("app/handlers/user/start.py").read_text(encoding="utf-8")
+    # /start разрезан на пакет: сама команда и её ветки живут в command.py.
+    src = Path("app/handlers/user/start/command.py").read_text(encoding="utf-8")
     block = src[src.index("gift.activated_welcome") - 700:]
     block = block[: block.index("gift.activated_welcome") + 400]
     assert "_autonotif_text" in block, "подарочное приветствие идёт мимо реестра"

@@ -17,6 +17,30 @@ export default defineConfig({
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Маршруты уже разнесены по чанкам через lazy() в App.tsx. Здесь
+        // отделяем две группы зависимостей, которые иначе размазались бы по
+        // общему чанку:
+        //   charts — recharts и d3 под ним, самая тяжёлая зависимость в
+        //            проекте. Нужна только на экранах с графиками, поэтому
+        //            не должна лежать в том же файле, что и роутер;
+        //   vendor — react, роутер, react-query. Меняются раз в полгода, и
+        //            отдельным файлом переживают выкладку нового кода в кэше
+        //            браузера.
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return;
+          if (/[\\/]node_modules[\\/](recharts|d3-|victory-|internmap|delaunator|robust-predicates)/.test(id))
+            return "charts";
+          if (
+            /[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler|@tanstack)[\\/]/.test(id)
+          )
+            return "vendor";
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

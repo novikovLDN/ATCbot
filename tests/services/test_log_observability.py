@@ -127,8 +127,12 @@ def _log_calls(path: Path):
 _BEARER_CODE_FILES = {
     "database/gift_subscriptions.py": ("gift_code",),
     "database/subscriptions.py": ("gift_code",),
-    "app/handlers/callbacks/gift.py": ("gift_code",),
-    "app/handlers/user/start.py": ("gift_code", "bgift_code"),
+    # Подарки разрезаны на пакет: код подарка логируется на оплате
+    # и попадает в экраны списка.
+    "app/handlers/callbacks/gift/payment.py": ("gift_code",),
+    "app/handlers/callbacks/gift/my_gifts.py": ("gift_code",),
+    # /start разрезан на пакет; обе ветки активации кодов живут в command.py.
+    "app/handlers/user/start/command.py": ("gift_code", "bgift_code"),
     "app/handlers/payments/goods_delivery.py": ("gift_code",),
 }
 
@@ -371,7 +375,7 @@ def test_no_silent_exception_handlers_on_money_paths(rel_path):
 def test_gift_balance_debit_failure_is_logged():
     """Отказ списания не оставлял в логах ничего: человек видел «ошибка
     обработки платежа», а по логам покупки не существовало вовсе."""
-    src = (REPO_ROOT / "app/handlers/callbacks/gift.py").read_text(encoding="utf-8")
+    src = (REPO_ROOT / "app/handlers/callbacks/gift/payment.py").read_text(encoding="utf-8")
     assert "GIFT_BALANCE_DEBIT_FAILED" in src
 
 

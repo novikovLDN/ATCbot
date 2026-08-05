@@ -7,7 +7,7 @@
 
       • app/utils/telegram_safe.py:convert_tg_emoji — через неё идут
         safe_send_message, safe_edit_text и broadcast_delivery;
-      • app/api/dashboard/routes/broadcasts.py:normalize_premium_emoji —
+      • app/api/dashboard/routes/broadcasts/keyboard.py:normalize_premium_emoji —
         через неё идут создание рассылки в дашборде и планировщик.
 
     Метка ловилась по-разному: `.+?` без re.DOTALL не переходит на новую
@@ -30,7 +30,9 @@ import pytest
 
 from app.utils.telegram_safe import convert_tg_emoji, _TG_ADS_EMOJI_RE
 
-DASHBOARD_ROUTE = Path("app/api/dashboard/routes/broadcasts.py")
+# normalize_premium_emoji переехала сюда при разрезании роута рассылок на
+# пакет. Читаем исходник, а не импортируем: тесту не нужен FastAPI.
+DASHBOARD_ROUTE = Path("app/api/dashboard/routes/broadcasts/keyboard.py")
 
 
 def _dashboard_regex():

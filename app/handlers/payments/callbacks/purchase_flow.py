@@ -1,5 +1,28 @@
-"""
-Payment-related callback handlers: buy, tariff selection, payment methods.
+"""Покупка подписки: выбор тарифа → выбор периода → способ оплаты.
+
+ЧТО ЗДЕСЬ
+    Два основных шага покупки и подтверждение перехода Plus → Basic.
+
+ПОЧЕМУ ВЫДЕЛЕНО
+    Это главный денежный путь бота, и правится он чаще всего: цены,
+    скидки, склонения периодов, кнопка «Назад».
+
+ЧТО ЛЕГКО СЛОМАТЬ
+    Здесь НЕ создаётся ни покупка, ни счёт — только состояние в FSM. Так
+    и задумано: покупку создаёт экран способа оплаты, и создание её
+    раньше приведёт к висящим неоплаченным записям на каждый клик.
+
+    Проверки состояния FSM на каждом шаге. Кнопка из старого сообщения
+    живёт в чате вечно; без проверки человек прыгнет в середину покупки
+    со старой ценой.
+
+    Кнопка «Назад» зависит от того, пришёл ли человек из рассылки
+    (маркер from_broadcast). Потеряете ветку — из акции он уедет в
+    «Управление подпиской» и акцию потеряет.
+
+    Период, у которого не посчиталась цена, пропадает с экрана. Это
+    осознанно (кнопка без цены хуже), но обязано попадать в лог: иначе
+    «куда делся годовой тариф» не разобрать.
 """
 import logging
 import time
@@ -15,312 +38,22 @@ import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.services.subscriptions import service as subscription_service
-from app.handlers.common.guards import ensure_db_ready_callback
-from app.handlers.common.screens import _open_buy_screen, show_tariffs_main_screen
+from app.handlers.common.screens import show_tariffs_main_screen
 from app.handlers.payments.method_select import show_payment_method_selection
 from app.handlers.common.utils import (
     safe_edit_text,
     get_promo_session,
     validate_callback_data,
 )
-from app.handlers.common.keyboards import (
-    get_connect_keyboard,
-)
 from app.handlers.common.states import PromoCodeInput, PurchaseState
 from app.core.structured_logger import log_event
+from app.handlers.payments.callbacks.tariff_meta import _period_badge
 
-payments_callbacks_router = Router()
+router = Router()
 logger = logging.getLogger(__name__)
 
 
-
-_TARIFF_META = {
-    "basic":       {"icon": "⚡️", "name": "Basic",       "desc_key": "buy.tariff_basic_desc"},
-    "plus":        {"icon": "👑", "name": "Plus",        "desc_key": "buy.tariff_plus_desc"},
-    "combo_basic": {"icon": "🚀", "name": "Комбо Basic", "desc_key": "combo.tariff_basic"},
-    "combo_plus":  {"icon": "🚀", "name": "Комбо Plus",  "desc_key": "combo.tariff_plus"},
-}
-
-
-def _period_badge(period_days: int) -> str:
-    """Emotional badge for period buttons: ⭐ for 3 mo (popular), 🔥 for 12+ mo (best deal)."""
-    if period_days == 90:
-        return "⭐"
-    if period_days >= 365:
-        return "🔥"
-    return ""
-
-def _current_tariff_key(sub) -> str:
-    """Determine effective tariff key including combo flag."""
-    if not sub:
-        return ""
-    sub_type = (sub.get("subscription_type") or "basic").strip().lower()
-    is_combo = sub.get("is_combo", False)
-    if is_combo:
-        return f"combo_{sub_type}"  # combo_basic / combo_plus
-    return sub_type  # basic / plus
-
-
-@payments_callbacks_router.callback_query(F.data == "menu_buy_vpn")
-async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
-    """Управление подпиской: продлить текущий / сменить тарифный план."""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    sub = await database.get_subscription(telegram_id)
-    current_key = _current_tariff_key(sub)
-
-    # Пользователи без подписки, trial или bypass-only — стандартный экран тарифов
-    is_bypass_only = bool(sub and sub.get("is_bypass_only"))
-    if not sub or is_bypass_only or current_key not in _TARIFF_META:
-        await _open_buy_screen(callback, callback.bot, state)
-        return
-
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    meta = _TARIFF_META[current_key]
-
-    text = (
-        f"📦 <b>Управление подпиской</b>\n\n"
-        f"Ваш текущий тариф:\n\n"
-        f"{i18n_get_text(language, meta['desc_key'])}\n\n"
-        f"Выберите действие:"
-    )
-
-    # Кнопка продления текущего тарифа
-    if current_key.startswith("combo_"):
-        renew_cb = f"combo_tariff:{current_key}"
-    else:
-        renew_cb = f"tariff:{current_key}"
-
-    buttons = [
-        [InlineKeyboardButton(
-            text=f"🔄 Продлить {meta['name']}",
-            callback_data=renew_cb,
-        )],
-        [InlineKeyboardButton(
-            text="📦 Сменить тарифный план",
-            callback_data="switch_tariff_menu",
-        )],
-        [InlineKeyboardButton(
-            text="Купить ГБ обхода",
-            callback_data="buy_traffic",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_profile",
-        )],
-    ]
-
-    await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
-    await state.set_state(PurchaseState.choose_tariff)
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
-
-
-@payments_callbacks_router.callback_query(
-    F.data == "switch_tariff_menu",
-    StateFilter(PurchaseState.choose_tariff, PurchaseState.choose_period, default_state),
-)
-async def callback_switch_tariff_menu(callback: CallbackQuery, state: FSMContext):
-    """Меню смены тарифа — показываем все доступные тарифы кроме текущего."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    sub = await database.get_subscription(telegram_id)
-    current_key = _current_tariff_key(sub)
-
-    text = (
-        "📦 <b>Сменить тарифный план</b>\n\n"
-        "Новый тариф начнёт действовать после окончания текущей подписки.\n\n"
-        "Доступные тарифы:"
-    )
-
-    buttons = []
-    for key, meta in _TARIFF_META.items():
-        if key == current_key:
-            continue
-        buttons.append([InlineKeyboardButton(
-            text=f"{meta['icon']} {meta['name']}",
-            callback_data=f"switch_tariff:{key}",
-        )])
-
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
-        callback_data="menu_buy_vpn",
-    )])
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
-
-
-@payments_callbacks_router.callback_query(
-    F.data.startswith("switch_tariff:"),
-    StateFilter(PurchaseState.choose_tariff, PurchaseState.choose_period, default_state),
-)
-async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
-    """Экран нового тарифа с описанием и выбором периода."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    new_tariff = callback.data.split(":")[1]
-    if new_tariff not in _TARIFF_META:
-        return
-
-    meta = _TARIFF_META[new_tariff]
-    is_combo = new_tariff.startswith("combo_")
-
-    desc_text = i18n_get_text(language, meta['desc_key'])
-
-    if is_combo:
-        # Для комбо — показываем преимущества комбо подписки
-        combo_benefits = (
-            "\n\n💡 <b>Преимущества комбо:</b>\n"
-            "✅ Трафик обхода уже включён в стоимость\n"
-            "✅ Не нужно покупать ГБ отдельно\n"
-            "✅ Экономия до 30% по сравнению с раздельной покупкой"
-        )
-        text = (
-            f"{meta['icon']} <b>Переход на {meta['name']}</b>\n\n"
-            f"{desc_text}"
-            f"{combo_benefits}\n\n"
-            f"Новый тариф начнёт действовать после окончания текущей подписки.\n"
-            f"Выберите период:"
-        )
-    else:
-        text = (
-            f"{meta['icon']} <b>Переход на {meta['name']}</b>\n\n"
-            f"{desc_text}\n\n"
-            f"Новый тариф начнёт действовать после окончания текущей подписки.\n"
-            f"Выберите период:"
-        )
-
-    buttons = []
-
-    if is_combo:
-        # Комбо-тариф: берём цены из COMBO_TARIFFS + применяем цепочку скидок
-        tariff_data = config.COMBO_TARIFFS.get(new_tariff, {})
-        period_keys = {30: "combo.period_1", 90: "combo.period_3", 180: "combo.period_6", 365: "combo.period_12", 730: "combo.period_24"}
-        promo_session = await get_promo_session(state)
-        promo_code = promo_session.get("promo_code") if promo_session else None
-        for period_days, info in tariff_data.items():
-            try:
-                price_info = await subscription_service.calculate_price(
-                    telegram_id=telegram_id,
-                    tariff=info["base_tariff"],
-                    period_days=period_days,
-                    promo_code=promo_code,
-                    base_price_override_rubles=info["price"],
-                )
-                price_rub = price_info["final_price_kopecks"] // 100
-            except Exception:
-                price_rub = info["price"]
-            btn_text = i18n_get_text(language, period_keys.get(period_days, "combo.period_1"), gb=info["gb"], price=price_rub)
-            buttons.append([InlineKeyboardButton(
-                text=btn_text,
-                callback_data=f"combo_period:{new_tariff}:{period_days}",
-            )])
-    else:
-        # Обычный тариф: берём цены из TARIFFS + calculate_price
-        promo_session = await get_promo_session(state)
-        promo_code = promo_session.get("promo_code") if promo_session else None
-
-        await state.update_data(tariff_type=new_tariff, purchase_id=None, period_days=None)
-        await state.set_state(PurchaseState.choose_period)
-
-        periods = config.TARIFFS.get(new_tariff, {})
-        for period_days, period_data in periods.items():
-            try:
-                price_info = await subscription_service.calculate_price(
-                    telegram_id=telegram_id,
-                    tariff=new_tariff,
-                    period_days=period_days,
-                    promo_code=promo_code
-                )
-            except Exception as e:
-                # Период молча пропадал с экрана покупки: пользователь видел
-                # не весь список тарифов и не понимал, куда делся годовой.
-                # Пропускать всё равно приходится — показать кнопку без цены
-                # нельзя, — но теперь это видно в логах и разбирается.
-                logger.error(
-                    "PRICE_CALC_FAILED tariff=%s period_days=%s user=%s: %s — "
-                    "период не показан на экране покупки",
-                    new_tariff, period_days, telegram_id, e,
-                )
-                continue
-
-            base_price_rubles = price_info["base_price_kopecks"] / 100.0
-            final_price_rubles = price_info["final_price_kopecks"] / 100.0
-            has_discount = price_info["discount_percent"] > 0
-
-            if period_days == 730:
-                period_text = i18n_get_text(language, "buy.period_24_months")
-            else:
-                months = period_days // 30
-                if months == 1:
-                    period_text = i18n_get_text(language, "buy.period_1")
-                elif months in [2, 3, 4]:
-                    period_text = i18n_get_text(language, "buy.period_2_4", months=months)
-                else:
-                    period_text = i18n_get_text(language, "buy.period_5_plus", months=months)
-
-            price_int = int(final_price_rubles)
-            badge = _period_badge(period_days)
-
-            if has_discount:
-                if badge:
-                    button_text = i18n_get_text(
-                        language, "buy.button_price_discount_badge",
-                        base=int(base_price_rubles), final=price_int, period=period_text, badge=badge,
-                    )
-                else:
-                    button_text = i18n_get_text(
-                        language, "buy.button_price_discount",
-                        base=int(base_price_rubles), final=price_int, period=period_text,
-                    )
-            else:
-                if badge:
-                    button_text = i18n_get_text(
-                        language, "buy.button_price_badge",
-                        price=price_int, period=period_text, badge=badge,
-                    )
-                else:
-                    button_text = i18n_get_text(
-                        language, "buy.button_price",
-                        price=price_int, period=period_text,
-                    )
-
-            buttons.append([InlineKeyboardButton(
-                text=button_text,
-                callback_data=f"period:{new_tariff}:{period_days}"
-            )])
-
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
-        callback_data="switch_tariff_menu"
-    )])
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
-
-
-@payments_callbacks_router.callback_query(
+@router.callback_query(
     F.data.startswith("tariff:"),
     StateFilter(PurchaseState.choose_tariff, PurchaseState.choose_biz_tier, PurchaseState.choose_period, default_state),
 )
@@ -589,7 +322,7 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     await state.set_state(PurchaseState.choose_period)
 
 
-@payments_callbacks_router.callback_query(
+@router.callback_query(
     F.data.startswith("period:"),
     StateFilter(PurchaseState.choose_period),
 )
@@ -766,7 +499,7 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     await show_payment_method_selection(callback, tariff_type, period_days, price_info["final_price_kopecks"])
 
 
-@payments_callbacks_router.callback_query(
+@router.callback_query(
     F.data == "downgrade_confirm_basic",
     StateFilter(PurchaseState.choose_period),
 )
@@ -794,183 +527,3 @@ async def callback_downgrade_confirm_basic(callback: CallbackQuery, state: FSMCo
     await state.update_data(confirmed_downgrade=True)
     await state.set_state(PurchaseState.choose_payment_method)
     await show_payment_method_selection(callback, tariff_type, period_days, final_price_kopecks)
-
-
-@payments_callbacks_router.callback_query(F.data == "enter_promo")
-async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
-    """Обработчик кнопки ввода промокода"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    # SAFE STARTUP GUARD: Проверка готовности БД
-    if not await ensure_db_ready_callback(callback):
-        return
-    
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    
-    # КРИТИЧНО: Проверяем активную промо-сессию
-    promo_session = await get_promo_session(state)
-    if promo_session:
-        # Промокод уже применён - показываем сообщение
-        text = i18n_get_text(language, "buy.promo_applied")
-        await callback.message.answer(text, parse_mode="HTML")
-        return
-
-    # CRITICAL FIX: Очищаем предыдущие FSM состояния перед установкой нового
-    # Это гарантирует, что пользователь не останется в "зависшем" состоянии
-    await state.set_state(None)
-    
-    # Устанавливаем состояние ожидания промокода
-    await state.set_state(PromoCodeInput.waiting_for_promo)
-
-    text = i18n_get_text(language, "buy.enter_promo_text")
-    await callback.message.answer(text, parse_mode="HTML")
-
-
-@payments_callbacks_router.callback_query(F.data == "promo_back")
-async def callback_promo_back(callback: CallbackQuery, state: FSMContext):
-    """Обработчик кнопки 'Назад' при ошибке промокода - возвращает на экран выбора тарифа"""
-    # CRITICAL FIX: Очищаем FSM state при выходе с экрана ввода промокода
-    await state.clear()
-    
-    # CRITICAL FIX: Используем каноничный экран тарифов вместо локального render
-    await show_tariffs_main_screen(callback, state)
-
-
-# Старый обработчик tariff_* удалён - теперь используется новый флоу tariff_type -> tariff_period
-
-
-
-
-
-
-
-@payments_callbacks_router.callback_query(F.data == "corporate_access_request")
-async def callback_corporate_access_request(callback: CallbackQuery, state: FSMContext):
-    """
-    🏢 BUSINESS TARIFF CATALOG
-
-    Entry point: User taps "Для бизнеса" button.
-    Shows 6 business server tiers to choose from.
-    """
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    await state.set_state(PurchaseState.choose_biz_tier)
-    await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
-
-    text = i18n_get_text(language, "buy.biz_screen_title")
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_starter_btn"), callback_data="tariff:biz_starter")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_team_btn"), callback_data="tariff:biz_team")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_business_btn"), callback_data="tariff:biz_business")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_pro_btn"), callback_data="tariff:biz_pro")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_enterprise_btn"), callback_data="tariff:biz_enterprise")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_ultimate_btn"), callback_data="tariff:biz_ultimate")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn")],
-    ])
-
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
-    logger.debug(f"Business catalog shown for user {telegram_id}")
-
-
-@payments_callbacks_router.callback_query(
-    F.data.startswith("biz_country:"),
-    StateFilter(PurchaseState.choose_country),
-)
-async def callback_biz_country_selected(callback: CallbackQuery, state: FSMContext):
-    """ЭКРАН 3 (бизнес) — После выбора страны → показать периоды с ценами для этой страны."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    if not validate_callback_data(callback.data):
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    country_code = callback.data.split(":")[1]
-    if country_code not in config.BIZ_COUNTRIES:
-        await callback.answer("Invalid country", show_alert=True)
-        return
-
-    fsm_data = await state.get_data()
-    tariff_type = fsm_data.get("tariff_type")
-    if not tariff_type or tariff_type not in config.TARIFFS:
-        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
-        return
-
-    await state.update_data(country=country_code)
-    await state.set_state(PurchaseState.choose_period)
-
-    country_info = config.BIZ_COUNTRIES[country_code]
-    text = i18n_get_text(language, f"buy.tariff_{tariff_type}_desc")
-    text += f"\n\n{country_info['flag']} Регион: {country_info['name']}"
-
-    buttons = []
-    periods = config.TARIFFS[tariff_type]
-    for period_days in periods:
-        price = config.get_biz_price(tariff_type, period_days, country_code)
-
-        if period_days == 730:
-            period_text = i18n_get_text(language, "buy.period_24_months")
-        else:
-            months = period_days // 30
-            if months == 1:
-                period_text = i18n_get_text(language, "buy.period_1")
-            elif months in [2, 3, 4]:
-                period_text = i18n_get_text(language, "buy.period_2_4", months=months)
-            else:
-                period_text = i18n_get_text(language, "buy.period_5_plus", months=months)
-
-        badge = _period_badge(period_days)
-        button_text = f"{price:,} ₽ — {period_text}".replace(",", " ")
-        if badge:
-            button_text = f"{button_text} {badge}"
-        buttons.append([InlineKeyboardButton(
-            text=button_text,
-            callback_data=f"period:{tariff_type}:{period_days}"
-        )])
-
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
-        callback_data=f"tariff:{tariff_type}"
-    )])
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
-
-
-# Здесь был обработчик callback_corporate_access_confirm (callback_data
-# "corporate_access_confirm"): он слал админу заявку на корпоративный доступ и
-# показывал пользователю «запрос принят».
-#
-# Удалён как недостижимый. Достижимости не было по двум независимым причинам:
-#   1) ни одна клавиатура во всём репозитории (включая dashboard/ на TypeScript)
-#      не создаёт кнопку с callback_data "corporate_access_confirm";
-#   2) обработчик стоял под StateFilter(CorporateAccessRequest.waiting_for_confirmation),
-#      а это состояние нигде не выставляется — класс CorporateAccessRequest
-#      встречался только в определении в states.py и в самом фильтре.
-#
-# Живой корпоративный сценарий сейчас другой: кнопка "corporate_access_request"
-# → callback_corporate_access_request (каталог бизнес-тарифов) → "tariff:biz_*"
-# → выбор страны → обычная оплата. Заявка админу в нём не нужна.
-#
-# Если сценарий «оставить заявку» понадобится снова: текст ответа лежит в
-# ключе buy.corporate_request_accepted (все семь языков), тип уведомления
-# админу — "corporate_access_request" в admin_notifications.
-

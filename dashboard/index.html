@@ -2,16 +2,23 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <!-- user-scalable=no убран: запрет масштабирования — прямое нарушение
+         WCAG 1.4.4. В плотной таблице увеличить пальцами колонку с суммой
+         иногда единственный способ её прочитать. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="robots" content="noindex,nofollow" />
     <title>Atlas Admin</title>
 
     <!-- PWA / iOS standalone -->
     <link rel="manifest" href="/dashboard/manifest.webmanifest" />
-    <!-- Цвет системной панели совпадает с фоном страницы в каждой теме:
-         ступень 2 нейтральной шкалы в светлой, ступень 1 в тёмной. -->
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F8F9FB" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0C0E12" />
+    <!-- Цвет системной панели. Одна meta без media, значение подменяет
+         lib/theme.ts при каждом переключении темы: вариантов с
+         prefers-color-scheme недостаточно, потому что тему можно выбрать
+         вручную вопреки системе. Начальное значение — светлая тема (она по
+         умолчанию), ступень 2 нейтральной шкалы. Раньше здесь стоял #0A0A0A
+         при белом интерфейсе, и заставка установленного приложения сначала
+         вспыхивала чёрным. -->
+    <meta name="theme-color" content="#F8F9FB" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Atlas Admin" />

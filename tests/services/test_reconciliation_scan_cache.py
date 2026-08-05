@@ -54,7 +54,14 @@ def _clean_cache():
 
 
 def _install(monkeypatch, get_all_users):
-    import database.reconciliation as rec
+    """Подменяем пул и панель, возвращаем модуль со списком кандидатов.
+
+    get_pool патчим именно в reconciliation_candidates: после разрезания
+    database/reconciliation.py на модули там живёт find_over_issuance_candidates,
+    а фасад держит только реэкспорт — подмена атрибута на фасаде до реальной
+    функции не доехала бы.
+    """
+    import database.reconciliation_candidates as rec
     from app.services import remnawave_api
     monkeypatch.setattr(rec, "get_pool", AsyncMock(return_value=_FakePool()))
     monkeypatch.setattr(remnawave_api, "get_all_users", get_all_users)
@@ -118,9 +125,13 @@ async def test_expired_ttl_triggers_a_fresh_scan(monkeypatch):
     scan = AsyncMock(return_value=[_panel_user(1)])
     rec = _install(monkeypatch, scan)
 
+    # Кэш — глобал reconciliation_panel, а не фасада: состарить его можно
+    # только там, где он реально лежит.
+    import database.reconciliation_panel as panel
+
     await rec.find_over_issuance_candidates()
-    stored_at, rows = rec._panel_scan_cache
-    rec._panel_scan_cache = (stored_at - rec._PANEL_SCAN_TTL_SECONDS - 1, rows)
+    stored_at, rows = panel._panel_scan_cache
+    panel._panel_scan_cache = (stored_at - panel._PANEL_SCAN_TTL_SECONDS - 1, rows)
     await rec.find_over_issuance_candidates()
 
     assert scan.await_count == 2

@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
+import { Wifi, WifiOff, Loader2 } from "lucide-react";
 import { useEventStream } from "@/lib/ws";
 
+/**
+ * Индикатор живого соединения.
+ *
+ * Было: плавающая плашка, приклеенная к правому нижнему углу поверх контента,
+ * где состояние различалось по сути только цветом точки (WCAG 1.4.1). Стало:
+ * элемент шапки — цвет, значок и слово сразу.
+ *
+ * role="status", а не "alert": обрыв связи с шиной событий не требует
+ * немедленного вмешательства и не должен перебивать то, что человек читает.
+ */
 export function LiveIndicator() {
   const [status, setStatus] = useState<"connecting" | "live" | "offline">("connecting");
   const [lastBeat, setLastBeat] = useState(Date.now());
@@ -10,8 +21,8 @@ export function LiveIndicator() {
     setLastBeat(Date.now());
   });
 
-  // Treat as offline if no ping/event in the last 60 seconds
-  // (server pings every 25s).
+  // Считаем связь потерянной, если 60 секунд не было ни события, ни пинга
+  // (сервер пингует каждые 25 секунд).
   useEffect(() => {
     const t = window.setInterval(() => {
       if (Date.now() - lastBeat > 60000) setStatus("offline");
@@ -19,25 +30,27 @@ export function LiveIndicator() {
     return () => window.clearInterval(t);
   }, [lastBeat]);
 
+  const map = {
+    live: { Icon: Wifi, word: "Связь есть", cls: "text-success" },
+    offline: { Icon: WifiOff, word: "Нет связи", cls: "text-danger" },
+    connecting: { Icon: Loader2, word: "Подключаюсь", cls: "text-fg-muted" },
+  } as const;
+  const { Icon, word, cls } = map[status];
+
   return (
     <div
-      className="pointer-events-none fixed right-3 z-40 flex items-center gap-2 rounded-full border border-border bg-bg-card/80 px-3 py-1.5 text-[11px] font-medium backdrop-blur"
-      style={{
-        bottom: "max(80px, calc(env(safe-area-inset-bottom) + 88px))",
-      }}
+      role="status"
+      // На узком экране остаётся один значок: слово прячем визуально, но из
+      // подписи для скринридера оно никуда не девается.
+      className={`inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium ${cls}`}
+      title={word}
     >
-      <span
-        className={
-          status === "live"
-            ? "h-1.5 w-1.5 rounded-full bg-info-solid animate-pulse-live"
-            : status === "offline"
-            ? "h-1.5 w-1.5 rounded-full bg-danger"
-            : "h-1.5 w-1.5 rounded-full bg-warning"
-        }
+      <Icon
+        className={`h-3.5 w-3.5 shrink-0 ${status === "connecting" ? "animate-spin" : ""}`}
+        aria-hidden
       />
-      <span className={status === "live" ? "text-accent" : "text-fg-muted"}>
-        {status === "live" ? "Live" : status === "offline" ? "Offline" : "..."}
-      </span>
+      <span className="hidden lg:inline">{word}</span>
+      <span className="sr-only lg:hidden">{word}</span>
     </div>
   );
 }

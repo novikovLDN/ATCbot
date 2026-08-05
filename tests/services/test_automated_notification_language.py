@@ -76,11 +76,13 @@ async def test_params_are_rendered_for_russian(monkeypatch):
 def test_all_call_sites_pass_language():
     """Вызов без language снова сделает фолбэк недостижимым, поэтому
     проверяем каждый рантайм-вызов в коде бота."""
+    # pay_external — теперь пакет (экран на каждого провайдера), поэтому
+    # берём все его модули: иначе проверка тихо перестанет что-либо читать.
     files = [
         Path("reminders.py"),
         Path("trial_notifications.py"),
         Path("app/handlers/callbacks/pay_balance.py"),
-        Path("app/handlers/callbacks/pay_external.py"),
+        *sorted(Path("app/handlers/callbacks/pay_external").glob("*.py")),
     ]
     offenders = []
     for f in files:

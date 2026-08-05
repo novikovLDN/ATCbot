@@ -1,76 +1,64 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import {
-  LayoutDashboard,
-  Users,
-  CreditCard,
-  Megaphone,
-  MoreHorizontal,
-  X,
-  TrendingUp,
-  Share2,
-  Gift,
-  Tag,
-  Link as LinkIcon,
-  ScrollText,
-  Wrench,
-  Settings as SettingsIcon,
-  LogOut,
-} from "lucide-react";
+import { MoreHorizontal, X, LogOut } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { auth } from "@/lib/auth";
 import { endpoints } from "@/lib/api";
+import { NAV } from "@/lib/nav";
 
-interface Item {
-  to: string;
-  label: string;
-  icon: typeof LayoutDashboard;
-}
+/**
+ * Нижняя навигация телефона: четыре пункта и «Ещё».
+ *
+ * Набор основных пунктов пересобран по research §9.4. «Рассылки» из нижней
+ * панели убраны сознательно: отправку рассылки нельзя отменить, и ставить её
+ * в один ряд с просмотром — приглашение к беде на ходу. Их место заняли
+ * «События»: посмотреть, что произошло, — как раз мобильная задача. Сами
+ * рассылки никуда не делись, они в «Ещё».
+ *
+ * Отступ безопасной зоны считается ровно один раз — здесь. Раньше он был и в
+ * body, и в контейнере контента, и на айфоне с вырезом набегало около 100 px
+ * пустоты сверху и лишняя полоса снизу.
+ */
 
-const PRIMARY: Item[] = [
-  { to: "/", label: "Главная", icon: LayoutDashboard },
-  { to: "/users", label: "Юзеры", icon: Users },
-  { to: "/payments", label: "Платежи", icon: CreditCard },
-  { to: "/broadcasts", label: "Рассылки", icon: Megaphone },
-];
-
-const MORE: Item[] = [
-  { to: "/analytics", label: "Аналитика", icon: TrendingUp },
-  { to: "/promo", label: "Промокоды", icon: Tag },
-  { to: "/links", label: "Ссылки", icon: LinkIcon },
-  { to: "/referrals", label: "Рефералы", icon: Share2 },
-  { to: "/bgift", label: "Гифт-ГБ", icon: Gift },
-  { to: "/audit", label: "Аудит", icon: ScrollText },
-  { to: "/service", label: "Сервис", icon: Wrench },
-  { to: "/settings", label: "Настройки", icon: SettingsIcon },
-];
+const PRIMARY = NAV.filter((s) => s.mobilePrimary);
+const MORE = NAV.filter((s) => !s.mobilePrimary);
 
 export function MobileNav() {
   const [open, setOpen] = useState(false);
   const location = useLocation();
+  const sheetRef = useRef<HTMLDivElement>(null);
 
-  // Close the sheet whenever the user navigates.
+  // Закрываем панель на каждый переход.
   useEffect(() => {
     setOpen(false);
   }, [location.pathname]);
 
-  // Block body scroll while the sheet is open so iOS doesn't rubber-band
-  // the page underneath.
+  // Блокируем прокрутку страницы, пока панель открыта, иначе iOS тянет фон
+  // резинкой. Плюс Esc — на телефоне с клавиатурой это тоже работает.
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    sheetRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
     return () => {
       document.body.style.overflow = prev;
+      document.removeEventListener("keydown", onKey);
     };
   }, [open]);
 
-  const inMore = MORE.some((it) => location.pathname.startsWith(it.to));
+  const inMore = MORE.some(
+    (it) => location.pathname === it.to || location.pathname.startsWith(it.to + "/"),
+  );
 
   return (
     <>
       <nav
-        className="fixed inset-x-2 z-30 flex justify-around rounded-2xl border border-border bg-bg-card/90 px-2 py-1.5 backdrop-blur-md md:hidden"
+        aria-label="Основные разделы"
+        className="fixed inset-x-2 z-30 flex justify-around rounded-xl border border-border bg-bg-card/95 px-1 py-1 backdrop-blur md:hidden"
         style={{ bottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
       >
         {PRIMARY.map((it) => (
@@ -80,82 +68,81 @@ export function MobileNav() {
             end={it.to === "/"}
             className={({ isActive }) =>
               cn(
-                "flex flex-1 flex-col items-center gap-0.5 rounded-xl px-2 py-1.5 text-[10px] font-medium transition-all duration-200",
-                // Active = solid lime pill с тёмным текстом и shadow-glow
-                // (как «Dashboard» внизу из brand-deck).
+                "flex min-h-tap-touch flex-1 flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-2xs transition-colors",
                 isActive
-                  ? "bg-accent text-bg font-semibold shadow-glow-sm"
+                  ? "bg-accent-9 font-medium text-white"
                   : "text-fg-subtle hover:text-fg",
               )
             }
           >
-            <it.icon className="h-4 w-4" strokeWidth={2.25} />
+            <it.icon className="h-4 w-4" strokeWidth={2.25} aria-hidden />
             {it.label}
           </NavLink>
         ))}
         <button
           type="button"
           onClick={() => setOpen(true)}
+          aria-expanded={open}
           className={cn(
-            "flex flex-1 flex-col items-center gap-0.5 rounded-xl px-2 py-1.5 text-[10px] font-medium transition-all duration-200",
-            inMore
-              ? "bg-accent text-bg font-semibold shadow-glow-sm"
-              : "text-fg-subtle hover:text-fg",
+            "flex min-h-tap-touch flex-1 flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-2xs transition-colors",
+            inMore ? "bg-accent-9 font-medium text-white" : "text-fg-subtle hover:text-fg",
           )}
         >
-          <MoreHorizontal className="h-4 w-4" strokeWidth={2.25} />
+          <MoreHorizontal className="h-4 w-4" strokeWidth={2.25} aria-hidden />
           Ещё
         </button>
       </nav>
 
       {open && (
         <div
-          className="fixed inset-0 z-40 flex items-end bg-black/60 backdrop-blur-sm animate-fade-in md:hidden"
+          className="fixed inset-0 z-40 flex items-end bg-bg-overlay/50 md:hidden"
           onClick={() => setOpen(false)}
         >
           <div
-            className="w-full rounded-t-3xl border-t border-x border-border bg-bg-subtle shadow-[0_-12px_40px_-8px_rgba(0,0,0,0.6)] animate-slide-up"
+            ref={sheetRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Остальные разделы"
+            tabIndex={-1}
+            className="w-full rounded-t-xl border-x border-t border-border bg-bg-card shadow-lg animate-slide-up"
             style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-border" />
-            <div className="flex items-center justify-between px-5 pt-3 pb-2">
-              <div>
-                <div className="text-[10px] font-medium uppercase tracking-[0.15em] text-fg-subtle">
-                  Меню
-                </div>
-                <h3 className="text-base font-semibold text-fg">Все разделы</h3>
-              </div>
+            <div className="flex items-center justify-between px-4 pb-2 pt-3">
+              <h2 className="text-lg font-semibold text-fg">Остальные разделы</h2>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="grid h-9 w-9 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border"
+                aria-label="Закрыть"
+                className="grid h-11 w-11 place-items-center rounded-md text-fg-muted hover:bg-bg-subtle hover:text-fg"
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4" aria-hidden />
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 px-5 py-3">
+            <ul className="grid grid-cols-2 gap-2 px-4 py-2">
               {MORE.map((it) => (
-                <NavLink
-                  key={it.to}
-                  to={it.to}
-                  className={({ isActive }) =>
-                    cn(
-                      "flex items-center gap-3 rounded-xl border px-3 py-3 text-sm font-medium transition-colors",
-                      isActive
-                        ? "border-accent/40 bg-accent/10 text-accent"
-                        : "border-border bg-bg-card text-fg hover:border-fg-subtle",
-                    )
-                  }
-                >
-                  <it.icon className="h-4 w-4 shrink-0" strokeWidth={2} />
-                  <span className="truncate">{it.label}</span>
-                </NavLink>
+                <li key={it.to}>
+                  <NavLink
+                    to={it.to}
+                    className={({ isActive }) =>
+                      cn(
+                        "flex min-h-tap-touch items-center gap-2.5 rounded-md border px-3 py-3 text-base transition-colors",
+                        isActive
+                          ? "border-accent-7 bg-accent-3 font-medium text-accent-text"
+                          : "border-border bg-bg-card text-fg hover:bg-bg-subtle",
+                      )
+                    }
+                  >
+                    <it.icon className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+                    <span className="truncate">{it.label}</span>
+                  </NavLink>
+                </li>
               ))}
-            </div>
+            </ul>
 
-            <div className="px-5 pt-2 pb-4">
+            <div className="px-4 pb-2 pt-3">
               <button
                 type="button"
                 onClick={async () => {
@@ -167,9 +154,9 @@ export function MobileNav() {
                   auth.clear();
                   window.location.assign("/dashboard/");
                 }}
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm font-medium text-danger transition-colors hover:bg-danger/15"
+                className="flex min-h-tap-touch w-full items-center justify-center gap-2 rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-base font-medium text-danger transition-colors hover:bg-danger/15"
               >
-                <LogOut className="h-4 w-4" />
+                <LogOut className="h-4 w-4" aria-hidden />
                 Выйти
               </button>
             </div>

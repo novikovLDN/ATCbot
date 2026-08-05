@@ -1,6 +1,6 @@
 """Мёртвый обработчик corporate_access_confirm не должен вернуться.
 
-Дефект: в app/handlers/payments/callbacks.py жил обработчик
+Дефект: в app/handlers/payments/callbacks.py (ныне пакет) жил обработчик
 callback_corporate_access_confirm — 100 строк, которые не мог выполнить ни
 один пользователь. Недостижимость была двойная:
 
@@ -23,12 +23,22 @@ from pathlib import Path
 
 import pytest
 
-CALLBACKS = Path("app/handlers/payments/callbacks.py")
+# Экраны покупки разрезаны на пакет; надгробие удалённого обработчика уехало
+# вместе с бизнес-сценарием в business.py. Читаем весь пакет: обработчик мог
+# бы вернуться в любой из его модулей.
+CALLBACKS_PKG = Path("app/handlers/payments/callbacks")
 STATES = Path("app/handlers/common/states.py")
+
+_SOURCES = {
+    path: path.read_text(encoding="utf-8")
+    for path in sorted(CALLBACKS_PKG.glob("*.py"))
+}
 
 # Строки в коде, а не в комментариях: комментарий-надгробие оставлен намеренно.
 _CODE_LINES = [
-    line for line in CALLBACKS.read_text(encoding="utf-8").splitlines()
+    line
+    for text in _SOURCES.values()
+    for line in text.splitlines()
     if not line.lstrip().startswith("#")
 ]
 _CODE = "\n".join(_CODE_LINES)
@@ -41,7 +51,7 @@ def test_handler_is_gone():
 
 def test_tombstone_comment_explains_what_was_here():
     """Комментарий на месте удалённого кода — чтобы не восстановили вслепую."""
-    src = CALLBACKS.read_text(encoding="utf-8")
+    src = "\n".join(_SOURCES.values())
     assert "corporate_access_confirm" in src, "надгробие потеряно"
     assert "buy.corporate_request_accepted" in src, (
         "не указано, где лежит текст ответа — восстанавливать будет дороже"

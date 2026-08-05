@@ -26,9 +26,16 @@ from pathlib import Path
 
 CALLBACKS = Path("app/handlers/callbacks")
 
+# pay_external с тех пор разрезан ещё раз — на пакет по провайдерам
+# (карта/Stars в Telegram, Platega, CryptoBot, Lava), поэтому здесь путь к
+# каталогу, а не к файлу. Свой набор проверок у него в
+# tests/services/test_pay_external_split.py.
 PAYMENT_MODULES = [
     "pay_balance.py",
-    "pay_external.py",
+    "pay_external/telegram_invoice.py",
+    "pay_external/platega.py",
+    "pay_external/cryptobot.py",
+    "pay_external/lava.py",
     "topup.py",
     "_invoice_cleanup.py",
 ]
@@ -92,10 +99,11 @@ def test_gift_screen_reuses_the_shared_invoice_cleanup():
     INVOICE_TIMEOUT или добавление лога попадали в один-два файла: инвойсы
     одних товаров исчезали, других висели просроченными.
     """
-    src = (CALLBACKS / "gift.py").read_text(encoding="utf-8")
+    # Подарки разрезаны на пакет; платёжные экраны — в gift/payment.py.
+    src = (CALLBACKS / "gift" / "payment.py").read_text(encoding="utf-8")
     assert "_invoice_cleanup import _schedule_invoice_deletion" in src
     assert "async def _schedule_invoice_deletion" not in src, (
-        "в gift.py снова своя копия автоудаления инвойса"
+        "в gift/payment.py снова своя копия автоудаления инвойса"
     )
 
 

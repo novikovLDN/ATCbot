@@ -26,7 +26,8 @@ from app.i18n import get_text
 # того, как остальные вызовы разберут.
 CLEANED = [
     Path("app/handlers/payments/payments_messages.py"),
-    Path("app/handlers/payments/callbacks.py"),
+    # Экраны покупки — пакет; проверяем каждый его модуль.
+    *sorted(Path("app/handlers/payments/callbacks").glob("*.py")),
     Path("app/handlers/payments/telegram_stars_purchase.py"),
 ]
 

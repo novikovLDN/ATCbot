@@ -25,9 +25,11 @@
     background-color: rgb(var(--surface-page));
     color: rgb(var(--fg-default));
     min-height: 100vh;
-    /* Safe-area для iOS PWA (вырез и полоса «домой»). */
-    padding-top: env(safe-area-inset-top);
-    padding-bottom: env(safe-area-inset-bottom);
+    /* Отступа безопасной зоны здесь БОЛЬШЕ НЕТ и быть не должно.
+       Раньше он стоял и тут, и в контейнере контента — на айфоне с вырезом
+       считался дважды, около 100 px пустоты до заголовка и лишняя полоса
+       снизу. Теперь вырез обходит только шапка (TopBar), а нижнюю полосу
+       «домой» — только нижняя навигация (MobileNav). */
     -webkit-tap-highlight-color: transparent;
   }
 
