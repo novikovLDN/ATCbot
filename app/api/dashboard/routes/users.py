@@ -84,6 +84,34 @@ async def users_search(
     }
 
 
+@router.get("/subscriptions")
+async def users_subscriptions(
+    filter: str = Query("active", pattern="^(active|expiring_7d)$"),
+    limit: int = Query(200, gt=0, le=500),
+):
+    """Отфильтрованный список подписок — то, куда ведут плитки сводки.
+
+    ПОРЯДОК ОБЪЯВЛЕНИЯ ВАЖЕН. Этот маршрут обязан стоять ВЫШЕ
+    `GET /{telegram_id}`: тот ловит любой односегментный путь, и слово
+    «subscriptions» уехало бы в параметр-число с ответом 422. Ровно так
+    в этом проекте умер экран отложенных рассылок — там `/scheduled`
+    стоял под `/{broadcast_id}`. Сторожит tests/services/test_summary_routes.py.
+
+    Отбор совпадает с числами зоны B на сводке (database/dashboard_summary.py):
+    активные платные без триалов и bypass-only, комбо считаются отдельным
+    продуктом. Если условия разъедутся, плитка и список покажут разное.
+    """
+    try:
+        rows = await database.list_paid_subscriptions(filter, limit=limit)
+    except Exception as e:
+        logger.exception("DASHBOARD_SUBSCRIPTIONS_LIST_FAILED filter=%s", filter)
+        raise HTTPException(500, f"subscriptions_failed: {e}")
+    logger.info(
+        "DASHBOARD_SUBSCRIPTIONS_LIST_OK filter=%s returned=%s", filter, len(rows),
+    )
+    return {"filter": filter, "items": rows, "total": len(rows)}
+
+
 def _describe_subscription(subscription: Optional[dict]) -> Optional[dict]:
     """Дополнить подписку понятным описанием тарифа для интерфейса.
 

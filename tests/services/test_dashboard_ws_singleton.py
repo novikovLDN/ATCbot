@@ -20,7 +20,11 @@ import re
 from pathlib import Path
 
 WS = Path("dashboard/src/lib/ws.ts")
-DASHBOARD = Path("dashboard/src/pages/Dashboard.tsx")
+# Троттлинг переехал вместе с лентой событий: сводку разложили на зоны, и
+# подписка на шину теперь живёт там, где рисуется лента, а не в файле
+# страницы. Сам дефект от переезда никуда не делся — обработчик по-прежнему
+# срабатывает на КАЖДОЕ событие любого типа.
+FEED = Path("dashboard/src/components/summary/EventFeed.tsx")
 SRC_DIR = Path("dashboard/src")
 
 
@@ -78,14 +82,14 @@ def test_socket_survives_a_brief_drop_to_zero_subscribers():
 
 def test_stats_invalidation_is_throttled():
     """Инвалидация тяжёлых агрегатов — не чаще раза в несколько секунд."""
-    src = DASHBOARD.read_text(encoding="utf-8")
-    m = re.search(r"const STATS_INVALIDATE_MS = (\d+);", src)
+    src = FEED.read_text(encoding="utf-8")
+    m = re.search(r"const INVALIDATE_THROTTLE_MS = (\d+);", src)
     assert m, "нет константы троттлинга"
     assert int(m.group(1)) >= 5000
 
     # В обработчике событий — только троттленный вызов.
     handler = src.split("useEventStream(", 1)[1].split("});", 1)[0]
-    assert "invalidateStats()" in handler
+    assert "refresh()" in handler
     assert "invalidateQueries" not in handler, (
         "прямой вызов invalidateQueries в обработчике обходит троттлинг"
     )
@@ -94,6 +98,6 @@ def test_stats_invalidation_is_throttled():
 def test_throttle_does_not_swallow_the_last_event():
     """Троттлинг с хвостом: последнее событие всплеска обязано доехать,
     иначе экран замрёт на предпоследнем состоянии."""
-    src = DASHBOARD.read_text(encoding="utf-8")
-    body = src.split("const invalidateStats", 1)[1].split("}, [qc]);", 1)[0]
+    src = FEED.read_text(encoding="utf-8")
+    body = src.split("const refresh = useCallback", 1)[1].split("}, [qc]);", 1)[0]
     assert "setTimeout" in body, "нет отложенного (хвостового) вызова"

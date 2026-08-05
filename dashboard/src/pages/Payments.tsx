@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   PieChart,
@@ -29,7 +29,7 @@ import { fmtNum, fmtRub, fmtDate } from "@/lib/format";
 import { StatCard } from "@/components/StatCard";
 import { Spinner } from "@/components/Spinner";
 import { EmptyState } from "@/components/EmptyState";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 const RANGES = [
   { label: "24ч", hours: 24 },
@@ -65,6 +65,17 @@ const CHART_COLORS = [
 
 export function Payments() {
   const [hours, setHours] = useState(168);
+  // Плитка «сорвалось оплат за 24 ч» на сводке ведёт сюда с ?focus=errors.
+  // Без этого клик по числу открывал бы страницу платежей вообще, а блок
+  // ошибок остался бы свёрнутым внизу — число вело бы «примерно туда».
+  const [params] = useSearchParams();
+  const focusErrors = params.get("focus") === "errors";
+  useEffect(() => {
+    if (!focusErrors) return;
+    document
+      .getElementById("payment-errors")
+      ?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [focusErrors]);
 
   const revenue = useQuery({
     queryKey: ["payments", "revenue", hours],
@@ -180,19 +191,25 @@ export function Payments() {
         </div>
       )}
 
-      <PaymentErrors hours={hours} />
+      <PaymentErrors hours={hours} defaultExpanded={focusErrors} />
       <PaymentsFeed hours={hours} />
     </div>
   );
 }
 
-function PaymentErrors({ hours }: { hours: number }) {
+function PaymentErrors({
+  hours,
+  defaultExpanded = false,
+}: {
+  hours: number;
+  defaultExpanded?: boolean;
+}) {
   const summary = useQuery({
     queryKey: ["payments", "errors", "summary", hours],
     queryFn: () => endpoints.paymentsErrorsSummary(hours),
     refetchInterval: 15_000,
   });
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const rows = useQuery({
     queryKey: ["payments", "errors", "list", hours],
     queryFn: () => endpoints.paymentsErrors({ hours, limit: 200 }),
@@ -205,10 +222,11 @@ function PaymentErrors({ hours }: { hours: number }) {
 
   return (
     <section
+      id="payment-errors"
       className={
         empty
-          ? "card p-5"
-          : "card border-danger/30 bg-danger/[0.04] p-5"
+          ? "card scroll-mt-20 p-5"
+          : "card scroll-mt-20 border-danger/30 bg-danger/[0.04] p-5"
       }
     >
       <button

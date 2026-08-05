@@ -110,6 +110,75 @@ export interface UserDetail {
   cashback_effective_percent: number;
 }
 
+// ── Сводка: четыре зоны главного экрана ──────────────────────────────
+//
+// Числа зоны B приходят объектом, а не голым числом, нарочно: у каждого
+// своя судьба при отказе. `value: null` вместе с `error` означает «не
+// смогли посчитать» и на экране обязано выглядеть иначе, чем ноль.
+export interface SummaryMetric {
+  value: number | null;
+  error?: string;
+}
+
+export interface SummaryMoney {
+  tz: string;
+  /** Минут прошло с полуночи МСК — этим подписывают сравнение со вчера. */
+  elapsed_minutes: number;
+  today_rubles: number;
+  today_payments: number;
+  yesterday_same_time_rubles: number;
+  yesterday_same_time_payments: number;
+  sparkline: Array<{ date: string; rubles: number }>;
+}
+
+export interface SummaryBusiness {
+  metrics: {
+    active_subscriptions: SummaryMetric;
+    expiring_7d: SummaryMetric;
+    failed_payments_24h: SummaryMetric;
+    panel_mismatches: SummaryMetric;
+  };
+}
+
+export type AttentionItem = {
+  kind: "stuck_payment" | "panel_mismatch" | "failed_broadcast";
+  id: string;
+  at: string | null;
+  telegram_id?: number;
+  username?: string | null;
+  amount_rubles?: number | null;
+  tariff?: string | null;
+  provider?: string | null;
+  years_from_now?: number | null;
+  broadcast_id?: number | null;
+  title?: string | null;
+  failed?: number | null;
+  total?: number | null;
+  error?: string | null;
+};
+
+/** «ok» — проверили; «error» — проверить не смогли. Пустой список
+ *  означает разное в этих двух случаях, и текст на экране тоже разный. */
+export type AttentionSource = "ok" | "error";
+
+export interface SummaryAttention {
+  items: AttentionItem[];
+  truncated: boolean;
+  sources: Record<string, AttentionSource>;
+}
+
+export interface SummaryEvent {
+  kind: "payment" | "signup" | "admin";
+  at: string | null;
+  actor_id: number | null;
+  target_id: number | null;
+  username: string | null;
+  title_key: string | null;
+  tariff: string | null;
+  amount_rubles: number | null;
+  detail: string | null;
+}
+
 export const endpoints = {
   authStatus: () =>
     api.get<{
@@ -127,6 +196,16 @@ export const endpoints = {
     api.get<{ telegram_id: number; role: string; expires_at: number }>(
       `/auth/verify?token=${encodeURIComponent(token)}`,
     ),
+  // Сводка — по одному запросу на зону. Раньше главная дёргала
+  // одиннадцать эндпоинтов и держала на каждом свой таймер.
+  summaryMoney: (sparkDays = 30) =>
+    api.get<SummaryMoney>(`/summary/money?spark_days=${sparkDays}`),
+  summaryBusiness: () => api.get<SummaryBusiness>("/summary/business"),
+  summaryAttention: (limit = 10) =>
+    api.get<SummaryAttention>(`/summary/attention?limit=${limit}`),
+  summaryEvents: (limit = 20) =>
+    api.get<{ items: SummaryEvent[] }>(`/summary/events?limit=${limit}`),
+
   statsOverview: () => api.get<StatsOverview>("/stats/overview"),
   statsBusiness: () => api.get<Record<string, number>>("/stats/business"),
   statsRevenue: () => api.get<RevenueStats>("/stats/revenue"),

@@ -161,6 +161,112 @@ async def get_payments_by_provider(hours: int) -> list:
     ]
 
 
+async def get_revenue_today_vs_yesterday(spark_days: int = 30) -> Dict[str, Any]:
+    """Главное число сводки: выручка за сегодня против вчера В ТО ЖЕ ВРЕМЯ.
+
+    ПОЧЕМУ НЕ «ЗА ВЕСЬ ВЧЕРАШНИЙ ДЕНЬ»
+        В одиннадцать утра сравнивать четыре часа продаж с полными
+        предыдущими сутками бессмысленно: падение будет всегда, и число
+        перестают читать. Поэтому у вчерашнего дня берётся ровно столько
+        же времени от полуночи, сколько прошло сегодня.
+
+    Границу суток режет Postgres по Москве — тем же выражением
+    `AT TIME ZONE 'Europe/Moscow'`, что и суточный ряд в
+    database/admin_reports.py::get_daily_timeseries. Разъедутся эти два
+    места — тайл и график снова будут показывать разные цифры про один
+    день, как было до выравнивания.
+
+    Выручка — только внешние поступления (REVENUE_EXTERNAL_ONLY_SQL в
+    шапке модуля). Покупка с баланса уже посчитана в момент пополнения.
+
+    Возвращает рубли, спарклайн за `spark_days` суток и elapsed_minutes —
+    сколько минут прошло с полуночи; фронту это нужно, чтобы подписать
+    сравнение честно («вчера к 11:12»).
+
+    Исключения НЕ гасятся: на главном экране «0 ₽» и «не смогли
+    посчитать» обязаны выглядеть по-разному, а решает это маршрут.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            WITH b AS (
+                SELECT
+                    (DATE_TRUNC('day', (NOW() AT TIME ZONE 'Europe/Moscow'))
+                        AT TIME ZONE 'Europe/Moscow') AS today_start,
+                    ((DATE_TRUNC('day', (NOW() AT TIME ZONE 'Europe/Moscow'))
+                        - INTERVAL '1 day') AT TIME ZONE 'Europe/Moscow') AS yday_start,
+                    ((NOW() AT TIME ZONE 'Europe/Moscow')
+                        - DATE_TRUNC('day', (NOW() AT TIME ZONE 'Europe/Moscow'))) AS elapsed
+            )
+            SELECT
+                (EXTRACT(EPOCH FROM b.elapsed)::bigint / 60) AS elapsed_minutes,
+                COALESCE(SUM(pp.price_kopecks) FILTER (
+                    WHERE pp.created_at >= b.today_start), 0)::bigint AS today_kopecks,
+                COUNT(pp.id) FILTER (WHERE pp.created_at >= b.today_start)::int AS today_count,
+                COALESCE(SUM(pp.price_kopecks) FILTER (
+                    WHERE pp.created_at >= b.yday_start
+                      AND pp.created_at < b.yday_start + b.elapsed), 0)::bigint AS yday_kopecks,
+                COUNT(pp.id) FILTER (
+                    WHERE pp.created_at >= b.yday_start
+                      AND pp.created_at < b.yday_start + b.elapsed)::int AS yday_count
+            FROM b
+            LEFT JOIN pending_purchases pp
+                   ON pp.status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
+                  AND pp.created_at >= b.yday_start
+            GROUP BY b.elapsed, b.today_start, b.yday_start
+            """,
+        )
+        spark = await conn.fetch(
+            """
+            WITH days AS (
+                SELECT generate_series(
+                    DATE_TRUNC('day', (NOW() AT TIME ZONE 'Europe/Moscow'))
+                        - ($1::int - 1) * INTERVAL '1 day',
+                    DATE_TRUNC('day', (NOW() AT TIME ZONE 'Europe/Moscow')),
+                    INTERVAL '1 day'
+                )::date AS day
+            ),
+            win AS (
+                SELECT ((DATE_TRUNC('day', (NOW() AT TIME ZONE 'Europe/Moscow'))
+                    - ($1::int - 1) * INTERVAL '1 day') AT TIME ZONE 'Europe/Moscow') AS since
+            ),
+            pay AS (
+                SELECT DATE_TRUNC('day', created_at AT TIME ZONE 'Europe/Moscow')::date AS day,
+                       COALESCE(SUM(price_kopecks), 0)::bigint AS revenue_kopecks
+                FROM pending_purchases
+                WHERE status = 'paid' AND COALESCE(payment_provider, '') <> 'balance'
+                  AND created_at >= (SELECT since FROM win)
+                GROUP BY 1
+            )
+            SELECT d.day, COALESCE(pay.revenue_kopecks, 0) AS revenue_kopecks
+            FROM days d LEFT JOIN pay ON pay.day = d.day
+            ORDER BY d.day
+            """,
+            spark_days,
+        )
+    # LEFT JOIN гарантирует строку даже на пустой таблице, но GROUP BY по
+    # elapsed на всякий случай проверяем: пустой ответ здесь означал бы
+    # сломанный запрос, а не отсутствие продаж.
+    today_kopecks = int(row["today_kopecks"]) if row else 0
+    yday_kopecks = int(row["yday_kopecks"]) if row else 0
+    return {
+        "tz": "Europe/Moscow",
+        "elapsed_minutes": int(row["elapsed_minutes"]) if row else 0,
+        "today_rubles": today_kopecks / 100,
+        "today_payments": int(row["today_count"]) if row else 0,
+        "yesterday_same_time_rubles": yday_kopecks / 100,
+        "yesterday_same_time_payments": int(row["yday_count"]) if row else 0,
+        "sparkline": [
+            {
+                "date": r["day"].isoformat(),
+                "rubles": int(r["revenue_kopecks"]) / 100,
+            }
+            for r in spark
+        ],
+    }
+
+
 async def get_payments_breakdown(hours: int) -> Dict[str, Any]:
     """Полный разрез оплат за окно N часов:
       - total: {count, revenue_rubles}

@@ -33,8 +33,15 @@ export default defineConfig({
           if (!id.includes("node_modules")) return;
           if (/[\\/]node_modules[\\/](recharts|d3-|victory-|internmap|delaunator|robust-predicates)/.test(id))
             return "charts";
+          // clsx и tailwind-merge — по полкилобайта каждый, но их зовёт и
+          // наш cn(), и recharts. Без явного назначения rollup клал их
+          // ВНУТРЬ чанка charts, а входной чанк импортировал их оттуда —
+          // и тянул за собой все 409 КБ recharts на КАЖДЫЙ экран, включая
+          // логин и сводку, где ни одного графика нет. Заметно это было
+          // только в графе импортов собранного бандла: по размеру чанков
+          // всё выглядело правильно разрезанным.
           if (
-            /[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler|@tanstack)[\\/]/.test(id)
+            /[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler|@tanstack|clsx|tailwind-merge)[\\/]/.test(id)
           )
             return "vendor";
         },

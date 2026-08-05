@@ -71,13 +71,22 @@ def test_ws_checks_that_token_owner_is_still_admin():
     assert 'int(payload["sub"])' in token_branch, "sub не разбирается"
 
 
-@pytest.mark.parametrize("label, sub", [
+@pytest.mark.parametrize("label, hint", [
     ("ARPU", "на всю базу"),
     ("LTV", "на платящего"),
 ])
-def test_dashboard_labels_say_what_is_measured(label, sub):
-    """Подпись «на юзера» у ARPU была неверной и маскировала совпадение."""
-    src = Path("dashboard/src/pages/Dashboard.tsx").read_text(encoding="utf-8")
+def test_analytics_labels_say_what_is_measured(label, hint):
+    """Подпись «на юзера» у ARPU была неверной и маскировала совпадение.
+
+    Карточки переехали со сводки на «Аналитику» (research §9.3: ARPU и LTV
+    — метрики уровня 2, из них не следует действие в ближайший час). При
+    переезде их к тому же расклеили: на главной они жили одной карточкой
+    «ARPU / средний LTV» с двумя числами через слэш, где понять, где чьё,
+    было нельзя вовсе.
+    """
+    src = Path("dashboard/src/pages/Analytics.tsx").read_text(encoding="utf-8")
     idx = src.index(f'label="{label}"')
     window = src[idx: idx + 260]
-    assert f'sub="{sub}"' in window, f"карточка {label}: подпись не объясняет знаменатель"
+    assert f'hint="{hint}"' in window, (
+        f"карточка {label}: подпись не объясняет знаменатель"
+    )

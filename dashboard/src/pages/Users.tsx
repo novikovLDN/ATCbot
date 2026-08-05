@@ -21,10 +21,20 @@ import { fmtNum, fmtRub, fmtDate } from "@/lib/format";
 import { toast } from "@/store/toast";
 import { Spinner } from "@/components/Spinner";
 import { EmptyState } from "@/components/EmptyState";
+import {
+  SubscriptionFilterList,
+  type SubscriptionFilter,
+} from "@/components/users/SubscriptionFilterList";
 
 export function Users() {
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const initialTg = params.get("tg") || "";
+  // ?filter= приходит с плиток сводки: «активные подписки» и «истекают за
+  // 7 дней». Число там кликабельно ровно ради этого списка — без него
+  // клик открывал бы пустой экран поиска, то есть был бы мёртвым.
+  const rawFilter = params.get("filter");
+  const filter: SubscriptionFilter | null =
+    rawFilter === "active" || rawFilter === "expiring_7d" ? rawFilter : null;
   const [query, setQuery] = useState(initialTg);
   const [submitted, setSubmitted] = useState(initialTg);
   // After the search returns >1 match the admin picks one from the
@@ -102,6 +112,17 @@ export function Users() {
           Найти
         </button>
       </form>
+
+      {filter && (
+        <SubscriptionFilterList
+          filter={filter}
+          onReset={() => {
+            const next = new URLSearchParams(params);
+            next.delete("filter");
+            setParams(next, { replace: true });
+          }}
+        />
+      )}
 
       {submitted && search.isLoading && (
         <div className="card flex items-center gap-3 p-6 text-sm text-fg-muted">

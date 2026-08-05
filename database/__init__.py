@@ -168,6 +168,7 @@ from database.analytics import (  # noqa: F401
     get_analytics_by_period,
     get_active_paid_subscriptions_count,
     get_revenue_for_period,
+    get_revenue_today_vs_yesterday,
     get_payments_by_provider,
     get_payments_breakdown,
     get_recent_payments_feed,
@@ -362,6 +363,18 @@ from database.farm import (  # noqa: F401
     STORM_ANNOUNCE_BEFORE_HOURS,
     STORM_MIN_INTERVAL_DAYS,
     STORM_MAX_INTERVAL_DAYS,
+)
+
+# Главный экран дашборда. Отдельным модулем, потому что там действует
+# правило, противоположное остальному отчётному слою: сбой поднимается
+# наверх, а не превращается в ноль (см. шапку dashboard_summary.py).
+from database.dashboard_summary import (  # noqa: F401
+    get_summary_subscription_counts,
+    list_paid_subscriptions,
+    get_failed_payments_count,
+    get_stuck_payments,
+    get_failed_broadcasts,
+    get_summary_events,
 )
 
 # Admin: stats, broadcasts, analytics, exports, gifts, VIP, discounts

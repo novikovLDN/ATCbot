@@ -36,6 +36,7 @@
 from database.analytics_revenue import (  # noqa: F401
     REVENUE_EXTERNAL_ONLY_SQL,
     get_revenue_for_period,
+    get_revenue_today_vs_yesterday,
     get_payments_by_provider,
     get_payments_breakdown,
     get_purchase_breakdown,
@@ -64,6 +65,7 @@ from database.analytics_stats import (  # noqa: F401
 __all__ = [
     "REVENUE_EXTERNAL_ONLY_SQL",
     "get_revenue_for_period",
+    "get_revenue_today_vs_yesterday",
     "get_payments_by_provider",
     "get_payments_breakdown",
     "get_purchase_breakdown",

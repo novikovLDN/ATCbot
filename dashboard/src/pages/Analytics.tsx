@@ -14,6 +14,8 @@ import { ApiError, downloadCsv, endpoints } from "@/lib/api";
 import { fmtNum, fmtRub } from "@/lib/format";
 import { StatCard } from "@/components/StatCard";
 import { Spinner } from "@/components/Spinner";
+import { HourlyActivity } from "@/components/analytics/HourlyActivity";
+import { ConversionFunnel } from "@/components/analytics/ConversionFunnel";
 import { toast } from "@/store/toast";
 
 const RANGES = [
@@ -127,7 +129,7 @@ export function Analytics() {
         />
       </section>
 
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Доход всего"
           value={fmtRub(revenue.data?.total_revenue_rubles)}
@@ -140,19 +142,36 @@ export function Analytics() {
           icon={UsersIcon}
           loading={revenue.isLoading}
         />
+        {/* ARPU и LTV — две РАЗНЫЕ метрики, и подпись обязана называть
+            знаменатель. Они считались одинаково (выручка / платящие) и
+            всегда показывали одно число под двумя названиями; на сводке
+            жили одной склеенной карточкой «ARPU / средний LTV», где
+            различить их было нельзя вовсе. Уберёте hint — дефект вернётся
+            в форме «два числа, непонятно чьих». */}
         <StatCard
-          label="ARPU / средний LTV"
-          value={
-            revenue.data
-              ? `${fmtRub(revenue.data.arpu_rubles)} / ${fmtRub(revenue.data.avg_ltv_rubles)}`
-              : "—"
-          }
+          label="ARPU"
+          hint="на всю базу"
+          value={fmtRub(revenue.data?.arpu_rubles)}
+          icon={TrendingUp}
+          loading={revenue.isLoading}
+        />
+        <StatCard
+          label="LTV"
+          hint="на платящего"
+          value={fmtRub(revenue.data?.avg_ltv_rubles)}
           icon={TrendingUp}
           loading={revenue.isLoading}
         />
       </section>
 
       <BreakdownTable data={breakdown.data} loading={breakdown.isLoading} />
+
+      {/* Переехало со сводки: на главной из этих двух блоков не следует
+          действия в ближайший час, а место они занимали наравне с
+          деньгами. Ни один не удалён — оба на уровень глубже (research
+          §9.3, NN/g «Reduce Clutter Without Reducing Capability»). */}
+      <HourlyActivity />
+      <ConversionFunnel />
 
       <ExportSection />
     </div>

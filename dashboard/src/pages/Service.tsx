@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -20,8 +21,22 @@ import { fmtDate, fmtNum, fmtRub } from "@/lib/format";
 import { toast } from "@/store/toast";
 import { Spinner } from "@/components/Spinner";
 import { EmptyState } from "@/components/EmptyState";
+import { ReconciliationSection } from "@/components/ReconciliationSection";
 
 export function Service() {
+  // Сводка ссылается сюда якорем: плитка «расхождений с панелью» и строки
+  // «требует внимания» ведут на /service?focus=reconciliation. Без
+  // прокрутки человек попадал бы наверх страницы и искал блок глазами —
+  // ровно та потеря контекста, ради которой числа делали кликабельными.
+  const [params] = useSearchParams();
+  const focus = params.get("focus");
+  useEffect(() => {
+    if (focus !== "reconciliation") return;
+    document
+      .getElementById("reconciliation")
+      ?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [focus]);
+
   return (
     <div className="space-y-6">
       <header>
@@ -37,6 +52,12 @@ export function Service() {
       <IncidentSection />
       <PendingActivationsSection />
       <PendingPaymentsSection />
+
+      {/* Сверка Remnawave ↔ БД. Переехала со сводки: открывают редко и по
+          подозрению, а места на главной занимала постоянно. */}
+      <div id="reconciliation" className="scroll-mt-20">
+        <ReconciliationSection />
+      </div>
     </div>
   );
 }

@@ -1,5 +1,11 @@
 /**
- * «Сверка» — reconciliation section at the bottom of Dashboard.
+ * «Сверка» — раздел «Сервис» (/service).
+ *
+ * ПЕРЕЕХАЛА СЮДА СО СВОДКИ. Экран сверки открывают редко и по конкретному
+ * подозрению, а на главной он занимал место постоянно. Дом сверки —
+ * «Сервис»: там же здоровье интеграции с Remnawave (research §9.2). На
+ * сводке от неё осталось одно число в зоне B и строки в «требует
+ * внимания» — они ведут сюда якорем ?focus=reconciliation.
  *
  * Shows users whose PREMIUM subscription expires more than 8 years from now,
  * plus a stream of recent auto-detected over-issuance events. Each candidate
