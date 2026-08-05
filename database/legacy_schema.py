@@ -64,6 +64,20 @@ async def apply_legacy_schema_bootstrap(conn) -> None:
     except Exception:
         pass
 
+    # Привязка аккаунта на сайте QoDev. Колонку читает воркер синхронизации
+    # (app/workers/site_sync_worker.py) и админский экран связок.
+    #
+    # ПОЧЕМУ ЗДЕСЬ, А НЕ В ОБРАБОТЧИКЕ
+    #     Тот же ALTER TABLE выполнялся прямо внутри /start — на каждой
+    #     привязке сайта. ALTER берёт ACCESS EXCLUSIVE на users: он
+    #     дожидается всех текущих запросов к таблице и всё это время
+    #     держит новые. На горячем пути это управляемый по чужому таймингу
+    #     стоп-кран для всего бота, ради колонки, которая нужна один раз.
+    try:
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS site_linked BOOLEAN DEFAULT FALSE")
+    except Exception:
+        pass
+
     # Таблица pending_purchases - контекст покупки для защиты от устаревших кнопок
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS pending_purchases (

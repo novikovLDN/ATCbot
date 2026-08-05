@@ -111,14 +111,12 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     try:
         parts = callback.data.split(":")
         if len(parts) < 2:
-            user = await database.get_user(callback.from_user.id)
             language = await resolve_user_language(callback.from_user.id)
             await callback.answer(i18n_get_text(language, "errors.tariff"), show_alert=True)
             return
         tariff_type = parts[1]  # "basic" или "plus"
     except (IndexError, ValueError) as e:
         logger.error(f"Invalid tariff callback_data: {callback.data}, error={e}")
-        user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "errors.tariff"), show_alert=True)
         return
@@ -126,7 +124,6 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     # Валидация тарифа
     if tariff_type not in config.TARIFFS:
         logger.error(f"Invalid tariff_type: {tariff_type}")
-        user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "errors.tariff"), show_alert=True)
         return

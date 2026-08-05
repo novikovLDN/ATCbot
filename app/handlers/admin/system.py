@@ -21,9 +21,11 @@
     Обращение к callback.message после выхода из обработчика даст гонку с
     уже устаревшим сообщением.
 
-    Экран QoDev выполняет ALTER TABLE ... ADD COLUMN IF NOT EXISTS на живой
-    таблице users. Это не место для схемы — миграция должна жить в
-    migrations/, — но поведение оставлено как было.
+    Схему отсюда больше не правят. Экран QoDev выполнял ALTER TABLE ...
+    ADD COLUMN IF NOT EXISTS на живой таблице users; колонка site_linked
+    заведена при инициализации схемы (database/legacy_schema.py). За тем,
+    чтобы DDL не вернулся в обработчики, следит
+    tests/services/test_no_ddl_in_handlers.py.
 """
 import logging
 from datetime import datetime, timezone
@@ -375,10 +377,9 @@ async def callback_admin_qodev(callback: CallbackQuery):
         # Get linked users from bot DB (site_linked = true)
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            # Ensure column exists
-            await conn.execute("""
-                ALTER TABLE users ADD COLUMN IF NOT EXISTS site_linked BOOLEAN DEFAULT FALSE
-            """)
+            # Колонка site_linked заводится при инициализации схемы
+            # (database/legacy_schema.py). ALTER TABLE отсюда убран: он
+            # брал ACCESS EXCLUSIVE на users ради одного экрана.
             rows = await conn.fetch("""
                 SELECT u.telegram_id, u.username, u.created_at,
                        s.expires_at, s.subscription_type

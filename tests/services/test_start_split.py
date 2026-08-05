@@ -156,3 +156,68 @@ def test_helper_modules_do_not_import_the_command():
                 assert not (node.module or "").endswith("start.command"), (
                     f"{module} тянет cmd_start обратно"
                 )
+
+
+class TestStartPayloadIsParsedOnce:
+    """Хвост /start разбирается в одном месте и проверка не декоративная.
+
+    ЧТО БЫЛО
+
+        В начале cmd_start стояла проверка «подозрительный payload»: она
+        писала INVALID_START_PAYLOAD в лог и заканчивалась `pass`.
+        Комментарий рядом обещал «обрабатываем как обычный /start», но
+        ниже семь веток диплинков резали message.text ЗАНОВО, каждая
+        своей копией `strip().split(maxsplit=1)`. То есть проверка не
+        влияла ни на что, а правило разбора существовало в семи
+        экземплярах.
+    """
+
+    def test_the_tail_is_split_in_exactly_one_place(self):
+        """Семь копий одного разбора — семь мест, где разойдётся правило."""
+        import inspect
+
+        from app.handlers.user.start import command
+
+        src = inspect.getsource(command)
+        splits = src.count("message.text.strip().split(maxsplit=1)")
+        assert splits == 1, (
+            f"разбор хвоста /start снова размножился: {splits} копий"
+        )
+
+    def test_a_valid_deeplink_survives(self):
+        from unittest.mock import MagicMock
+
+        from app.handlers.user.start.command import _start_payload
+
+        msg = MagicMock()
+        msg.text = "/start ref_ABC123"
+        msg.from_user.id = 1
+        assert _start_payload(msg) == "ref_ABC123"
+
+    def test_plain_start_has_no_payload(self):
+        from unittest.mock import MagicMock
+
+        from app.handlers.user.start.command import _start_payload
+
+        msg = MagicMock()
+        msg.text = "/start"
+        msg.from_user.id = 1
+        assert _start_payload(msg) is None
+
+    @pytest.mark.parametrize("tail", [
+        "ref_<script>",          # посторонние символы
+        "gift_a b",              # пробел внутри
+        "x" * 65,                # длиннее, чем разрешает сам Telegram
+    ])
+    def test_a_rejected_payload_does_not_reach_the_branches(self, tail):
+        """Раньше отбракованный payload разбирался ветками как ни в чём не бывало."""
+        from unittest.mock import MagicMock
+
+        from app.handlers.user.start.command import _start_payload
+
+        msg = MagicMock()
+        msg.text = f"/start {tail}"
+        msg.from_user.id = 1
+        assert _start_payload(msg) is None, (
+            f"{tail!r} прошёл проверку — ветки диплинков его разберут"
+        )

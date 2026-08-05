@@ -3,7 +3,8 @@
 ЧТО ЗДЕСЬ
     `_BUTTON_TYPES` — что вообще разрешено просить у API;
     `_build_reply_markup` — сборка инлайн-клавиатуры по этому списку;
-    `normalize_premium_emoji` — Markdown-формат premium-эмодзи → HTML.
+    `normalize_premium_emoji` — второе имя канонической конвертации
+    premium-эмодзи (app/utils/telegram_safe.py:convert_tg_emoji).
 
 ПОЧЕМУ ВЫДЕЛЕНО
     Кнопки правят чаще всего остального в рассылках (новый оффер — новая
@@ -21,32 +22,30 @@
 """
 from __future__ import annotations
 
-import re
 from typing import Optional
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.utils.telegram_safe import _TG_ADS_EMOJI_RE, convert_tg_emoji
 
-# Telegram-клиент при копировании premium-эмодзи иногда вставляет их
-# в Markdown image-синтаксисе  ![👑](tg://emoji?id=12345).  Бот шлёт
-# broadcast только с parse_mode="HTML" — такой markdown отрисуется как
-# plain text и сломает entity-парсер (отсюда 600/600 ошибок). Чтобы
-# админ мог копи-пастить из любого источника, нормализуем оба формата
-# к HTML-варианту  <tg-emoji emoji-id="12345">👑</tg-emoji>.
-_MD_TG_EMOJI_RE = re.compile(r"!\[([^\]]+?)\]\(tg://emoji\?id=(\d+)\)")
-
-
-def normalize_premium_emoji(text: str) -> str:
-    """Convert Markdown `![emoji](tg://emoji?id=X)` → HTML `<tg-emoji>`.
-
-    Idempotent on text that's already HTML.
-    """
-    if not text:
-        return text
-    return _MD_TG_EMOJI_RE.sub(
-        lambda m: f'<tg-emoji emoji-id="{m.group(2)}">{m.group(1)}</tg-emoji>',
-        text,
-    )
+# Telegram-клиент при копировании premium-эмодзи иногда вставляет их в
+# Markdown image-синтаксисе  ![👑](tg://emoji?id=12345).  Рассылка уходит
+# с parse_mode="HTML" — такой markdown отрисуется как plain text и
+# сломает entity-парсер (отсюда 600/600 ошибок в своё время). Приводим к
+# HTML-варианту  <tg-emoji emoji-id="12345">👑</tg-emoji>.
+#
+# ЗДЕСЬ ТОЛЬКО ИМЯ, А НЕ ВТОРАЯ РЕАЛИЗАЦИЯ
+#     Раньше тут лежала своя копия — и она, в отличие от канонической, не
+#     экранировала метку. Между ![ и ] лежит произвольный текст админа:
+#     один символ & или < ронял разбор ВСЕГО сообщения, то есть рассылка
+#     падала целиком, а не на одном эмодзи. Копия к тому же расходилась с
+#     оригиналом по регулярке, так что админ видел в дашборде одно, а
+#     люди получали другое.
+#
+#     Имена оставлены прежними: их зовут send.py, планировщик рассылок и
+#     реэкспорт пакета.
+normalize_premium_emoji = convert_tg_emoji
+_MD_TG_EMOJI_RE = _TG_ADS_EMOJI_RE
 
 
 _BUTTON_TYPES = {
