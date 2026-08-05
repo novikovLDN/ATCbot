@@ -31,7 +31,16 @@ from fastapi.testclient import TestClient
 
 PKG = Path("app/api/dashboard/routes/broadcasts")
 
-# Снято с роутера ДО разрезания: метод, путь, имя обработчика — по порядку.
+# Снято с роутера ДО разрезания: метод, путь, имя обработчика.
+#
+# ПОРЯДОК ЗДЕСЬ — ИСХОДНЫЙ, И ОН БЫЛ НЕВЕРЕН. `GET /scheduled` стоял ниже
+# `GET /{broadcast_id}`, то есть был недостижим: FastAPI отдаёт запрос
+# первому подошедшему маршруту, «scheduled» уходило в broadcast_id и
+# отвечало 422 int_parsing. Экран отложенных рассылок не открывался.
+#
+# Поэтому набор маршрутов сверяем как МНОЖЕСТВО (ничего не потеряно и не
+# добавлено), а порядок проверяет отдельный тест — уже не «как было», а
+# «ни один маршрут не перехвачен соседом».
 ROUTES_BEFORE = [
     ("GET", "/broadcasts/recent", "broadcasts_recent"),
     ("GET", "/broadcasts/segments", "segments_list"),
@@ -88,26 +97,104 @@ def test_old_single_file_module_is_gone():
 
 
 def test_route_table_did_not_change(app):
-    """Тот же набор маршрутов В ТОМ ЖЕ ПОРЯДКЕ, что и до разрезания."""
+    """Тот же НАБОР маршрутов, что и до разрезания, и те же функции.
+
+    Про порядок — см. комментарий у ROUTES_BEFORE и тест ниже.
+    """
     spec = app.openapi()
     # operationId у FastAPI = имя функции + путь + метод. Имя функции
     # сравниваем по префиксу, чтобы не завязываться на схему генерации id.
-    actual = [
-        (method.upper(), path, op["operationId"])
+    actual = {
+        (method.upper(), path): op["operationId"]
         for path, ops in spec["paths"].items()
         for method, op in ops.items()
+    }
+    expected = {(m, p): fn for m, p, fn in ROUTES_BEFORE}
+
+    lost = sorted(set(expected) - set(actual))
+    added = sorted(set(actual) - set(expected))
+    assert not lost, f"маршруты пропали при разбивке: {lost}"
+    assert not added, f"появились маршруты, которых не было: {added}"
+
+    for key, fn_was in expected.items():
+        assert actual[key].startswith(fn_was), (
+            f"{key[0]} {key[1]} обслуживает не та функция: {actual[key]}"
+        )
+
+
+# Пути без параметров: именно они и становятся жертвой `/{broadcast_id}`.
+_LITERAL_ROUTES = [(m, p) for m, p, _ in ROUTES_BEFORE if "{" not in p]
+
+
+@pytest.mark.parametrize("method,path", _LITERAL_ROUTES)
+def test_literal_route_is_not_swallowed_by_the_id_route(app, method, path):
+    """Слово в пути не должно уезжать в числовой параметр соседа.
+
+    ЗАЧЕМ ЭТО ОТДЕЛЬНЫМ ТЕСТОМ
+
+        Так экран отложенных рассылок и умер: `GET /{broadcast_id}` был
+        объявлен раньше `GET /scheduled`, слово «scheduled» уходило в
+        параметр-число, запрос отвечал 422 int_parsing. В логах — ничего:
+        422 на живом маршруте, который никто не звал.
+
+        ПОЧЕМУ ПРОВЕРКА ЖИВЫМ ЗАПРОСОМ, А НЕ РАЗБОРОМ app.routes
+
+        Разбор — то, с чего я начал, и он оказался пустышкой: эта версия
+        FastAPI заворачивает каждый include_router в объект-обёртку без
+        path_regex, а маршруты прячет внутрь. Обход верхнего уровня видит
+        четыре служебных маршрута документации и «проходит», не проверив
+        ничего. Порядок перебора у обёрток свой (есть ещё и понижение
+        приоритета параметрических путей) — воспроизводить его в тесте
+        значит переписывать тест на каждом обновлении FastAPI.
+
+        Поэтому спрашиваем приложение: отдай ответ на этот путь. Нам
+        важен ровно один признак — 422 про параметр, которого в этом пути
+        нет. Что вернёт сам обработчик (200, 500 без базы) — не важно.
+    """
+    from app.api.dashboard.deps import require_admin
+
+    app.dependency_overrides[require_admin] = lambda: {"sub": "1"}
+    # Обработчики пойдут в базу, которой здесь нет. Ошибку обработчика
+    # превращаем в 500 вместо исключения: она нас не интересует.
+    client = TestClient(app, raise_server_exceptions=False)
+    try:
+        r = client.request(method, path)
+    finally:
+        app.dependency_overrides.clear()
+
+    if r.status_code != 422:
+        return
+
+    stolen = [
+        d.get("loc") for d in r.json().get("detail", [])
+        if d.get("loc") and d["loc"][0] == "path"
     ]
-    assert len(actual) == len(ROUTES_BEFORE), (
-        f"маршрутов было {len(ROUTES_BEFORE)}, стало {len(actual)}"
+    assert not stolen, (
+        f"{method} {path} перехвачен маршрутом с параметром в пути: "
+        f"{stolen}. Литеральный путь должен объявляться раньше "
+        f"перехватывающего `/{{broadcast_id}}`."
     )
-    for (m_now, p_now, oid), (m_was, p_was, fn_was) in zip(actual, ROUTES_BEFORE):
-        assert (m_now, p_now) == (m_was, p_was), (
-            f"порядок или путь изменился: было {m_was} {p_was}, "
-            f"стало {m_now} {p_now}"
+
+
+def test_scheduled_list_actually_answers(app):
+    """Тот самый экран: список отложенных рассылок открывается."""
+    from unittest.mock import AsyncMock
+
+    import database
+    from app.api.dashboard.deps import require_admin
+
+    app.dependency_overrides[require_admin] = lambda: {"sub": "1"}
+    original = getattr(database, "list_scheduled_broadcasts", None)
+    database.list_scheduled_broadcasts = AsyncMock(return_value=[])
+    try:
+        r = TestClient(app).get("/broadcasts/scheduled")
+        assert r.status_code == 200, (
+            f"список отложенных рассылок снова не открывается: {r.text}"
         )
-        assert oid.startswith(fn_was), (
-            f"{m_was} {p_was} обслуживает не та функция: {oid}"
-        )
+    finally:
+        if original is not None:
+            database.list_scheduled_broadcasts = original
+        app.dependency_overrides.clear()
 
 
 def test_history_screen_is_not_swallowed_by_the_id_route(app):
