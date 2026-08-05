@@ -17,6 +17,12 @@ from app.utils.referral_middleware import process_referral_on_first_interaction
 from app.handlers.common.guards import ensure_db_ready_message
 from app.handlers.common.keyboards import get_language_keyboard, get_main_menu_keyboard
 from app.handlers.common.utils import safe_resolve_username
+# Коды подарков (gift_) и бонусных ссылок на ГБ (bgift_) — предъявительские
+# токены: кто прочитал код, тот и активирует чужую оплаченную подписку или
+# забирает гигабайты. У bgift-ссылок код к тому же многоразовый (есть статус
+# max_uses_reached), то есть остаётся рабочим и после записи в лог. Поэтому в
+# логи идёт маска, а цепочка собирается по telegram_id и id записи.
+from app.utils.security import mask_secret
 
 user_router = Router()
 logger = logging.getLogger(__name__)
@@ -196,7 +202,7 @@ async def cmd_start(message: Message, state: FSMContext):
                         except Exception as rmn_err:
                             logger.exception(
                                 "BGIFT_REMNAWAVE_FAIL user=%s code=%s err=%s",
-                                telegram_id, bgift_code, rmn_err,
+                                telegram_id, mask_secret(bgift_code), rmn_err,
                             )
 
                         if granted:
@@ -215,7 +221,7 @@ async def cmd_start(message: Message, state: FSMContext):
                             ])
                             logger.info(
                                 "BGIFT_REDEEMED user=%s code=%s gb=%s",
-                                telegram_id, bgift_code, gb,
+                                telegram_id, mask_secret(bgift_code), gb,
                             )
                         else:
                             # Remnawave failed — roll back the redemption record so
@@ -228,12 +234,12 @@ async def cmd_start(message: Message, state: FSMContext):
                                     )
                                     logger.error(
                                         "BGIFT_REMNAWAVE_FAIL_ROLLBACK user=%s code=%s gb=%s rolled_back=%s",
-                                        telegram_id, bgift_code, gb, rolled_back,
+                                        telegram_id, mask_secret(bgift_code), gb, rolled_back,
                                     )
                                 except Exception as rb_err:
                                     logger.exception(
                                         "BGIFT_ROLLBACK_FAIL user=%s code=%s err=%s",
-                                        telegram_id, bgift_code, rb_err,
+                                        telegram_id, mask_secret(bgift_code), rb_err,
                                     )
                             text = i18n_get_text(language, "bypass_gift.error_remnawave")
                         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
@@ -252,13 +258,13 @@ async def cmd_start(message: Message, state: FSMContext):
                     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                     logger.info(
                         "BGIFT_REDEMPTION_FAILED user=%s code=%s status=%s",
-                        telegram_id, bgift_code, status,
+                        telegram_id, mask_secret(bgift_code), status,
                     )
                     return
                 except Exception as e:
                     logger.exception(
                         "BGIFT_REDEMPTION_ERROR user=%s code=%s err=%s",
-                        telegram_id, bgift_code, e,
+                        telegram_id, mask_secret(bgift_code), e,
                     )
                     text = i18n_get_text(language, "bypass_gift.error_not_found")
                     keyboard = (
@@ -325,7 +331,7 @@ async def cmd_start(message: Message, state: FSMContext):
                             )
                             keyboard = await get_main_menu_keyboard(language, telegram_id)
                             await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-                        logger.info(f"GIFT_ACTIVATED_VIA_LINK user={telegram_id} code={gift_code} new_user={is_new_user}")
+                        logger.info(f"GIFT_ACTIVATED_VIA_LINK user={telegram_id} code={mask_secret(gift_code)} new_user={is_new_user}")
 
                         # Fire-and-forget: create Remnawave bypass for gift recipient
                         try:
@@ -354,10 +360,10 @@ async def cmd_start(message: Message, state: FSMContext):
                         else:
                             keyboard = await get_main_menu_keyboard(language, telegram_id)
                         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-                        logger.warning(f"GIFT_ACTIVATION_FAILED user={telegram_id} code={gift_code} error={error}")
+                        logger.warning(f"GIFT_ACTIVATION_FAILED user={telegram_id} code={mask_secret(gift_code)} error={error}")
                         return
                 except Exception as e:
-                    logger.exception(f"Gift activation error: user={telegram_id}, code={gift_code}, error={e}")
+                    logger.exception(f"Gift activation error: user={telegram_id}, code={mask_secret(gift_code)}, error={e}")
                     language = await resolve_user_language(telegram_id)
                     text = i18n_get_text(language, "gift.error_invalid")
                     if is_new_user:

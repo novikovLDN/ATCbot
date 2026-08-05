@@ -89,6 +89,13 @@ async def sync_balance(telegram_id: int) -> Optional[dict]:
     # Apply pending cashback from site
     pending = data.get("pendingCashback", [])
     if pending:
+        # Это деньги на баланс, поэтому в логе должно стоять начисленное, а не
+        # присланное сайтом. Раньше писалось items=len(pending) и total из
+        # ответа сайта: позиции с amountRubles <= 0 отсеиваются условием ниже
+        # и не начисляются, но в запись всё равно попадали — лог и баланс
+        # расходились, а свериться было не с чем.
+        applied_count = 0
+        applied_rubles = 0.0
         for cb in pending:
             amount_rubles = cb.get("amountRubles", 0)
             if amount_rubles > 0:
@@ -98,9 +105,13 @@ async def sync_balance(telegram_id: int) -> Optional[dict]:
                     source="site_referral",
                     description=cb.get("description", "Кешбэк с сайта"),
                 )
+                applied_count += 1
+                applied_rubles += amount_rubles
         logger.info(
-            "SITE_SYNC_CASHBACK_APPLIED: user=%s items=%d total=%s kop",
-            telegram_id, len(pending), data.get("pendingCashbackTotal", 0),
+            "SITE_SYNC_CASHBACK_APPLIED: user=%s applied=%d/%d applied_rub=%.2f "
+            "site_total=%s kop",
+            telegram_id, applied_count, len(pending), applied_rubles,
+            data.get("pendingCashbackTotal", 0),
         )
 
     return data

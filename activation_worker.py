@@ -299,9 +299,25 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str, str | None]:
                             # сообщение: у заблокировавшего бота пользователя
                             # ждать нечего.
                             telegram_message_sent = sent is not None
-                            logger.info(
-                                f"ACTIVATION_NOTIFICATION_SENT [subscription_id={subscription_id}, user={telegram_id}]"
-                            )
+                            # Исход берётся из ответа safe_send_message, а не из
+                            # того, что отправку запустили. Она возвращает None,
+                            # когда человек заблокировал бота или чат недоступен,
+                            # — и раньше в этом случае в логе всё равно стояло
+                            # ACTIVATION_NOTIFICATION_SENT. Подписка активирована,
+                            # ключ выдан, человек об этом не знает, а по логам
+                            # выходило, что знает: обращение «оплатил, ничего не
+                            # пришло» упиралось в запись, говорящую обратное.
+                            if telegram_message_sent:
+                                logger.info(
+                                    f"ACTIVATION_NOTIFICATION_SENT [subscription_id={subscription_id}, user={telegram_id}]"
+                                )
+                            else:
+                                logger.warning(
+                                    "ACTIVATION_NOTIFICATION_UNDELIVERED "
+                                    "[subscription_id=%s, user=%s] — подписка активна, "
+                                    "человек уведомления не получил",
+                                    subscription_id, telegram_id,
+                                )
                     except Exception as e:
                         logger.error(
                             f"Failed to send activation notification to user {telegram_id}: {e}"

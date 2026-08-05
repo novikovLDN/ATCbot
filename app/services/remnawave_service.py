@@ -74,9 +74,13 @@ async def _get_user_with_recovery(telegram_id: int, rmn_uuid: str):
     so the caller can recreate the user with proper UUID storage."""
     if not _is_valid_full_uuid(rmn_uuid):
         # Legacy bug: shortUuid was stored instead of full UUID.
+        # Здесь по определению лежит НЕ полный UUID, а legacy-shortUuid — тот
+        # самый идентификатор из подписочной ссылки, по которому её и
+        # открывают. Писался целиком: правило «uuid только префикс» ловило
+        # ключ `uuid=`, а этот назывался `stored=` и проходил мимо.
         logger.warning(
             "REMNAWAVE_INVALID_UUID: tg=%s stored=%s is not a full UUID, clearing",
-            telegram_id, rmn_uuid,
+            telegram_id, (rmn_uuid or "")[:8],
         )
         await database.clear_remnawave_uuid(telegram_id)
         return None
@@ -131,9 +135,15 @@ async def create_remnawave_user(
             await database.set_remnawave_uuid(telegram_id, rmn_uuid)
             await database.reset_traffic_notification_flags(telegram_id)
             sub_url = result.get("subscriptionUrl", "")
+            # Подписочная ссылка — предъявительский секрет: кто её открыл, тот
+            # и получил конфиги VPN. Рядом в этой же записи uuid аккуратно
+            # резался до [:8], а вся ссылка писалась целиком, то есть обрезка
+            # ничего не защищала. В лог идёт только факт её наличия — по нему
+            # видно, вернула панель ссылку или нет, а этого для разбора и
+            # достаточно (тот же приём в purchase_flow.py).
             logger.info(
-                "REMNAWAVE_USER_CREATED: tg=%s uuid=%s sub_url=%s tariff=%s limit=%d",
-                telegram_id, rmn_uuid[:8], sub_url, tariff, traffic_limit,
+                "REMNAWAVE_USER_CREATED: tg=%s uuid=%s sub_url_present=%s tariff=%s limit=%d",
+                telegram_id, rmn_uuid[:8], bool(sub_url), tariff, traffic_limit,
             )
         else:
             logger.warning("REMNAWAVE_USER_CREATE_FAILED: tg=%s", telegram_id)

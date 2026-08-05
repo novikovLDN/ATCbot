@@ -18,7 +18,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import app.handlers.farm as farm
+# Именно storm-модуль, а не пакет app.handlers.farm: ферма разрезана, и
+# обработчики шторма читают свои собственные globals — патч на пакет они
+# не увидят.
+import app.handlers.farm.storm as farm
 
 OAK_REWARD = 5300          # копейки, дуб
 OAK_SHIELD_KOPECKS = 3000  # плёнка на дуб — 30 ₽

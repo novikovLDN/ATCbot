@@ -23,6 +23,8 @@ import re
 import pytest
 
 import database.admin as admin_mod
+import database.admin_reports as admin_reports_mod
+import database.admin_users as admin_users_mod
 import database.analytics as analytics_mod
 
 
@@ -70,7 +72,11 @@ def conn(monkeypatch):
     async def _get_pool():
         return pool
 
-    monkeypatch.setattr(admin_mod, "get_pool", _get_pool)
+    # Подменять get_pool надо в том модуле, где живёт САМА функция:
+    # database/admin.py теперь фасад, и его get_pool запросы не видят.
+    # Ряды переехали в admin_reports, карточка пользователя — в admin_users.
+    monkeypatch.setattr(admin_reports_mod, "get_pool", _get_pool)
+    monkeypatch.setattr(admin_users_mod, "get_pool", _get_pool)
     monkeypatch.setattr(analytics_mod, "get_pool", _get_pool)
     return c
 

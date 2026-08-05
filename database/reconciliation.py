@@ -848,6 +848,15 @@ async def apply_reconciliation_fix(
         )
         if not panel_updated:
             panel_error = "renew_premium_user returned False"
+            # Тихий отказ панели: исключения нет, поэтому ветка ниже с
+            # logger.exception не срабатывает, а причина уезжала только в
+            # JSON-ответ. В логах единственным следом оставалась строка
+            # RECONCILIATION_FIX_APPLIED — то есть отказ выглядел успехом.
+            logger.error(
+                "RECONCILIATION_PANEL_UPDATE_REJECTED user=%s new=%s — панель "
+                "вернула False, срок доступа НЕ подрезан",
+                telegram_id, new_expires_at.isoformat(),
+            )
         else:
             # Панель изменилась — кэшированный список кандидатов протух.
             # Иначе после «Исправить» человек ещё до 10 минут висит в списке.
@@ -904,11 +913,28 @@ async def apply_reconciliation_fix(
                 telegram_id, new_expires_at.isoformat(), e,
             )
 
-    logger.info(
-        "RECONCILIATION_FIX_APPLIED user=%s old=%s new=%s removed_days=%s "
+    # Тег и уровень записи следуют из того, изменилась ли панель.
+    #
+    # Раньше строка была одна и писалась безусловно: при упавшей панели в лог
+    # уходило «RECONCILIATION_FIX_APPLIED ... removed_days=3200
+    # panel_updated=False» — то есть слово «исправлено» с полным набором
+    # доказательств для человека, у которого не изменилось ничего. Подсчёт
+    # «сколько исправили» по тегу давал завышенное число, а уровень info не
+    # выделял провал. days_removed при этом — тоже намерение: он посчитан
+    # внутри транзакции, ДО единственного реального действия (патча панели).
+    #
+    # admin_telegram_id добавлен сюда потому, что DB-строка журнала пишется
+    # только при panel_updated: в сценарии отказа лог остаётся единственным
+    # источником, и без него не видно, кто именно инициировал подрезку.
+    _fix_log = logger.info if panel_updated else logger.error
+    _fix_tag = "RECONCILIATION_FIX_APPLIED" if panel_updated else "RECONCILIATION_FIX_FAILED"
+    _fix_log(
+        "%s user=%s admin=%s old=%s new=%s removed_days=%s "
         "total_paid_days=%s admin_grant_days=%s proof_ids=%s log_id=%s "
-        "panel_updated=%s fallback=%s",
+        "panel_updated=%s fallback=%s panel_error=%s",
+        _fix_tag,
         telegram_id,
+        admin_telegram_id,
         old_expires_at.isoformat() if old_expires_at else None,
         new_expires_at.isoformat(),
         days_removed,
@@ -918,6 +944,7 @@ async def apply_reconciliation_fix(
         log_id,
         panel_updated,
         fallback_applied,
+        panel_error,
     )
 
     # Успех фикса = панель обновилась. Если панель упала — success=False:
@@ -960,6 +987,15 @@ async def list_reconciliation_log(limit: int = 100) -> List[Dict[str, Any]]:
                 limit,
             )
         except asyncpg.UndefinedTableError:
+            # Самая опасная форма вранья: врёт сам инструмент аудита.
+            # Пустой список без записи в лог экран сверки рисует как
+            # «исправлений не было», хотя на деле журнала не существует —
+            # то есть «аудита нет вовсе» выглядит как «всё чисто».
+            logger.error(
+                "RECONCILIATION_LOG_TABLE_MISSING — таблица "
+                "subscription_reconciliation_log отсутствует; журнал сверки "
+                "пуст не потому, что исправлений не было",
+            )
             return []
     return [_serialize(r) for r in rows]
 
@@ -981,6 +1017,12 @@ async def list_over_issuance_log(limit: int = 100) -> List[Dict[str, Any]]:
                 limit,
             )
         except asyncpg.UndefinedTableError:
+            # См. выше: пустой журнал должен отличаться от отсутствующего.
+            logger.error(
+                "OVER_ISSUANCE_LOG_TABLE_MISSING — таблица "
+                "subscription_over_issuance_log отсутствует; журнал пуст не "
+                "потому, что превышений не было",
+            )
             return []
     return [_serialize(r) for r in rows]
 

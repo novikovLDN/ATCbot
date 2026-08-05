@@ -85,12 +85,33 @@ async def site_sync_worker_task(bot=None):
 
                 telegram_id = row["telegram_id"]
                 try:
-                    await sync_balance(telegram_id)
-                    await sync_referrals(telegram_id)
-                    synced += 1
+                    # Обе функции НЕ бросают при отказе сайта: _post отдаёт
+                    # None и на не-200, и на success=false, и на таймаут.
+                    # Раньше synced увеличивался просто по факту возврата из
+                    # вызова, поэтому при полностью лежащем сайте итог гласил
+                    # «synced=500 errors=0» — а не синхронизировалось ничего.
+                    # errors ловил только исключения Python, то есть ровно те
+                    # случаи, которые к сайту отношения не имеют.
+                    balance_ok = await sync_balance(telegram_id) is not None
+                    referrals_ok = await sync_referrals(telegram_id) is not None
+                    if balance_ok and referrals_ok:
+                        synced += 1
+                    else:
+                        errors += 1
+                        logger.warning(
+                            "SITE_SYNC_USER_FAILED: user=%s balance_ok=%s referrals_ok=%s "
+                            "— сайт не принял данные",
+                            telegram_id, balance_ok, referrals_ok,
+                        )
                 except Exception as e:
                     errors += 1
-                    logger.debug("site_sync_worker: user=%s error=%s", telegram_id, e)
+                    # Причина отказа раньше уходила в debug, а root-логгер
+                    # настроен на INFO: в проде оставалось «errors=12» без
+                    # единого слова о том, на ком и почему.
+                    logger.warning(
+                        "SITE_SYNC_USER_ERROR: user=%s error=%s: %s",
+                        telegram_id, type(e).__name__, e,
+                    )
 
                 await asyncio.sleep(SYNC_USER_DELAY)
 

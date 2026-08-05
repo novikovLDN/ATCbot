@@ -280,6 +280,26 @@ async def process_confirmed_payment(
                 period_days=result.get("period_days"),
                 context=f"webhook:{provider}",
             )
+        except TransientPaymentError as combo_err:
+            # НЕ уведомление, а сорванная выдача товара.
+            #
+            # _send_confirmation вызывается внутри этого try и бросает
+            # TransientPaymentError, когда комбо-тарифу не удалось начислить
+            # bypass-трафик: расчёт был на то, что вебхук ответит 5xx и
+            # провайдер повторит платёж. Но except ниже ловит любое
+            # Exception, и сигнал гасился записью «payment was successful» —
+            # человек оплачивал комбо, гигабайты не приходили, повтора не
+            # было, и в логах это выглядело как неудавшееся уведомление.
+            #
+            # Поведение здесь намеренно не меняется (это отдельный дефект,
+            # см. отчёт) — но запись обязана называть вещи своими именами:
+            # товар не выдан, и разбирать это придётся руками.
+            logger.critical(
+                "PAYMENT_DELIVERY_FAILED_SILENTLY: provider=%s, user=%s, "
+                "purchase_id=%s, payment_id=%s, error=%s — оплата принята, товар "
+                "НЕ выдан; сигнал на повтор вебхука проглочен, нужен ручной разбор",
+                provider, telegram_id, purchase_id, payment_id, combo_err,
+            )
         except Exception as notif_err:
             logger.error(
                 f"PAYMENT_NOTIFICATION_FAILED: provider={provider}, user={telegram_id}, "
@@ -469,7 +489,19 @@ def extract_purchase_id(payload_raw: Any) -> Optional[str]:
         else:
             payload_data = payload_raw
         return payload_data.get("purchase_id")
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError) as e:
+        # Точка входа денежного пути: без purchase_id платёж не привязать ни к
+        # какой покупке — деньги придут, товар не выдастся. Возврат None молча
+        # оставлял разбор без причины: непонятно, payload пришёл битый, пустой
+        # или другой структуры. Само тело не пишем — оно приходит от внешнего
+        # провайдера, может содержать что угодно и годится для подмены строк
+        # в логе; хватает типа ошибки и длины.
+        logger.error(
+            "PAYLOAD_PARSE_FAILED: не удалось извлечь purchase_id, "
+            "error=%s: %s, payload_type=%s, payload_len=%s",
+            type(e).__name__, e, type(payload_raw).__name__,
+            len(payload_raw) if isinstance(payload_raw, (str, bytes)) else "n/a",
+        )
         return None
 
 
@@ -531,8 +563,21 @@ async def _lookup_purchase_tariff(purchase_id: str) -> tuple:
         row = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
         if row:
             return row.get("tariff"), row.get("period_days")
-    except Exception:
-        pass
+        # Строки нет — алерт о сбое оплаты уйдёт без тарифа и срока. Знать об
+        # этом надо: пустые поля в алерте выглядят как «товар не определён»,
+        # хотя на деле не нашлась запись покупки.
+        logger.warning(
+            "PURCHASE_TARIFF_LOOKUP_EMPTY purchase_id=%s — алерт уйдёт без тарифа",
+            purchase_id,
+        )
+    except Exception as e:
+        # Вызывается только с путей, где оплата уже сорвалась, и молчание
+        # здесь съедало вторую ошибку поверх первой: в алерте админу тариф и
+        # срок оказывались пустыми без единого следа почему.
+        logger.warning(
+            "PURCHASE_TARIFF_LOOKUP_FAILED purchase_id=%s error=%s: %s",
+            purchase_id, type(e).__name__, e,
+        )
     return None, None
 
 
@@ -625,9 +670,13 @@ async def _send_gift_confirmation(
         tariff=result.get("gift_tariff") or "basic",
         period_days=int(result.get("gift_period_days") or 30),
     )
+    # Код подарка — предъявительский токен на оплаченную подписку: кто его
+    # прочитал, тот её и активирует (start.py принимает /start gift_<код>).
+    # В логи идёт маска, а цепочка собирается по purchase_id.
+    from app.utils.security import mask_secret
     logger.info(
         "GIFT_PAYMENT_FINALIZED provider=%s purchase_id=%s user=%s code=%s",
-        provider, purchase_id, telegram_id, result["gift_code"],
+        provider, purchase_id, telegram_id, mask_secret(result["gift_code"]),
     )
 
 

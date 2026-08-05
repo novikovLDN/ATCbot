@@ -35,7 +35,8 @@ from aiogram.fsm.context import FSMContext
 import config
 import database
 from app.i18n import get_text as i18n_get_text
-from app.utils.logging_helpers import log_handler_exit
+from app.utils.logging_helpers import log_handler_exit, classify_error
+from app.utils.security import mask_secret
 from app.handlers.payments.purchase_routing import classify_purchase
 # Финализация покупки идёт только через сервисный слой.
 #
@@ -106,9 +107,13 @@ async def deliver_gift(paid: PaidPurchase) -> bool:
                 tariff=gift_result["gift_tariff"],
                 period_days=gift_result["gift_period_days"],
             )
+            # Код подарка не пишем целиком: это предъявительский токен на
+            # оплаченную подписку — кто прочитал код, тот её и активирует
+            # (start.py принимает ссылку /start gift_<код>). Для разбора
+            # цепочки хватает purchase_id, он уникален и не даёт доступа.
             logger.info(
                 f"GIFT_PAYMENT_FINALIZED purchase_id={purchase_id} user={telegram_id} "
-                f"code={gift_result['gift_code']}"
+                f"code={mask_secret(gift_result['gift_code'])}"
             )
             await state.clear()
             duration_ms = (time.time() - start_time) * 1000
@@ -122,12 +127,46 @@ async def deliver_gift(paid: PaidPurchase) -> bool:
             )
             return True
         else:
-            logger.error(f"Gift finalization returned unexpected result: {gift_result}")
+            # Деньги взяты, кода подарка нет. Раньше сюда попадал дамп всего
+            # gift_result (вместе с самим кодом) и ни одного признака, по
+            # которому заказ можно найти: ни покупателя, ни purchase_id.
+            logger.error(
+                "GIFT_PAYMENT_NO_CODE purchase_id=%s user=%s keys=%s — "
+                "оплата прошла, код подарка не выдан, нужен разбор вручную",
+                purchase_id, telegram_id,
+                sorted(gift_result.keys()) if isinstance(gift_result, dict) else type(gift_result).__name__,
+            )
             await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+            duration_ms = (time.time() - start_time) * 1000
+            # Исход итога — failed, а не success: покупатель заплатил и
+            # остался без товара. От уровня записи здесь зависит, заметят её
+            # или нет (log_handler_exit печатает success как INFO).
+            log_handler_exit(
+                handler_name="process_successful_payment",
+                outcome="failed",
+                telegram_id=telegram_id,
+                operation="payment_finalization",
+                error_type="domain_error",
+                duration_ms=duration_ms,
+                payment_type="gift_subscription",
+                reason="no_gift_code_in_result",
+                purchase_id=purchase_id,
+            )
             return True
     except Exception as e:
         logger.exception(f"Gift payment finalization failed: user={telegram_id}, error={e}")
         await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+        duration_ms = (time.time() - start_time) * 1000
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="failed",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            error_type=classify_error(e),
+            duration_ms=duration_ms,
+            payment_type="gift_subscription",
+            purchase_id=purchase_id,
+        )
         return True
 
 
@@ -170,17 +209,28 @@ async def deliver_premium(paid: PaidPurchase) -> bool:
             purchase_id, telegram_id, payment_amount_rubles,
         )
     except Exception as e:
+        # Исход итоговой записи берётся из фактического результата ветки.
+        # Раньше log_handler_exit ниже стоял вне try и всегда писал
+        # outcome="success": заказ, по которому уведомление админу не ушло,
+        # в аудите неотличим от выданного, а уровень записи по контракту
+        # log_handler_exit падает с ERROR до INFO — при разборе «человек
+        # заплатил, товара нет» такая запись уводит в другую сторону.
+        _outcome, _error_type = "failed", classify_error(e)
         logger.exception("PREMIUM_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
         await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+    else:
+        _outcome, _error_type = "success", None
     await state.clear()
     duration_ms = (time.time() - start_time) * 1000
     log_handler_exit(
         handler_name="process_successful_payment",
-        outcome="success",
+        outcome=_outcome,
         telegram_id=telegram_id,
         operation="payment_finalization",
+        error_type=_error_type,
         duration_ms=duration_ms,
         payment_type="telegram_premium",
+        purchase_id=purchase_id,
     )
     return True
 
@@ -225,17 +275,23 @@ async def deliver_stars(paid: PaidPurchase) -> bool:
             purchase_id, telegram_id, payment_amount_rubles,
         )
     except Exception as e:
+        # См. deliver_premium: исход берётся из результата, не из намерения.
+        _outcome, _error_type = "failed", classify_error(e)
         logger.exception("STARS_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
         await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+    else:
+        _outcome, _error_type = "success", None
     await state.clear()
     duration_ms = (time.time() - start_time) * 1000
     log_handler_exit(
         handler_name="process_successful_payment",
-        outcome="success",
+        outcome=_outcome,
         telegram_id=telegram_id,
         operation="payment_finalization",
+        error_type=_error_type,
         duration_ms=duration_ms,
         payment_type="telegram_stars",
+        purchase_id=purchase_id,
     )
     return True
 
@@ -276,17 +332,23 @@ async def deliver_steam(paid: PaidPurchase) -> bool:
             purchase_id, telegram_id, payment_amount_rubles,
         )
     except Exception as e:
+        # См. deliver_premium: исход берётся из результата, не из намерения.
+        _outcome, _error_type = "failed", classify_error(e)
         logger.exception("STEAM_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
         await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+    else:
+        _outcome, _error_type = "success", None
     await state.clear()
     duration_ms = (time.time() - start_time) * 1000
     log_handler_exit(
         handler_name="process_successful_payment",
-        outcome="success",
+        outcome=_outcome,
         telegram_id=telegram_id,
         operation="payment_finalization",
+        error_type=_error_type,
         duration_ms=duration_ms,
         payment_type="steam",
+        purchase_id=purchase_id,
     )
     return True
 
@@ -327,17 +389,23 @@ async def deliver_spotify(paid: PaidPurchase) -> bool:
             purchase_id, telegram_id, payment_amount_rubles,
         )
     except Exception as e:
+        # См. deliver_premium: исход берётся из результата, не из намерения.
+        _outcome, _error_type = "failed", classify_error(e)
         logger.exception("SPOTIFY_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
         await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+    else:
+        _outcome, _error_type = "success", None
     await state.clear()
     duration_ms = (time.time() - start_time) * 1000
     log_handler_exit(
         handler_name="process_successful_payment",
-        outcome="success",
+        outcome=_outcome,
         telegram_id=telegram_id,
         operation="payment_finalization",
+        error_type=_error_type,
         duration_ms=duration_ms,
         payment_type="spotify",
+        purchase_id=purchase_id,
     )
     return True
 
@@ -380,9 +448,27 @@ async def deliver_apple_id(paid: PaidPurchase) -> bool:
         )
         logger.info("APPLE_PAYMENT_FINALIZED purchase_id=%s user=%s", purchase_id, telegram_id)
     except Exception as e:
+        # См. deliver_premium: исход берётся из результата, не из намерения.
+        _outcome, _error_type = "failed", classify_error(e)
         logger.exception("APPLE_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
         await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+    else:
+        _outcome, _error_type = "success", None
     await state.clear()
+    # Единственная товарная ветка, где итоговой записи не было вовсе:
+    # log_handler_entry в process_successful_payment открывал span, а Apple ID
+    # его не закрывал — по логам покупка обрывалась на входе в обработчик.
+    duration_ms = (time.time() - start_time) * 1000
+    log_handler_exit(
+        handler_name="process_successful_payment",
+        outcome=_outcome,
+        telegram_id=telegram_id,
+        operation="payment_finalization",
+        error_type=_error_type,
+        duration_ms=duration_ms,
+        payment_type="apple_id",
+        purchase_id=purchase_id,
+    )
     return True
 
 
@@ -405,6 +491,13 @@ async def deliver_traffic_pack(paid: PaidPurchase) -> bool:
         return False
 
     payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
+    # Исход итоговой записи собирается по ходу ветки и берётся из факта
+    # начисления ГБ, а не из того, что оплата дошла. Пакет трафика — тот
+    # случай, где деньги списываются в одном месте, а товар выдаёт панель
+    # Remnawave в другом: она может не ответить, и тогда человек заплатил,
+    # а гигабайтов у него нет.
+    _outcome: str = "failed"
+    _error_type: Optional[str] = "unexpected_error"
     try:
         traffic_result = await subscription_service.finalize_purchase(
             purchase_id=purchase_id,
@@ -506,24 +599,43 @@ async def deliver_traffic_pack(paid: PaidPurchase) -> bool:
                 ])
             await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
+            # rmn_success — это ответ панели, а не факт оплаты. Когда он
+            # False, человеку уже дописано «активация задерживается»: итог
+            # обязан говорить то же самое, иначе аудит покажет success там,
+            # где ГБ не начислены.
+            if rmn_success:
+                _outcome, _error_type = "success", None
+            else:
+                _outcome, _error_type = "degraded", "dependency_error"
             logger.info(
-                "TRAFFIC_PACK_PAYMENT_FINALIZED purchase_id=%s user=%s gb=%s",
-                purchase_id, telegram_id, traffic_gb,
+                "TRAFFIC_PACK_PAYMENT_FINALIZED purchase_id=%s user=%s gb=%s traffic_applied=%s",
+                purchase_id, telegram_id, traffic_gb, rmn_success,
             )
         else:
-            logger.error(f"Traffic pack finalization unexpected result: {traffic_result}")
+            # Ни покупателя, ни purchase_id в записи не было — найти такой
+            # заказ по логам было нечем.
+            logger.error(
+                "TRAFFIC_PACK_UNEXPECTED_RESULT purchase_id=%s user=%s keys=%s — "
+                "оплата прошла, пакет не начислен",
+                purchase_id, telegram_id,
+                sorted(traffic_result.keys()) if isinstance(traffic_result, dict) else type(traffic_result).__name__,
+            )
+            _outcome, _error_type = "failed", "domain_error"
             await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Traffic pack payment finalization failed: user={telegram_id}, error={e}")
+        _outcome, _error_type = "failed", classify_error(e)
         await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
     await state.clear()
     duration_ms = (time.time() - start_time) * 1000
     log_handler_exit(
         handler_name="process_successful_payment",
-        outcome="success",
+        outcome=_outcome,
         telegram_id=telegram_id,
         operation="payment_finalization",
+        error_type=_error_type,
         duration_ms=duration_ms,
         payment_type="traffic_pack",
+        purchase_id=purchase_id,
     )
     return True

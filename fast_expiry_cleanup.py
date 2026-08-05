@@ -98,6 +98,12 @@ async def fast_expiry_cleanup_task(bot=None):
     while True:
         # Initialize variables at top of loop to ensure they're always defined
         items_processed = 0
+        # Сколько строк реально закрыто, а не просто просмотрено.
+        # items_processed увеличивается ПЕРВЫМ действием в цикле — до
+        # проверки истечения, до guard'а платной подписки, до UPDATE и до
+        # обращения к панели. То есть это размер выборки: итерация, где все
+        # 100 строк пропущены или упали, рапортовала «обработано 100».
+        items_revoked = 0
         outcome = "success"
         iteration_error_type = None
         # Причина пропуска итерации — уходит в метрики вместе с исходом.
@@ -152,7 +158,7 @@ async def fast_expiry_cleanup_task(bot=None):
             
             # H1 fix: Wrap iteration body with timeout
             async def _run_iteration_body():
-                nonlocal items_processed, outcome  # Allow modification of outer scope variables
+                nonlocal items_processed, items_revoked, outcome  # Allow modification of outer scope variables
                 # Event loop protection: prevent overlapping iterations
                 async with _worker_lock:
                     # Получаем истёкшие подписки с активными UUID
@@ -403,10 +409,19 @@ async def fast_expiry_cleanup_task(bot=None):
                                                                 )
                                                             except Exception as e:
                                                                 logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")
+                                                            # «SUCCESS» здесь — про базу, а не про доступ.
+                                                            #
+                                                            # Отзыв в панели идёт ниже, уже после закрытия
+                                                            # транзакции, и может не состояться. Прежний текст
+                                                            # не оговаривал стадию, поэтому запись читалась как
+                                                            # «доступ отозван» — при том что на этот момент в
+                                                            # панели не сделано ещё ничего.
+                                                            items_revoked += 1
                                                             logger.info(
-                                                                f"cleanup: SUCCESS [user={telegram_id}, uuid={uuid_preview}, "
+                                                                f"cleanup: DB_CLEARED [user={telegram_id}, uuid={uuid_preview}, "
                                                                 f"mode={'bypass_only' if has_remnawave else 'expired'}, "
-                                                                f"expires_at={expires_at.isoformat()}]"
+                                                                f"expires_at={expires_at.isoformat()}] — "
+                                                                f"база обновлена, отзыв в панели ниже"
                                                             )
                                                         else:
                                                             logger.warning(
@@ -429,19 +444,30 @@ async def fast_expiry_cleanup_task(bot=None):
                                                         "cleanup: PREMIUM_DISABLED [user=%s]", telegram_id,
                                                     )
                                                 else:
-                                                    # Сущности нет, панель выключена или отказала.
-                                                    # База уже закрыта — доступ по ссылке погаснет
-                                                    # сам по expireAt, но раньше он не погаснет,
-                                                    # поэтому это предупреждение, а не отладка.
-                                                    logger.warning(
+                                                    # Сущности нет, панель выключена или отказала —
+                                                    # три разных причины под одним исходом, различить
+                                                    # их по этой записи нельзя.
+                                                    #
+                                                    # Уровень поднят до error, потому что ретрая не
+                                                    # будет ПО ПОСТРОЕНИЮ: uuid в базе уже занулён, и
+                                                    # в следующий проход строка не попадёт в выборку
+                                                    # (условие uuid IS NOT NULL). Доступ в панели
+                                                    # остаётся активным, а эта строка — единственное
+                                                    # свидетельство, по которому его потом искать.
+                                                    logger.error(
                                                         "cleanup: PREMIUM_DISABLE_SKIPPED [user=%s] — "
-                                                        "сущность в панели могла остаться активной",
+                                                        "сущность в панели могла остаться активной; "
+                                                        "повтора не будет, uuid в базе уже очищен",
                                                         telegram_id,
                                                     )
                                             except Exception as rmn_err:
-                                                logger.warning(
-                                                    "cleanup: PREMIUM_DISABLE_FAIL [user=%s] %s",
-                                                    telegram_id, rmn_err,
+                                                # То же последствие, что и выше: доступ не отозван и
+                                                # автоматически отозван не будет. Плюс traceback —
+                                                # без него причина сетевого отказа не видна.
+                                                logger.error(
+                                                    "cleanup: PREMIUM_DISABLE_FAIL [user=%s] %s — "
+                                                    "доступ в панели НЕ отозван, повтора не будет",
+                                                    telegram_id, rmn_err, exc_info=True,
                                                 )
                                     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
                                         logger.warning(f"fast_expiry_cleanup: Database temporarily unavailable during DB update: {type(e).__name__}: {str(e)[:100]}")
@@ -515,6 +541,8 @@ async def fast_expiry_cleanup_task(bot=None):
                     error_type=iteration_error_type,
                     duration_ms=duration_ms,
                     reason=iteration_reason,
+                    items_examined=items_processed,
+                    items_revoked=items_revoked,
                 )
                 if outcome not in ("success", "cancelled", "skipped"):
                     await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)

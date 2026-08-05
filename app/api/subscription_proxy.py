@@ -43,6 +43,24 @@ from app.services import remnawave_api
 
 logger = logging.getLogger(__name__)
 
+
+def _redact_target(url: str) -> str:
+    """Оставить от целевой ссылки только схему и хост.
+
+    Файл сам объявляет выданную панелью ссылку чувствительной (см. докстринг
+    выше), но записи о редиректе печатали `target.split("?")[0]` — это
+    отрезает лишь query, а секрет лежит в ПУТИ: `/sub/<shortUuid>`. Кто
+    прочитал такую строку, тот открывает чужую подписку. Для разбора
+    достаточно знать, на какой бэкенд ушёл редирект.
+    """
+    if not url:
+        return "<none>"
+    scheme, sep, rest = url.partition("://")
+    if not sep:
+        return "<redacted>"
+    host = rest.split("/", 1)[0]
+    return f"{scheme}://{host}/<redacted>"
+
 router = APIRouter()
 
 
@@ -152,7 +170,7 @@ async def _resolve_for_telegram_id(telegram_id: int) -> Optional[str]:
 async def legacy_sub(uuid: str = Path(..., min_length=8, max_length=128)):
     target = await _resolve(uuid)
     if target:
-        logger.info("SUB_PROXY_REDIRECT: uuid=%s -> %s", uuid[:8], target.split("?")[0])
+        logger.info("SUB_PROXY_REDIRECT: uuid=%s -> %s", uuid[:8], _redact_target(target))
         return RedirectResponse(target, status_code=302)
     return JSONResponse({"error": "not_found"}, status_code=404)
 
@@ -194,6 +212,6 @@ async def bot_sub(
 
     target = await _resolve_for_telegram_id(id)
     if target:
-        logger.info("SUB_PROXY_REDIRECT_API: id=%s -> %s", id, target.split("?")[0])
+        logger.info("SUB_PROXY_REDIRECT_API: id=%s -> %s", id, _redact_target(target))
         return RedirectResponse(target, status_code=302)
     return JSONResponse({"error": "not_found"}, status_code=404)

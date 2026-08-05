@@ -264,7 +264,20 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
                     "trial.reminder_24h", telegram_id,
                     status="sent" if success else "failed",
                 )
-                logger.info(f"trial_reminder_24h_sent: user={telegram_id}, hours_until_expiry={hours_until_expiry:.1f}")
+                # Ветка выполняется и при success=False (status ==
+                # "failed_permanently"): флаг там ставится намеренно, чтобы не
+                # долбиться в недоступный чат. Но текстовая запись раньше в
+                # обоих случаях говорила "_sent", и подсчёт отправленных
+                # напоминаний по логу давал завышенное число — метрика в
+                # log_notification_send при этом честно писала "failed".
+                if success:
+                    logger.info(f"trial_reminder_24h_sent: user={telegram_id}, hours_until_expiry={hours_until_expiry:.1f}")
+                else:
+                    logger.warning(
+                        "trial_reminder_24h_undelivered: user=%s, hours_until_expiry=%.1f, "
+                        "status=%s — напоминание не доставлено, флаг проставлен, повтора не будет",
+                        telegram_id, hours_until_expiry, status,
+                    )
             return
 
     # Trial 3h reminder — with 15% discount. Окно из trigger_config

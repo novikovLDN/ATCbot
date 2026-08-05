@@ -308,6 +308,16 @@ async def callback_gift_pay_balance(callback: CallbackQuery, state: FSMContext):
             description=f"Подарочная подписка {_tariff_display_name(tariff)} на {_period_display(period_days)}",
         )
         if not success:
+            # Отказ списания не оставлял в логах ничего: человек видел
+            # «ошибка обработки платежа», а по логам покупки не существовало
+            # вовсе — разобрать обращение «купил подарок, денег нет / подарка
+            # нет» было не по чему. Причина отказа здесь одна из двух —
+            # нехватка баланса или сбой БД, и различать их надо в логе.
+            logger.error(
+                "GIFT_BALANCE_DEBIT_FAILED buyer=%s tariff=%s period=%sd price=%s ₽ — "
+                "списание с баланса не прошло, подарок не создан",
+                telegram_id, tariff, period_days, price_rubles,
+            )
             await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
             await state.clear()
             return
@@ -322,7 +332,14 @@ async def callback_gift_pay_balance(callback: CallbackQuery, state: FSMContext):
         )
 
         gift_code = gift["gift_code"]
-        logger.info(f"GIFT_PAID_BALANCE buyer={telegram_id} code={gift_code} tariff={tariff} period={period_days}d")
+        # Код подарка не пишем целиком: это предъявительский токен на
+        # оплаченную подписку — кто прочитал лог, тот её и активирует.
+        # Для разбора цепочки есть buyer и id записи подарка.
+        from app.utils.security import mask_secret
+        logger.info(
+            f"GIFT_PAID_BALANCE buyer={telegram_id} gift_id={gift.get('id')} "
+            f"code={mask_secret(gift_code)} tariff={tariff} period={period_days}d"
+        )
 
         await _send_gift_success(callback.bot, telegram_id, language, gift_code, tariff, period_days)
         await state.clear()

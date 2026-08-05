@@ -13,7 +13,9 @@ payments, pending_purchases и balance_transactions. Админ удалял о�
 import re
 from pathlib import Path
 
-SRC = Path("database/admin.py")
+# Удаление пользователя переехало из database/admin.py (тот стал фасадом)
+# в модуль, где собраны все админские действия над доступом.
+SRC = Path("database/admin_access.py")
 
 FINANCIAL_TABLES = ("payments", "pending_purchases", "balance_transactions")
 
@@ -21,8 +23,10 @@ FINANCIAL_TABLES = ("payments", "pending_purchases", "balance_transactions")
 def _delete_body() -> str:
     text = SRC.read_text(encoding="utf-8")
     start = text.index("async def admin_delete_user_complete")
-    end = text.index("\nasync def ", start + 10)
-    return text[start:end]
+    # Функция может оказаться последней в файле — тогда следующего
+    # `async def` просто нет, и берём всё до конца.
+    end = text.find("\nasync def ", start + 10)
+    return text[start:] if end == -1 else text[start:end]
 
 
 def test_financial_tables_are_not_deleted():

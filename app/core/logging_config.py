@@ -55,6 +55,18 @@ class PIISanitizingFilter(logging.Filter):
     _PATTERNS = [
         # VLESS keys: vless://uuid@host:port?...#name
         (re.compile(r'vless://[^\s"\']+', re.IGNORECASE), 'vless://***REDACTED***'),
+        # Остальные схемы клиентских ключей. Раньше фильтр знал только vless,
+        # хотя проект раздаёт ссылки и в этих форматах — Happ/Incy собираются
+        # в app/services/happ_crypto.py и incy_crypto.py.
+        (re.compile(r'\b(happ|incy|ss|trojan|vmess)://[^\s"\']+', re.IGNORECASE),
+         r'\1://***REDACTED***'),
+        # Подписочная ссылка панели: https://<host>/sub/<shortUuid> и
+        # выданная ботом https://<host>/api/sub/<token>. Это ОСНОВНОЙ секрет
+        # проекта — кто открыл ссылку, тот получил конфиги VPN, — и до сих
+        # пор он не редактировался вовсе: правило ловило только литеральное
+        # `uuid=`, а здесь идентификатор лежит в пути.
+        (re.compile(r'https?://[^\s"\']*?/(api/)?sub/[^\s"\']+', re.IGNORECASE),
+         '***SUBSCRIPTION_URL_REDACTED***'),
         # Bearer tokens
         (re.compile(r'Bearer\s+[A-Za-z0-9._\-]+', re.IGNORECASE), 'Bearer ***'),
         # Bot tokens: 123456:ABC-DEF...
@@ -76,7 +88,22 @@ class PIISanitizingFilter(logging.Filter):
         if isinstance(record.msg, str):
             record.msg = self._sanitize(record.msg)
 
-        if record.exc_text:
+        # Трейсбэки не санировались НИКОГДА.
+        #
+        # Здесь стояло `if record.exc_text: record.exc_text = ...`, но
+        # exc_text заполняет форматтер внутри emit(), а фильтры отрабатывают
+        # ДО него — на этот момент поле всегда None. То есть заявленная в
+        # докстринге защита «might leak through exception tracebacks» не
+        # работала ни разу.
+        #
+        # Форматируем трейсбэк сами и кладём в exc_text уже очищенным:
+        # logging.Formatter.format переиспользует непустой exc_text и заново
+        # его не собирает, поэтому в вывод попадает только санированный текст.
+        if record.exc_info and record.exc_info[0] is not None:
+            if not record.exc_text:
+                record.exc_text = "".join(
+                    traceback.format_exception(*record.exc_info)
+                ).rstrip("\n")
             record.exc_text = self._sanitize(record.exc_text)
 
         return True
@@ -93,17 +120,24 @@ class JSONFormatter(logging.Formatter):
     """Structured JSON log formatter for production log aggregators."""
 
     def format(self, record: logging.LogRecord) -> str:
+        _clean = PIISanitizingFilter._sanitize
         log_entry = {
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": _clean(record.getMessage()),
         }
         if record.exc_info and record.exc_info[0] is not None:
+            # Собиралось напрямую из exc_info, мимо exc_text, — то есть мимо
+            # PIISanitizingFilter: в JSON-режиме (LOG_FORMAT=json, штатный для
+            # прода) текст исключения и трейсбэк уходили в лог как есть.
+            # Чистим теми же правилами, что и обычный вывод.
             log_entry["exception"] = {
                 "type": record.exc_info[0].__name__,
-                "message": str(record.exc_info[1]),
-                "traceback": traceback.format_exception(*record.exc_info),
+                "message": _clean(str(record.exc_info[1])),
+                "traceback": [
+                    _clean(line) for line in traceback.format_exception(*record.exc_info)
+                ],
             }
         return json_module.dumps(log_entry, ensure_ascii=False, default=str)
 

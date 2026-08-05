@@ -24,6 +24,7 @@
     (subscription_type='combo_plus' либо 'plus' с флагом is_combo), и
     единая точка перевода избавляет интерфейс от этой двусмысленности.
 """
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -35,6 +36,14 @@ import database
 from app.api.dashboard.deps import require_admin
 from app.constants import tariffs as tariff_ref
 from app.events import bus
+
+# Модульного логгера здесь не было вовсе: logging импортировался локально в
+# двух хелперах уведомлений, а ни один пишущий эндпоинт — выдача доступа,
+# отзыв, смена тарифа, правка баланса, удаление — не оставлял в логе ни одной
+# строки. Ни до, ни после. Восстановить «кто кому что выдал» по логам
+# приложения было нельзя: единственным следом оставался bus.publish, а это
+# in-memory шина для SSE, а не журнал.
+logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -274,11 +283,23 @@ async def user_grant(
     body: GrantRequest = ...,
     admin: dict = Depends(require_admin),
 ):
+    # Запись ДО действия: если процесс упадёт внутри атомарного помощника,
+    # останется след, что выдачу вообще начинали и кто её начал.
+    logger.info(
+        "DASHBOARD_GRANT_START admin=%s user=%s days=%s tariff=%s notify=%s",
+        admin.get("sub"), telegram_id, body.days, body.tariff, body.notify,
+    )
     try:
         expires_at, vpn_key = await database.admin_grant_access_atomic(
             telegram_id, body.days, int(admin["sub"]), tariff=body.tariff,
         )
     except Exception as e:
+        # Провал выдачи доступа уходил только в HTTP-ответ админу. В логах
+        # приложения его не было — ни сообщения, ни трейсбэка.
+        logger.exception(
+            "DASHBOARD_GRANT_FAILED admin=%s user=%s days=%s tariff=%s error=%s",
+            admin.get("sub"), telegram_id, body.days, body.tariff, e,
+        )
         raise HTTPException(500, f"grant_failed: {e}")
     bus.publish({
         "type": "admin:grant",
@@ -291,6 +312,22 @@ async def user_grant(
         await _notify_granted(telegram_id, body.days, "units.days", vpn_key, expires_at)
         if body.notify else False
     )
+    # Исход уведомления берётся из результата отправки, а не из намерения:
+    # notify_sent=False означает «не просили слать» ИЛИ «не дошло», и эти два
+    # случая надо различать в логе, иначе «выдали, а человек не знает»
+    # неотличимо от «выдали молча намеренно».
+    logger.info(
+        "DASHBOARD_GRANT_OK admin=%s user=%s days=%s tariff=%s expires_at=%s "
+        "key_issued=%s notify_requested=%s notify_delivered=%s",
+        admin.get("sub"), telegram_id, body.days, body.tariff, expires_at,
+        bool(vpn_key), body.notify, notify_sent,
+    )
+    if body.notify and not notify_sent:
+        logger.warning(
+            "DASHBOARD_GRANT_NOTIFY_UNDELIVERED admin=%s user=%s — доступ выдан, "
+            "человек уведомления не получил",
+            admin.get("sub"), telegram_id,
+        )
     return {
         "ok": True,
         "expires_at": expires_at.isoformat() if hasattr(expires_at, "isoformat") else expires_at,
@@ -310,11 +347,19 @@ async def user_grant_minutes(
     body: GrantMinutesRequest = ...,
     admin: dict = Depends(require_admin),
 ):
+    logger.info(
+        "DASHBOARD_GRANT_MINUTES_START admin=%s user=%s minutes=%s notify=%s",
+        admin.get("sub"), telegram_id, body.minutes, body.notify,
+    )
     try:
         expires_at, vpn_key = await database.admin_grant_access_minutes_atomic(
             telegram_id, body.minutes, int(admin["sub"]),
         )
     except Exception as e:
+        logger.exception(
+            "DASHBOARD_GRANT_MINUTES_FAILED admin=%s user=%s minutes=%s error=%s",
+            admin.get("sub"), telegram_id, body.minutes, e,
+        )
         raise HTTPException(500, f"grant_minutes_failed: {e}")
     bus.publish({
         "type": "admin:grant_minutes",
@@ -325,6 +370,12 @@ async def user_grant_minutes(
     notify_sent = (
         await _notify_granted(telegram_id, body.minutes, "units.minutes", vpn_key, expires_at)
         if body.notify else False
+    )
+    logger.info(
+        "DASHBOARD_GRANT_MINUTES_OK admin=%s user=%s minutes=%s expires_at=%s "
+        "key_issued=%s notify_requested=%s notify_delivered=%s",
+        admin.get("sub"), telegram_id, body.minutes, expires_at,
+        bool(vpn_key), body.notify, notify_sent,
     )
     return {
         "ok": True,
@@ -339,15 +390,33 @@ async def user_revoke(
     telegram_id: int = Path(..., gt=0),
     admin: dict = Depends(require_admin),
 ):
+    logger.info(
+        "DASHBOARD_REVOKE_START admin=%s user=%s", admin.get("sub"), telegram_id,
+    )
     try:
         ok = await database.admin_revoke_access_atomic(telegram_id, int(admin["sub"]))
     except Exception as e:
+        logger.exception(
+            "DASHBOARD_REVOKE_FAILED admin=%s user=%s error=%s",
+            admin.get("sub"), telegram_id, e,
+        )
         raise HTTPException(500, f"revoke_failed: {e}")
     bus.publish({
         "type": "admin:revoke",
         "telegram_id": telegram_id,
         "by": admin.get("sub"),
     })
+    # ok=False означает, что отзывать было нечего (подписки нет, UPDATE не
+    # задел ни строки). Раньше это значение нигде не фиксировалось, а событие
+    # «отозвано» уходило в шину одинаково при любом исходе.
+    if ok:
+        logger.info("DASHBOARD_REVOKE_OK admin=%s user=%s", admin.get("sub"), telegram_id)
+    else:
+        logger.warning(
+            "DASHBOARD_REVOKE_NOOP admin=%s user=%s — отзывать было нечего, "
+            "активной подписки не найдено",
+            admin.get("sub"), telegram_id,
+        )
     return {"ok": bool(ok)}
 
 
@@ -603,9 +672,13 @@ async def _send_partner_congrats(telegram_id: int, percent: int) -> bool:
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
+        # Реферальная ссылка в запись не идёт: она содержит личный код
+        # пользователя и вместе с telegram_id рядом даёт готовую связку
+        # «человек → его монетизируемый идентификатор». Для разбора хватает
+        # telegram_id, ссылка выводится из него.
         logger.info(
-            "CASHBACK_FIX_CONGRATS_SENT user=%s percent=%s link=%s",
-            telegram_id, percent, referral_link,
+            "CASHBACK_FIX_CONGRATS_SENT user=%s percent=%s",
+            telegram_id, percent,
         )
         return True
     except Exception as e:
@@ -727,6 +800,16 @@ async def user_balance_change(
     so the change appears in balance_transactions with proper attribution.
     """
     reason = body.reason or f"Web dashboard adjustment by admin {admin.get('sub')}"
+    # Личность админа обязана попасть в лог отдельным полем.
+    #
+    # В balance_transactions уходит только source='admin' и свободный текст
+    # description: если админ прислал собственный reason, его ID не
+    # сохраняется НИГДЕ, и начисление денег становится анонимным. Пока это
+    # так, лог — единственное место, где видно, кто именно двигал баланс.
+    logger.info(
+        "DASHBOARD_BALANCE_CHANGE_START admin=%s user=%s delta_rub=%s custom_reason=%s",
+        admin.get("sub"), telegram_id, body.delta_rubles, bool(body.reason),
+    )
     try:
         if body.delta_rubles > 0:
             ok = await database.increase_balance(
@@ -739,8 +822,17 @@ async def user_balance_change(
                 source="admin", description=reason,
             )
     except Exception as e:
+        logger.exception(
+            "DASHBOARD_BALANCE_CHANGE_FAILED admin=%s user=%s delta_rub=%s error=%s",
+            admin.get("sub"), telegram_id, body.delta_rubles, e,
+        )
         raise HTTPException(500, f"balance_change_failed: {e}")
     if not ok:
+        logger.warning(
+            "DASHBOARD_BALANCE_CHANGE_REJECTED admin=%s user=%s delta_rub=%s — "
+            "операция отклонена (недостаточно средств или нет пользователя)",
+            admin.get("sub"), telegram_id, body.delta_rubles,
+        )
         raise HTTPException(400, "balance_change_rejected")
     bus.publish({
         "type": "admin:balance_change",
@@ -749,8 +841,23 @@ async def user_balance_change(
         "by": admin.get("sub"),
     })
     new_balance = 0.0
+    balance_read_ok = False
     try:
         new_balance = await database.get_user_balance(telegram_id)
-    except Exception:
-        pass
+        balance_read_ok = True
+    except Exception as e:
+        # Молчаливый except: pass на денежном пути. Админ видел «баланс 0 ₽»
+        # после успешного начисления и, скорее всего, начислял второй раз —
+        # при этом в логах не оставалось ничего.
+        logger.error(
+            "DASHBOARD_BALANCE_READBACK_FAILED admin=%s user=%s error=%s: %s — "
+            "изменение баланса ПРИМЕНЕНО, но в ответ уйдёт 0 ₽; повторное "
+            "начисление по этому экрану будет ошибкой",
+            admin.get("sub"), telegram_id, type(e).__name__, e,
+        )
+    logger.info(
+        "DASHBOARD_BALANCE_CHANGE_OK admin=%s user=%s delta_rub=%s new_balance=%s",
+        admin.get("sub"), telegram_id, body.delta_rubles,
+        new_balance if balance_read_ok else "unknown",
+    )
     return {"ok": True, "new_balance_rubles": new_balance}

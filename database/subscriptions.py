@@ -2921,9 +2921,13 @@ async def _finalize_purchase_locked(
                         purchase_id, _to_db_utc(now_utc), _to_db_utc(gift_expires),
                     )
 
+                    # Код подарка — предъявительский токен на оплаченную
+                    # подписку: кто прочитал лог, тот её и активирует. Пишем
+                    # маску, цепочка собирается по purchase_id.
+                    from app.utils.security import mask_secret
                     logger.info(
                         f"finalize_purchase: GIFT_CREATED [purchase_id={purchase_id}, user={telegram_id}, "
-                        f"gift_code={gift_code}, tariff={tariff_type}, period={period_days}d]"
+                        f"gift_code={mask_secret(gift_code)}, tariff={tariff_type}, period={period_days}d]"
                     )
                     return {
                         "success": True,

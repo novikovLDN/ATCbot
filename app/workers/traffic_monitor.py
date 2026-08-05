@@ -68,8 +68,29 @@ async def _check_user_traffic(bot: Bot, telegram_id: int, rmn_uuid: str) -> None
             if threshold_bytes > 0 and threshold_bytes >= limit:
                 continue
             if remaining <= threshold_bytes and not flags.get(flag_key, False):
-                await _send_traffic_notification(bot, telegram_id, remaining, flag_key)
+                delivered = await _send_traffic_notification(
+                    bot, telegram_id, remaining, flag_key,
+                )
                 await database.set_traffic_notification_flag(telegram_id, flag_key)
+                if not delivered:
+                    # Флаг однократности ставится независимо от исхода
+                    # отправки, поэтому неудача здесь окончательна: повтора
+                    # не будет никогда. Раньше это было видно только как
+                    # TRAFFIC_NOTIFICATION_FAIL уровня warning, из которого
+                    # не следовало, что уведомление потеряно навсегда.
+                    #
+                    # Порог traffic_notified_0 — это «трафик кончился, доступ
+                    # отключился». Человек об этом не узнает, а по флагу в
+                    # базе система считает, что узнал: для разбора обращения
+                    # «внезапно перестал работать VPN» запись обязана быть
+                    # заметной.
+                    _level = logger.error if flag_key == "traffic_notified_0" else logger.warning
+                    _level(
+                        "TRAFFIC_NOTIFICATION_LOST: tg=%s flag=%s remaining=%d — "
+                        "уведомление не доставлено, флаг однократности проставлен, "
+                        "повтора не будет",
+                        telegram_id, flag_key, remaining,
+                    )
                 break  # One notification per iteration
 
     except Exception as e:
@@ -81,8 +102,14 @@ async def _send_traffic_notification(
     telegram_id: int,
     remaining_bytes: int,
     flag_key: str,
-) -> None:
-    """Send traffic warning notification to user."""
+) -> bool:
+    """Отправить предупреждение об остатке трафика.
+
+    Возвращает True, только если Telegram принял сообщение. Раньше функция
+    возвращала None при любом исходе, и вызывающий код не мог отличить
+    доставленное уведомление от съеденного исключением — а флаг однократности
+    ставился в обоих случаях.
+    """
     try:
         language = await resolve_user_language(telegram_id)
 
@@ -106,9 +133,13 @@ async def _send_traffic_notification(
             )],
         ])
         await bot.send_message(telegram_id, text, reply_markup=kb, parse_mode="HTML")
+        # Запись строго после ответа Telegram: до неё дойдёт только реально
+        # принятое сообщение.
         logger.info("TRAFFIC_NOTIFICATION_SENT: tg=%s flag=%s remaining=%d", telegram_id, flag_key, remaining_bytes)
+        return True
     except Exception as e:
-        logger.warning("TRAFFIC_NOTIFICATION_FAIL: tg=%s %s: %s", telegram_id, type(e).__name__, e)
+        logger.warning("TRAFFIC_NOTIFICATION_FAIL: tg=%s flag=%s %s: %s", telegram_id, flag_key, type(e).__name__, e)
+        return False
 
 
 async def traffic_monitor_iteration(bot: Bot) -> None:
@@ -129,6 +160,9 @@ async def traffic_monitor_iteration(bot: Bot) -> None:
     """
     users = await database.get_active_remnawave_users()
     if not users:
+        # Пустой проход раньше завершался вообще без записи, и «воркер жив,
+        # проверять некого» было неотличимо от «воркер не запускался».
+        logger.info("TRAFFIC_MONITOR_ITERATION_DONE: проверять некого (0 активных)")
         return
 
     started = time.monotonic()

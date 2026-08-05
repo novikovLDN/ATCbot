@@ -328,7 +328,13 @@ async def process_auto_renewals(bot: Bot):
                             )
                             
                             if not success:
-                                logger.error(f"Failed to decrease balance for auto-renewal: user={telegram_id}")
+                                # В записи не было ни суммы, ни баланса — то есть
+                                # ПОЧЕМУ отказано, восстановить было нельзя.
+                                logger.error(
+                                    "AUTO_RENEWAL_DEBIT_FAILED user=%s tariff=%s amount=%s ₽ "
+                                    "balance=%s ₽ — списание не прошло, подписка не продлена",
+                                    telegram_id, tariff_type, amount_rubles, balance_rubles,
+                                )
                                 continue
                             
                             result = await database.grant_access(
@@ -421,15 +427,37 @@ async def process_auto_renewals(bot: Bot):
                             )
                             
                             if not payment_id:
-                                logger.error(f"Failed to create payment record for auto-renewal: user={telegram_id}")
+                                # Худшая точка разрыва: деньги УЖЕ списаны и
+                                # grant_access уже выполнен, а continue коммитит
+                                # savepoint. Человек не попадает в
+                                # notifications_to_send, значит фаза B его не
+                                # тронет: в панели не продлят и не уведомят.
+                                # Прежний текст («Failed to create payment
+                                # record») читался как безобидный сбой вставки.
+                                logger.critical(
+                                    "AUTO_RENEWAL_PAYMENT_RECORD_LOST user=%s tariff=%s "
+                                    "amount=%s ₽ — деньги списаны, доступ в базе продлён, "
+                                    "записи о платеже нет; продление в панели и уведомление "
+                                    "НЕ состоятся, возврата не было",
+                                    telegram_id, tariff_type, amount_rubles,
+                                )
                                 continue
                             
                             notification_already_sent = await notification_service.check_notification_idempotency(
                                 payment_id, conn=conn
                             )
                             if notification_already_sent:
-                                logger.info(
-                                    f"NOTIFICATION_IDEMPOTENT_SKIP [type=auto_renewal, payment_id={payment_id}, user={telegram_id}]"
+                                # continue пропускает не только уведомление:
+                                # человек не попадает в notifications_to_send, а
+                                # значит фаза B не продлит его и в панели. Текст
+                                # говорил только про уведомления, а уровень info
+                                # не отражал того, что деньги списаны, а панель
+                                # не тронута.
+                                logger.warning(
+                                    "AUTO_RENEWAL_SKIPPED_ALREADY_NOTIFIED payment_id=%s user=%s — "
+                                    "деньги списаны, база продлена, но фаза B пропущена: "
+                                    "продления в панели и уведомления не будет",
+                                    payment_id, telegram_id,
                                 )
                                 continue
 
@@ -451,10 +479,34 @@ async def process_auto_renewals(bot: Bot):
                                 "tariff_type": tariff_type,
                                 "period_days": period_days,
                             })
-                            logger.info(f"Auto-renewal successful: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={amount_rubles} RUB, expires_at={expires_str}")
+                            # «successful» относилось ко всему продлению, хотя на
+                            # этот момент сделана только фаза A: списание и
+                            # запись в базу. Панель трогает фаза B, уже после
+                            # коммита, и она может не состояться целиком — а в
+                            # логе всё равно оставалось «Auto-renewal
+                            # successful». payment_id добавлен, чтобы эта строка
+                            # сшивалась с NOTIFICATION_SENT из фазы B: раньше их
+                            # можно было связать только по времени.
+                            logger.info(
+                                "AUTO_RENEWAL_CHARGED user=%s payment_id=%s tariff=%s "
+                                "period_days=%s amount=%s RUB expires_at=%s — "
+                                "деньги списаны и база продлена, панель обновляется в фазе B",
+                                telegram_id, payment_id, tariff_type, period_days,
+                                amount_rubles, expires_str,
+                            )
 
                         else:
-                            logger.debug(f"Insufficient balance for auto-renewal: user={telegram_id}, balance={balance_rubles:.2f} RUB, required={amount_rubles:.2f} RUB")
+                            # Главная штатная причина отказа стояла на debug, а
+                            # root-логгер настроен на INFO — то есть в проде её
+                            # не было видно. При этом last_auto_renewal_at уже
+                            # проставлен, человек выключен из автопродления на
+                            # 12 часов и подписка истечёт: на вопрос «почему не
+                            # продлили» ответа в логах не оставалось.
+                            logger.info(
+                                "AUTO_RENEWAL_INSUFFICIENT_BALANCE user=%s balance=%.2f RUB "
+                                "required=%.2f RUB — подписка не продлена",
+                                telegram_id, balance_rubles, amount_rubles,
+                            )
                     
                     except _RollbackUser:
                         # Штатный отказ от продления: savepoint откачен, идём дальше.
@@ -570,6 +622,16 @@ async def process_auto_renewals(bot: Bot):
                     ])
                     sent = await safe_send_message(bot, item["telegram_id"], text, reply_markup=keyboard)
                     if sent is None:
+                        # Полностью немой путь: результат проверялся и молча
+                        # выбрасывался. mark_notification_sent при этом не
+                        # вызывается, поэтому ни NOTIFICATION_SENT, ни
+                        # NOTIFICATION_FLAG_ALREADY_SET не появятся — по логам
+                        # человек просто исчезал после списания денег.
+                        logger.warning(
+                            "AUTO_RENEWAL_NOTIFICATION_UNDELIVERED payment_id=%s user=%s — "
+                            "подписка продлена и оплачена, человек уведомления не получил",
+                            item.get("payment_id"), item.get("telegram_id"),
+                        )
                         continue
                     await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
                     # Explicit timeout for notification connection acquire (pool timeout is 10s)
@@ -593,8 +655,16 @@ async def process_auto_renewals(bot: Bot):
                         # Release notification connection
                         try:
                             await notify_cm.__aexit__(None, None, None)
-                        except Exception:
-                            pass
+                        except Exception as rel_err:
+                            # Утечка соединения пула — прямая причина
+                            # последующих таймаутов pool.acquire() в этом же
+                            # воркере. Молчание здесь делало её
+                            # недиагностируемой: таймауты появлялись позже и
+                            # выглядели как проблема базы.
+                            logger.warning(
+                                "auto_renewal: notify_conn release failed: %s: %s",
+                                type(rel_err).__name__, rel_err,
+                            )
                 except Exception as e:
                     logger.error(
                         f"CRITICAL: Failed to send/mark auto-renewal notification: payment_id={item.get('payment_id')}, user={item.get('telegram_id')}, error={e}"
@@ -608,14 +678,27 @@ async def process_auto_renewals(bot: Bot):
                             f"Payment: {item.get('payment_id')}\n"
                             f"Error: {type(e).__name__}: {str(e)[:200]}"
                         )
-                    except Exception:
-                        pass
+                    except Exception as alert_err:
+                        # Двойной провал: уведомление не ушло И админа не
+                        # позвали. Раньше не оставлял следа вовсе — а это
+                        # ровно тот случай, когда человек заплатил и об этом
+                        # никто не узнал.
+                        logger.critical(
+                            "AUTO_RENEWAL_NOTIFY_AND_ALERT_FAILED payment_id=%s user=%s: %s — "
+                            "не удалось ни уведомить, ни поднять алерт",
+                            item.get("payment_id"), item.get("telegram_id"), alert_err,
+                        )
         finally:
             # Release connection (equivalent to __aexit__)
             try:
                 await cm.__aexit__(None, None, None)
-            except Exception:
-                pass  # Ignore errors during cleanup
+            except Exception as rel_err:
+                # См. выше: утечка соединения проявляется позже и в другом
+                # месте, поэтому её надо записывать там, где она произошла.
+                logger.warning(
+                    "auto_renewal: connection release failed: %s: %s",
+                    type(rel_err).__name__, rel_err,
+                )
 
         await asyncio.sleep(0)
 
@@ -726,15 +809,26 @@ async def auto_renewal_task(bot: Bot):
             iteration_outcome = "degraded"
             iteration_error_type = "infra_error"
         except Exception as e:
-            logger.error(f"auto_renewal: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
-            logger.debug("auto_renewal: Full traceback for task loop", exc_info=True)
+            # Трейсбэк стоял на debug, а root-логгер настроен на INFO: в
+            # проде оставался только класс исключения и 100 символов текста,
+            # без стека и без указания, на ком упало.
+            logger.error(
+                "auto_renewal: Unexpected error in task loop: %s: %s",
+                type(e).__name__, e, exc_info=True,
+            )
             iteration_outcome = "failed"
             iteration_error_type = classify_error(e)
             try:
                 from app.services.admin_alerts import alert_worker_failure
                 await alert_worker_failure(bot, "auto_renewal", e, iteration=iteration_number)
-            except Exception:
-                pass
+            except Exception as alert_err:
+                # «Воркер автопродления упал и админа не позвали» — событие,
+                # которое обязано быть видно: без него тишина в логах
+                # неотличима от штатной работы.
+                logger.error(
+                    "auto_renewal: alert_worker_failure failed on iteration %s: %s",
+                    iteration_number, alert_err,
+                )
         finally:
             # Always log ITERATION_END so production logs confirm the iteration completed (no indefinite hang)
             duration_ms = (time.time() - iteration_start_time) * 1000

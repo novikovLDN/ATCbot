@@ -19,14 +19,18 @@ import pytest
 
 LANGS = ["ru", "en", "de", "ar", "kk", "tj", "uz"]
 CYRILLIC = re.compile(r"[А-Яа-яЁё]")
-FARM_SRC = Path("app/handlers/farm.py")
+# Ферма разрезана на пакет: правила, экран, грядки, шторм. Тексты живут в
+# трёх из четырёх модулей, поэтому сканируем весь пакет целиком — иначе
+# проверка молча перестанет видеть половину экранов.
+FARM_SRCS = sorted(p for p in Path("app/handlers/farm").glob("*.py"))
 
 # Ключи собираются конкатенацией: get_text(lang, "farm.plant_" + key).
 _KEY_LITERAL = re.compile(r'i18n_get_text\(\s*\w+,\s*[\'"]([\w.]+)[\'"]')
 
 
-def _module_tree():
-    return ast.parse(FARM_SRC.read_text(encoding="utf-8"))
+def _module_trees():
+    assert FARM_SRCS, "пакет фермы не найден — проверка ничего не сканирует"
+    return [(p, ast.parse(p.read_text(encoding="utf-8"))) for p in FARM_SRCS]
 
 
 def _docstring_ids(tree):
@@ -67,22 +71,25 @@ def _log_and_ledger_ids(tree):
 
 
 def test_no_russian_literals_left_on_screen():
-    tree = _module_tree()
-    skip = _docstring_ids(tree) | _log_and_ledger_ids(tree)
-
-    offenders = [
-        (node.lineno, node.value[:60])
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and id(node) not in skip
-        and CYRILLIC.search(node.value)
-    ]
+    offenders = []
+    for path, tree in _module_trees():
+        skip = _docstring_ids(tree) | _log_and_ledger_ids(tree)
+        offenders += [
+            (f"{path}:{node.lineno}", node.value[:60])
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in skip
+            and CYRILLIC.search(node.value)
+        ]
     assert not offenders, f"русский текст в коде фермы: {offenders}"
 
 
 def _used_keys():
-    return set(_KEY_LITERAL.findall(FARM_SRC.read_text(encoding="utf-8")))
+    keys = set()
+    for path in FARM_SRCS:
+        keys |= set(_KEY_LITERAL.findall(path.read_text(encoding="utf-8")))
+    return keys
 
 
 def test_farm_asks_for_a_meaningful_number_of_keys():
@@ -152,7 +159,10 @@ async def test_farm_screen_renders_for_every_language(lang, monkeypatch):
     from datetime import datetime, timedelta, timezone
     from unittest.mock import AsyncMock, MagicMock
 
-    import app.handlers.farm as farm
+    # Подменять зависимости надо в том модуле, где живёт _render_farm:
+    # ферма разрезана на пакет, и патч на app.handlers.farm обработчик
+    # экрана уже не увидит — он читает свои собственные globals.
+    import app.handlers.farm.screen as farm
 
     now = datetime.now(timezone.utc)
     plots = [

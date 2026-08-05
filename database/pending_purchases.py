@@ -162,7 +162,26 @@ async def create_pending_purchase(
             else:
                 raise
 
-        logger.info(f"Pending purchase created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff}, period_days={period_days}, price={price_kopecks} kopecks, country={country}")
+        # country НЕ всегда страна.
+        #
+        # Spotify и Steam переиспользуют колонки этой таблицы под учётные
+        # данные покупателя: country хранит email (Spotify) или логин (Steam),
+        # а promo_code — пароль от аккаунта Spotify
+        # (app/handlers/payments/spotify_purchase.py:_create_pending).
+        # Строка ниже писала country как есть, поэтому на каждой покупке
+        # Spotify в лог уровня INFO уходил email аккаунта рядом с telegram_id
+        # покупателя. Пароль в лог не идёт и идти не должен — promo_code
+        # здесь не логируется намеренно.
+        _CREDENTIAL_PURCHASE_TYPES = ("spotify", "steam")
+        _country_for_log = (
+            "<redacted:account>"
+            if country and (
+                purchase_type in _CREDENTIAL_PURCHASE_TYPES
+                or (tariff or "").startswith(("spotify_", "steam_"))
+            )
+            else country
+        )
+        logger.info(f"Pending purchase created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff}, period_days={period_days}, price={price_kopecks} kopecks, country={_country_for_log}")
 
         return purchase_id
 
