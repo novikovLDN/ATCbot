@@ -116,6 +116,43 @@ class PIISanitizingFilter(logging.Filter):
         return text
 
 
+# Поля, которые logging кладёт в каждую запись сам. Всё, чего здесь нет, —
+# это то, что положил вызывающий через extra={...}.
+#
+# Список зафиксирован явно, а не вычисляется из «эталонной» записи: у
+# LogRecord набор атрибутов зависит от версии Python и от того, какие
+# handler'ы его трогали. Ошибка в одну сторону — в лог поедет служебный
+# мусор, в другую — исчезнет то, ради чего запись и писали.
+_STANDARD_RECORD_FIELDS = frozenset({
+    "args", "asctime", "created", "exc_info", "exc_text", "filename",
+    "funcName", "levelname", "levelno", "lineno", "message", "module",
+    "msecs", "msg", "name", "pathname", "process", "processName",
+    "relativeCreated", "stack_info", "taskName", "thread", "threadName",
+})
+
+
+def _extra_fields(record: logging.LogRecord) -> dict:
+    """Что вызывающий передал в extra={...}.
+
+    ЗАЧЕМ ЭТО ВООБЩЕ ПОНАДОБИЛОСЬ
+
+        45 мест по дереву кладут в extra весь смысл записи, а в сообщении
+        оставляют голую константу: `logger.critical("ACTIVATION_FAILED_NO_VPN_KEY",
+        extra={"telegram_id": ...})`. Ни текстовый шаблон
+        ("%(message)s"), ни JSONFormatter содержимое extra не читали — оно
+        доезжало до вывода и исчезало.
+
+        То есть единственная запись о том, что человеку не выдали
+        оплаченный ключ, выглядела как строка без единого идентификатора.
+        Разбор такой жалобы упирался в «где-то у кого-то».
+    """
+    return {
+        key: value
+        for key, value in record.__dict__.items()
+        if key not in _STANDARD_RECORD_FIELDS and not key.startswith("_")
+    }
+
+
 class JSONFormatter(logging.Formatter):
     """Structured JSON log formatter for production log aggregators."""
 
@@ -127,6 +164,11 @@ class JSONFormatter(logging.Formatter):
             "logger": record.name,
             "message": _clean(record.getMessage()),
         }
+        # Поля из extra кладём рядом с сообщением, а не внутрь него: в
+        # агрегаторе по ним фильтруют. Строки чистим теми же правилами —
+        # в extra попадают и ссылки на подписку, и коды.
+        for key, value in _extra_fields(record).items():
+            log_entry[key] = _clean(value) if isinstance(value, str) else value
         if record.exc_info and record.exc_info[0] is not None:
             # Собиралось напрямую из exc_info, мимо exc_text, — то есть мимо
             # PIISanitizingFilter: в JSON-режиме (LOG_FORMAT=json, штатный для
@@ -140,6 +182,30 @@ class JSONFormatter(logging.Formatter):
                 ],
             }
         return json_module.dumps(log_entry, ensure_ascii=False, default=str)
+
+
+class TextFormatter(logging.Formatter):
+    """Человекочитаемый вывод, который не теряет extra={...}.
+
+    Шаблон "%(message)s" печатает только сообщение, поэтому в текстовом
+    режиме — а он по умолчанию, то есть на нём сидит вся локальная
+    разработка и stage — контекст записи исчезал так же, как в JSON.
+    Дописываем его хвостом `ключ=значение` после сообщения.
+
+    Формат хвоста выбран так, чтобы `grep telegram_id=12345` находил все
+    записи по человеку разом — обычный способ разбора здесь именно этот.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        extras = _extra_fields(record)
+        if not extras:
+            return base
+        tail = " ".join(f"{key}={value}" for key, value in extras.items())
+        # Хвост чистим целиком: в extra попадают ссылки на подписку и коды,
+        # а PIISanitizingFilter правит только record.msg и не знает про
+        # добавленные поля.
+        return f"{base} | {PIISanitizingFilter._sanitize(tail)}"
 
 
 # Module-level listener so it can be stopped on shutdown
@@ -166,7 +232,7 @@ def setup_logging():
     if log_format == "json":
         formatter = JSONFormatter()
     else:
-        formatter = logging.Formatter(
+        formatter = TextFormatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
 

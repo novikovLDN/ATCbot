@@ -402,3 +402,124 @@ def test_swallowed_retry_signal_is_reported():
         "проглоченный сигнал на повтор должен разбираться отдельной веткой"
     )
     assert "PAYMENT_DELIVERY_FAILED_SILENTLY" in src
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 6. Контекст записи доезжает до вывода
+# ─────────────────────────────────────────────────────────────────────
+
+def _record_with_extra(msg: str, **extra) -> logging.LogRecord:
+    record = logging.LogRecord("t", logging.INFO, __file__, 1, msg, None, None)
+    record.__dict__.update(extra)
+    return record
+
+
+class TestExtraReachesTheOutput:
+    """extra={...} обязан попадать в вывод — раньше он исчезал целиком.
+
+    ЧТО БЫЛО
+
+        45 мест по дереву кладут в extra ВЕСЬ смысл записи, а в сообщении
+        оставляют голую константу:
+
+            logger.critical("ACTIVATION_FAILED_NO_VPN_KEY",
+                            extra={"telegram_id": ..., "purchase_id": ...})
+
+        Ни текстовый шаблон ("%(message)s"), ни JSONFormatter (он собирал
+        фиксированный словарь из четырёх полей) содержимое extra не
+        читали. Оно доезжало до форматтера и исчезало.
+
+        То есть единственная запись о том, что человеку не выдали
+        оплаченный ключ, выглядела в логе как строка без единого
+        идентификатора. По ней нельзя было понять даже, о ком речь.
+
+    ПОЧЕМУ ОБА ФОРМАТА
+
+        JSON — штатный для прода, текстовый — по умолчанию, то есть на нём
+        сидят разработка и stage. Починить один и забыть другой значит
+        оставить половину случаев неразбираемыми.
+    """
+
+    def test_json_output_carries_the_context(self):
+        from app.core.logging_config import JSONFormatter
+
+        import json as json_module
+
+        out = json_module.loads(JSONFormatter().format(
+            _record_with_extra("ACTIVATION_FAILED_NO_VPN_KEY",
+                               telegram_id=12345, purchase_id="p1"),
+        ))
+        assert out["telegram_id"] == 12345, (
+            "контекст записи снова теряется: по такой строке нельзя понять, "
+            "кому не выдали оплаченный ключ"
+        )
+        assert out["purchase_id"] == "p1"
+
+    def test_text_output_carries_the_context(self):
+        from app.core.logging_config import TextFormatter
+
+        out = TextFormatter("%(message)s").format(
+            _record_with_extra("ACTIVATION_FAILED_NO_VPN_KEY", telegram_id=12345),
+        )
+        assert "telegram_id=12345" in out, out
+
+    def test_the_tail_is_greppable_by_identifier(self):
+        """Разбор идёт через `grep telegram_id=<id>` — формат хвоста важен."""
+        from app.core.logging_config import TextFormatter
+
+        out = TextFormatter("%(message)s").format(
+            _record_with_extra("X", telegram_id=777),
+        )
+        assert "telegram_id=777" in out
+
+    @pytest.mark.parametrize("secret,leak", [
+        ("vless://uuid@host:443?sni=x#name", "uuid@host"),
+        ("https://panel.example.com/sub/aBc123ShortUuid", "ShortUuid"),
+    ])
+    def test_secrets_in_extra_are_redacted_too(self, secret, leak):
+        """Фильтр правит record.msg и про добавленные поля не знает.
+
+        Значит, чистить их обязан сам форматтер — иначе новый путь вывода
+        стал бы новым путём утечки подписочной ссылки.
+        """
+        from app.core.logging_config import JSONFormatter, TextFormatter
+
+        import json as json_module
+
+        as_json = json_module.dumps(json_module.loads(JSONFormatter().format(
+            _record_with_extra("KEY_ISSUED", link=secret),
+        )), ensure_ascii=False)
+        as_text = TextFormatter("%(message)s").format(
+            _record_with_extra("KEY_ISSUED", link=secret),
+        )
+        for out in (as_json, as_text):
+            assert leak not in out, f"секрет из extra утёк в вывод: {out}"
+
+    def test_no_service_fields_leak_into_the_output(self):
+        """Обратная ошибка: в вывод поедет весь служебный состав записи."""
+        from app.core.logging_config import TextFormatter
+
+        out = TextFormatter("%(message)s").format(
+            _record_with_extra("X", telegram_id=1),
+        )
+        for service in ("pathname=", "levelno=", "msecs=", "relativeCreated="):
+            assert service not in out, f"в вывод попало служебное поле: {out}"
+
+    def test_a_record_without_extra_is_unchanged(self):
+        from app.core.logging_config import TextFormatter
+
+        assert TextFormatter("%(message)s").format(
+            _record_with_extra("BARE"),
+        ) == "BARE"
+
+    def test_the_setup_actually_installs_this_formatter(self):
+        """Иначе форматтер починен, а бот пишет прежним — и никто не заметит."""
+        import inspect
+
+        from app.core import logging_config
+
+        src = inspect.getsource(logging_config.setup_logging)
+        assert "TextFormatter(" in src, (
+            "setup_logging снова ставит голый logging.Formatter — "
+            "контекст записей опять теряется в текстовом режиме"
+        )
