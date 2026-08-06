@@ -4,7 +4,14 @@ import { useQuery } from "@tanstack/react-query";
 import { endpoints } from "@/lib/api";
 import { fmtNum, fmtRub } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import { Card, CardHeader, EmptyFailure, LoadingGate, Skeleton } from "@/components/ui";
+import {
+  Card,
+  CardHeader,
+  EmptyAllClear,
+  EmptyFailure,
+  LoadingGate,
+  Skeleton,
+} from "@/components/ui";
 
 /**
  * Активность по часам суток — «когда покупают».
@@ -21,8 +28,17 @@ import { Card, CardHeader, EmptyFailure, LoadingGate, Skeleton } from "@/compone
  * быть единственным носителем смысла (research §4.11).
  *
  * Столбцы рисуются div'ами, а не recharts: двадцать четыре прямоугольника
- * не стоят инициализации библиотеки, а сама библиотека на этом экране уже
- * загружена ради других графиков — экономии от её использования тут нет.
+ * не стоят инициализации библиотеки. Recharts на этом экране больше не
+ * загружается вовсе — из src/ ушёл последний импорт.
+ *
+ * АНИМАЦИИ СЕРИИ ЗДЕСЬ НЕТ, И ДОБАВЛЯТЬ ЕЁ НЕЛЬЗЯ. Требование research §7.3
+ * («isAnimationActive={false}») в коде без recharts выглядит как отсутствие
+ * transition на высоте столбца. Раньше стояло `transition-[height]
+ * duration-300`: запрос обновляется по staleTime и при смене периода, и на
+ * каждое обновление все 24 столбца ехали по высоте треть секунды. На рабочей
+ * панели это мешает читать — глаз ловит движение вместо числа, а пик
+ * «переползает» на соседний час прямо во время чтения. Вернёте transition —
+ * вернёте дефект.
  */
 
 const METRICS = [
@@ -90,6 +106,15 @@ export function HourlyActivity() {
             skeleton={<Skeleton className="h-44" />}
             message="Считаю активность по часам"
           >
+            {series.length === 0 ? (
+              // Ряд пуст — двадцать четыре нулевых столбика выглядели бы как
+              // график, у которого просто маленький масштаб. Пишем словами.
+              <EmptyAllClear
+                title="За это окно активности не было"
+                description="Запрос прошёл, но ни в один час не случилось ни одной покупки. Возьмите окно шире."
+              />
+            ) : (
+            <>
             <div className="pill-tabs mb-4">
               {METRICS.map((m) => (
                 <button
@@ -128,7 +153,7 @@ export function HourlyActivity() {
                   >
                     <div
                       className={cn(
-                        "w-full rounded-t-sm transition-[height] duration-300",
+                        "w-full rounded-t-sm",
                         isPeak ? "bg-accent-9" : "bg-accent-6",
                       )}
                       style={{ height: `${Math.max(2, (v / max) * 100)}%` }}
@@ -142,6 +167,8 @@ export function HourlyActivity() {
                 <span key={h}>{h}</span>
               ))}
             </div>
+            </>
+            )}
           </LoadingGate>
         )}
       </div>

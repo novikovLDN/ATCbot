@@ -10,7 +10,7 @@
  *   UndoBanner             — отмена в неисчезающем баннере, не в тосте (§2.4)
  *   Skeleton*              — только таблицы, карточки, плитки (§3.3)
  *   Loading*               — лестница задержек 1/2/10 секунд (§3.1)
- *   Empty*                 — четыре разных пустых состояния (§3.4)
+ *   Empty*                 — шесть разных пустых состояний (§3.4)
  */
 export { Button, type ButtonProps } from "./Button";
 export { Input, type InputProps } from "./Input";
@@ -39,4 +39,12 @@ export {
   useLoadStage,
   type LoadStage,
 } from "./Loading";
-export { EmptyFirstRun, EmptyFilter, EmptyNoAccess, EmptyFailure } from "./EmptyState";
+export {
+  EmptyFirstRun,
+  EmptyFilter,
+  EmptyAllClear,
+  EmptyNotConfigured,
+  EmptyNoAccess,
+  EmptyFailure,
+} from "./EmptyState";
+export { StatCard, type StatCardProps } from "./StatCard";

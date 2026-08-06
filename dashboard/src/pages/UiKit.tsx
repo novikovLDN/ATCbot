@@ -9,11 +9,14 @@ import {
   ConfirmDialog,
   Dash,
   DensityToggle,
+  EmptyAllClear,
   EmptyFailure,
   EmptyFilter,
   EmptyFirstRun,
   EmptyNoAccess,
+  EmptyNotConfigured,
   Input,
+  StatCard,
   LoadingGate,
   Modal,
   ProgressBar,
@@ -181,11 +184,19 @@ export default function UiKit() {
           </div>
         </Section>
 
-        <Section title="Карточки и плитки">
+        <Section title="Карточки и плитки" note="ни градиента под числом, ни иконки рядом с ним — и то и другое мешает искать нужное число глазами">
           <div className="grid gap-3 sm:grid-cols-3">
             <StatTile label="Доход сегодня" value="84 320 ₽" hint="вчера в это же время 71 200 ₽" tone="money-in" />
             <StatTile label="Возвраты за 24 ч" value="−4 470 ₽" hint="3 операции" tone="money-out" />
             <StatTile label="Активные подписки" value="1 284" hint="+12 за сутки" />
+          </div>
+          {/* StatCard отличается от StatTile крупнее числом и наличием
+              состояния загрузки — он для страниц аналитики, где числа
+              приезжают отдельными запросами. */}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <StatCard label="Доход за 30 дней" value="1 284 590 ₽" tone="success" pill="+12%" />
+            <StatCard label="ARPU" hint="на всю базу" value="184 ₽" tone="accent" />
+            <StatCard label="Средний чек" value="—" loading />
           </div>
           <Card>
             <CardHeader
@@ -257,7 +268,10 @@ export default function UiKit() {
           </div>
         </Section>
 
-        <Section title="Пустые состояния" note="четыре разных случая, у каждого своё действие">
+        <Section
+          title="Пустые состояния"
+          note="шесть разных случаев, у каждого свой текст и своё действие · порядок проверки на экране: отказ → нет прав → не настроено → всё в порядке → фильтр → первый запуск"
+        >
           <div className="grid gap-3 md:grid-cols-2">
             <EmptyFirstRun
               title="Промокодов пока нет"
@@ -266,6 +280,18 @@ export default function UiKit() {
               onAction={() => {}}
             />
             <EmptyFilter query="ivan" onReset={() => {}} />
+            <EmptyAllClear
+              title="Расхождений с панелью нет"
+              description="Все сроки в Remnawave укладываются в оплаченный период. Проверка прошла целиком."
+              actionLabel="Проверить ещё раз"
+              onAction={() => {}}
+            />
+            <EmptyNotConfigured
+              title="Push на этом устройстве не подключён"
+              description="Нажмите «Подключить» и разрешите уведомления в браузере. На iPhone сначала добавьте дашборд на экран «Домой»."
+              actionLabel="Подключить"
+              onAction={() => {}}
+            />
             <EmptyNoAccess what="журналу действий" contact="владелец панели" />
             <EmptyFailure what="платежи за 30 дней" onRetry={() => {}} />
           </div>

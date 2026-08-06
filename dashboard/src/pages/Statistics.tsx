@@ -1,30 +1,59 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  BarChart3,
-  CreditCard,
-  Megaphone,
-  Percent,
-  RefreshCcw,
-  ShoppingBag,
-  Users,
-} from "lucide-react";
+import { RefreshCcw } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
 import { fmtNum, fmtRub } from "@/lib/format";
-import { Spinner } from "@/components/Spinner";
+import { cn } from "@/lib/cn";
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyAllClear,
+  EmptyFailure,
+  LoadingGate,
+  SkeletonCard,
+  SkeletonTile,
+  StatCard,
+} from "@/components/ui";
 
 /**
- * Statistics hub — consolidated view всех метрик которые мы
- * собираем: платежи (breakdown), рассылки (top-конверсия),
- * рефералы (top-партнёры + КПИ), магазин по продукту.
+ * «Статистика» — вторая вкладка раздела «Аналитика».
  *
- * В отличие от Dashboard.tsx (все секции в Collapsible'ах),
- * здесь всё раскрыто по умолчанию — scrolling wall of stats
- * для read-only обзора.
+ * ЧЕМ ОТЛИЧАЕТСЯ ОТ ПЕРВОЙ ВКЛАДКИ. «Метрики и доход» отвечают на вопрос
+ * «сколько», эта вкладка — на вопрос «из чего»: какие продукты, какие
+ * провайдеры, какие партнёры, какие рассылки. Поэтому здесь нет ни одного
+ * итогового числа, которого не было бы на первой вкладке, зато каждое
+ * разложено на составляющие.
+ *
+ * ЧТО ИСПРАВЛЕНО ПРИ ПЕРЕДЕЛКЕ (все три дефекта нашлись живьём):
+ *
+ * 1. ХУК ЗА УСЛОВНЫМ ВОЗВРАТОМ. В SegmentsMini стояло `if (isLoading) return`
+ *    и только НИЖЕ useMemo. React считает хуки по порядку вызова: как только
+ *    запрос переставал грузиться, число хуков в компоненте менялось с 1 на 2,
+ *    и React падал с «rendered more hooks than during the previous render».
+ *    Хуки теперь вызываются до любых возвратов — иначе дефект вернётся.
+ *
+ * 2. ОШИБКА, ПОКАЗАННАЯ КАК ПУСТОТА. Сегменты при отказе запроса возвращали
+ *    null — блок просто исчезал со страницы, и понять, сломалось или сегментов
+ *    нет, было нельзя. Рефералы вообще не проверяли isError и рисовали нули.
+ *
+ * 3. СВОИ ЛОКАЛЬНЫЕ Skeleton / EmptyRow / ErrorNote. Три компонента с теми же
+ *    именами, что в `ui/`, но с другим поведением: скелетон без блика,
+ *    «пусто» и «ошибка» одинаковым серым текстом. Взяты общие.
  */
+
+const RANGES = [
+  { hours: 24, label: "24 часа" },
+  { hours: 168, label: "7 дней" },
+  { hours: 720, label: "30 дней" },
+] as const;
+
+type RangeHours = (typeof RANGES)[number]["hours"];
+
 export function Statistics() {
-  const [hours, setHours] = useState<24 | 168 | 720>(168);
-  const label = (h: number) => (h === 24 ? "24 часа" : h === 168 ? "7 дней" : "30 дней");
+  const [hours, setHours] = useState<RangeHours>(168);
+  const label = RANGES.find((r) => r.hours === hours)?.label ?? "период";
 
   const breakdown = useQuery({
     queryKey: ["statistics", "payments-breakdown", hours],
@@ -49,8 +78,12 @@ export function Statistics() {
   });
   const broadcasts = useQuery({
     queryKey: ["statistics", "broadcasts-recent", 20],
+    // Приведение через unknown намеренно: как только этот эндпоинт получит
+    // точный тип в lib/api.ts, прямой каст в Record<string, unknown> перестанет
+    // компилироваться (индексной сигнатуры у именованного интерфейса нет).
+    // Строки разбираются ниже через asNum/String, форма ответа здесь не важна.
     queryFn: () =>
-      endpoints.broadcastsRecent(20) as Promise<
+      endpoints.broadcastsRecent(20) as unknown as Promise<
         Array<Record<string, unknown>>
       >,
     refetchInterval: 30_000,
@@ -63,287 +96,429 @@ export function Statistics() {
     broadcasts.refetch();
   };
 
-  const anyLoading =
+  const anyFetching =
     breakdown.isFetching ||
     referrals.isFetching ||
     topReferrers.isFetching ||
     broadcasts.isFetching;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4 pb-8 pt-2 md:pt-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
+    <div className="space-y-6">
+      <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold text-fg">
-            <BarChart3 className="h-5 w-5 text-fg-muted" />
+          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+            Анализ
+          </div>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg md:text-3xl">
             Статистика
           </h1>
-          <p className="mt-1 max-w-xl text-sm text-fg-muted">
-            Полный срез: платежи по продуктам, топ-партнёры рефералки,
-            последние рассылки с конверсией, магазин по позициям.
-            Обновляется автоматически каждую минуту.
+          <p className="mt-1 max-w-xl text-base text-fg-muted">
+            Из чего складываются деньги: продукты, провайдеры, партнёры,
+            рассылки. Числа обновляются сами — раз в минуту.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex overflow-hidden rounded-lg border border-border">
-            {[24, 168, 720].map((h) => (
+          <div className="pill-tabs" role="group" aria-label="Период">
+            {RANGES.map((r) => (
               <button
                 type="button"
-                key={h}
-                onClick={() => setHours(h as 24 | 168 | 720)}
-                className={
-                  hours === h
-                    ? "bg-accent px-3 py-1.5 text-xs font-semibold text-bg"
-                    : "bg-bg-card px-3 py-1.5 text-xs font-medium text-fg-muted hover:bg-bg-subtle/60"
-                }
+                key={r.hours}
+                onClick={() => setHours(r.hours)}
+                aria-pressed={hours === r.hours}
+                className={hours === r.hours ? "pill-tab-active" : "pill-tab"}
               >
-                {label(h)}
+                {r.label}
               </button>
             ))}
           </div>
-          <button
-            type="button"
+          <Button
             onClick={refetchAll}
-            className="btn-secondary"
-            disabled={anyLoading}
+            loading={anyFetching}
+            icon={<RefreshCcw className="h-3.5 w-3.5" />}
           >
-            {anyLoading ? <Spinner /> : <RefreshCcw className="h-3.5 w-3.5" />}
             Обновить
-          </button>
+          </Button>
         </div>
       </header>
 
-      {/* Total revenue KPI */}
-      <SectionCard
-        icon={CreditCard}
-        title="Общий оборот"
-        subtitle={`За ${label(hours).toLowerCase()}`}
-      >
-        {breakdown.isLoading ? (
-          <Skeleton lines={3} />
-        ) : breakdown.isError ? (
-          <ErrorNote err={breakdown.error} />
-        ) : (
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <BigStat
-              label="Оплат"
-              value={fmtNum(breakdown.data?.total.count ?? 0)}
+      {/* ── Оборот за выбранный период ──────────────────────────────── */}
+      <Card>
+        <CardHeader title="Оборот" subtitle={`за ${label.toLowerCase()}`} />
+        <CardBody>
+          {breakdown.isError ? (
+            <EmptyFailure
+              what={`оборот за ${label.toLowerCase()}`}
+              reason={
+                (breakdown.error as ApiError)?.detail ??
+                "Запрос не вернулся. Нули здесь читались бы как «оплат не было»."
+              }
+              onRetry={() => breakdown.refetch()}
             />
-            <BigStat
-              label="Выручка"
-              value={fmtRub(breakdown.data?.total.revenue_rubles ?? 0)}
-              accent
-            />
-            <BigStat
-              label="Средний чек"
-              value={fmtRub(
-                breakdown.data?.total.count
-                  ? breakdown.data.total.revenue_rubles /
-                      breakdown.data.total.count
-                  : 0,
-              )}
-            />
-            <BigStat
-              label="Продуктов в наличии"
-              value={fmtNum(breakdown.data?.by_type.length ?? 0)}
-            />
-          </div>
-        )}
-      </SectionCard>
-
-      {/* Payments by product / provider / tariff / apple-nominal */}
-      <SectionCard
-        icon={ShoppingBag}
-        title="Магазин · разбивка"
-        subtitle="что купили + как оплатили + Apple-номиналы"
-      >
-        {breakdown.isLoading ? (
-          <Skeleton lines={4} />
-        ) : breakdown.isError ? (
-          <ErrorNote err={breakdown.error} />
-        ) : !breakdown.data || breakdown.data.total.count === 0 ? (
-          <EmptyRow text="За период оплат не было." />
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2">
-            <BreakdownTable
-              title="По продукту"
-              rows={breakdown.data.by_type.map((r) => ({
-                label: PT_LABEL[r.purchase_type] ?? r.purchase_type,
-                count: r.count,
-                revenue: r.revenue_rubles,
-              }))}
-            />
-            <BreakdownTable
-              title="По провайдеру"
-              rows={breakdown.data.by_provider.map((r) => ({
-                label: PROVIDER_LABEL[r.provider] ?? r.provider,
-                count: r.count,
-                revenue: r.revenue_rubles,
-              }))}
-            />
-            <BreakdownTable
-              title="Топ-15 тарифов"
-              rows={breakdown.data.by_tariff.map((r) => ({
-                label: r.tariff,
-                count: r.count,
-                revenue: r.revenue_rubles,
-              }))}
-            />
-            {breakdown.data.by_apple_nominal.length > 0 && (
-              <BreakdownTable
-                title="Apple ID · по номиналу"
-                rows={breakdown.data.by_apple_nominal.map((r) => ({
-                  label: `${APPLE_REGION[r.region] ?? r.region} · ${r.nominal}${APPLE_CUR[r.region] ?? "$"}`,
-                  count: r.count,
-                  revenue: r.revenue_rubles,
-                }))}
-              />
-            )}
-          </div>
-        )}
-      </SectionCard>
-
-      {/* Referrals */}
-      <SectionCard
-        icon={Percent}
-        title="Рефералы · сводка"
-        subtitle="общая выручка + топ-10 партнёров"
-      >
-        {referrals.isLoading || topReferrers.isLoading ? (
-          <Skeleton lines={4} />
-        ) : (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <BigStat
-                label="Приглашённых"
-                value={fmtNum(asNum(referrals.data?.referred_users_count) ?? 0)}
-              />
-              <BigStat
-                label="Активных"
-                value={fmtNum(asNum(referrals.data?.active_referrals) ?? 0)}
-              />
-              <BigStat
-                label="Выручка от рефералов"
-                value={fmtRub(asNum(referrals.data?.referral_revenue) ?? 0)}
-                accent
-              />
-              <BigStat
-                label="Выплачено кэшбэком"
-                value={fmtRub(asNum(referrals.data?.cashback_paid) ?? 0)}
-              />
-            </div>
-            {topReferrers.data && topReferrers.data.length > 0 && (
-              <div className="rounded-xl border border-border bg-bg-subtle/40 p-3">
-                <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-                  Топ-10 партнёров (по выручке)
+          ) : (
+            <LoadingGate
+              loading={breakdown.isLoading}
+              skeleton={
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  {[0, 1, 2, 3].map((i) => (
+                    <SkeletonTile key={i} />
+                  ))}
                 </div>
-                <div className="space-y-1">
-                  {topReferrers.data.slice(0, 10).map((r, i) => {
-                    const id =
-                      asNum((r as { referrer_id?: unknown }).referrer_id) ??
-                      asNum((r as { telegram_id?: unknown }).telegram_id) ??
-                      0;
-                    const username =
-                      ((r as { username?: string }).username as string) || "—";
-                    const invited = asNum((r as { invited_count?: unknown }).invited_count) ?? 0;
-                    const trials = asNum((r as { trial_count?: unknown }).trial_count) ?? 0;
-                    const paid = asNum((r as { paid_count?: unknown }).paid_count) ?? 0;
-                    const revenue =
-                      asNum((r as { total_invited_revenue?: unknown }).total_invited_revenue) ??
-                      asNum((r as { total_revenue?: unknown }).total_revenue) ??
-                      0;
-                    return (
-                      <div
-                        key={id + "_" + i}
-                        className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-bg-elevated"
-                      >
-                        <span className="w-5 text-fg-subtle tabular-nums">{i + 1}.</span>
-                        <span className="min-w-0 flex-1 truncate font-medium text-fg">
-                          {username !== "—" ? `@${username}` : `tg:${id}`}
-                        </span>
-                        <span className="rounded bg-fg/5 px-1.5 py-0.5 text-[10px] text-fg-muted tabular-nums">
-                          👥 {fmtNum(invited)}
-                        </span>
-                        <span className="rounded bg-info/10 px-1.5 py-0.5 text-[10px] text-info tabular-nums">
-                          🎁 {fmtNum(trials)}
-                        </span>
-                        <span className="rounded bg-success/10 px-1.5 py-0.5 text-[10px] text-success tabular-nums">
-                          💳 {fmtNum(paid)}
-                        </span>
-                        <span className="min-w-[68px] text-right text-xs font-semibold tabular-nums text-fg">
-                          {fmtRub(revenue)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
+              }
+              message="Считаю оборот"
+            >
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <StatCard
+                  label="Выручка"
+                  value={fmtRub(breakdown.data?.total.revenue_rubles ?? 0)}
+                  tone="success"
+                />
+                <StatCard
+                  label="Оплат"
+                  value={fmtNum(breakdown.data?.total.count ?? 0)}
+                />
+                <StatCard
+                  label="Средний чек"
+                  value={fmtRub(
+                    breakdown.data?.total.count
+                      ? breakdown.data.total.revenue_rubles /
+                          breakdown.data.total.count
+                      : 0,
+                  )}
+                  hint="выручка ÷ оплаты"
+                />
+                <StatCard
+                  label="Продуктов продано"
+                  value={fmtNum(breakdown.data?.by_type.length ?? 0)}
+                  hint="разных позиций"
+                />
               </div>
-            )}
-          </div>
-        )}
-      </SectionCard>
+            </LoadingGate>
+          )}
+        </CardBody>
+      </Card>
 
-      {/* Broadcasts */}
-      <SectionCard
-        icon={Megaphone}
-        title="Последние рассылки"
-        subtitle="кто отправлено · доставлено · ошибок"
-      >
-        {broadcasts.isLoading ? (
-          <Skeleton lines={5} />
-        ) : broadcasts.isError ? (
-          <ErrorNote err={broadcasts.error} />
-        ) : !broadcasts.data || broadcasts.data.length === 0 ? (
-          <EmptyRow text="Рассылок ещё не было." />
-        ) : (
-          <div className="space-y-1">
-            {broadcasts.data.slice(0, 20).map((b, i) => (
-              <BroadcastRow key={i} row={b} />
-            ))}
-          </div>
-        )}
-      </SectionCard>
+      {/* ── Разбивки. Везде горизонтальные полосы, отсортированные по
+             значению: категорий больше трёх, а пирог с четырьмя и более
+             сегментами даёт иллюзию понимания (research §7.1). ──────── */}
+      <Card>
+        <CardHeader
+          title="Из чего оборот"
+          subtitle={`за ${label.toLowerCase()} · что купили, чем заплатили, по каким тарифам`}
+        />
+        <CardBody>
+          {breakdown.isError ? (
+            <EmptyFailure
+              what="разбивку оборота"
+              reason={
+                (breakdown.error as ApiError)?.detail ??
+                "Запрос не вернулся."
+              }
+              onRetry={() => breakdown.refetch()}
+            />
+          ) : (
+            <LoadingGate
+              loading={breakdown.isLoading}
+              skeleton={
+                <div className="grid gap-3 md:grid-cols-2">
+                  <SkeletonCard lines={4} />
+                  <SkeletonCard lines={4} />
+                </div>
+              }
+              message="Раскладываю оборот по разрезам"
+            >
+              {!breakdown.data || breakdown.data.total.count === 0 ? (
+                <EmptyAllClear
+                  title={`За ${label.toLowerCase()} оплат не было`}
+                  description="Запрос прошёл — платежей в этом окне действительно ноль. Возьмите период шире."
+                />
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <BreakdownBars
+                    title="По продукту"
+                    rows={breakdown.data.by_type.map((r) => ({
+                      label: PT_LABEL[r.purchase_type] ?? r.purchase_type,
+                      count: r.count,
+                      revenue: r.revenue_rubles,
+                    }))}
+                  />
+                  <BreakdownBars
+                    title="По провайдеру"
+                    rows={breakdown.data.by_provider.map((r) => ({
+                      label: PROVIDER_LABEL[r.provider] ?? r.provider,
+                      count: r.count,
+                      revenue: r.revenue_rubles,
+                    }))}
+                  />
+                  <BreakdownBars
+                    title="Топ-15 тарифов"
+                    rows={breakdown.data.by_tariff.map((r) => ({
+                      label: r.tariff,
+                      count: r.count,
+                      revenue: r.revenue_rubles,
+                    }))}
+                  />
+                  {breakdown.data.by_apple_nominal.length > 0 && (
+                    <BreakdownBars
+                      title="Apple ID — по номиналу"
+                      rows={breakdown.data.by_apple_nominal.map((r) => ({
+                        label: `${APPLE_REGION[r.region] ?? r.region} · ${r.nominal} ${APPLE_CUR[r.region] ?? "$"}`,
+                        count: r.count,
+                        revenue: r.revenue_rubles,
+                      }))}
+                    />
+                  )}
+                </div>
+              )}
+            </LoadingGate>
+          )}
+        </CardBody>
+      </Card>
 
-      {/* Segments cross-ref */}
-      <SectionCard
-        icon={Users}
-        title="Сегменты аудитории"
-        subtitle="откройте на главной для управления"
-      >
-        <SegmentsMini />
-      </SectionCard>
+      {/* ── Рефералы ────────────────────────────────────────────────── */}
+      <Card>
+        <CardHeader
+          title="Рефералы"
+          subtitle="за всё время · сводка и десять партнёров с наибольшей выручкой"
+        />
+        <CardBody className="space-y-3">
+          {referrals.isError ? (
+            <EmptyFailure
+              what="сводку по рефералам"
+              reason={
+                (referrals.error as ApiError)?.detail ??
+                "Запрос не вернулся. Четыре нуля выглядели бы как «партнёрская программа не работает»."
+              }
+              onRetry={() => referrals.refetch()}
+            />
+          ) : (
+            <LoadingGate
+              loading={referrals.isLoading}
+              skeleton={
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  {[0, 1, 2, 3].map((i) => (
+                    <SkeletonTile key={i} />
+                  ))}
+                </div>
+              }
+              message="Считаю рефералов"
+            >
+              {/* ИМЕНА ПОЛЕЙ ПРОВЕРЕНЫ ПО БЭКЕНДУ (database/referral_analytics.py,
+                  get_referral_overall_stats). До правки здесь стояли
+                  referred_users_count / active_referrals / referral_revenue /
+                  cashback_paid — таких полей в ответе нет и не было, поэтому
+                  все четыре числа ВСЕГДА показывали ноль. Сверяйте имена с
+                  типом ReferralsOverall в lib/api.ts, а не с тем, как метрику
+                  назвали в подписи. */}
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <StatCard
+                  label="Партнёров"
+                  value={fmtNum(referrals.data?.total_referrers ?? 0)}
+                  hint="привели хотя бы одного"
+                />
+                <StatCard
+                  label="Приглашённых"
+                  value={fmtNum(referrals.data?.total_referrals ?? 0)}
+                  hint="пришли по чужой ссылке"
+                />
+                <StatCard
+                  label="Выручка от рефералов"
+                  value={fmtRub(referrals.data?.total_revenue ?? 0)}
+                  tone="success"
+                />
+                <StatCard
+                  label="Выплачено кэшбэком"
+                  value={fmtRub(referrals.data?.total_cashback_paid ?? 0)}
+                  hint="ушло партнёрам"
+                />
+              </div>
+            </LoadingGate>
+          )}
+
+          {topReferrers.isError ? (
+            <EmptyFailure
+              what="топ партнёров"
+              reason={
+                (topReferrers.error as ApiError)?.detail ?? "Запрос не вернулся."
+              }
+              onRetry={() => topReferrers.refetch()}
+            />
+          ) : (
+            <LoadingGate
+              loading={topReferrers.isLoading}
+              skeleton={<SkeletonCard lines={5} />}
+              message="Собираю топ партнёров"
+            >
+              {!topReferrers.data || topReferrers.data.length === 0 ? (
+                <EmptyAllClear
+                  title="Партнёров пока нет"
+                  description="Никто ещё не привёл ни одного пользователя по своей ссылке."
+                />
+              ) : (
+                <div className="rounded-lg border border-border">
+                  <div className="border-b border-border-subtle px-3 py-2 text-2xs font-medium uppercase tracking-wider text-fg-subtle">
+                    Топ-10 партнёров по выручке
+                  </div>
+                  <ul className="divide-y divide-border-subtle">
+                    {topReferrers.data.slice(0, 10).map((r, i) => (
+                      <ReferrerRow key={i} row={r} place={i + 1} />
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </LoadingGate>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* ── Рассылки ────────────────────────────────────────────────── */}
+      <Card>
+        <CardHeader
+          title="Последние рассылки"
+          subtitle="сколько ушло, сколько доставлено, сколько упало"
+        />
+        <CardBody>
+          {broadcasts.isError ? (
+            <EmptyFailure
+              what="список рассылок"
+              reason={
+                (broadcasts.error as ApiError)?.detail ??
+                "Запрос не вернулся. Пустой список читался бы как «рассылок не было»."
+              }
+              onRetry={() => broadcasts.refetch()}
+            />
+          ) : (
+            <LoadingGate
+              loading={broadcasts.isLoading}
+              skeleton={<SkeletonCard lines={5} />}
+              message="Загружаю рассылки"
+            >
+              {!broadcasts.data || broadcasts.data.length === 0 ? (
+                <EmptyAllClear
+                  title="Рассылок ещё не было"
+                  description="Как только уйдёт первая — здесь появится её доставляемость."
+                />
+              ) : (
+                <ul className="divide-y divide-border-subtle rounded-lg border border-border">
+                  {broadcasts.data.slice(0, 20).map((b, i) => (
+                    <BroadcastRow key={i} row={b} />
+                  ))}
+                </ul>
+              )}
+            </LoadingGate>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* ── Сегменты ────────────────────────────────────────────────── */}
+      <SegmentsCard />
     </div>
   );
 }
 
-function SegmentsMini() {
+/**
+ * Сегменты аудитории — только просмотр размеров. Управление сегментами живёт
+ * в разделе «Рассылки», и дублировать его сюда не нужно.
+ *
+ * ВНИМАНИЕ: все хуки вызываются до первого return. Именно здесь раньше стоял
+ * useMemo ниже условного выхода — см. п. 1 в шапке файла.
+ */
+function SegmentsCard() {
   const segments = useQuery({
     queryKey: ["statistics", "segments"],
     queryFn: endpoints.broadcastSegments,
     refetchInterval: 120_000,
   });
-  if (segments.isLoading) return <Skeleton lines={2} />;
-  if (segments.isError || !segments.data) return null;
-  // Top-10 сегментов по размеру
-  const sorted = useMemo(() => {
-    return [...(segments.data ?? [])].sort((a, b) => b.count - a.count).slice(0, 10);
-  }, [segments.data]);
+
+  const sorted = useMemo(
+    () => [...(segments.data ?? [])].sort((a, b) => b.count - a.count).slice(0, 10),
+    [segments.data],
+  );
+
   return (
-    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-      {sorted.map((s) => (
-        <div
-          key={s.key}
-          className="flex items-center justify-between rounded-lg border border-border bg-bg-subtle/40 px-3 py-2 text-xs"
-        >
-          <span className="truncate text-fg-muted">{s.label}</span>
-          <span className="ml-2 shrink-0 rounded bg-accent/10 px-1.5 py-0.5 font-semibold text-accent tabular-nums">
-            {fmtNum(s.count)}
-          </span>
-        </div>
-      ))}
-    </div>
+    <Card>
+      <CardHeader
+        title="Сегменты аудитории"
+        subtitle="десять самых крупных · настройка и рассылка по сегменту — в разделе «Рассылки»"
+      />
+      <CardBody>
+        {segments.isError ? (
+          <EmptyFailure
+            what="сегменты аудитории"
+            reason={
+              (segments.error as ApiError)?.detail ??
+              "Запрос не вернулся. Раньше этот блок в такой ситуации просто исчезал со страницы."
+            }
+            onRetry={() => segments.refetch()}
+          />
+        ) : (
+          <LoadingGate
+            loading={segments.isLoading}
+            skeleton={<SkeletonCard lines={4} />}
+            message="Считаю сегменты"
+          >
+            {sorted.length === 0 ? (
+              <EmptyAllClear
+                title="Сегментов нет"
+                description="Ни один сегмент не набрал ни одного пользователя."
+              />
+            ) : (
+              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                {sorted.map((s) => (
+                  <div
+                    key={s.key}
+                    className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-base"
+                  >
+                    <span className="truncate text-fg-muted">{s.label}</span>
+                    <span className="shrink-0 font-semibold tabular-nums text-fg">
+                      {fmtNum(s.count)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </LoadingGate>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 
+/** Строка партнёра. Числа подписаны словами, а не эмодзи: эмодзи рисуются
+ *  по-разному в разных системах и не читаются экранным диктором. */
+function ReferrerRow({ row, place }: { row: unknown; place: number }) {
+  const r = row as Record<string, unknown>;
+  const id = asNum(r.referrer_id) ?? asNum(r.telegram_id) ?? 0;
+  const username = typeof r.username === "string" ? r.username : "";
+  const invited = asNum(r.invited_count) ?? 0;
+  const trials = asNum(r.trial_count) ?? 0;
+  const paid = asNum(r.paid_count) ?? 0;
+  const revenue =
+    asNum(r.total_invited_revenue) ?? asNum(r.total_revenue) ?? 0;
+
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-base">
+      <span className="w-5 shrink-0 tabular-nums text-fg-subtle">{place}</span>
+      <span className="min-w-0 flex-1 truncate font-medium text-fg">
+        {username ? `@${username}` : `tg:${id}`}
+      </span>
+      <span className="shrink-0 text-xs text-fg-muted">
+        привёл <b className="tabular-nums text-fg">{fmtNum(invited)}</b>
+      </span>
+      <span className="shrink-0 text-xs text-fg-muted">
+        триалов <b className="tabular-nums text-fg">{fmtNum(trials)}</b>
+      </span>
+      <span className="shrink-0 text-xs text-fg-muted">
+        оплат <b className="tabular-nums text-fg">{fmtNum(paid)}</b>
+      </span>
+      <span className="min-w-[72px] shrink-0 text-right font-semibold tabular-nums text-fg">
+        {fmtRub(revenue)}
+      </span>
+    </li>
+  );
+}
+
+/** Строка рассылки. «Упало» показано и цветом, и словом — цвет не может быть
+ *  единственным носителем смысла (research §4.11). */
 function BroadcastRow({ row }: { row: Record<string, unknown> }) {
   const id = asNum(row.id) ?? 0;
   const title = String(row.title ?? "Без названия");
@@ -351,141 +526,93 @@ function BroadcastRow({ row }: { row: Record<string, unknown> }) {
   const failed = asNum(row.failed_count) ?? asNum(row.failed) ?? 0;
   const total = asNum(row.total_recipients) ?? sent + failed;
   const created = String(row.created_at ?? "").slice(0, 16).replace("T", " ");
-  return (
-    <a
-      href={`/dashboard/broadcasts?id=${id}`}
-      className="flex items-center gap-3 rounded-lg border border-border/60 bg-bg-card px-3 py-2 text-xs hover:border-accent/40"
-    >
-      <span className="w-8 shrink-0 text-fg-subtle tabular-nums">#{id}</span>
-      <span className="min-w-0 flex-1 truncate font-medium text-fg">{title}</span>
-      <span className="hidden shrink-0 text-fg-subtle sm:inline">{created}</span>
-      <span className="shrink-0 rounded bg-fg/5 px-1.5 py-0.5 text-fg-muted tabular-nums">
-        {fmtNum(total)}
-      </span>
-      <span className="shrink-0 rounded bg-success/10 px-1.5 py-0.5 text-success tabular-nums">
-        ✓ {fmtNum(sent)}
-      </span>
-      {failed > 0 && (
-        <span className="shrink-0 rounded bg-danger/10 px-1.5 py-0.5 text-danger tabular-nums">
-          ✕ {fmtNum(failed)}
-        </span>
-      )}
-    </a>
-  );
-}
 
-// ── Helpers / small components ───────────────────────────────────────
-
-function SectionCard({
-  icon: Icon,
-  title,
-  subtitle,
-  children,
-}: {
-  icon: typeof BarChart3;
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
   return (
-    <section className="rounded-2xl border border-border bg-bg-card p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-            <Icon className="h-3 w-3" /> {title}
-          </div>
-          {subtitle && (
-            <div className="mt-0.5 text-[11px] text-fg-subtle">{subtitle}</div>
-          )}
-        </div>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function BigStat({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-}) {
-  return (
-    <div className="rounded-xl border border-border bg-bg-subtle/40 p-3">
-      <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
-        {label}
-      </div>
-      <div
-        className={`mt-0.5 text-xl font-semibold tabular-nums ${accent ? "text-accent" : "text-fg"}`}
+    <li>
+      <a
+        href={`/dashboard/broadcasts?id=${id}`}
+        className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-base transition-colors hover:bg-bg-subtle"
       >
-        {value}
-      </div>
-    </div>
+        <span className="w-10 shrink-0 font-mono text-xs text-fg-subtle">
+          #{id}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-medium text-fg">
+          {title}
+        </span>
+        <span className="hidden shrink-0 text-xs text-fg-subtle sm:inline">
+          {created}
+        </span>
+        <span className="shrink-0 text-xs text-fg-muted">
+          получателей <b className="tabular-nums text-fg">{fmtNum(total)}</b>
+        </span>
+        <span className="shrink-0 text-xs text-fg-muted">
+          доставлено{" "}
+          <b className="tabular-nums text-success">{fmtNum(sent)}</b>
+        </span>
+        {failed > 0 && (
+          <span className="shrink-0 text-xs text-fg-muted">
+            упало <b className="tabular-nums text-danger">{fmtNum(failed)}</b>
+          </span>
+        )}
+      </a>
+    </li>
   );
 }
 
-function BreakdownTable({
+/**
+ * Горизонтальные полосы, отсортированные по значению.
+ *
+ * Именно этот тип заменяет круговую диаграмму везде, где сегментов больше
+ * трёх (research §7.2). Полоса показывает долю, число рядом — саму величину;
+ * долю не приходится восстанавливать по углу сектора.
+ */
+function BreakdownBars({
   title,
   rows,
 }: {
   title: string;
   rows: Array<{ label: string; count: number; revenue: number }>;
 }) {
-  const total = rows.reduce((a, r) => a + r.revenue, 0);
+  const sorted = [...rows].sort((a, b) => b.revenue - a.revenue);
+  const total = sorted.reduce((a, r) => a + r.revenue, 0);
+  const max = Math.max(1, ...sorted.map((r) => r.revenue));
+
   return (
-    <div className="rounded-xl border border-border bg-bg-subtle/40 p-3">
-      <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+    <div className="rounded-lg border border-border p-3">
+      <div className="mb-2 text-2xs font-medium uppercase tracking-wider text-fg-subtle">
         {title}
       </div>
-      <div className="space-y-1.5">
-        {rows.length === 0 && <div className="text-xs text-fg-subtle">Нет данных</div>}
-        {rows.map((r) => {
-          const pct = total > 0 ? (r.revenue / total) * 100 : 0;
-          return (
-            <div key={r.label} className="text-xs">
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-fg-muted">{r.label}</span>
-                <span className="shrink-0 tabular-nums text-fg">
-                  {fmtRub(r.revenue)}
-                  <span className="ml-1.5 text-[10px] text-fg-subtle">{fmtNum(r.count)}</span>
-                </span>
+      {sorted.length === 0 ? (
+        <div className="py-2 text-xs text-fg-subtle">В этом разрезе пусто.</div>
+      ) : (
+        <div className="space-y-1.5">
+          {sorted.map((r) => {
+            const share = total > 0 ? (r.revenue / total) * 100 : 0;
+            return (
+              <div key={r.label} className="text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-fg-muted">{r.label}</span>
+                  <span className="shrink-0 tabular-nums text-fg">
+                    {fmtRub(r.revenue)}
+                    <span className="ml-1.5 text-fg-subtle">
+                      {share.toFixed(0)}% · {fmtNum(r.count)} шт
+                    </span>
+                  </span>
+                </div>
+                {/* Полоса масштабируется от максимума, а не от суммы: так
+                    видно соотношение позиций между собой. Минимум 2% — иначе
+                    живая, но маленькая величина выглядит как ноль. */}
+                <div className="mt-1 h-1 overflow-hidden rounded-full bg-bg-subtle">
+                  <div
+                    className={cn("h-full bg-accent-9")}
+                    style={{ width: `${Math.max(2, (r.revenue / max) * 100)}%` }}
+                  />
+                </div>
               </div>
-              <div className="mt-1 h-1 overflow-hidden rounded-full bg-bg-elevated">
-                <div
-                  className="h-full bg-accent/70 transition-[width] duration-500"
-                  style={{ width: `${Math.max(2, pct)}%` }}
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function Skeleton({ lines }: { lines: number }) {
-  return (
-    <div className="space-y-2">
-      {Array.from({ length: lines }).map((_, i) => (
-        <div key={i} className="skeleton h-8" />
-      ))}
-    </div>
-  );
-}
-
-function EmptyRow({ text }: { text: string }) {
-  return <div className="py-3 text-center text-sm text-fg-subtle">{text}</div>;
-}
-
-function ErrorNote({ err }: { err: unknown }) {
-  const msg = (err as ApiError)?.detail ?? "Ошибка загрузки";
-  return (
-    <div className="rounded-lg border border-danger/30 bg-danger/5 p-3 text-xs text-danger">
-      {msg}
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -523,10 +650,10 @@ const PROVIDER_LABEL: Record<string, string> = {
   unknown: "Прочее",
 };
 const APPLE_REGION: Record<string, string> = {
-  usa: "🇺🇸 USA",
-  turkey: "🇹🇷 Turkey",
-  russia: "🇷🇺 Russia",
-  india: "🇮🇳 India",
+  usa: "США",
+  turkey: "Турция",
+  russia: "Россия",
+  india: "Индия",
 };
 const APPLE_CUR: Record<string, string> = {
   usa: "$",

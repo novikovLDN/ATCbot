@@ -9,6 +9,16 @@ Time-range params accept a trailing-window in hours: `?hours=24`,
 `?hours=720` etc. Routes that need a calendar-day window also accept
 `?since=<ISO datetime>` which overrides `hours` and uses that as an
 absolute lower bound (used for the "Сегодня (МСК)" dashboard tile).
+
+СЕКРЕТЫ
+    Текст исключения наружу — только через scrub_secrets. Экраны «Метрики и
+    доход» и «Статистика» показывают detail целиком в блоке отказа, то есть
+    строка уходит прямо в браузер администратора и оседает в логах прокси.
+
+ЛОГИ
+    Каждый обработчик пишет и удачу, и отказ. Числа этих восьми ручек стоят
+    на витрине денег, и «экран показал ноль» надо уметь отличить от «запрос
+    не дошёл» по логу, а не по памяти.
 """
 import logging
 from datetime import datetime, timezone
@@ -17,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 import database
 from app.api.dashboard.deps import require_admin
+from app.utils.security import scrub_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +79,15 @@ async def stats_overview():
         try:
             data["business_metrics"] = await database.get_business_metrics()
         except Exception as e:
-            logger.warning("stats_overview: business_metrics failed: %s", e)
+            logger.warning(
+                "stats.overview: business_metrics failed: %s", scrub_secrets(e)
+            )
             data["business_metrics"] = {}
+        logger.info("stats.overview ok")
         return data
     except Exception as e:
-        raise HTTPException(500, f"stats_overview_failed: {e}")
+        logger.error("stats.overview failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"stats_overview_failed: {scrub_secrets(e)}")
 
 
 @router.get("/business")
@@ -83,9 +98,12 @@ async def stats_business():
     считать их не из чего — подробности в докстринге
     database.analytics.get_business_metrics."""
     try:
-        return await database.get_business_metrics()
+        data = await database.get_business_metrics()
     except Exception as e:
-        raise HTTPException(500, f"business_metrics_failed: {e}")
+        logger.error("stats.business failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"business_metrics_failed: {scrub_secrets(e)}")
+    logger.info("stats.business ok")
+    return data
 
 
 @router.get("/revenue")
@@ -96,14 +114,16 @@ async def stats_revenue():
         paying = await database.get_paying_users_count()
         arpu = await database.get_arpu()
         ltv = await database.get_ltv()
-        return {
-            "total_revenue_rubles": total,
-            "paying_users": paying,
-            "arpu_rubles": arpu,
-            "avg_ltv_rubles": ltv,
-        }
     except Exception as e:
-        raise HTTPException(500, f"revenue_failed: {e}")
+        logger.error("stats.revenue failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"revenue_failed: {scrub_secrets(e)}")
+    logger.info("stats.revenue ok")
+    return {
+        "total_revenue_rubles": total,
+        "paying_users": paying,
+        "arpu_rubles": arpu,
+        "avg_ltv_rubles": ltv,
+    }
 
 
 @router.get("/period")
@@ -115,29 +135,41 @@ async def stats_period(
     `hours` capped at one year. `since` is an ISO datetime — when
     supplied it overrides `hours`."""
     try:
-        return await database.get_analytics_by_period(
+        data = await database.get_analytics_by_period(
             hours, since=_parse_since(since),
         )
+    except HTTPException:
+        # _parse_since уже отдал 400 invalid_since — не превращаем его в 500.
+        raise
     except Exception as e:
-        raise HTTPException(500, f"period_failed: {e}")
+        logger.error("stats.period failed: hours=%s %s", hours, scrub_secrets(e))
+        raise HTTPException(500, f"period_failed: {scrub_secrets(e)}")
+    logger.info("stats.period ok: hours=%s", hours)
+    return data
 
 
 @router.get("/purchase-breakdown")
 async def stats_purchase_breakdown():
     """Counts + revenue by tariff and time window."""
     try:
-        return await database.get_purchase_breakdown()
+        data = await database.get_purchase_breakdown()
     except Exception as e:
-        raise HTTPException(500, f"breakdown_failed: {e}")
+        logger.error("stats.purchase_breakdown failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"breakdown_failed: {scrub_secrets(e)}")
+    logger.info("stats.purchase_breakdown ok")
+    return data
 
 
 @router.get("/promo")
 async def stats_promo():
     """Promo-code usage stats."""
     try:
-        return await database.get_promo_stats()
+        data = await database.get_promo_stats()
     except Exception as e:
-        raise HTTPException(500, f"promo_failed: {e}")
+        logger.error("stats.promo failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"promo_failed: {scrub_secrets(e)}")
+    logger.info("stats.promo ok")
+    return data
 
 
 @router.get("/daily")
@@ -149,9 +181,12 @@ async def stats_daily(days: int = Query(30, gt=0, le=180)):
     users / new subs charts off this one payload.
     """
     try:
-        return await database.get_daily_timeseries(days)
+        data = await database.get_daily_timeseries(days)
     except Exception as e:
-        raise HTTPException(500, f"daily_failed: {e}")
+        logger.error("stats.daily failed: days=%s %s", days, scrub_secrets(e))
+        raise HTTPException(500, f"daily_failed: {scrub_secrets(e)}")
+    logger.info("stats.daily ok: days=%s", days)
+    return data
 
 
 @router.get("/hourly")
@@ -163,6 +198,9 @@ async def stats_hourly(days: int = Query(7, gt=0, le=90)):
     Полезно понять, в какие часы юзеры покупают и когда пик.
     """
     try:
-        return await database.get_hourly_timeseries(days)
+        data = await database.get_hourly_timeseries(days)
     except Exception as e:
-        raise HTTPException(500, f"hourly_failed: {e}")
+        logger.error("stats.hourly failed: days=%s %s", days, scrub_secrets(e))
+        raise HTTPException(500, f"hourly_failed: {scrub_secrets(e)}")
+    logger.info("stats.hourly ok: days=%s", days)
+    return data

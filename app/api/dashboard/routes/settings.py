@@ -1,4 +1,16 @@
-"""Admin settings — notification toggles and self-tests."""
+"""Admin settings — notification toggles and self-tests.
+
+СЕКРЕТЫ
+    Текст исключения наружу — только через scrub_secrets. Здесь это не
+    формальность: push-стек ходит на сторонние сервисы (FCM, APNs, Mozilla) и
+    в тексте ошибки приезжает endpoint подписки — по сути идентификатор
+    устройства администратора, — а у VAPID-ветки в ошибке бывает и сам ключ.
+
+ЛОГИ
+    Каждый обработчик пишет и удачу, и отказ. Экран «Настройки» показывает
+    состояние тумблеров, и «тумблер выключен» надо уметь отличить от «запрос
+    не дошёл» по логу.
+"""
 import asyncio
 import logging
 import random
@@ -9,6 +21,7 @@ from pydantic import BaseModel, Field
 import config
 from app.api.dashboard.deps import require_admin
 from app.services import admin_settings
+from app.utils.security import scrub_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +30,14 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 
 @router.get("/notifications")
 async def settings_get_notifications():
-    return await admin_settings.get_notification_flags()
+    """Текущее состояние тумблеров уведомлений админу."""
+    try:
+        flags = await admin_settings.get_notification_flags()
+    except Exception as e:
+        logger.error("settings.notifications_get failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"notifications_get_failed: {scrub_secrets(e)}")
+    logger.info("settings.notifications_get ok")
+    return flags
 
 
 class NotificationFlagPatch(BaseModel):
@@ -27,10 +47,24 @@ class NotificationFlagPatch(BaseModel):
 
 @router.post("/notifications")
 async def settings_patch_notifications(body: NotificationFlagPatch):
+    """Включить или выключить один тип уведомлений."""
     try:
-        return await admin_settings.set_notification_flag(body.key, body.enabled)
+        flags = await admin_settings.set_notification_flag(body.key, body.enabled)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        # Неизвестный ключ — ошибка вызывающего, а не сбой. 400, не 500.
+        logger.warning(
+            "settings.notifications_patch rejected: key=%s %s",
+            body.key,
+            scrub_secrets(e),
+        )
+        raise HTTPException(400, scrub_secrets(e))
+    except Exception as e:
+        logger.error("settings.notifications_patch failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"notifications_patch_failed: {scrub_secrets(e)}")
+    logger.info(
+        "settings.notifications_patch ok: key=%s enabled=%s", body.key, body.enabled
+    )
+    return flags
 
 
 def _get_bot():
@@ -96,7 +130,9 @@ async def _send_test_sequence(bot):
                 disable_web_page_preview=True,
             )
         except Exception as e:
-            logger.warning("test notification send failed: %s", e)
+            logger.warning(
+                "settings.notifications_test send failed: %s", scrub_secrets(e)
+            )
 
 
 @router.post("/notifications/test")
@@ -106,6 +142,7 @@ async def settings_test_notifications():
     send is fired as a background task."""
     bot = _get_bot()
     asyncio.create_task(_send_test_sequence(bot))
+    logger.info("settings.notifications_test scheduled: count=3")
     return {"ok": True, "count": 3, "delay_seconds": 1.0}
 
 
@@ -117,9 +154,12 @@ async def settings_push_vapid_key():
     """Public VAPID key for PushManager.subscribe(applicationServerKey)."""
     from app.services import push_notifications
     try:
-        return {"publicKey": await push_notifications.get_public_key()}
+        key = await push_notifications.get_public_key()
     except Exception as e:
-        raise HTTPException(500, f"vapid_key_failed: {e}")
+        logger.error("settings.push_vapid_key failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"vapid_key_failed: {scrub_secrets(e)}")
+    logger.info("settings.push_vapid_key ok")
+    return {"publicKey": key}
 
 
 class PushSubscribeRequest(BaseModel):
@@ -132,16 +172,24 @@ class PushSubscribeRequest(BaseModel):
 
 @router.post("/push/subscribe")
 async def settings_push_subscribe(body: PushSubscribeRequest):
+    """Зарегистрировать браузерную подписку на push."""
     from app.services import push_notifications
-    ok = await push_notifications.upsert_subscription(
-        endpoint=body.endpoint,
-        p256dh=body.p256dh,
-        auth=body.auth,
-        user_agent=body.user_agent or None,
-        label=body.label or None,
-    )
+    try:
+        ok = await push_notifications.upsert_subscription(
+            endpoint=body.endpoint,
+            p256dh=body.p256dh,
+            auth=body.auth,
+            user_agent=body.user_agent or None,
+            label=body.label or None,
+        )
+    except Exception as e:
+        logger.error("settings.push_subscribe failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"subscribe_failed: {scrub_secrets(e)}")
     if not ok:
+        logger.error("settings.push_subscribe rejected by service")
         raise HTTPException(500, "subscribe_failed")
+    # endpoint в лог не пишем целиком: это идентификатор устройства.
+    logger.info("settings.push_subscribe ok: label=%s", body.label or "-")
     return {"ok": True}
 
 
@@ -151,15 +199,28 @@ class PushUnsubscribeRequest(BaseModel):
 
 @router.post("/push/unsubscribe")
 async def settings_push_unsubscribe(body: PushUnsubscribeRequest):
+    """Отключить push на одном устройстве."""
     from app.services import push_notifications
-    await push_notifications.remove_subscription(body.endpoint)
+    try:
+        await push_notifications.remove_subscription(body.endpoint)
+    except Exception as e:
+        logger.error("settings.push_unsubscribe failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"unsubscribe_failed: {scrub_secrets(e)}")
+    logger.info("settings.push_unsubscribe ok")
     return {"ok": True}
 
 
 @router.get("/push/subscriptions")
 async def settings_push_subscriptions():
+    """Список устройств, на которых подключён push."""
     from app.services import push_notifications
-    return await push_notifications.list_subscriptions()
+    try:
+        rows = await push_notifications.list_subscriptions()
+    except Exception as e:
+        logger.error("settings.push_subscriptions failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"subscriptions_failed: {scrub_secrets(e)}")
+    logger.info("settings.push_subscriptions ok: rows=%s", len(rows or []))
+    return rows
 
 
 @router.post("/push/test")
@@ -172,6 +233,12 @@ async def settings_push_test():
             body="Atlas Admin — пуш-уведомления работают.",
             tag="atlas-test",
         )
-        return result
     except Exception as e:
-        raise HTTPException(500, f"push_test_failed: {e}")
+        logger.error("settings.push_test failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"push_test_failed: {scrub_secrets(e)}")
+    logger.info(
+        "settings.push_test ok: sent=%s total=%s",
+        (result or {}).get("sent"),
+        (result or {}).get("total"),
+    )
+    return result

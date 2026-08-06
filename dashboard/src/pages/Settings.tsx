@@ -12,6 +12,11 @@ import {
 } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
 import { Spinner } from "@/components/Spinner";
+import {
+  ConfirmDialog,
+  EmptyFailure,
+  EmptyNotConfigured,
+} from "@/components/ui";
 import { toast } from "@/store/toast";
 import {
   disablePushOnThisDevice,
@@ -22,6 +27,7 @@ import {
   isSubscribedHere,
   listPushSubscriptions,
   sendPushTest,
+  type PushSubscriptionRow,
 } from "@/lib/push";
 import { Share } from "lucide-react";
 
@@ -114,7 +120,21 @@ export function Settings() {
           </div>
         </div>
 
-        {flags.isLoading ? (
+        {/* ОТКАЗ ЗАПРОСА РИСУЕТСЯ ОТКАЗОМ, а не переключателями.
+            До правки при ошибке ветка уходила в `flags.data ? … : true`, то
+            есть все три тумблера показывались ВКЛЮЧЁННЫМИ. Человек видел
+            выдуманное состояние настроек и мог выключить то, что и так было
+            выключено, — на уведомлениях об ошибках платежей это дорого. */}
+        {flags.isError ? (
+          <EmptyFailure
+            what="настройки уведомлений"
+            reason={
+              (flags.error as ApiError)?.detail ??
+              "Не знаем, что сейчас включено. Показывать тумблеры наугад нельзя — можно выключить нужное."
+            }
+            onRetry={() => flags.refetch()}
+          />
+        ) : flags.isLoading ? (
           <div className="flex items-center gap-2 text-sm text-fg-muted">
             <Spinner /> Загружаю...
           </div>
@@ -197,6 +217,8 @@ function PushSection() {
     supported ? Notification.permission : "denied",
   );
   const [hereSubscribed, setHereSubscribed] = useState(false);
+  // Устройство, отключение которого подтверждают в диалоге.
+  const [toRemove, setToRemove] = useState<PushSubscriptionRow | null>(null);
 
   useEffect(() => {
     if (!supported) return;
@@ -458,7 +480,29 @@ function PushSection() {
         </button>
       </div>
 
-      {subs.data && subs.data.length > 0 && (
+      {/* Список подключённых устройств. При отказе запроса раньше блок просто
+          исчезал: понять, что устройств нет и что список не загрузился, было
+          нельзя. */}
+      {subs.isError && (
+        <EmptyFailure
+          what="список подключённых устройств"
+          reason={
+            (subs.error as ApiError)?.detail ??
+            "Запрос не вернулся. Пустой список означал бы, что push не подключён нигде."
+          }
+          onRetry={() => subs.refetch()}
+        />
+      )}
+
+      {!subs.isError && subs.data && subs.data.length === 0 && (
+        <EmptyNotConfigured
+          title="Ни одно устройство не подключено"
+          description="Нажмите «Подключить на этом устройстве» выше и разрешите уведомления в браузере. Пока push не подключён, важное приходит в Telegram."
+          icon={BellRing}
+        />
+      )}
+
+      {!subs.isError && subs.data && subs.data.length > 0 && (
         <ul className="divide-y divide-border/60">
           {subs.data.map((s) => (
             <li
@@ -486,13 +530,10 @@ function PushSection() {
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  if (confirm("Удалить это устройство?")) {
-                    removeRemote.mutate(s.endpoint);
-                  }
-                }}
+                onClick={() => setToRemove(s)}
                 disabled={removeRemote.isPending}
                 className="btn-ghost text-danger hover:text-danger"
+                aria-label={`Отключить устройство ${s.label || "без имени"}`}
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -500,6 +541,22 @@ function PushSection() {
           ))}
         </ul>
       )}
+
+      {/* Системный confirm() заменён на диалог: он называет устройство и
+          говорит, что именно перестанет работать. «Удалить это устройство?»
+          без имени — вопрос, на который нельзя ответить осознанно, когда
+          устройств в списке несколько (research §6.6). */}
+      <ConfirmDialog
+        open={toRemove !== null}
+        onCancel={() => setToRemove(null)}
+        onConfirm={() => toRemove && removeRemote.mutate(toRemove.endpoint)}
+        title={`Отключить push на устройстве «${toRemove?.label || "без имени"}»?`}
+        body="Уведомления туда приходить перестанут. Подключить обратно можно только с самого устройства — с этого экрана чужое устройство не вернуть."
+        confirmLabel="Отключить"
+        cancelLabel="Оставить"
+        destructive
+        loading={removeRemote.isPending}
+      />
     </section>
   );
 }

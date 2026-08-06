@@ -9,6 +9,23 @@ Reads:
 Writes:
   POST /fix/{telegram_id}             — recompute expires_at from payments+admin_grant_days
                                         and shorten the row; logs before/after with proof
+
+ПОРЯДОК МАРШРУТОВ
+    Литеральный /candidates объявлен ПЕРЕД /candidates/{telegram_id}. Путь с
+    параметром перехватывает любой односегментный путь, объявленный ниже.
+
+СЕКРЕТЫ
+    Текст исключения наружу — только через scrub_secrets. Здесь это особенно
+    важно: обработчики ходят в панель Remnawave, и в тексте ошибки HTTP-клиента
+    приезжает URL панели вместе с токеном в заголовке или в query.
+
+ЦЕНА ЗАПРОСА
+    /candidates/{telegram_id} делает 1–2 НЕКЭШИРОВАННЫХ обращения к панели
+    Remnawave на каждый вызов. Экран раскрывает карточку кандидата по клику и
+    ещё раз — когда пришли по ссылке ?tg= из блока «Требует внимания» на
+    сводке. Не вызывайте его списком и не ставьте на автообновление: это
+    прямая нагрузка на внешний сервис, которая наружу выглядит как ddos с
+    нашего IP.
 """
 from __future__ import annotations
 
@@ -18,6 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 import database
 from app.api.dashboard.deps import require_admin
+from app.utils.security import scrub_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +48,9 @@ async def candidates(limit: int = Query(200, gt=0, le=1000)):
     try:
         rows = await database.find_over_issuance_candidates(limit)
     except Exception as e:
-        raise HTTPException(500, f"candidates_failed: {e}")
+        logger.error("reconciliation.candidates failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"candidates_failed: {scrub_secrets(e)}")
+    logger.info("reconciliation.candidates ok: total=%s", len(rows))
     return {"total": len(rows), "items": rows}
 
 
@@ -42,9 +62,18 @@ async def candidate_detail(telegram_id: int = Path(..., gt=0)):
     try:
         detail = await database.get_reconciliation_detail(telegram_id)
     except Exception as e:
-        raise HTTPException(500, f"detail_failed: {e}")
+        logger.error(
+            "reconciliation.detail failed: telegram_id=%s %s",
+            telegram_id,
+            scrub_secrets(e),
+        )
+        raise HTTPException(500, f"detail_failed: {scrub_secrets(e)}")
     if not detail.get("found"):
+        logger.info("reconciliation.detail not found: telegram_id=%s", telegram_id)
         raise HTTPException(404, "no_subscription")
+    # Логируем каждый вызов: он стоит 1–2 запроса в панель Remnawave, и по
+    # логу должно быть видно, если экран начал дёргать его пачками.
+    logger.info("reconciliation.detail ok: telegram_id=%s", telegram_id)
     return detail
 
 
@@ -66,8 +95,12 @@ async def apply_fix(
             telegram_id, admin_id, reason=reason,
         )
     except Exception as e:
-        logger.exception("reconciliation_fix crash user=%s", telegram_id)
-        raise HTTPException(500, f"fix_failed: {e}")
+        logger.exception(
+            "reconciliation.fix crash: telegram_id=%s %s",
+            telegram_id,
+            scrub_secrets(e),
+        )
+        raise HTTPException(500, f"fix_failed: {scrub_secrets(e)}")
     if not result.get("success"):
         # После рефакторинга single-source-of-truth ошибка возможна ровно
         # одна: Remnawave-панель не приняла PATCH expireAt (сеть, 5xx,
@@ -76,7 +109,16 @@ async def apply_fix(
         if err == "db_unavailable":
             raise HTTPException(503, result)
         # panel_error / любое другое → 502 (upstream не отвечает).
+        logger.error(
+            "reconciliation.fix rejected: telegram_id=%s error=%s", telegram_id, err
+        )
         raise HTTPException(502, result)
+    logger.info(
+        "reconciliation.fix ok: telegram_id=%s by=%s days_removed=%s",
+        telegram_id,
+        admin_id,
+        result.get("days_removed"),
+    )
     return result
 
 
@@ -86,7 +128,9 @@ async def audit_log(limit: int = Query(100, gt=0, le=500)):
     try:
         rows = await database.list_reconciliation_log(limit)
     except Exception as e:
-        raise HTTPException(500, f"audit_failed: {e}")
+        logger.error("reconciliation.audit_log failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"audit_failed: {scrub_secrets(e)}")
+    logger.info("reconciliation.audit_log ok: rows=%s", len(rows))
     return rows
 
 
@@ -97,5 +141,7 @@ async def over_issuance_log(limit: int = Query(100, gt=0, le=500)):
     try:
         rows = await database.list_over_issuance_log(limit)
     except Exception as e:
-        raise HTTPException(500, f"over_issuance_failed: {e}")
+        logger.error("reconciliation.over_issuance_log failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"over_issuance_failed: {scrub_secrets(e)}")
+    logger.info("reconciliation.over_issuance_log ok: rows=%s", len(rows))
     return rows

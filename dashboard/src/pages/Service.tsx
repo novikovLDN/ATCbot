@@ -5,37 +5,83 @@ import {
   AlertTriangle,
   Power,
   RefreshCcw,
-  Clock,
   Save,
-  Wallet,
-  Zap,
-  ShieldOff,
   PlayCircle,
   Fingerprint,
   Plus,
   Trash2,
 } from "lucide-react";
-import { isPasskeySupported, passkeyList, passkeyDelete, registerPasskey, type PasskeyRow } from "@/lib/passkey";
+import {
+  isPasskeySupported,
+  passkeyList,
+  passkeyDelete,
+  registerPasskey,
+  type PasskeyRow,
+} from "@/lib/passkey";
 import { ApiError, endpoints } from "@/lib/api";
 import { fmtDate, fmtNum, fmtRub } from "@/lib/format";
 import { toast } from "@/store/toast";
-import { Spinner } from "@/components/Spinner";
-import { EmptyState } from "@/components/EmptyState";
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  ConfirmDialog,
+  EmptyAllClear,
+  EmptyFailure,
+  EmptyNotConfigured,
+  Input,
+  LoadingGate,
+  SkeletonCard,
+  SkeletonTable,
+  StatusBadge,
+  TBody,
+  TD,
+  TH,
+  THead,
+  TR,
+  Table,
+  TableScroll,
+} from "@/components/ui";
 import { ReconciliationSection } from "@/components/ReconciliationSection";
 
+/**
+ * «Сервис» — уровень 3 навигации: сюда заходят редко и по конкретному поводу
+ * (research §9.2). Здесь живёт здоровье интеграции с Remnawave, очереди,
+ * которые могли застрять, и сверка подписок.
+ *
+ * ССЫЛКА СО СВОДКИ. Плитка «Расхождений с панелью» в зоне B и строки блока
+ * «Требует внимания» ведут сюда с параметрами:
+ *
+ *     /service?focus=reconciliation              — просто открыть блок сверки
+ *     /service?focus=reconciliation&tg=100500    — открыть и раскрыть карточку
+ *                                                  конкретного пользователя
+ *
+ * Оба разбираются ниже. Параметр `tg` раньше молча игнорировался: человек
+ * приходил из строки про конкретную подписку и должен был снова искать её
+ * глазами в списке кандидатов — ровно та потеря контекста, ради устранения
+ * которой строки делали кликабельными.
+ *
+ * ПРО ПРОКРУТКУ. Одного вызова scrollIntoView на монтировании мало: выше
+ * блока сверки стоят четыре секции с собственными запросами, и когда их
+ * данные приезжают, содержимое разъезжается вниз уже после того, как плавная
+ * прокрутка закончилась. Поэтому прокрутка повторяется, пока высота страницы
+ * меняется, и глохнет сама, как только та устаканилась (или через 3 секунды —
+ * чтобы не бороться с человеком, если он начал листать сам).
+ */
 export function Service() {
-  // Сводка ссылается сюда якорем: плитка «расхождений с панелью» и строки
-  // «требует внимания» ведут на /service?focus=reconciliation. Без
-  // прокрутки человек попадал бы наверх страницы и искал блок глазами —
-  // ровно та потеря контекста, ради которой числа делали кликабельными.
   const [params] = useSearchParams();
   const focus = params.get("focus");
-  useEffect(() => {
-    if (focus !== "reconciliation") return;
-    document
-      .getElementById("reconciliation")
-      ?.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, [focus]);
+  const focusTelegramId = numOrNull(params.get("tg"));
+
+  // Прокрутку к блоку включаем ТОЛЬКО когда конкретный пользователь не задан.
+  // Если в адресе есть tg=, до глаз доводит сама карточка кандидата — она
+  // знает своё место точнее, чем блок целиком. Оставить оба — значит стравить
+  // их между собой: карточка встаёт по центру, блочная прокрутка тут же
+  // утаскивает страницу к заголовку блока, и так по кругу три секунды.
+  useFocusScroll(
+    focus === "reconciliation" && focusTelegramId === null ? "reconciliation" : null,
+  );
 
   return (
     <div className="space-y-6">
@@ -46,9 +92,12 @@ export function Service() {
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg md:text-3xl">
           Сервис
         </h1>
+        <p className="mt-1 max-w-xl text-base text-fg-muted">
+          Здоровье интеграции с Remnawave, очереди, которые могли застрять, и
+          сверка выданных сроков с оплаченными.
+        </p>
       </header>
 
-      <PasskeysSection />
       <IncidentSection />
       <PendingActivationsSection />
       <PendingPaymentsSection />
@@ -56,12 +105,60 @@ export function Service() {
       {/* Сверка Remnawave ↔ БД. Переехала со сводки: открывают редко и по
           подозрению, а места на главной занимала постоянно. */}
       <div id="reconciliation" className="scroll-mt-20">
-        <ReconciliationSection />
+        <ReconciliationSection focusTelegramId={focusTelegramId} />
       </div>
+
+      <PasskeysSection />
     </div>
   );
 }
 
+/**
+ * Прокрутка к якорю из ?focus=. Держится за элемент, пока страница не
+ * перестанет расти под ним.
+ *
+ * ЧТО СЛОМАЕТСЯ ПРИ НЕВЕРНОЙ ПРАВКЕ: если убрать повтор и оставить один
+ * scrollIntoView, ссылка со сводки будет промахиваться мимо блока на медленной
+ * сети — визуально это выглядит как «ссылка не работает».
+ */
+function useFocusScroll(anchorId: string | null) {
+  useEffect(() => {
+    if (!anchorId) return;
+    let stop = false;
+    let lastTop: number | null = null;
+    const started = Date.now();
+
+    const tick = () => {
+      if (stop) return;
+      const el = document.getElementById(anchorId);
+      if (el) {
+        const top = Math.round(el.getBoundingClientRect().top);
+        // lastTop === null — самый первый заход, скроллим безусловно. Иначе
+        // блок, случайно оказавшийся у верхней кромки, не прокрутился бы
+        // вовсе: разница с начальным значением не превысила бы порог.
+        // Дальше скроллим, только пока позиция ещё едет.
+        if (lastTop === null || Math.abs(top - lastTop) > 4) {
+          el.scrollIntoView({ block: "start", behavior: "smooth" });
+          lastTop = top;
+        }
+      }
+      if (Date.now() - started < 3000) window.setTimeout(tick, 250);
+    };
+    tick();
+
+    return () => {
+      stop = true;
+    };
+  }, [anchorId]);
+}
+
+function numOrNull(v: string | null): number | null {
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Режим инцидента: баннер всем пользователям бота. */
 function IncidentSection() {
   const qc = useQueryClient();
   const incident = useQuery({
@@ -96,97 +193,95 @@ function IncidentSection() {
   const isActive = incident.data?.is_active ?? false;
 
   return (
-    <section
-      className={
-        isActive
-          ? "card border-warning/40 bg-warning/10 p-5"
-          : "card p-5"
-      }
-    >
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <div
-            className={
-              isActive
-                ? "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-warning/15 text-warning"
-                : "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border"
+    <Card className={isActive ? "border-warning" : undefined}>
+      <CardHeader
+        title="Режим инцидента"
+        subtitle="баннер появится у каждого пользователя на главном экране бота"
+        actions={
+          // Пока состояние не приехало, переключать нечего: иначе можно
+          // случайно «включить» уже включённый режим и погасить баннер.
+          incident.isError ? null : (
+            <>
+              {isActive && <StatusBadge kind="risk">Баннер показывается</StatusBadge>}
+              <Button
+                variant={isActive ? "danger" : "primary"}
+                onClick={() =>
+                  save.mutate({ is_active: !isActive, incident_text: text || null })
+                }
+                loading={save.isPending}
+                disabled={incident.isLoading}
+                icon={<Power className="h-3.5 w-3.5" />}
+              >
+                {isActive ? "Выключить" : "Включить"}
+              </Button>
+            </>
+          )
+        }
+      />
+      <CardBody className="space-y-3">
+        {incident.isError ? (
+          <EmptyFailure
+            what="состояние режима инцидента"
+            reason={
+              (incident.error as ApiError)?.detail ??
+              "Не знаем, показывается ли сейчас баннер. Переключатель спрятан намеренно: включать вслепую нельзя."
             }
-          >
-            <AlertTriangle className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Режим инцидента
-            </div>
-            <h2 className="text-lg font-semibold text-fg">
-              Баннер всем пользователям
-            </h2>
-            <p className="mt-1 text-sm text-fg-muted">
-              Текст появится у каждого юзера на главном экране бота. Используй
-              для предупреждений о тех. работах, перебоях оплаты, и т.п.
+            onRetry={() => incident.refetch()}
+          />
+        ) : (
+          <>
+            <p className="text-base text-fg-muted">
+              Текст для предупреждений о технических работах и перебоях с
+              оплатой. Разметка — HTML, как в Telegram.
             </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() =>
-            save.mutate({
-              is_active: !isActive,
-              incident_text: text || null,
-            })
-          }
-          disabled={save.isPending}
-          className={isActive ? "btn-danger" : "btn-primary"}
-        >
-          {save.isPending ? <Spinner /> : <Power className="h-3.5 w-3.5" />}
-          {isActive ? "Выключить" : "Включить"}
-        </button>
-      </div>
+            <label className="block">
+              <div className="mb-1.5 text-xs font-medium text-fg-subtle">
+                Текст баннера
+              </div>
+              <textarea
+                className="input min-h-[120px] resize-y leading-relaxed"
+                value={text}
+                maxLength={2000}
+                onChange={(e) => {
+                  setText(e.target.value);
+                  setDirty(true);
+                }}
+                placeholder="Например: Сейчас наблюдаются перебои с оплатой через СБП. Используйте карту."
+              />
+            </label>
 
-      <label className="block">
-        <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-fg-subtle">
-          Текст (HTML)
-        </div>
-        <textarea
-          className="input min-h-[120px] resize-y leading-relaxed"
-          value={text}
-          maxLength={2000}
-          onChange={(e) => {
-            setText(e.target.value);
-            setDirty(true);
-          }}
-          placeholder="Например: ⚠️ Сейчас наблюдаются перебои с оплатой через СБП. Используйте карту."
-        />
-      </label>
-
-      {dirty && (
-        <div className="mt-3 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              setText(incident.data?.incident_text ?? "");
-              setDirty(false);
-            }}
-            className="btn-ghost"
-            disabled={save.isPending}
-          >
-            Сбросить
-          </button>
-          <button
-            type="button"
-            onClick={() => save.mutate({ is_active: isActive, incident_text: text })}
-            disabled={save.isPending}
-            className="btn-primary"
-          >
-            {save.isPending ? <Spinner /> : <Save className="h-3.5 w-3.5" />}
-            Сохранить текст
-          </button>
-        </div>
-      )}
-    </section>
+            {dirty && (
+              <div className="flex items-center justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setText(incident.data?.incident_text ?? "");
+                    setDirty(false);
+                  }}
+                  disabled={save.isPending}
+                >
+                  Вернуть как было
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() =>
+                    save.mutate({ is_active: isActive, incident_text: text })
+                  }
+                  loading={save.isPending}
+                  icon={<Save className="h-3.5 w-3.5" />}
+                >
+                  Сохранить текст
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 
+/** Очередь провизии VPN: оплачено, но ключ ещё не выдан. */
 function PendingActivationsSection() {
   const qc = useQueryClient();
   const list = useQuery({
@@ -204,150 +299,140 @@ function PendingActivationsSection() {
       } else {
         toast.error(
           data.error_message ??
-            `Ретрай #${data.subscription_id} не удался — оставлена в очереди`,
+            `Повтор для #${data.subscription_id} не удался — заявка осталась в очереди`,
         );
       }
       qc.invalidateQueries({ queryKey: ["activations"] });
     },
     onError: (e: unknown) =>
-      toast.error((e as ApiError)?.detail ?? "Не удалось дёрнуть retry"),
+      toast.error((e as ApiError)?.detail ?? "Не удалось запустить повтор"),
   });
 
   const total = list.data?.total ?? 0;
   const rows = list.data?.rows ?? [];
 
   return (
-    <section className="card p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div
-            className={
-              total > 0
-                ? "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-warning/15 text-warning"
-                : "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border"
+    <Card>
+      <CardHeader
+        title="Очередь выдачи VPN"
+        subtitle="оплачено, подписка создана, но ключ ещё не выдан — VPN-API не ответил в момент вебхука"
+        actions={
+          <>
+            {total > 0 && <StatusBadge kind="pending">{fmtNum(total)} в очереди</StatusBadge>}
+            <Button
+              onClick={() => list.refetch()}
+              loading={list.isFetching}
+              icon={<RefreshCcw className="h-3.5 w-3.5" />}
+            >
+              Обновить
+            </Button>
+          </>
+        }
+      />
+      <CardBody className="space-y-3">
+        {/* Отказ запроса ОБЯЗАН стоять перед пустым состоянием. Иначе
+            недоступный бэкенд выглядел бы как «очередь пуста, всё хорошо» —
+            то есть ровно наоборот. */}
+        {list.isError ? (
+          <EmptyFailure
+            what="очередь выдачи VPN"
+            reason={
+              (list.error as ApiError)?.detail ??
+              "Запрос не вернулся. Пустая очередь и недоступный сервер выглядят одинаково, поэтому здесь ошибка, а не «всё хорошо»."
             }
+            onRetry={() => list.refetch()}
+          />
+        ) : (
+          <LoadingGate
+            loading={list.isLoading}
+            skeleton={<SkeletonTable rows={3} cols={6} />}
+            message="Читаю очередь выдачи"
           >
-            <Zap className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Pending активации VPN
-            </div>
-            <h2 className="text-lg font-semibold text-fg">
-              Очередь провизии
-              {total > 0 && (
-                <span className="ml-2 badge-warning">{fmtNum(total)}</span>
-              )}
-            </h2>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => list.refetch()}
-          className="btn-secondary"
-        >
-          <RefreshCcw className="h-3.5 w-3.5" /> Обновить
-        </button>
-      </div>
-
-      <p className="mb-4 text-sm text-fg-muted">
-        Пользователь оплатил, подписка создана, но в момент webhook'а VPN-API
-        не ответил — UUID/ключ ещё не выданы. Фоновый воркер дёргает retry
-        раз в 5 мин (макс 5 попыток). Здесь можно дёрнуть руками сейчас.
-      </p>
-
-      {list.isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-fg-muted">
-          <Spinner /> Загружаю...
-        </div>
-      ) : rows.length === 0 ? (
-        <EmptyState
-          icon={ShieldOff}
-          title="Очередь пуста"
-          description="Все оплаченные подписки имеют VPN-ключи. Это норма."
-        />
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-fg-subtle">
-                <th className="px-2 py-2 font-medium">Sub ID</th>
-                <th className="px-2 py-2 font-medium">Юзер</th>
-                <th className="px-2 py-2 font-medium">Тариф</th>
-                <th className="px-2 py-2 font-medium">Попыток</th>
-                <th className="px-2 py-2 font-medium">Последняя ошибка</th>
-                <th className="px-2 py-2 font-medium">С</th>
-                <th className="px-2 py-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/60">
-              {rows.map((r) => {
-                const id = Number(r.id ?? 0);
-                const attempts = asNum(r.activation_attempts) ?? 0;
-                const err = String(r.last_activation_error ?? "—");
-                const sinceStr =
-                  typeof r.activated_at === "string"
-                    ? fmtDate(r.activated_at)
-                    : "—";
-                return (
-                  <tr
-                    key={id || Math.random()}
-                    className="hover:bg-accent/[0.04]"
-                  >
-                    <td className="px-2 py-2 font-mono text-xs text-fg-muted">
-                      {id}
-                    </td>
-                    <td className="px-2 py-2 text-fg">
-                      tg:{String(r.telegram_id ?? "—")}
-                    </td>
-                    <td className="px-2 py-2 text-fg">
-                      {String(r.subscription_type ?? "—")}
-                    </td>
-                    <td className="px-2 py-2">
-                      <span
-                        className={
-                          attempts >= 5
-                            ? "badge-danger"
-                            : attempts >= 3
-                            ? "badge-warning"
-                            : "badge-muted"
-                        }
-                      >
-                        {attempts}/5
-                      </span>
-                    </td>
-                    <td className="max-w-[280px] truncate px-2 py-2 text-xs text-fg-muted">
-                      {err}
-                    </td>
-                    <td className="px-2 py-2 text-xs text-fg-muted">
-                      {sinceStr}
-                    </td>
-                    <td className="px-2 py-2 text-right">
-                      <button
-                        type="button"
-                        onClick={() => retry.mutate(id)}
-                        disabled={retry.isPending}
-                        className="btn-ghost"
-                      >
-                        {retry.isPending && retry.variables === id ? (
-                          <Spinner />
-                        ) : (
-                          <PlayCircle className="h-3.5 w-3.5" />
-                        )}
-                        Retry
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
+            {rows.length === 0 ? (
+              <EmptyAllClear
+                title="Очередь пуста"
+                description="У всех оплаченных подписок есть VPN-ключи. Это норма — фоновый воркер повторяет выдачу раз в 5 минут."
+              />
+            ) : (
+              <>
+                <p className="text-base text-fg-muted">
+                  Фоновый воркер повторяет выдачу раз в 5 минут, максимум 5
+                  попыток. Кнопка «Повторить» запускает попытку сейчас.
+                </p>
+                <TableScroll>
+                  <Table density="compact">
+                    <THead>
+                      <tr>
+                        <TH>Подписка</TH>
+                        <TH>Пользователь</TH>
+                        <TH>Тариф</TH>
+                        <TH>Попыток</TH>
+                        <TH>Последняя ошибка</TH>
+                        <TH>С какого времени</TH>
+                        <TH />
+                      </tr>
+                    </THead>
+                    <TBody>
+                      {rows.map((r) => {
+                        const id = Number(r.id ?? 0);
+                        const attempts = asNum(r.activation_attempts) ?? 0;
+                        const err = String(r.last_activation_error ?? "—");
+                        const since =
+                          typeof r.activated_at === "string"
+                            ? fmtDate(r.activated_at)
+                            : "—";
+                        return (
+                          <TR key={id || Math.random()}>
+                            <TD mono>{id}</TD>
+                            <TD>tg:{String(r.telegram_id ?? "—")}</TD>
+                            <TD>{String(r.subscription_type ?? "—")}</TD>
+                            <TD>
+                              {/* Число попыток подписано словом, а не только
+                                  цветом бейджа (research §4.11). */}
+                              <StatusBadge
+                                kind={
+                                  attempts >= 5
+                                    ? "failure"
+                                    : attempts >= 3
+                                      ? "risk"
+                                      : "neutral"
+                                }
+                              >
+                                {attempts} из 5
+                              </StatusBadge>
+                            </TD>
+                            <TD className="max-w-[280px] truncate text-xs text-fg-muted">
+                              {err}
+                            </TD>
+                            <TD className="text-xs text-fg-muted">{since}</TD>
+                            <TD numeric>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => retry.mutate(id)}
+                                loading={retry.isPending && retry.variables === id}
+                                disabled={retry.isPending}
+                                icon={<PlayCircle className="h-3.5 w-3.5" />}
+                              >
+                                Повторить
+                              </Button>
+                            </TD>
+                          </TR>
+                        );
+                      })}
+                    </TBody>
+                  </Table>
+                </TableScroll>
+              </>
+            )}
+          </LoadingGate>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 
+/** Платежи, застрявшие в статусе «в обработке». */
 function PendingPaymentsSection() {
   const list = useQuery({
     queryKey: ["payments", "pending"],
@@ -355,111 +440,100 @@ function PendingPaymentsSection() {
     refetchInterval: 15_000,
   });
 
-  return (
-    <section className="card p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border">
-            <Clock className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Висящие платежи
-            </div>
-            <h2 className="text-lg font-semibold text-fg">
-              Статус «pending»
-              {list.data && list.data.length > 0 && (
-                <span className="ml-2 badge-warning">
-                  {list.data.length}
-                </span>
-              )}
-            </h2>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => list.refetch()}
-          className="btn-secondary"
-        >
-          <RefreshCcw className="h-3.5 w-3.5" /> Обновить
-        </button>
-      </div>
+  const count = list.data?.length ?? 0;
 
-      {list.isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-fg-muted">
-          <Spinner /> Загружаю...
-        </div>
-      ) : !list.data || list.data.length === 0 ? (
-        <EmptyState
-          icon={Wallet}
-          title="Нет висящих платежей"
-          description="Все платежи обработаны. Это хороший признак."
-        />
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-fg-subtle">
-                <th className="px-2 py-2 font-medium">ID</th>
-                <th className="px-2 py-2 font-medium">Юзер</th>
-                <th className="px-2 py-2 font-medium">Тариф</th>
-                <th className="px-2 py-2 font-medium">Сумма</th>
-                <th className="px-2 py-2 font-medium">Источник</th>
-                <th className="px-2 py-2 font-medium">Создан</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/60">
-              {list.data.map((p) => (
-                <tr
-                  key={String(p.id ?? Math.random())}
-                  className="hover:bg-accent/[0.04]"
-                >
-                  <td className="px-2 py-2 font-mono text-xs text-fg-muted">
-                    {String(p.id ?? "—")}
-                  </td>
-                  <td className="px-2 py-2 text-fg">
-                    tg:{String(p.telegram_id ?? "—")}
-                  </td>
-                  <td className="px-2 py-2 text-fg">{String(p.tariff ?? "—")}</td>
-                  <td className="px-2 py-2 text-fg">
-                    {typeof p.amount === "number"
-                      ? fmtRub(p.amount / 100)
-                      : String(p.amount ?? "—")}
-                  </td>
-                  <td className="px-2 py-2 text-fg-muted">
-                    {String(p.source ?? "—")}
-                  </td>
-                  <td className="px-2 py-2 text-fg-muted">
-                    {typeof p.created_at === "string"
-                      ? fmtDate(p.created_at)
-                      : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="mt-3 text-xs text-fg-subtle">
-            Платежи &ldquo;виснут&rdquo; обычно из-за пропавших webhook'ов от
-            провайдера. Большинство решаются ретраем со стороны провайдера в
-            течение часа. Если &gt;24 ч — стоит проверить руками. Авто-полл
-            раз в 15 секунд (
-            {fmtNum(list.data.length)} записей).
-          </p>
-        </div>
-      )}
-    </section>
+  return (
+    <Card>
+      <CardHeader
+        title="Висящие платежи"
+        subtitle="статус «в обработке» дольше обычного · обновляется само раз в 15 секунд"
+        actions={
+          <>
+            {count > 0 && <StatusBadge kind="pending">{fmtNum(count)}</StatusBadge>}
+            <Button
+              onClick={() => list.refetch()}
+              loading={list.isFetching}
+              icon={<RefreshCcw className="h-3.5 w-3.5" />}
+            >
+              Обновить
+            </Button>
+          </>
+        }
+      />
+      <CardBody className="space-y-3">
+        {list.isError ? (
+          <EmptyFailure
+            what="висящие платежи"
+            reason={
+              (list.error as ApiError)?.detail ??
+              "Запрос не вернулся. «Висящих платежей нет» здесь было бы враньём — мы просто не знаем."
+            }
+            onRetry={() => list.refetch()}
+          />
+        ) : (
+          <LoadingGate
+            loading={list.isLoading}
+            skeleton={<SkeletonTable rows={3} cols={6} />}
+            message="Ищу зависшие платежи"
+          >
+            {count === 0 ? (
+              <EmptyAllClear
+                title="Висящих платежей нет"
+                description="Все платежи дошли до конечного статуса."
+              />
+            ) : (
+              <>
+                <p className="text-base text-fg-muted">
+                  Платежи виснут обычно из-за потерянных вебхуков провайдера.
+                  Большинство расходится само в течение часа. Если запись висит
+                  дольше суток — стоит разобрать руками.
+                </p>
+                <TableScroll>
+                  <Table density="compact">
+                    <THead>
+                      <tr>
+                        <TH>ID</TH>
+                        <TH>Пользователь</TH>
+                        <TH>Тариф</TH>
+                        <TH numeric>Сумма</TH>
+                        <TH>Провайдер</TH>
+                        <TH>Создан</TH>
+                      </tr>
+                    </THead>
+                    <TBody>
+                      {(list.data ?? []).map((p) => (
+                        <TR key={String(p.id ?? Math.random())}>
+                          <TD mono>{String(p.id ?? "—")}</TD>
+                          <TD>tg:{String(p.telegram_id ?? "—")}</TD>
+                          <TD>{String(p.tariff ?? "—")}</TD>
+                          <TD numeric>
+                            {typeof p.amount === "number"
+                              ? fmtRub(p.amount / 100)
+                              : String(p.amount ?? "—")}
+                          </TD>
+                          <TD className="text-fg-muted">
+                            {String(p.source ?? "—")}
+                          </TD>
+                          <TD className="text-fg-muted">
+                            {typeof p.created_at === "string"
+                              ? fmtDate(p.created_at)
+                              : "—"}
+                          </TD>
+                        </TR>
+                      ))}
+                    </TBody>
+                  </Table>
+                </TableScroll>
+              </>
+            )}
+          </LoadingGate>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 
-function asNum(v: unknown): number | undefined {
-  if (typeof v === "number") return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : undefined;
-  }
-  return undefined;
-}
-
+/** Вход по Face ID / Touch ID. */
 function PasskeysSection() {
   const qc = useQueryClient();
   const supported = isPasskeySupported();
@@ -471,6 +545,8 @@ function PasskeysSection() {
   });
 
   const [label, setLabel] = useState("");
+  const [toDelete, setToDelete] = useState<PasskeyRow | null>(null);
+
   const add = useMutation({
     mutationFn: () => registerPasskey(label.trim() || undefined),
     onSuccess: () => {
@@ -480,6 +556,7 @@ function PasskeysSection() {
     },
     onError: (e: unknown) => {
       const detail = (e as { detail?: string })?.detail;
+      // «cancelled» — человек сам закрыл системное окно. Это не ошибка.
       if (detail !== "cancelled") {
         toast.error(detail ?? "Не удалось добавить");
       }
@@ -489,7 +566,8 @@ function PasskeysSection() {
   const del = useMutation({
     mutationFn: (id: number) => passkeyDelete(id),
     onSuccess: () => {
-      toast.success("Удалён");
+      toast.success("Ключ удалён");
+      setToDelete(null);
       qc.invalidateQueries({ queryKey: ["passkeys"] });
     },
     onError: () => toast.error("Не удалось удалить"),
@@ -497,109 +575,128 @@ function PasskeysSection() {
 
   if (!supported) {
     return (
-      <section className="card p-5">
-        <div className="flex items-start gap-3">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border">
-            <Fingerprint className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Passkey
-            </div>
-            <h2 className="text-lg font-semibold text-fg">Браузер не поддерживает</h2>
-            <p className="mt-1 text-sm text-fg-muted">
-              Открой дашборд в Safari (iOS / macOS) или Chrome — там доступны
-              Face ID / Touch ID / системные ключи.
-            </p>
-          </div>
-        </div>
-      </section>
+      <Card>
+        <CardHeader title="Вход по Face ID / Touch ID" />
+        <CardBody>
+          <EmptyNotConfigured
+            title="Браузер не поддерживает passkey"
+            description="Откройте дашборд в Safari (iOS или macOS) либо в Chrome — там доступны Face ID, Touch ID и системные ключи."
+            icon={Fingerprint}
+          />
+        </CardBody>
+      </Card>
     );
   }
 
   return (
-    <section className="card p-5">
-      <div className="mb-3 flex items-center gap-3">
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
-          <Fingerprint className="h-4 w-4" />
+    <Card>
+      <CardHeader
+        title="Вход по Face ID / Touch ID"
+        subtitle="passkey привязывается к устройству или к связке ключей iCloud"
+      />
+      <CardBody className="space-y-4">
+        <div className="grid grid-cols-1 items-end gap-2 md:grid-cols-[1fr_auto]">
+          <Input
+            label="Метка нового ключа"
+            hint="Чтобы отличать устройства в списке ниже"
+            maxLength={64}
+            placeholder="iPhone 15, MacBook Air"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+          <Button
+            variant="primary"
+            onClick={() => add.mutate()}
+            loading={add.isPending}
+            icon={<Plus className="h-3.5 w-3.5" />}
+          >
+            Добавить passkey
+          </Button>
         </div>
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Passkey
-          </div>
-          <h2 className="text-lg font-semibold text-fg">
-            Face ID / Touch ID
-          </h2>
-        </div>
-      </div>
 
-      <p className="mb-3 text-sm text-fg-muted">
-        Добавь passkey — и в следующий раз войдёшь одним касанием без
-        пароля. Привяжется к этому устройству / iCloud Keychain.
-      </p>
+        {list.isError ? (
+          <EmptyFailure
+            what="список ключей"
+            reason={
+              (list.error as ApiError)?.detail ??
+              "Запрос не вернулся. Раньше на этом месте писали «ещё ни одного ключа» — и это было неправдой."
+            }
+            onRetry={() => list.refetch()}
+          />
+        ) : (
+          <LoadingGate
+            loading={list.isLoading}
+            skeleton={<SkeletonCard lines={2} />}
+            message="Читаю список ключей"
+          >
+            {!list.data || list.data.length === 0 ? (
+              <EmptyNotConfigured
+                title="Ключей пока нет"
+                description="Добавьте passkey — и в следующий раз вход займёт одно касание, без пароля."
+                icon={Fingerprint}
+              />
+            ) : (
+              <ul className="divide-y divide-border-subtle rounded-lg border border-border">
+                {list.data.map((p: PasskeyRow) => (
+                  <li
+                    key={p.id}
+                    className="flex items-center justify-between gap-2 px-3 py-3 text-base"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-medium text-fg">
+                        {p.label || "Passkey"}
+                      </div>
+                      <div className="mt-0.5 text-xs text-fg-muted">
+                        {p.transports && p.transports.length > 0
+                          ? `${p.transports.join(" · ")} · `
+                          : ""}
+                        добавлен{" "}
+                        {p.created_at
+                          ? new Date(p.created_at).toLocaleDateString("ru-RU")
+                          : "—"}
+                        {p.last_used_at
+                          ? ` · последний вход ${new Date(p.last_used_at).toLocaleDateString("ru-RU")}`
+                          : " · ещё не использовался"}
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setToDelete(p)}
+                      icon={<Trash2 className="h-3.5 w-3.5" />}
+                    >
+                      Удалить
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </LoadingGate>
+        )}
+      </CardBody>
 
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto]">
-        <input
-          className="input"
-          maxLength={64}
-          placeholder='Метка — напр. "iPhone 15", "MacBook Air"'
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-        />
-        <button
-          type="button"
-          onClick={() => add.mutate()}
-          disabled={add.isPending}
-          className="btn-primary"
-        >
-          {add.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
-          Добавить passkey
-        </button>
-      </div>
-
-      {list.isLoading ? (
-        <div className="mt-4 flex items-center gap-2 text-sm text-fg-muted">
-          <Spinner /> Загружаю...
-        </div>
-      ) : list.data && list.data.length > 0 ? (
-        <ul className="mt-4 divide-y divide-border/60">
-          {list.data.map((p: PasskeyRow) => (
-            <li
-              key={p.id}
-              className="flex items-center justify-between gap-2 py-3 text-sm"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-medium text-fg">
-                  {p.label || "Passkey"}
-                </div>
-                <div className="mt-0.5 text-xs text-fg-muted">
-                  {p.transports && p.transports.length > 0 ? (
-                    <span>{p.transports.join(" · ")} · </span>
-                  ) : null}
-                  Добавлен {p.created_at ? new Date(p.created_at).toLocaleDateString("ru-RU") : "—"}
-                  {p.last_used_at
-                    ? ` · последний вход ${new Date(p.last_used_at).toLocaleDateString("ru-RU")}`
-                    : " · ещё не использовался"}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  if (confirm(`Удалить «${p.label || "passkey"}»?`)) del.mutate(p.id);
-                }}
-                disabled={del.isPending}
-                className="btn-ghost text-danger hover:text-danger"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="mt-4 text-sm text-fg-muted">
-          Ещё ни одного passkey не привязано.
-        </div>
-      )}
-    </section>
+      {/* Удаление ключа необратимо и может отрезать вход с устройства, к
+          которому нет доступа прямо сейчас, — поэтому диалог, а не окно
+          отмены (research §6.6). */}
+      <ConfirmDialog
+        open={toDelete !== null}
+        onCancel={() => setToDelete(null)}
+        onConfirm={() => toDelete && del.mutate(toDelete.id)}
+        title={`Удалить ключ «${toDelete?.label || "Passkey"}»?`}
+        body="Войти этим устройством без пароля больше не получится. Ключ придётся заводить заново с самого устройства."
+        confirmLabel="Удалить ключ"
+        cancelLabel="Оставить"
+        destructive
+      />
+    </Card>
   );
+}
+
+function asNum(v: unknown): number | undefined {
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
 }

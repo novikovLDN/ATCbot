@@ -1,4 +1,13 @@
-"""CSV export endpoints — streamed line-by-line."""
+"""CSV export endpoints — streamed line-by-line.
+
+СЕКРЕТЫ
+    Текст исключения наружу — только через scrub_secrets.
+
+ЛОГИ
+    Оба обработчика пишут в лог, и в записи есть число строк. Выгрузка — это
+    вынос всей базы пользователей за пределы панели одним файлом, и по логу
+    должно быть видно, кто и сколько выгрузил.
+"""
 import csv
 import io
 import logging
@@ -9,6 +18,7 @@ from fastapi.responses import StreamingResponse
 
 import database
 from app.api.dashboard.deps import require_admin
+from app.utils.security import scrub_secrets
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -66,7 +76,9 @@ async def export_users():
     try:
         rows = await database.get_all_users_for_export()
     except Exception as e:
-        raise HTTPException(500, f"export_users_failed: {e}")
+        logger.error("export.users failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"export_users_failed: {scrub_secrets(e)}")
+    logger.info("export.users ok: rows=%s", len(rows))
     name = f"users_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
     return StreamingResponse(
         _csv_stream(rows),
@@ -81,7 +93,9 @@ async def export_subscriptions():
     try:
         rows = await database.get_active_subscriptions_for_export()
     except Exception as e:
-        raise HTTPException(500, f"export_subscriptions_failed: {e}")
+        logger.error("export.subscriptions failed: %s", scrub_secrets(e))
+        raise HTTPException(500, f"export_subscriptions_failed: {scrub_secrets(e)}")
+    logger.info("export.subscriptions ok: rows=%s", len(rows))
     name = f"subscriptions_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
     return StreamingResponse(
         _csv_stream(rows),

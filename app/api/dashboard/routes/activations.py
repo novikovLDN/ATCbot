@@ -3,7 +3,18 @@ VPN-provisioning HTTP call to the panel was unreachable at the moment.
 
 The activation_worker.py background task retries them every ~5 min up to
 5 attempts; this endpoint lets the admin see what's queued and force a
-retry NOW without waiting for the next cycle (useful for VIPs)."""
+retry NOW without waiting for the next cycle (useful for VIPs).
+
+СЕКРЕТЫ
+    Текст исключения наружу — только через scrub_secrets. Сюда прилетают
+    ошибки HTTP-вызова к панели Remnawave, а в них бывает URL с токеном.
+
+ЛОГИ
+    Оба обработчика пишут в лог. Ручной повтор выдачи — операция, которая
+    ходит во внешнюю панель и меняет доступ пользователя, и по логу должно
+    быть видно, кто её запускал.
+"""
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path
@@ -11,6 +22,9 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 import database
 from app.api.dashboard.deps import require_admin
 from app.events import bus
+from app.utils.security import scrub_secrets
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -48,6 +62,7 @@ async def activations_pending(limit: int = 100):
         total = await conn.fetchval(
             "SELECT COUNT(*) FROM subscriptions WHERE activation_status = 'pending'"
         ) or 0
+    logger.info("activations.pending ok: total=%s returned=%s", int(total), len(rows))
     return {
         "total": int(total),
         "rows": [_serialize(dict(r)) for r in rows],
@@ -88,9 +103,20 @@ async def activations_retry(
             pool=pool,
         )
     except Exception as e:
-        raise HTTPException(500, f"retry_failed: {e}")
+        logger.error(
+            "activations.retry failed: subscription_id=%s %s",
+            subscription_id,
+            scrub_secrets(e),
+        )
+        raise HTTPException(500, f"retry_failed: {scrub_secrets(e)}")
 
     success = getattr(result, "success", False)
+    logger.info(
+        "activations.retry done: subscription_id=%s success=%s by=%s",
+        subscription_id,
+        bool(success),
+        admin.get("sub"),
+    )
     bus.publish({
         "type": "activation:retry",
         "subscription_id": subscription_id,

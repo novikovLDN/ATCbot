@@ -7,6 +7,12 @@
  * сводке от неё осталось одно число в зоне B и строки в «требует
  * внимания» — они ведут сюда якорем ?focus=reconciliation.
  *
+ * ПРО focusTelegramId. Строки блока «Требует внимания» ведут сюда с
+ * ?tg=<telegram_id>: человек пришёл разбираться с ОДНОЙ конкретной подпиской.
+ * Такая карточка раскрывается сама и подсвечивается рамкой — иначе её
+ * пришлось бы искать глазами в списке из десятков одинаковых строк, и клик по
+ * конкретной строке на сводке терял бы весь смысл.
+ *
  * Shows users whose PREMIUM subscription expires more than 8 years from now,
  * plus a stream of recent auto-detected over-issuance events. Each candidate
  * expands to a detail card with:
@@ -18,7 +24,7 @@
  * The over-issuance events include a python stack snippet (caller_context)
  * so we can trace WHERE the excessive duration came from.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -31,8 +37,14 @@ import {
 } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
 import { fmtNum } from "@/lib/format";
+import { cn } from "@/lib/cn";
 import { toast } from "@/store/toast";
 import { Spinner } from "@/components/Spinner";
+import {
+  EmptyAllClear,
+  EmptyFailure,
+  EmptyNotConfigured,
+} from "@/components/ui";
 
 const fmtDate = (iso: string | null) => {
   if (!iso) return "—";
@@ -56,7 +68,12 @@ const fmtDays = (days: number) => {
   return `${years} лет · ${days} д`;
 };
 
-export function ReconciliationSection() {
+export function ReconciliationSection({
+  /** Из ?tg= на /service. Карточка этого пользователя раскроется сама. */
+  focusTelegramId = null,
+}: {
+  focusTelegramId?: number | null;
+} = {}) {
   // Auto-refetch выключен: candidates-endpoint делает полный скан
   // Remnawave-панели (get_all_users, ~10 запросов, ~5-8 сек), а
   // over-issuance-endpoint читает лог DB. Каждый обновляется вручную
@@ -124,29 +141,43 @@ export function ReconciliationSection() {
         </div>
       </header>
 
+      {/* Порядок веток важен и менять его нельзя: отказ → панель недоступна →
+          пусто. Если поднять «пусто» выше, недоступная панель Remnawave
+          покажется как «расхождений нет» — то есть худшая из возможных
+          неправд на этом экране. */}
       {candidates.isLoading ? (
         <div className="flex items-center gap-2 text-sm text-fg-muted">
           <Spinner /> Загружаю список…
         </div>
       ) : candidates.isError ? (
-        <div className="rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
-          Ошибка загрузки: {(candidates.error as ApiError)?.detail ?? "…"}
-        </div>
+        <EmptyFailure
+          what="список кандидатов на сверку"
+          reason={
+            (candidates.error as ApiError)?.detail ??
+            "Запрос не вернулся. Пустой список здесь читался бы как «расхождений нет»."
+          }
+          onRetry={() => candidates.refetch()}
+        />
       ) : candidates.data?.items[0]?.panel_unreachable ? (
-        <div className="rounded-xl border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
-          Не удалось получить список пользователей из Remnawave.
-          Проверь REMNAWAVE_API_URL / TOKEN и логи —
-          <code className="ml-1 font-mono">get_all_users</code> вернул None.
-        </div>
+        <EmptyNotConfigured
+          title="Панель Remnawave не отвечает"
+          description="Сверять не с чем: get_all_users вернул пустой ответ. Проверьте REMNAWAVE_API_URL и токен в переменных окружения, затем логи панели."
+          actionLabel="Проверить ещё раз"
+          onAction={() => candidates.refetch()}
+        />
       ) : (candidates.data?.items.length ?? 0) === 0 ? (
-        <div className="rounded-xl border border-border bg-bg-subtle/40 p-6 text-center text-sm text-fg-muted">
-          Кандидатов нет — все премиум-энтити в Remnawave укладываются
-          в 8-летний коридор.
-        </div>
+        <EmptyAllClear
+          title="Расхождений нет"
+          description="Все премиум-подписки в Remnawave укладываются в 8-летний коридор. Проверка прошла целиком."
+        />
       ) : (
         <div className="space-y-2.5">
           {candidates.data!.items.map((c) => (
-            <CandidateRow key={c.telegram_id} row={c} />
+            <CandidateRow
+              key={c.telegram_id}
+              row={c}
+              focused={focusTelegramId === c.telegram_id}
+            />
           ))}
         </div>
       )}
@@ -166,9 +197,20 @@ export function ReconciliationSection() {
           <div className="flex items-center gap-2 text-xs text-fg-muted">
             <Spinner /> …
           </div>
+        ) : overIssuance.isError ? (
+          // Раньше отказ этого запроса попадал в ветку «событий не
+          // зафиксировано» — то есть сломанный лог выглядел как чистый.
+          <EmptyFailure
+            what="лог авто-детекта"
+            reason={
+              (overIssuance.error as ApiError)?.detail ??
+              "Запрос не вернулся. «Событий не зафиксировано» здесь было бы неправдой."
+            }
+            onRetry={() => overIssuance.refetch()}
+          />
         ) : (overIssuance.data?.length ?? 0) === 0 ? (
           <div className="text-xs text-fg-subtle">
-            Событий не зафиксировано.
+            Событий не зафиксировано — новых выдач сверх коридора не было.
           </div>
         ) : (
           <div className="space-y-1.5">
@@ -188,11 +230,42 @@ type CandidateRow = NonNullable<
   Awaited<ReturnType<typeof endpoints.reconciliationCandidates>>
 >["items"][number];
 
-function CandidateRow({ row }: { row: CandidateRow }) {
-  const [open, setOpen] = useState(false);
+function CandidateRow({
+  row,
+  focused = false,
+}: {
+  row: CandidateRow;
+  /** Пришли по ссылке именно за этой подпиской (?tg= на /service). */
+  focused?: boolean;
+}) {
+  const [open, setOpen] = useState(focused);
+  const ref = useRef<HTMLDivElement>(null);
+  const scrolled = useRef(false);
+
+  // Доводим до глаз ровно один раз. Повторная прокрутка на каждый рендер
+  // отбирала бы у человека управление страницей, стоило ему начать листать.
+  useEffect(() => {
+    if (!focused || scrolled.current) return;
+    scrolled.current = true;
+    setOpen(true);
+    ref.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [focused]);
 
   return (
-    <div className="rounded-xl border border-border bg-bg-subtle/40">
+    <div
+      ref={ref}
+      className={cn(
+        "rounded-xl border bg-bg-subtle/40",
+        // Подсветка нужной карточки — рамкой и подписью, а не только цветом:
+        // цвет не может быть единственным носителем смысла (research §4.11).
+        focused ? "border-accent-9 ring-1 ring-accent-9" : "border-border",
+      )}
+    >
+      {focused && (
+        <div className="border-b border-border px-4 py-1.5 text-[10px] font-medium uppercase tracking-wider text-accent-text">
+          Пришли сюда за этой подпиской — со сводки, из блока «Требует внимания»
+        </div>
+      )}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
