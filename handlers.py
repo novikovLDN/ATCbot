@@ -566,22 +566,11 @@ logger = logging.getLogger(__name__)
 # VPN-ключи теперь создаются динамически через Xray API, лимита нет
 
 def get_language_keyboard(language: str = "ru"):
-    """Клавиатура для выбора языка (языковые названия показываются в нативной форме)"""
+    """Клавиатура выбора языка — только ru + en."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ru"), callback_data="lang_ru"),
             InlineKeyboardButton(text=i18n_get_text(language, "lang.button_en"), callback_data="lang_en"),
-        ],
-        [
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_de"), callback_data="lang_de"),
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_kk"), callback_data="lang_kk"),
-        ],
-        [
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ar"), callback_data="lang_ar"),
-        ],
-        [
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_uz"), callback_data="lang_uz"),
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_tj"), callback_data="lang_tj"),
         ],
     ])
     return keyboard

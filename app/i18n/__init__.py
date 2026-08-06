@@ -1,18 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 Modular I18N architecture for Atlas Secure.
-Strict localization: no hardcoded UI strings in logic.
+Supported: русский (default) + English. Остальные локали удалены
+2026-XX по решению о фокусе на CIS/EN аудиторию.
 
-Language resolution:
-- If language not in LANGUAGES → use DEFAULT_LANGUAGE (ru)
-- Otherwise → use exact language module
-- If key missing in requested language → fallback to English
-- If key missing in all languages → return key (safe fallback, never crash)
+Legacy юзеры с language='de'/'ar'/'kk'/'tj'/'uz' в БД автоматом
+получат тексты на русском (fallback через LANGUAGES.get()).
 """
 
 import logging
 
-from . import ru, en, uz, tj, de, kk, ar
+from . import ru, en
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +19,6 @@ DEFAULT_LANGUAGE = "ru"
 LANGUAGES = {
     "ru": ru.LANG,
     "en": en.LANG,
-    "uz": uz.LANG,
-    "tj": tj.LANG,
-    "de": de.LANG,
-    "kk": kk.LANG,
-    "ar": ar.LANG,
 }
 
 
@@ -34,15 +27,15 @@ def get_text(language: str, key: str, strict: bool = None, **kwargs) -> str:
     Get localized text for key in given language.
 
     Args:
-        language: Language code (ru, en, uz, tj, de, kk, ar)
+        language: 'ru' | 'en' (любой другой → русский)
         key: Dot-separated key (e.g. main.profile, common.back)
-        strict: Deprecated, kept for backward compatibility. No longer raises.
-        **kwargs: Format placeholders (e.g. user="John" for {user})
+        strict: Deprecated, kept for backward compatibility.
+        **kwargs: Format placeholders (e.g. user="John" для {user})
 
     Returns:
         Localized string, optionally formatted. Never raises.
     """
-    # 1. Try requested language
+    # 1. Try requested language (unknown lang → default ru)
     lang_dict = LANGUAGES.get(language, LANGUAGES[DEFAULT_LANGUAGE])
     text = lang_dict.get(key)
 
@@ -51,8 +44,8 @@ def get_text(language: str, key: str, strict: bool = None, **kwargs) -> str:
             return text.format(**kwargs)
         return text
 
-    # 2. Fallback to English
-    en_dict = LANGUAGES.get("en", {})
+    # 2. Fallback to English if requested was ru
+    en_dict = LANGUAGES["en"]
     if key in en_dict:
         logger.warning("I18N fallback to EN for key=%s, lang=%s", key, language)
         text = en_dict[key]
