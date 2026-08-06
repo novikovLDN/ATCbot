@@ -76,9 +76,8 @@ class TestRenderMigrationText:
     def test_mentions_lte_bypass_unchanged(self):
         from app.services import migration_broadcast
         text = migration_broadcast.render_migration_text("https://rmnw/sub/x")
-        # Body must reassure users that LTE-bypass links are untouched.
-        assert "LTE" in text
-        assert "обход" in text.lower()
+        # Body must reassure users that Pro-server links are untouched.
+        assert "Pro" in text
 
     def test_html_special_chars_in_url_are_escaped(self):
         from app.services import migration_broadcast
