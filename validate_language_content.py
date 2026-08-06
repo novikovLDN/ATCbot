@@ -13,15 +13,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 I18N_DIR = ROOT / "app" / "i18n"
 
-LANGUAGE_CODES = ["ru", "en", "de", "kk", "uz", "tj", "ar"]
+LANGUAGE_CODES = ["ru", "en"]
 RU_CODE = "ru"
 EN_CODE = "en"
 
 # Keys that intentionally contain Cyrillic (native language names in selector)
-CYRILLIC_ALLOWED_KEYS = frozenset({"lang.button_ru", "lang.button_kk", "lang.button_tj"})
+CYRILLIC_ALLOWED_KEYS = frozenset({"lang.button_ru"})
 
-# Languages to check for English bleed (de, kk, ar, uz, tj only; exclude ru, en)
-ENGLISH_BLEED_CHECK_LANGS = frozenset({"de", "kk", "ar", "uz", "tj"})
+# Languages to check for English bleed (none — только ru+en остались)
+ENGLISH_BLEED_CHECK_LANGS = frozenset()
 
 # English bleed: detect by exact match with en.py (copy-paste without translation)
 # Short single-word English suspects (e.g. "Error", "Payment")

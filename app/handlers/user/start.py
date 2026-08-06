@@ -15,7 +15,7 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.utils.referral_middleware import process_referral_on_first_interaction
 from app.handlers.common.guards import ensure_db_ready_message
-from app.handlers.common.keyboards import get_language_keyboard, get_main_menu_keyboard
+from app.handlers.common.keyboards import get_main_menu_keyboard
 from app.handlers.common.utils import safe_resolve_username
 
 user_router = Router()
@@ -166,8 +166,7 @@ async def cmd_start(message: Message, state: FSMContext):
                     status = result.get("status")
                     # Default keyboard for non-success outcomes (errors).
                     keyboard = (
-                        get_language_keyboard(language) if is_new_user
-                        else await get_main_menu_keyboard(language, telegram_id)
+                        await get_main_menu_keyboard(language, telegram_id)
                     )
 
                     if status == "success":
@@ -262,8 +261,7 @@ async def cmd_start(message: Message, state: FSMContext):
                     )
                     text = i18n_get_text(language, "bypass_gift.error_not_found")
                     keyboard = (
-                        get_language_keyboard(language) if is_new_user
-                        else await get_main_menu_keyboard(language, telegram_id)
+                        await get_main_menu_keyboard(language, telegram_id)
                     )
                     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                     return
@@ -294,7 +292,8 @@ async def cmd_start(message: Message, state: FSMContext):
                             period_text = f"{months} месяцев"
 
                         if is_new_user:
-                            # Новый пользователь: приветствие + активация + выбор языка
+                            # Новый пользователь: приветствие + активация
+                            # (без выбора языка — дефолт ru)
                             text = i18n_get_text(
                                 language, "gift.activated_welcome",
                                 tariff_name=tariff_name,
@@ -302,7 +301,7 @@ async def cmd_start(message: Message, state: FSMContext):
                             )
                             await message.answer(
                                 text,
-                                reply_markup=get_language_keyboard(language),
+                                reply_markup=await get_main_menu_keyboard(language, telegram_id),
                                 parse_mode="HTML",
                             )
                         else:
@@ -338,10 +337,7 @@ async def cmd_start(message: Message, state: FSMContext):
                         }
                         error_key = error_keys.get(error, "gift.error_invalid")
                         text = i18n_get_text(language, error_key)
-                        if is_new_user:
-                            keyboard = get_language_keyboard(language)
-                        else:
-                            keyboard = await get_main_menu_keyboard(language, telegram_id)
+                        keyboard = await get_main_menu_keyboard(language, telegram_id)
                         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                         logger.warning(f"GIFT_ACTIVATION_FAILED user={telegram_id} code={gift_code} error={error}")
                         return
@@ -349,10 +345,7 @@ async def cmd_start(message: Message, state: FSMContext):
                     logger.exception(f"Gift activation error: user={telegram_id}, code={gift_code}, error={e}")
                     language = await resolve_user_language(telegram_id)
                     text = i18n_get_text(language, "gift.error_invalid")
-                    if is_new_user:
-                        keyboard = get_language_keyboard(language)
-                    else:
-                        keyboard = await get_main_menu_keyboard(language, telegram_id)
+                    keyboard = await get_main_menu_keyboard(language, telegram_id)
                     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                     return
 
@@ -448,9 +441,25 @@ async def cmd_start(message: Message, state: FSMContext):
                 }
             )
     
-    # Phase 4: ALWAYS show language selection first (pre-language-binding screen)
-    text = i18n_get_text(start_language, "lang.select_title")
-    await message.answer(text, reply_markup=get_language_keyboard(start_language), parse_mode="HTML")
+    # 2026-XX: удалили экран выбора языка — сразу показываем главное меню.
+    # Для новых юзеров дефолт 'ru'; переключение на 'en' доступно в
+    # /settings → «Язык». Legacy юзеры с language='de'/'ar'/…'
+    # получают ru через fallback в i18n.get_text.
+    language = await resolve_user_language(telegram_id)
+    text = i18n_get_text(language, "main.welcome")
+    keyboard = await get_main_menu_keyboard(language, telegram_id)
+    try:
+        from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID
+        await message.bot.send_photo(
+            chat_id=telegram_id,
+            photo=MAIN_PHOTO_FILE_ID,
+            caption=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    except Exception:
+        # Fallback без фото если photo_file_id устарел на текущем боте
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 _SHARE_DISCOUNT_PERCENT = 30
@@ -733,10 +742,7 @@ async def _handle_promo_link_start(
     async def _reply(text: str, keyboard=None):
         kb = keyboard
         if kb is None:
-            if is_new_user:
-                kb = get_language_keyboard(language)
-            else:
-                kb = await get_main_menu_keyboard(language, telegram_id)
+            kb = await get_main_menu_keyboard(language, telegram_id)
         try:
             await message.answer(text, reply_markup=kb, parse_mode="HTML")
         except Exception as e:
@@ -838,8 +844,7 @@ async def _handle_promo_link_start(
             # Fallback — покажем главное меню, чтоб юзер не остался
             # с висящим успехом без CTA.
             fallback_kb = (
-                get_language_keyboard(language) if is_new_user
-                else await get_main_menu_keyboard(language, telegram_id)
+                await get_main_menu_keyboard(language, telegram_id)
             )
             await _reply(
                 "Открой «Купить подписку» — скидка применится автоматически.",
@@ -849,8 +854,7 @@ async def _handle_promo_link_start(
 
     # Остальные типы (subscription_days, bypass_gb) — обычное меню.
     keyboard = (
-        get_language_keyboard(language) if is_new_user
-        else await get_main_menu_keyboard(language, telegram_id)
+        await get_main_menu_keyboard(language, telegram_id)
     )
     header = "🎉 <b>Награда активирована!</b>\n\n"
     await _reply(header + applied_text, keyboard=keyboard)

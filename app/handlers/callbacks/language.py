@@ -61,7 +61,10 @@ async def callback_language(callback: CallbackQuery):
     if not await ensure_db_ready_callback(callback):
         return
 
-    language = callback.data.split("_")[1]
+    lang_code = callback.data.split("_")[1]
+    if lang_code not in ("ru", "en"):
+        lang_code = "ru"
+    language = lang_code
     telegram_id = callback.from_user.id
 
     await database.update_user_language(telegram_id, language)
