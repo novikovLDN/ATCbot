@@ -165,7 +165,32 @@ async def get_effective_price(
 
 
 async def list_all_prices() -> list[Dict[str, Any]]:
-    """Все тарифы × периоды с их эффективными ценами. Для админ-UI."""
+    """Все тарифы × периоды с их эффективными ценами. Для админ-UI.
+
+    ДВА РОДА СТРОК, И РАЗНИЦА МЕЖДУ НИМИ — НЕ КОСМЕТИКА.
+
+        editable=True   тарифы из config.TARIFFS. Их цену можно
+                        переопределить (tariff_price_overrides) и на них
+                        действует глобальная скидка — обе правки доходят
+                        до покупателя через get_effective_price.
+
+        editable=False  комбо-тарифы из config.COMBO_TARIFFS. Их цена
+                        приходит в расчёт отдельным путём
+                        (base_price_override_rubles в
+                        database.subscription_pricing), мимо этого
+                        модуля. Ни override, ни глобальная скидка на них
+                        НЕ действуют.
+
+    ЗАЧЕМ ТОГДА ВООБЩЕ ОТДАВАТЬ КОМБО. Затем, что комбо — отдельный
+    продаваемый продукт со своей ценой, а не разновидность «Плюс».
+    Экран цен, на котором его нет, врёт молчанием: человек видит четыре
+    цены Плюса, меняет их и думает, что закрыл прайс целиком. Строка с
+    editable=False говорит правду: цена такая, а меняется она в конфиге.
+
+    Сделаете комбо editable, не научив расчёт цены читать override, —
+    получите поле ввода, которое сохраняется и ни на что не влияет. Это
+    хуже, чем его отсутствие.
+    """
     await _ensure_cache()
     out = []
     for tariff, periods in config.TARIFFS.items():
@@ -182,6 +207,26 @@ async def list_all_prices() -> list[Dict[str, Any]]:
                 "discount_percent": ep.discount_percent,
                 "is_overridden": ep.is_overridden,
                 "has_discount": ep.has_discount,
+                "editable": True,
+            })
+    for tariff, periods in (getattr(config, "COMBO_TARIFFS", {}) or {}).items():
+        for period_days, meta in periods.items():
+            price = int((meta or {}).get("price") or 0)
+            if price <= 0:
+                continue
+            out.append({
+                "tariff": tariff,
+                "period_days": int(period_days),
+                "base_price": price,
+                "config_price": price,
+                "effective_price": price,
+                "discount_percent": 0,
+                "is_overridden": False,
+                "has_discount": False,
+                "editable": False,
+                # Сколько ГБ обхода входит в пакет — единственное, чем
+                # комбо отличается от одноимённой подписки на экране.
+                "bypass_gb": int((meta or {}).get("gb") or 0),
             })
     return out
 

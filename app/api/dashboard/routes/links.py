@@ -1,15 +1,26 @@
-"""Marketing links — stats + promo. CRUD + summary for admin dashboard.
+"""Маркетинговые ссылки: статистические и промо.
 
-Two families:
-  /links/stats/*  — attribution / funnel links
-  /links/promo/*  — reward links (subscription / discount / GB)
+Два семейства:
+  /links/stats/*  — ссылки атрибуции: клик → регистрация → триал → покупка
+  /links/promo/*  — ссылки-награды: подписка, скидка, гигабайты обхода
 
-Routes require admin JWT (Depends(require_admin) mounted at router level).
-Deeplinks generated on the client from `slug` + configured bot username;
-we return slug + a ready-made `t_me_url` for convenience.
+Все маршруты требуют admin-JWT (Depends(require_admin) на роутере).
+Наружу вместе со slug отдаётся готовый t_me_url — собирать диплинк на
+клиенте нельзя: имя бота живёт в config, и на клиенте оно рано или
+поздно разойдётся с настоящим.
+
+ПОРЯДОК МАРШРУТОВ
+    Литеральные /stats и /promo объявлены ПЕРЕД /stats/{link_id} и
+    /promo/{link_id}. Переставите — список уедет в обработчик по
+    идентификатору и вернёт 422.
+
+СЕКРЕТЫ
+    Текст исключения наружу — только через scrub_secrets.
 """
 from __future__ import annotations
 
+import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -20,7 +31,9 @@ import config
 import database
 from app.api.dashboard.deps import require_admin
 from app.events import bus
+from app.utils.security import scrub_secrets
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -58,6 +71,26 @@ def _stat_url(slug: str) -> str:
     return f"https://t.me/{bot}?start=s-{slug}"
 
 
+def _reward_meta(value: Any) -> Dict[str, Any]:
+    """Привести reward_meta к словарю.
+
+    asyncpg отдаёт JSONB то словарём, то строкой — зависит от версии и от
+    того, зарегистрирован ли кодек. Слой выдачи награды это уже учитывает
+    (database/marketing_links.try_redeem_promo_link), а список наружу
+    отдавал как есть: экран получал строку вместо объекта и молча терял
+    тариф и срок скидки в подписи к ссылке.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def _promo_url(slug: str) -> str:
     bot = _bot_username()
     if not bot:
@@ -80,7 +113,7 @@ async def stats_links_list():
     try:
         links = await database.list_stats_links(include_inactive=True)
     except Exception as e:
-        raise HTTPException(500, f"list_failed: {e}")
+        raise HTTPException(500, f"list_failed: {scrub_secrets(e)}")
     out: List[Dict[str, Any]] = []
     for link in links:
         try:
@@ -90,6 +123,7 @@ async def stats_links_list():
         merged = _serialize(summary or link)
         merged["t_me_url"] = _stat_url(link["slug"])
         out.append(merged)
+    logger.info("links.stats_list ok: %d ссылок", len(out))
     return out
 
 
@@ -102,8 +136,12 @@ async def stats_link_create(
     try:
         existing = await database.list_stats_links(include_inactive=False)
     except Exception as e:
-        raise HTTPException(500, f"list_failed: {e}")
+        raise HTTPException(500, f"list_failed: {scrub_secrets(e)}")
     if len(existing) >= MAX_ACTIVE_STATS_LINKS:
+        logger.info(
+            "links.stats_create rejected: активных уже %d из %d",
+            len(existing), MAX_ACTIVE_STATS_LINKS,
+        )
         raise HTTPException(
             409,
             f"limit_reached (max {MAX_ACTIVE_STATS_LINKS} active). "
@@ -115,13 +153,17 @@ async def stats_link_create(
             created_by=int(admin["sub"]),
         )
     except Exception as e:
-        raise HTTPException(500, f"create_failed: {e}")
+        raise HTTPException(500, f"create_failed: {scrub_secrets(e)}")
     bus.publish({
         "type": "stats_link:created",
         "link_id": link["id"],
         "slug": link["slug"],
         "by": admin.get("sub"),
     })
+    logger.info(
+        "links.stats_create id=%s slug=%s by admin=%s",
+        link["id"], link["slug"], admin.get("sub"),
+    )
     payload = _serialize(link)
     payload["t_me_url"] = _stat_url(link["slug"])
     return payload
@@ -132,9 +174,10 @@ async def stats_link_detail(link_id: int = Path(..., gt=0)):
     try:
         summary = await database.get_stats_link_summary(link_id)
     except Exception as e:
-        raise HTTPException(500, f"detail_failed: {e}")
+        raise HTTPException(500, f"detail_failed: {scrub_secrets(e)}")
     if not summary:
         raise HTTPException(404, "Not found")
+    logger.info("links.stats_detail id=%s", link_id)
     out = _serialize(summary)
     out["t_me_url"] = _stat_url(summary["slug"])
     return out
@@ -148,10 +191,11 @@ async def stats_link_deactivate(
     try:
         ok = await database.set_stats_link_active(link_id, active=False)
     except Exception as e:
-        raise HTTPException(500, f"deactivate_failed: {e}")
+        raise HTTPException(500, f"deactivate_failed: {scrub_secrets(e)}")
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "stats_link:deactivated", "link_id": link_id, "by": admin.get("sub")})
+    logger.info("links.stats_deactivate id=%s by admin=%s", link_id, admin.get("sub"))
     return {"ok": True}
 
 
@@ -163,10 +207,11 @@ async def stats_link_reactivate(
     try:
         ok = await database.set_stats_link_active(link_id, active=True)
     except Exception as e:
-        raise HTTPException(500, f"reactivate_failed: {e}")
+        raise HTTPException(500, f"reactivate_failed: {scrub_secrets(e)}")
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "stats_link:reactivated", "link_id": link_id, "by": admin.get("sub")})
+    logger.info("links.stats_reactivate id=%s by admin=%s", link_id, admin.get("sub"))
     return {"ok": True}
 
 
@@ -178,10 +223,11 @@ async def stats_link_delete(
     try:
         ok = await database.delete_stats_link(link_id)
     except Exception as e:
-        raise HTTPException(500, f"delete_failed: {e}")
+        raise HTTPException(500, f"delete_failed: {scrub_secrets(e)}")
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "stats_link:deleted", "link_id": link_id, "by": admin.get("sub")})
+    logger.info("links.stats_delete id=%s by admin=%s", link_id, admin.get("sub"))
     return {"ok": True}
 
 
@@ -242,12 +288,14 @@ async def promo_links_list():
     try:
         links = await database.list_promo_links(include_inactive=True)
     except Exception as e:
-        raise HTTPException(500, f"list_failed: {e}")
+        raise HTTPException(500, f"list_failed: {scrub_secrets(e)}")
     out: List[Dict[str, Any]] = []
     for link in links:
         row = _serialize(link)
+        row["reward_meta"] = _reward_meta(link.get("reward_meta"))
         row["t_me_url"] = _promo_url(link["slug"])
         out.append(row)
+    logger.info("links.promo_list ok: %d ссылок", len(out))
     return out
 
 
@@ -260,8 +308,12 @@ async def promo_link_create(
     try:
         existing = await database.list_promo_links(include_inactive=False)
     except Exception as e:
-        raise HTTPException(500, f"list_failed: {e}")
+        raise HTTPException(500, f"list_failed: {scrub_secrets(e)}")
     if len(existing) >= MAX_ACTIVE_PROMO_LINKS:
+        logger.info(
+            "links.promo_create rejected: активных уже %d из %d",
+            len(existing), MAX_ACTIVE_PROMO_LINKS,
+        )
         raise HTTPException(
             409,
             f"limit_reached (max {MAX_ACTIVE_PROMO_LINKS} active). "
@@ -283,9 +335,9 @@ async def promo_link_create(
             created_by=int(admin["sub"]),
         )
     except ValueError as ve:
-        raise HTTPException(400, str(ve))
+        raise HTTPException(400, str(scrub_secrets(ve)))
     except Exception as e:
-        raise HTTPException(500, f"create_failed: {e}")
+        raise HTTPException(500, f"create_failed: {scrub_secrets(e)}")
     bus.publish({
         "type": "promo_link:created",
         "link_id": link["id"],
@@ -294,7 +346,13 @@ async def promo_link_create(
         "reward_value": body.reward_value,
         "by": admin.get("sub"),
     })
+    logger.info(
+        "links.promo_create id=%s slug=%s награда=%s/%s by admin=%s",
+        link["id"], link["slug"], body.reward_type, body.reward_value,
+        admin.get("sub"),
+    )
     payload = _serialize(link)
+    payload["reward_meta"] = _reward_meta(link.get("reward_meta"))
     payload["t_me_url"] = _promo_url(link["slug"])
     return payload
 
@@ -304,10 +362,12 @@ async def promo_link_detail(link_id: int = Path(..., gt=0)):
     try:
         summary = await database.get_promo_link_summary(link_id)
     except Exception as e:
-        raise HTTPException(500, f"detail_failed: {e}")
+        raise HTTPException(500, f"detail_failed: {scrub_secrets(e)}")
     if not summary:
         raise HTTPException(404, "Not found")
+    logger.info("links.promo_detail id=%s", link_id)
     out = _serialize(summary)
+    out["reward_meta"] = _reward_meta(summary.get("reward_meta"))
     out["t_me_url"] = _promo_url(summary["slug"])
     return out
 
@@ -320,10 +380,11 @@ async def promo_link_deactivate(
     try:
         ok = await database.set_promo_link_active(link_id, active=False)
     except Exception as e:
-        raise HTTPException(500, f"deactivate_failed: {e}")
+        raise HTTPException(500, f"deactivate_failed: {scrub_secrets(e)}")
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "promo_link:deactivated", "link_id": link_id, "by": admin.get("sub")})
+    logger.info("links.promo_deactivate id=%s by admin=%s", link_id, admin.get("sub"))
     return {"ok": True}
 
 
@@ -335,10 +396,11 @@ async def promo_link_reactivate(
     try:
         ok = await database.set_promo_link_active(link_id, active=True)
     except Exception as e:
-        raise HTTPException(500, f"reactivate_failed: {e}")
+        raise HTTPException(500, f"reactivate_failed: {scrub_secrets(e)}")
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "promo_link:reactivated", "link_id": link_id, "by": admin.get("sub")})
+    logger.info("links.promo_reactivate id=%s by admin=%s", link_id, admin.get("sub"))
     return {"ok": True}
 
 
@@ -350,8 +412,9 @@ async def promo_link_delete(
     try:
         ok = await database.delete_promo_link(link_id)
     except Exception as e:
-        raise HTTPException(500, f"delete_failed: {e}")
+        raise HTTPException(500, f"delete_failed: {scrub_secrets(e)}")
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "promo_link:deleted", "link_id": link_id, "by": admin.get("sub")})
+    logger.info("links.promo_delete id=%s by admin=%s", link_id, admin.get("sub"))
     return {"ok": True}

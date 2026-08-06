@@ -1,374 +1,214 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  Users,
-  Wallet,
-  Coins,
-  ChevronRight,
-  Search,
-  ArrowDownUp,
-} from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import { Search } from "lucide-react";
+
 import { endpoints } from "@/lib/api";
-import { fmtNum, fmtRub, fmtDate } from "@/lib/format";
-import { StatCard } from "@/components/StatCard";
-import { Spinner } from "@/components/Spinner";
-import { EmptyState } from "@/components/EmptyState";
+import { fmtNum, fmtRub } from "@/lib/format";
+import {
+  Button,
+  DensityToggle,
+  EmptyFailure,
+  Input,
+  LoadingGate,
+  SkeletonTile,
+  StatTile,
+  type Density,
+} from "@/components/ui";
+import {
+  ReferrersTable,
+  SORT_LABEL,
+  type ReferrerSort,
+} from "@/components/monetization/ReferrersTable";
+import { ReferrerPanel } from "@/components/monetization/ReferrerPanel";
 
-type SortBy = "total_revenue" | "invited_count" | "cashback_paid";
+/**
+ * Рефералы — четвёртая вкладка раздела «Монетизация».
+ *
+ * ВСЁ СОСТОЯНИЕ ЭКРАНА В АДРЕСЕ: ?sort=, ?q=, ?id=. Ссылка на конкретного
+ * партнёра работает из переписки и из закладки; кнопка «назад» тоже.
+ *
+ * ЭКРАН ТОЛЬКО ЧИТАЕТ. Процент кешбэка и выплаты меняются не здесь —
+ * кнопок правки тут нет намеренно, чтобы «посмотреть, кто сколько
+ * привёл» не соседствовало с «изменить условия» на расстоянии промаха.
+ *
+ * ОТКАЗ НЕ РИСУЕТ НОЛЬ. «0 ₽ дохода с партнёрки» и «не смогли посчитать»
+ * читаются совершенно по-разному, и первое — успокаивающая неправда.
+ */
 
-const SORT_LABELS: Record<SortBy, string> = {
-  total_revenue: "По доходу",
-  invited_count: "По приглашённым",
-  cashback_paid: "По cashback",
-};
+const DENSITY_KEY = "atlas.referrals.density";
+
+function readDensity(): Density {
+  const saved = localStorage.getItem(DENSITY_KEY);
+  return saved === "compact" || saved === "comfortable" ? saved : "comfortable";
+}
 
 export function Referrals() {
+  const [params, setParams] = useSearchParams();
+  const [density, setDensity] = useState<Density>(readDensity);
+
+  useEffect(() => localStorage.setItem(DENSITY_KEY, density), [density]);
+
+  const rawSort = params.get("sort");
+  const sort: ReferrerSort =
+    rawSort === "invited_count" || rawSort === "cashback_paid" ? rawSort : "total_revenue";
+  const query = params.get("q") ?? "";
+  const rawId = params.get("id");
+  const selected = rawId && /^\d+$/.test(rawId) ? Number(rawId) : null;
+
+  // Поле ввода живёт своей жизнью до нажатия «Найти»: запрос на каждую
+  // букву дёргал бы сервер, а список — не подсказка.
+  const [draft, setDraft] = useState(query);
+  useEffect(() => setDraft(query), [query]);
+
+  const patch = (next: Record<string, string | null>) => {
+    const usp = new URLSearchParams(params);
+    for (const [key, value] of Object.entries(next)) {
+      if (value === null || value === "") usp.delete(key);
+      else usp.set(key, value);
+    }
+    setParams(usp, { replace: true });
+  };
+
   const overall = useQuery({
     queryKey: ["referrals", "overall"],
     queryFn: endpoints.referralsOverall,
+    staleTime: 60_000,
   });
-
-  const [sortBy, setSortBy] = useState<SortBy>("total_revenue");
-  const [q, setQ] = useState("");
-  const [searchSubmitted, setSearchSubmitted] = useState("");
-
-  const top = useQuery({
-    queryKey: ["referrals", "top", sortBy, searchSubmitted],
-    queryFn: () =>
-      endpoints.referralsTop({
-        sort_by: sortBy,
-        sort_order: "DESC",
-        limit: 50,
-        q: searchSubmitted || undefined,
-      }),
-  });
-
-  const [selected, setSelected] = useState<number | null>(null);
 
   return (
-    <div className="space-y-6">
-      <header>
-        <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-          Партнёрка
+    <div className="mx-auto max-w-[1400px] space-y-4">
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-fg">Рефералы</h1>
+          <p className="mt-0.5 text-base text-fg-muted">
+            Кто приводит покупателей, сколько они принесли и сколько за это
+            выплачено кешбэком.
+          </p>
         </div>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg md:text-3xl">
-          Рефералы
-        </h1>
+        <DensityToggle value={density} onChange={setDensity} className="hidden md:inline-flex" />
       </header>
 
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard
-          label="Всего реферреров"
-          value={fmtNum(asNum(overall.data?.total_referrers))}
-          icon={Users}
-          loading={overall.isLoading}
+      {overall.isError ? (
+        <EmptyFailure
+          what="итоги партнёрской программы"
+          reason="Не смогли посчитать. Нули здесь читались бы как «партнёрка ничего не приносит» — это не так."
+          onRetry={() => overall.refetch()}
         />
-        <StatCard
-          label="Приглашённых"
-          value={fmtNum(asNum(overall.data?.total_referrals))}
-          tone="accent"
+      ) : (
+        <LoadingGate
           loading={overall.isLoading}
-        />
-        <StatCard
-          label="Доход с партнёрки"
-          value={fmtRub(asNum(overall.data?.total_revenue))}
-          tone="success"
-          icon={Wallet}
-          loading={overall.isLoading}
-        />
-        <StatCard
-          label="Cashback выплачено"
-          value={fmtRub(asNum(overall.data?.total_cashback_paid))}
-          icon={Coins}
-          loading={overall.isLoading}
-        />
-      </section>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_400px]">
-        <div className="card p-5">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-                Топ реферреров
-              </div>
-              <h2 className="text-lg font-semibold text-fg">Лидерборд</h2>
+          skeleton={
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {[0, 1, 2, 3].map((i) => (
+                <SkeletonTile key={i} />
+              ))}
             </div>
-            <div className="flex items-center gap-2">
-              <select
-                className="input w-auto"
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as SortBy)}
-              >
-                {(Object.keys(SORT_LABELS) as SortBy[]).map((k) => (
-                  <option key={k} value={k}>
-                    {SORT_LABELS[k]}
-                  </option>
-                ))}
-              </select>
-              <ArrowDownUp className="hidden h-3.5 w-3.5 text-fg-subtle md:block" />
-            </div>
+          }
+          message="Считаю итоги партнёрки"
+        >
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatTile
+              label="Партнёров"
+              value={fmtNum(overall.data?.total_referrers)}
+              hint="привели хотя бы одного человека"
+            />
+            <StatTile
+              label="Приглашённых"
+              value={fmtNum(overall.data?.total_referrals)}
+              hint="всего пришло по ссылкам"
+            />
+            <StatTile
+              label="Выручка с партнёрки"
+              value={fmtRub(overall.data?.total_revenue)}
+              tone="money-in"
+              hint="покупки приглашённых"
+            />
+            <StatTile
+              label="Выплачено кешбэком"
+              value={fmtRub(overall.data?.total_cashback_paid)}
+              tone="money-out"
+              hint="начислено партнёрам на баланс"
+            />
           </div>
+        </LoadingGate>
+      )}
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              setSearchSubmitted(q.trim());
-            }}
-            className="mb-4 flex items-center gap-2 rounded-xl border border-border bg-bg-subtle/60 px-3 py-1"
+      <div className="flex flex-wrap items-center gap-2">
+        <form
+          className="flex min-w-[260px] flex-1 items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            patch({ q: draft.trim() || null });
+          }}
+        >
+          <div className="flex-1">
+            <Input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Telegram ID или @username партнёра"
+              leading={<Search className="h-3.5 w-3.5" />}
+              inputMode="search"
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              aria-label="Поиск партнёра"
+            />
+          </div>
+          <Button type="submit" variant="primary">
+            Найти
+          </Button>
+        </form>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-fg-muted" htmlFor="referrals-sort">
+            Сортировка
+          </label>
+          <select
+            id="referrals-sort"
+            value={sort}
+            onChange={(e) => patch({ sort: e.target.value === "total_revenue" ? null : e.target.value })}
+            className="h-9 rounded-md border border-border-control bg-bg-card px-2 text-base text-fg"
           >
-            <Search className="h-3.5 w-3.5 text-fg-subtle" />
-            <input
-              className="flex-1 bg-transparent py-1.5 text-sm outline-none"
-              placeholder="Поиск по ID или @username..."
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-            {q && (
-              <button
-                type="button"
-                onClick={() => {
-                  setQ("");
-                  setSearchSubmitted("");
-                }}
-                className="text-xs text-fg-subtle hover:text-fg"
-              >
-                Очистить
-              </button>
-            )}
-          </form>
+            {(Object.keys(SORT_LABEL) as ReferrerSort[]).map((k) => (
+              <option key={k} value={k}>
+                {SORT_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
 
-          {top.isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-fg-muted">
-              <Spinner /> Загружаю...
-            </div>
-          ) : !top.data || top.data.length === 0 ? (
-            <EmptyState
-              icon={Users}
-              title="Пусто"
-              description="Под текущие фильтры реферреров нет."
-            />
-          ) : (
-            <ul className="divide-y divide-border/60">
-              {top.data.map((r, i) => {
-                const id = Number(r.referrer_id ?? 0);
-                if (!id) return null;
-                return (
-                  <li key={id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelected(id)}
-                      className={
-                        selected === id
-                          ? "flex w-full items-center gap-3 rounded-lg bg-accent/10 px-2 py-3 text-left text-fg shadow-[inset_0_0_0_1px_rgba(14,165,233,0.25)] transition"
-                          : "flex w-full items-center gap-3 rounded-lg px-2 py-3 text-left transition hover:bg-accent/[0.04]"
-                      }
-                    >
-                      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-bg-elevated font-mono text-xs text-fg-muted ring-1 ring-border">
-                        {i + 1}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="truncate font-medium text-fg">
-                            {r.username ? `@${String(r.username)}` : `tg:${id}`}
-                          </span>
-                          {typeof r.username === "string" && r.username && (
-                            <span className="font-mono text-[11px] text-fg-subtle">
-                              tg:{id}
-                            </span>
-                          )}
-                          <span className="badge-muted">
-                            {fmtNum(asNum(r.invited_count))} пригл.
-                          </span>
-                          <span className="badge-success">
-                            {fmtRub(asNum(r.total_invited_revenue))} доход
-                          </span>
-                        </div>
-                        <div className="mt-1 text-xs text-fg-muted">
-                          cashback {fmtRub(asNum(r.total_cashback_paid))}
-                          {r.first_referral_date
-                            ? ` · с ${fmtDate(String(r.first_referral_date))}`
-                            : ""}
-                        </div>
-                      </div>
-                      <ChevronRight className="h-4 w-4 shrink-0 text-fg-subtle" />
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]">
+        {/* На телефоне открытая карточка заменяет список: две колонки на
+            375 px превращаются в кашу. */}
+        <div className={selected !== null ? "hidden lg:block" : undefined}>
+          <ReferrersTable
+            sort={sort}
+            query={query}
+            selected={selected}
+            onSelect={(id) => patch({ id: String(id) })}
+            onResetFilters={() => patch({ q: null, sort: null })}
+            density={density}
+          />
         </div>
 
-        {selected ? (
-          <ReferrerDetail referrerId={selected} />
+        {selected !== null ? (
+          <div className="lg:sticky lg:top-4 lg:self-start">
+            <div className="mb-2 lg:hidden">
+              <Button size="sm" onClick={() => patch({ id: null })}>
+                ← К списку
+              </Button>
+            </div>
+            <ReferrerPanel referrerId={selected} onClose={() => patch({ id: null })} />
+          </div>
         ) : (
-          <div className="card hidden p-6 lg:block">
-            <EmptyState
-              icon={Users}
-              title="Выбери реферрера"
-              description="Кликни по строке — увидишь детали и историю выплат."
-            />
+          <div className="hidden rounded-lg border border-dashed border-border p-6 text-center text-base text-fg-muted lg:block">
+            Выберите партнёра слева — здесь будет видно, кого он привёл и что
+            ему начислили.
           </div>
         )}
       </div>
     </div>
   );
-}
-
-function ReferrerDetail({ referrerId }: { referrerId: number }) {
-  const detail = useQuery({
-    queryKey: ["referrals", "detail", referrerId],
-    queryFn: () => endpoints.referrerDetail(referrerId),
-  });
-  const history = useQuery({
-    queryKey: ["referrals", "history", referrerId],
-    queryFn: () => endpoints.referrerHistory(referrerId, 100),
-  });
-
-  if (detail.isLoading) {
-    return (
-      <div className="card flex items-center gap-3 p-6 text-sm text-fg-muted">
-        <Spinner /> Загружаю...
-      </div>
-    );
-  }
-  if (detail.isError || !detail.data) {
-    return (
-      <EmptyState
-        icon={Users}
-        title="Не удалось загрузить"
-        description="Попробуй обновить страницу."
-      />
-    );
-  }
-
-  const d = detail.data;
-  const invited = (d.invited_users as Array<Record<string, unknown>> | undefined) ?? [];
-
-  return (
-    <div className="space-y-4 animate-fade-in">
-      <div className="card p-5">
-        <div className="text-xs uppercase tracking-wider text-fg-subtle">
-          Реферрер
-        </div>
-        <h3 className="mt-1 text-lg font-semibold text-fg">
-          {d.username ? `@${String(d.username)}` : `tg:${referrerId}`}
-        </h3>
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <Tile label="Пригласил" value={fmtNum(asNum(d.invited_count))} />
-          <Tile label="Купили" value={fmtNum(asNum(d.paid_count))} />
-          <Tile
-            label="Доход"
-            value={fmtRub(asNum(d.total_invited_revenue))}
-            tone="success"
-          />
-          <Tile
-            label="Cashback"
-            value={fmtRub(asNum(d.total_cashback_paid))}
-          />
-        </div>
-        <div className="mt-3 text-xs text-fg-muted">
-          Текущий процент:{" "}
-          <b className="text-fg">
-            {fmtNum(asNum(d.current_cashback_percent))}%
-          </b>
-        </div>
-      </div>
-
-      <div className="card p-5">
-        <div className="mb-3 text-xs font-medium uppercase tracking-wider text-fg-subtle">
-          Приглашённые ({invited.length})
-        </div>
-        {invited.length === 0 ? (
-          <div className="text-sm text-fg-muted">Никого нет.</div>
-        ) : (
-          <ul className="max-h-[300px] divide-y divide-border/60 overflow-y-auto">
-            {invited.slice(0, 30).map((u, i) => (
-              <li key={i} className="flex items-center justify-between py-2 text-sm">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium text-fg">
-                    {u.username
-                      ? `@${String(u.username)}`
-                      : `tg:${String(u.telegram_id ?? "—")}`}
-                  </div>
-                  {typeof u.registered_at === "string" && (
-                    <div className="text-xs text-fg-muted">
-                      {fmtDate(u.registered_at)}
-                    </div>
-                  )}
-                </div>
-                {u.paid_amount ? (
-                  <span className="badge-success">
-                    {fmtRub(asNum(u.paid_amount))}
-                  </span>
-                ) : (
-                  <span className="badge-muted">не платил</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div className="card p-5">
-        <div className="mb-3 text-xs font-medium uppercase tracking-wider text-fg-subtle">
-          История cashback ({history.data?.total ?? 0})
-        </div>
-        {history.isLoading ? (
-          <Spinner />
-        ) : !history.data || history.data.rows.length === 0 ? (
-          <div className="text-sm text-fg-muted">Нет начислений.</div>
-        ) : (
-          <ul className="max-h-[400px] divide-y divide-border/60 overflow-y-auto">
-            {history.data.rows.map((r, i) => (
-              <li key={i} className="flex items-center justify-between py-2 text-sm">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-fg">
-                    {r.referred_username
-                      ? `@${String(r.referred_username)}`
-                      : `tg:${String(r.referred_user_id ?? "—")}`}
-                  </div>
-                  <div className="text-xs text-fg-muted">
-                    {fmtDate(String(r.created_at ?? ""))}
-                  </div>
-                </div>
-                <span className="badge-success">
-                  {fmtRub(asNum(r.reward_amount))}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Tile({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "success";
-}) {
-  const text = tone === "success" ? "text-success" : "text-fg";
-  return (
-    <div className="rounded-xl border border-border bg-bg-subtle/60 p-3">
-      <div className="text-[11px] uppercase tracking-wider text-fg-subtle">
-        {label}
-      </div>
-      <div className={`mt-1 truncate text-lg font-semibold ${text}`}>{value}</div>
-    </div>
-  );
-}
-
-function asNum(v: unknown): number | undefined {
-  if (typeof v === "number") return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : undefined;
-  }
-  return undefined;
 }

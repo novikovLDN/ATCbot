@@ -330,6 +330,177 @@ export interface PurchaseDetail {
   }>;
 }
 
+// ── Монетизация: цены, промокоды, ссылки, рефералы, подарочные ГБ ────
+//
+// ЗДЕСЬ ДЕНЬГИ, ПОЭТОМУ ТИПЫ, А НЕ Record<string, unknown>. Пять экранов
+// раздела раньше читали ответы как мешок неизвестных ключей и приводили
+// значения на месте — так в промокодах прижилась опечатка `uses_count`
+// вместо `used_count`: счётчик применений молча показывал ноль, и по
+// экрану это выглядело как «кодом ещё не пользовались».
+//
+// Все суммы приходят в РУБЛЯХ: слой базы делит копейки на сто на выходе
+// (database/referral_analytics.py и др.). Ещё раз делить нельзя.
+
+/** Строка прайса: GET /pricing/tariffs. */
+export interface TariffPriceRow {
+  tariff: string;
+  period_days: number;
+  /** Действующая база: переопределение, если задано, иначе config. */
+  base_price: number;
+  /** Всегда из config.TARIFFS — то, к чему вернёт сброс переопределения. */
+  config_price: number;
+  /** Что заплатит покупатель: база после глобальной скидки. */
+  effective_price: number;
+  discount_percent: number;
+  is_overridden: boolean;
+  has_discount: boolean;
+  /** false у комбо: их цена живёт в config.COMBO_TARIFFS и ни
+   *  переопределением, ни глобальной скидкой не меняется. */
+  editable: boolean;
+  /** Только у комбо: сколько ГБ обхода входит в пакет. */
+  bypass_gb?: number;
+}
+
+/** Строка промокода: GET /promo/list. */
+export interface PromoCodeRow {
+  id?: number;
+  code: string;
+  discount_percent: number;
+  max_uses: number | null;
+  /** Сколько раз код УЖЕ применили. Не uses_count — такого поля нет. */
+  used_count: number | null;
+  is_active: boolean;
+  deleted_at?: string | null;
+  expires_at: string | null;
+  created_at: string | null;
+  created_by?: number | null;
+  /** Считается в SQL: флаг И не удалён И не истёк И лимит не исчерпан.
+   *  Экран показывает именно это, а не голый is_active. */
+  is_effective_active?: boolean;
+}
+
+/** Статистическая ссылка с воронкой: GET /links/stats. */
+export interface StatsLinkRow {
+  id: number;
+  name: string | null;
+  slug: string;
+  t_me_url: string;
+  is_active: boolean;
+  created_at: string | null;
+  deactivated_at: string | null;
+  total_clicks: number | null;
+  unique_visitors: number | null;
+  new_users: number | null;
+  trials_activated: number | null;
+  paid_users: number | null;
+  total_revenue_rubles: number | null;
+}
+
+export type PromoLinkReward =
+  | "subscription_days"
+  | "tariff_discount"
+  | "bypass_discount"
+  | "bypass_gb";
+
+/** Промо-ссылка (награда по переходу): GET /links/promo. */
+export interface PromoLinkRow {
+  id: number;
+  name: string | null;
+  slug: string;
+  t_me_url: string;
+  is_active: boolean;
+  reward_type: PromoLinkReward;
+  reward_value: number;
+  reward_meta: Record<string, unknown> | null;
+  used_count: number | null;
+  max_uses_total: number | null;
+  max_uses_per_user: number | null;
+  expires_at: string | null;
+  created_at: string | null;
+  deactivated_at: string | null;
+}
+
+/** Подарочная ссылка на ГБ обхода: GET /bgift/list и /bgift/{id}. */
+export interface GiftLinkRow {
+  id: number;
+  code: string;
+  /** Готовый диплинк с сервера. Собирать его на клиенте нельзя: имя
+   *  бота живёт в config и разойдётся с зашитым в разметку. */
+  t_me_url: string;
+  gb_amount: number;
+  validity_days: number;
+  max_uses: number;
+  /** Сколько активаций уже израсходовано. В детали приходит отдельным
+   *  запросом и может быть null, если счётчик не сошёлся. */
+  redemption_count: number | null;
+  expires_at: string | null;
+  created_at: string | null;
+  deleted_at: string | null;
+  created_by?: number | null;
+}
+
+export interface GiftRedemptionRow {
+  id: number;
+  link_id: number;
+  telegram_id: number | null;
+  gb_granted: number | null;
+  redeemed_at: string | null;
+}
+
+/** Числа партнёрской программы: GET /referrals/overall. Суммы в рублях. */
+export interface ReferralsOverall {
+  total_referrers: number | null;
+  total_referrals: number | null;
+  total_revenue: number | null;
+  total_cashback_paid: number | null;
+  avg_cashback_per_referrer?: number | null;
+}
+
+/** Строка лидерборда партнёров: GET /referrals/top. */
+export interface ReferrerRow {
+  referrer_id: number;
+  username: string | null;
+  invited_count: number | null;
+  paid_count: number | null;
+  trial_count?: number | null;
+  conversion_percent?: number | null;
+  total_invited_revenue: number | null;
+  total_cashback_paid: number | null;
+  current_cashback_percent?: number | null;
+  first_referral_date: string | null;
+}
+
+/**
+ * Карточка партнёра: GET /referrals/{id}.
+ *
+ * Ключ списка — invited_list, а не invited_users: второго сервер никогда
+ * не отдавал, и экран, читавший его, показывал «никого нет» у партнёра с
+ * сотней приглашённых. Итоговые числа сервер подмешивает из агрегата
+ * лидерборда, поэтому они необязательные — агрегат может не сойтись.
+ */
+export interface ReferrerDetailData extends Partial<ReferrerRow> {
+  referrer_id: number;
+  username: string | null;
+  invited_list?: Array<{
+    invited_user_id?: number | null;
+    username?: string | null;
+    registered_at?: string | null;
+    first_payment_date?: string | null;
+    /** Рубли: слой базы уже поделил копейки на сто. */
+    purchase_amount?: number | null;
+    cashback_amount?: number | null;
+    purchase_id?: number | null;
+  }>;
+}
+
+/** Начисление кешбэка: GET /referrals/{id}/history. */
+export interface ReferralRewardRow {
+  referred_user_id?: number | null;
+  referred_username?: string | null;
+  reward_amount?: number | null;
+  created_at?: string | null;
+}
+
 export const endpoints = {
   authStatus: () =>
     api.get<{
@@ -653,8 +824,7 @@ export const endpoints = {
       body,
     ),
 
-  referralsOverall: () =>
-    api.get<Record<string, unknown>>("/referrals/overall"),
+  referralsOverall: () => api.get<ReferralsOverall>("/referrals/overall"),
   referralsTop: (params: {
     sort_by?: "total_revenue" | "invited_count" | "cashback_paid";
     sort_order?: "ASC" | "DESC";
@@ -669,45 +839,46 @@ export const endpoints = {
     if (params.offset !== undefined) usp.set("offset", String(params.offset));
     if (params.q) usp.set("q", params.q);
     const qs = usp.toString();
-    return api.get<Array<Record<string, unknown>>>(
-      "/referrals/top" + (qs ? `?${qs}` : ""),
-    );
+    return api.get<ReferrerRow[]>("/referrals/top" + (qs ? `?${qs}` : ""));
   },
   referrerDetail: (id: number) =>
-    api.get<Record<string, unknown>>(`/referrals/${id}`),
+    api.get<ReferrerDetailData>(`/referrals/${id}`),
   referrerHistory: (id: number, limit = 50) =>
-    api.get<{ rows: Array<Record<string, unknown>>; total: number }>(
+    api.get<{ rows: ReferralRewardRow[]; total: number }>(
       `/referrals/${id}/history?limit=${limit}`,
     ),
 
   bgiftSummary: () =>
-    api.get<Record<string, unknown>>("/bgift/summary"),
+    api.get<{
+      total_links: number;
+      active_links: number;
+      total_redemptions: number;
+      total_gb_granted: number;
+    }>("/bgift/summary"),
   bgiftList: (page = 0, page_size = 20, include_deleted = false) =>
-    api.get<Array<Record<string, unknown>>>(
+    api.get<GiftLinkRow[]>(
       `/bgift/list?page=${page}&page_size=${page_size}&include_deleted=${include_deleted}`,
     ),
-  bgiftDetail: (id: number) =>
-    api.get<Record<string, unknown>>(`/bgift/${id}`),
+  bgiftDetail: (id: number) => api.get<GiftLinkRow>(`/bgift/${id}`),
   bgiftRedemptions: (id: number, limit = 100) =>
-    api.get<{ rows: Array<Record<string, unknown>>; total: number }>(
+    api.get<{ rows: GiftRedemptionRow[]; total: number }>(
       `/bgift/${id}/redemptions?limit=${limit}`,
     ),
   bgiftCreate: (body: {
     gb_amount: number;
     validity_days: number;
     max_uses: number;
-  }) => api.post<Record<string, unknown>>("/bgift", body),
+  }) => api.post<GiftLinkRow>("/bgift", body),
   bgiftDelete: (id: number) => api.del<{ ok: boolean }>(`/bgift/${id}`),
 
   userDelete: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}`),
 
   // ── Marketing links: stats + promo ─────────────────────────────────
-  statsLinksList: () =>
-    api.get<Array<Record<string, unknown>>>("/links/stats"),
+  statsLinksList: () => api.get<StatsLinkRow[]>("/links/stats"),
   statsLinkCreate: (body: { name: string }) =>
-    api.post<Record<string, unknown>>("/links/stats", body),
+    api.post<StatsLinkRow>("/links/stats", body),
   statsLinkDetail: (id: number) =>
-    api.get<Record<string, unknown>>(`/links/stats/${id}`),
+    api.get<StatsLinkRow>(`/links/stats/${id}`),
   statsLinkDeactivate: (id: number) =>
     api.post<{ ok: boolean }>(`/links/stats/${id}/deactivate`),
   statsLinkReactivate: (id: number) =>
@@ -715,20 +886,17 @@ export const endpoints = {
   statsLinkDelete: (id: number) =>
     api.del<{ ok: boolean }>(`/links/stats/${id}`),
 
-  promoLinksList: () =>
-    api.get<Array<Record<string, unknown>>>("/links/promo"),
+  promoLinksList: () => api.get<PromoLinkRow[]>("/links/promo"),
   promoLinkCreate: (body: {
     name: string;
-    reward_type: "subscription_days" | "tariff_discount" | "bypass_discount" | "bypass_gb";
+    reward_type: PromoLinkReward;
     reward_value: number;
     max_uses_total?: number | null;
     max_uses_per_user?: number;
     reward_meta?: Record<string, unknown>;
     expires_in_hours?: number | null;
-  }) =>
-    api.post<Record<string, unknown>>("/links/promo", body),
-  promoLinkDetail: (id: number) =>
-    api.get<Record<string, unknown>>(`/links/promo/${id}`),
+  }) => api.post<PromoLinkRow>("/links/promo", body),
+  promoLinkDetail: (id: number) => api.get<PromoLinkRow>(`/links/promo/${id}`),
   promoLinkDeactivate: (id: number) =>
     api.post<{ ok: boolean }>(`/links/promo/${id}/deactivate`),
   promoLinkReactivate: (id: number) =>
@@ -741,8 +909,7 @@ export const endpoints = {
   incidentSet: (body: { is_active: boolean; incident_text?: string | null }) =>
     api.post<{ ok: boolean; is_active: boolean }>("/incident", body),
 
-  promoList: () =>
-    api.get<Array<Record<string, unknown>>>("/promo/list"),
+  promoList: () => api.get<PromoCodeRow[]>("/promo/list"),
   promoCreate: (body: {
     code: string;
     discount_percent: number;
@@ -1089,19 +1256,7 @@ export const endpoints = {
     ),
 
   // ── Pricing management (migration 069) ────────────────────────────
-  pricingTariffs: () =>
-    api.get<
-      Array<{
-        tariff: string;
-        period_days: number;
-        base_price: number;
-        config_price: number;
-        effective_price: number;
-        discount_percent: number;
-        is_overridden: boolean;
-        has_discount: boolean;
-      }>
-    >("/pricing/tariffs"),
+  pricingTariffs: () => api.get<TariffPriceRow[]>("/pricing/tariffs"),
   pricingSetOverride: (tariff: string, periodDays: number, priceRub: number) =>
     api.patch<{
       ok: boolean;
