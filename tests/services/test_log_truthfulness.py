@@ -535,15 +535,18 @@ def test_orphan_not_cleaned_records_name_the_entity():
 
 def test_expiry_audit_row_no_longer_claims_a_removal():
     """Аудит уходит в audit_log, то есть в журнал дашборда. Он говорил
-    result=success сразу за заглушкой — читалось как «доступ снят»."""
+    result=success сразу за заглушкой — читалось как «доступ снят».
+
+    Проверка не привязана к месту вызова: запись переехала из фазы 2 в
+    фазу 3, за UPDATE, и текст переехал с ней. Порядок закреплён отдельно —
+    tests/integration/test_vpn_entitlement.py::TestRealtimeExpiryAuditOrder.
+    """
     import database.subscription_state as st
 
     src = inspect.getsource(st.check_and_disable_expired_subscription)
-    idx = src.index("_log_vpn_lifecycle_audit_async")
-    window = src[idx:idx + 1200]
-    assert "no-op stub, nothing removed" in window, (
+    assert "no-op stub, nothing removed" in src, (
         "аудит снова не говорит, что удалять было нечем"
     )
-    assert "disable_remnawave_user_bg" in window, (
+    assert "disable_remnawave_user_bg" in src, (
         "в аудите нет указания, кто снимает доступ на самом деле"
     )

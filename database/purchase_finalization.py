@@ -940,19 +940,30 @@ async def _finalize_purchase_locked(
             # жить в панели. Пользователь не платил, но доступ у него был.
             #
             # Удаляем через API панели — тот же способ, что в перевыпуске ключа.
+            #
+            # delete_user зовётся не напрямую: на руках у нас uuid ПОДКЛЮЧЕНИЯ
+            # (vlessUuid), а DELETE /api/users/{uuid} ждёт внутренний uuid
+            # панели. По первому панель отвечает 404, и компенсация остаётся
+            # мнимой — просто с сетевым вызовом. Идентификатор ищет
+            # orphan_cleanup, он же проверяет, что панель подтвердила удаление:
+            # remnawave_api отдаёт None на любой отказ и ничего не бросает.
             if uuid_to_cleanup_on_failure:
-                uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                try:
-                    from app.services import remnawave_api
-                    await remnawave_api.delete_user(uuid_to_cleanup_on_failure)
+                from app.services.orphan_cleanup import delete_orphan_premium_entity
+                deleted, entity = await delete_orphan_premium_entity(
+                    telegram_id, uuid_to_cleanup_on_failure,
+                )
+                entity_id = entity or uuid_to_cleanup_on_failure
+                uuid_preview = f"{entity_id[:8]}..." if len(entity_id) > 8 else "***"
+                if deleted:
                     logger.critical(
-                        f"ORPHAN_PREVENTED uuid={uuid_preview} reason=phase2_failed "
+                        f"ORPHAN_DELETED uuid={uuid_preview} reason=phase2_failed "
                         f"purchase_id={purchase_id} user={telegram_id} error={tx_err}"
                     )
-                except Exception as remove_err:
+                else:
                     logger.critical(
-                        f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} "
-                        f"purchase_id={purchase_id} user={telegram_id} — удалите сущность "
+                        f"ORPHAN_NOT_CLEANED uuid={uuid_preview} reason=phase2_failed "
+                        f"purchase_id={purchase_id} user={telegram_id} error={tx_err} — "
+                        f"платный доступ остался у неоплатившего, удалите сущность "
                         f"в панели вручную"
                     )
             raise
@@ -960,7 +971,16 @@ async def _finalize_purchase_locked(
             old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
             try:
                 await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
-                logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
+                # Удалять здесь нечего и не нужно, поэтому запись говорит
+                # «пропущено», а не «удалено». Старый uuid — это vlessUuid
+                # прошлой выдачи; provision_subscription переиспользует ту же
+                # premium-сущность в панели и вшивает в неё этот же uuid.
+                # Отдельной сущности под старым uuid не существует, а под
+                # вызовом стоит заглушка снятого xray.
+                logger.info(
+                    "OLD_UUID_REMOVAL_SKIPPED",
+                    extra={"uuid": old_uuid[:8] + "...", "reason": "panel_entity_reused"}
+                )
             except Exception as e:
                 logger.critical(
                     "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",

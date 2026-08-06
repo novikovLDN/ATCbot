@@ -288,31 +288,44 @@ async def finalize_balance_purchase(
                 }
         except Exception as e:
             if uuid_to_cleanup_on_failure:
-                try:
-                    # Компенсация мнимая: safe_remove_vless_user_with_retry ведёт
-                    # в заглушку снятого xray и ничего не удаляет. ORPHAN_PREVENTED
-                    # писался CRITICAL-ом и читался как «поймали и починили», а
-                    # сущность фазы 1 оставалась в панели — доступ без оплаты.
-                    # Настоящее удаление умеет remnawave_api.delete_user, так это
-                    # сделано в database/purchase_finalization.py.
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
+                # Транзакция откатилась, сущность фазы 1 осталась в панели:
+                # деньги с баланса не списаны, а доступ рабочий. Раньше здесь
+                # стояла safe_remove_vless_user_with_retry — заглушка снятого
+                # xray, которая ничего не удаляла.
+                #
+                # Удаляем через панель. Вызов идёт после выхода из
+                # conn.transaction(): сеть внутри открытой транзакции держала
+                # бы её на всё время запроса.
+                from app.services.orphan_cleanup import delete_orphan_premium_entity
+                deleted, entity = await delete_orphan_premium_entity(
+                    telegram_id, uuid_to_cleanup_on_failure,
+                )
+                entity_id = entity or uuid_to_cleanup_on_failure
+                uuid_preview = f"{entity_id[:8]}..." if len(entity_id) > 8 else "***"
+                if deleted:
+                    logger.critical(
+                        f"ORPHAN_DELETED uuid={uuid_preview} reason=finalize_balance_purchase_tx_failed "
+                        f"user={telegram_id} error={e} — сущность удалена в панели"
+                    )
+                else:
                     logger.critical(
                         f"ORPHAN_NOT_CLEANED uuid={uuid_preview} reason=finalize_balance_purchase_tx_failed "
-                        f"user={telegram_id} error={e} — сущность осталась в панели, "
-                        f"удалите её вручную по этому uuid"
-                    )
-                except Exception as remove_err:
-                    uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                    logger.critical(
-                        f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} user={telegram_id}"
+                        f"user={telegram_id} error={e} — платный доступ остался у "
+                        f"неоплатившего, удалите сущность в панели вручную по этому uuid"
                     )
             raise
         if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
             old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
             try:
                 await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
-                logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
+                # «Пропущено», а не «удалено»: старый uuid — это vlessUuid
+                # прошлой выдачи, provision_subscription переиспользует ту же
+                # premium-сущность и вшивает в неё этот же uuid. Отдельной
+                # сущности под ним нет, а под вызовом — заглушка снятого xray.
+                logger.info(
+                    "OLD_UUID_REMOVAL_SKIPPED",
+                    extra={"uuid": old_uuid[:8] + "...", "reason": "panel_entity_reused"}
+                )
             except Exception as rem_err:
                 logger.critical(
                     "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",

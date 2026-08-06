@@ -18,7 +18,9 @@ from dataclasses import dataclass
 
 import database
 import config
-import vpn_utils
+# vpn_utils больше не импортируется: все его вызовы отсюда вели в заглушки
+# снятого с эксплуатации xray. Компенсация отката ушла в
+# app.services.orphan_cleanup (ленивый импорт по месту).
 from app.core.pool_monitor import acquire_connection
 from app.services.activation.exceptions import (
     ActivationServiceError,
@@ -340,6 +342,50 @@ async def _fetch_pending_for_notification(
 # Activation Attempt Logic
 # ====================================================================================
 
+async def _cleanup_orphan_entity(
+    telegram_id: int,
+    subscription_id: int,
+    connection_uuid: Optional[str],
+    *,
+    reason: str,
+    error: Optional[str] = None,
+) -> None:
+    """Убрать из панели сущность, созданную фазой 1, когда фаза 3 не состоялась.
+
+    Все четыре ветки отказа (гонка активаций, смена статуса, падение UPDATE,
+    ноль затронутых строк) оставляют за собой одно и то же: живую сущность в
+    панели, за которую никто не заплатил. Раньше под ними стояла
+    vpn_utils.safe_remove_vless_user_with_retry — заглушка снятого xray:
+    удаления не происходило никогда, а запись рапортовала о нём.
+
+    Удаление зовём с занятым соединением и взятым advisory-локом: локом мы
+    как раз и защищаем строку от параллельной активации, пока разбираемся с
+    панелью. orphan_cleanup не ходит в базу — второй acquire отсюда мог бы
+    выбрать пул досуха.
+
+    Ошибок наружу не отдаёт: вызывающий уже обрабатывает свою.
+    """
+    if not connection_uuid:
+        return
+    from app.services.orphan_cleanup import delete_orphan_premium_entity
+
+    deleted, entity = await delete_orphan_premium_entity(telegram_id, connection_uuid)
+    entity_id = entity or connection_uuid
+    if deleted:
+        logger.critical(
+            "ACTIVATION_ORPHAN_DELETED — сущность удалена в панели",
+            extra={"subscription_id": subscription_id, "uuid": entity_id[:8] + "...",
+                   "reason": reason, "error": error or ""},
+        )
+    else:
+        logger.critical(
+            "ACTIVATION_ORPHAN_NOT_CLEANED — платный доступ остался у "
+            "неоплатившего, удалите вручную по uuid",
+            extra={"subscription_id": subscription_id, "uuid": entity_id[:8] + "...",
+                   "reason": reason, "error": error or ""},
+        )
+
+
 async def attempt_activation(
     subscription_id: int,
     telegram_id: int,
@@ -462,26 +508,10 @@ async def _attempt_activation_no_conn_hold(
             if not recheck_row:
                 raise ActivationFailedError(f"Subscription {subscription_id} not found")
             if recheck_row["activation_status"] == "active":
-                # safe_remove_vless_user_with_retry ведёт в заглушку снятого
-                # xray и ничего не удаляет. ACTIVATION_ORPHAN_PREVENTED писался
-                # CRITICAL-ом и читался как «поймали и починили», а сущность,
-                # созданная фазой 1 в панели, оставалась жить. Удалять умеет
-                # remnawave_api.delete_user (образец —
-                # database/purchase_finalization.py), здесь его нет, поэтому
-                # запись честно называет uuid для ручной чистки.
-                try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
-                        "удалите вручную по uuid",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "concurrent_activation"}
-                    )
-                except Exception as remove_err:
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
-                        "удалите вручную по uuid",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "concurrent_activation", "remove_error": str(remove_err)[:200]}
-                    )
+                await _cleanup_orphan_entity(
+                    telegram_id, subscription_id, uuid_to_cleanup_on_failure,
+                    reason="concurrent_activation",
+                )
                 return ActivationResult(
                     success=True,
                     uuid=recheck_row.get("uuid"),
@@ -491,19 +521,10 @@ async def _attempt_activation_no_conn_hold(
                     attempts=recheck_row.get("activation_attempts", current_attempts)
                 )
             if recheck_row["activation_status"] != "pending":
-                try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
-                        "удалите вручную по uuid",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "state_changed"}
-                    )
-                except Exception as remove_err:
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
-                        "удалите вручную по uuid",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "state_changed", "remove_error": str(remove_err)[:200]}
-                    )
+                await _cleanup_orphan_entity(
+                    telegram_id, subscription_id, uuid_to_cleanup_on_failure,
+                    reason="state_changed",
+                )
                 raise ActivationNotAllowedError(
                     f"Subscription {subscription_id} is not pending (status={recheck_row['activation_status']})"
                 )
@@ -523,19 +544,10 @@ async def _attempt_activation_no_conn_hold(
                     extra={"subscription_id": subscription_id, "uuid": new_uuid[:8] + "..."}
                 )
             except Exception as tx_err:
-                try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
-                        "удалите вручную по uuid",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "error": str(tx_err)[:200]}
-                    )
-                except Exception as remove_err:
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
-                        "удалите вручную по uuid",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "error": str(tx_err)[:200], "remove_error": str(remove_err)[:200]}
-                    )
+                await _cleanup_orphan_entity(
+                    telegram_id, subscription_id, uuid_to_cleanup_on_failure,
+                    reason="db_update_failed", error=str(tx_err)[:200],
+                )
                 raise ActivationFailedError(f"Failed to update subscription after VPN API success: {tx_err}") from tx_err
 
             rows_affected = int(result.split()[-1]) if result else 0
@@ -553,19 +565,10 @@ async def _attempt_activation_no_conn_hold(
                         activation_status="active",
                         attempts=updated_row.get("activation_attempts", current_attempts + 1)
                     )
-                try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
-                        "удалите вручную по uuid",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "concurrent_activation"}
-                    )
-                except Exception as remove_err:
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_NOT_CLEANED — сущность осталась в панели, "
-                        "удалите вручную по uuid",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "concurrent_activation", "remove_error": str(remove_err)[:200]}
-                    )
+                await _cleanup_orphan_entity(
+                    telegram_id, subscription_id, uuid_to_cleanup_on_failure,
+                    reason="concurrent_modification",
+                )
                 raise ActivationFailedError(f"Failed to update subscription {subscription_id} (concurrent modification)")
             return ActivationResult(
                 success=True,

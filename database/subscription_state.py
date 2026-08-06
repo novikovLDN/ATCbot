@@ -112,9 +112,9 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
         try:
             await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_remove)
             # Под этим вызовом нет действия: vpn_utils.remove_vless_user —
-            # заглушка, xray снят с эксплуатации. EXPIRY_REMOVE_SUCCESS и
-            # аудит result="success" утверждали снятие доступа, которого
-            # не происходило, — и не «иногда», а всегда.
+            # заглушка, xray снят с эксплуатации. EXPIRY_REMOVE_SUCCESS
+            # утверждал снятие доступа, которого не происходило, — и не
+            # «иногда», а всегда.
             # Фактический отзыв делает disable_remnawave_user_bg ниже, уже
             # после того как строка в базе закрыта.
             logger.info(
@@ -122,27 +122,14 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                 "ничего не удалено; фактический отзыв идёт через Remnawave фазой 3",
                 telegram_id, uuid_to_remove[:8],
             )
-            try:
-                expires_at_str = (subscription.get("expires_at") or "").isoformat() if subscription else "N/A"
-                await _log_vpn_lifecycle_audit_async(
-                    action="vpn_expire",
-                    telegram_id=telegram_id,
-                    uuid=uuid_to_remove,
-                    source="auto-expiry",
-                    # result ограничен CHECK-ом ('success'|'error',
-                    # migrations/007_add_audit_log_fields.sql), третьего
-                    # значения туда не положить — поэтому правда о том, что
-                    # именно произошло, идёт в details. Раньше строка читалась
-                    # как «доступ снят», хотя снимать было нечем.
-                    result="success",
-                    details=(
-                        f"Real-time expiration check, expires_at={expires_at_str}; "
-                        f"legacy xray uuid cleared (no-op stub, nothing removed); "
-                        f"фактический отзыв в панели — disable_remnawave_user_bg"
-                    ),
-                )
-            except Exception as e:
-                logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")
+            # ЗДЕСЬ СТОЯЛА ЗАПИСЬ В ЖУРНАЛ ЖИЗНЕННОГО ЦИКЛА (vpn_expire,
+            # result=success) — до того, как подписка закрыта. Закрывает её
+            # UPDATE фазы 3, и он может не сработать: человек успел
+            # продлиться, условие expires_at <= now перестало выполняться,
+            # ветка уходит в EXPIRY_SKIPPED_RENEWED. Подписка при этом
+            # активна, а в журнале дашборда уже стоит «истекла».
+            # Запись перенесена в фазу 3, за UPDATE, и пишется только когда
+            # строка действительно закрыта.
         except Exception as e:
             removal_success = False
             logger.critical(
@@ -180,29 +167,54 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     subscription_id, telegram_id, uuid_to_remove, now_db,
                     _to_db_utc(far_future),
                 )
-                rows = int(result.split()[-1]) if result else 0
-                if rows > 0:
-                    logger.info(
-                        "EXPIRY_TRANSITION_TO_BYPASS_ONLY user=%s — Remnawave stays active",
-                        telegram_id,
-                    )
-                    # Extend Remnawave expiry so bypass keeps working
-                    try:
-                        from app.services.remnawave_service import extend_remnawave_for_bypass_bg
-                        extend_remnawave_for_bypass_bg(telegram_id)
-                    except Exception as rmn_err:
-                        logger.warning("REMNAWAVE_BYPASS_EXTEND_FAIL: tg=%s %s", telegram_id, rmn_err)
-                return rows > 0
-
-            result = await conn.execute(
-                """UPDATE subscriptions
-                   SET status = 'expired', uuid = NULL, vpn_key = NULL
-                   WHERE id = $1 AND telegram_id = $2 AND uuid = $3 AND status = 'active'
-                     AND expires_at <= $4""",
-                subscription_id, telegram_id, uuid_to_remove, now_db
-            )
+            else:
+                result = await conn.execute(
+                    """UPDATE subscriptions
+                       SET status = 'expired', uuid = NULL, vpn_key = NULL
+                       WHERE id = $1 AND telegram_id = $2 AND uuid = $3 AND status = 'active'
+                         AND expires_at <= $4""",
+                    subscription_id, telegram_id, uuid_to_remove, now_db
+                )
             rows = int(result.split()[-1]) if result else 0
-            if rows > 0:
+
+            # Ноль затронутых строк — человек успел продлиться между фазой 1 и
+            # этим UPDATE-ом: условие expires_at <= now перестало выполняться.
+            # Подписка осталась активной, и писать про неё что-либо в журнал
+            # нельзя. Ровно здесь раньше и расходились журнал и база: аудит
+            # «истекла» ставился фазой 2, до этой проверки.
+            if rows == 0:
+                logger.debug(
+                    "EXPIRY_SKIPPED_RENEWED",
+                    extra={"telegram_id": telegram_id, "uuid": uuid_to_remove[:8] + "..."}
+                )
+                return False
+
+            # Дальше — строка ТОЧНО закрыта. Только теперь пишем журнал.
+            expires_at_str = (subscription.get("expires_at") or "").isoformat() if subscription else "N/A"
+            if has_remnawave:
+                logger.info(
+                    "EXPIRY_TRANSITION_TO_BYPASS_ONLY user=%s — Remnawave stays active",
+                    telegram_id,
+                )
+                # Extend Remnawave expiry so bypass keeps working
+                try:
+                    from app.services.remnawave_service import extend_remnawave_for_bypass_bg
+                    extend_remnawave_for_bypass_bg(telegram_id)
+                except Exception as rmn_err:
+                    logger.warning("REMNAWAVE_BYPASS_EXTEND_FAIL: tg=%s %s", telegram_id, rmn_err)
+                # Переход в обход — не истечение: строка остаётся активной,
+                # expires_at уезжает на десять лет вперёд, человек продолжает
+                # пользоваться гигабайтами обхода. Записывать это как
+                # «подписка истекла» значит уводить разбор в поиск истёкшей
+                # подписки, которой нет.
+                audit_action = "vpn_bypass_transition"
+                audit_details = (
+                    f"Платная подписка закончилась, остался обход, "
+                    f"expires_at={expires_at_str}; legacy xray uuid cleared "
+                    f"(no-op stub, nothing removed); ГБ обхода продлевает "
+                    f"extend_remnawave_for_bypass_bg"
+                )
+            else:
                 logger.info(
                     "EXPIRY_DB_UPDATE_SUCCESS",
                     extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
@@ -222,12 +234,29 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                         logger.info(f"SPECIAL_OFFER_CREATED for user {telegram_id} after paid subscription expired")
                     except Exception as e:
                         logger.warning(f"Failed to create special offer for {telegram_id}: {e}")
-            elif rows == 0 and subscription_id and uuid_to_remove:
-                logger.debug(
-                    "EXPIRY_SKIPPED_RENEWED",
-                    extra={"telegram_id": telegram_id, "uuid": uuid_to_remove[:8] + "..."}
+                audit_action = "vpn_expire"
+                audit_details = (
+                    f"Real-time expiration check, expires_at={expires_at_str}; "
+                    f"legacy xray uuid cleared (no-op stub, nothing removed); "
+                    f"фактический отзыв в панели — disable_remnawave_user_bg"
                 )
-            return rows > 0
+
+            try:
+                # result ограничен CHECK-ом ('success'|'error',
+                # migrations/007_add_audit_log_fields.sql), третьего значения
+                # туда не положить — поэтому правда о том, что именно
+                # произошло, идёт в details и в action.
+                await _log_vpn_lifecycle_audit_async(
+                    action=audit_action,
+                    telegram_id=telegram_id,
+                    uuid=uuid_to_remove,
+                    source="auto-expiry",
+                    result="success",
+                    details=audit_details,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")
+            return True
 
 
 async def set_combo_flag(telegram_id: int, is_combo: bool = True):

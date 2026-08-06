@@ -291,18 +291,41 @@ async def reissue_vpn_key_atomic(
         except Exception as tx_err:
             # Фаза 3 (база) не прошла — свежая premium-сущность из фазы 2
             # осталась в панели сиротой; удаляем её.
+            #
+            # Здесь, в отличие от путей выдачи, на руках УЖЕ панельный uuid
+            # (reissue_result.panel_uuid), поэтому зовём delete_user напрямую.
+            # Но результат смотреть обязательно: remnawave_api отдаёт None и
+            # на отказ, и на 404, и на таймаут, ничего не бросая, — прежняя
+            # запись ORPHAN_PREVENTED утверждала удаление, не взглянув на
+            # ответ панели.
+            uuid_preview = (uuid_to_cleanup_on_failure or "")[:8]
             try:
-                from app.services import remnawave_api
-                if uuid_to_cleanup_on_failure:
-                    await remnawave_api.delete_user(uuid_to_cleanup_on_failure)
-                logger.critical(
-                    f"ORPHAN_PREVENTED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... reason=reissue_phase2_failed "
-                    f"user={telegram_id} error={tx_err}"
-                )
+                if not uuid_to_cleanup_on_failure:
+                    # Фаза 2 не дала идентификатора — удалять нечего и
+                    # искать потом будет не по чему.
+                    logger.critical(
+                        f"ORPHAN_NOT_CLEANED uuid=N/A reason=reissue_phase2_failed "
+                        f"user={telegram_id} error={tx_err} — панель не вернула uuid "
+                        f"сущности, найдите её вручную по пользователю"
+                    )
+                else:
+                    from app.services import remnawave_api
+                    removed = await remnawave_api.delete_user(uuid_to_cleanup_on_failure)
+                    if removed is not None:
+                        logger.critical(
+                            f"ORPHAN_DELETED uuid={uuid_preview}... reason=reissue_phase2_failed "
+                            f"user={telegram_id} error={tx_err}"
+                        )
+                    else:
+                        logger.critical(
+                            f"ORPHAN_NOT_CLEANED uuid={uuid_preview}... reason=reissue_phase2_failed "
+                            f"user={telegram_id} error={tx_err} — панель не подтвердила "
+                            f"удаление, удалите сущность вручную по этому uuid"
+                        )
             except Exception as remove_err:
                 logger.critical(
-                    f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... "
-                    f"reason={remove_err} user={telegram_id}"
+                    f"ORPHAN_NOT_CLEANED uuid={uuid_preview}... reason={remove_err} "
+                    f"user={telegram_id} — удалите сущность в панели вручную"
                 )
             logger.exception(f"Error in reissue_vpn_key_atomic for user {telegram_id}, transaction rolled back")
             raise

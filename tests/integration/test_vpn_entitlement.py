@@ -246,4 +246,152 @@ class TestExpiredSubscriptionRemoved:
         )
 
 
+class TestRealtimeExpiryAuditOrder:
+    """Проверка истечения по запросу: журнал не должен обгонять базу.
+
+    ЧТО ЛОМАЛОСЬ
+
+        database.check_and_disable_expired_subscription разнесена на три
+        фазы: чтение → снятие доступа вне транзакции → UPDATE. Запись
+        vpn_expire с result=success ставилась во ФАЗЕ 2, сразу за вызовом
+        xray-заглушки, — то есть до того, как подписка закрыта.
+
+        Закрывает её UPDATE фазы 3, и он может не сработать: пока шла
+        фаза 2, человек успел продлиться, условие `expires_at <= now`
+        перестало выполняться, UPDATE трогает ноль строк и ветка уходит в
+        EXPIRY_SKIPPED_RENEWED. Подписка при этом активна, а в журнале
+        дашборда уже стоит «истекла» — разбор обращения «списали день»
+        упирался в запись, которой верить нельзя.
+
+        То же самое было вылечено в fast_expiry_cleanup переносом записи
+        за UPDATE; здесь повторён тот же приём.
+    """
+
+    def _source(self):
+        import inspect
+        import database.subscription_state as st
+        return inspect.getsource(st.check_and_disable_expired_subscription)
+
+    def test_audit_is_written_once_and_after_the_update(self):
+        src = self._source()
+        writes = src.count("_log_vpn_lifecycle_audit_async(")
+        assert writes == 1, (
+            f"записей в журнал жизненного цикла стало {writes} — "
+            f"вернулся преждевременный аудит"
+        )
+        update = src.index("SET status = 'expired'")
+        renewed_check = src.index("if rows == 0:")
+        audit = src.index("_log_vpn_lifecycle_audit_async(")
+        assert update < renewed_check < audit, (
+            "аудит снова пишется раньше, чем закрыта строка в базе"
+        )
+
+    def test_action_depends_on_the_branch(self):
+        """Переход в bypass-only — не истечение: строка остаётся активной,
+        expires_at уезжает на десять лет вперёд, обход продолжает работать."""
+        src = self._source()
+        assert 'action="vpn_expire"' not in src, (
+            "действие снова захардкожено — оно должно зависеть от ветки"
+        )
+        assert "action=audit_action" in src
+        assert "vpn_bypass_transition" in src
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_logged_when_the_user_renewed(self, monkeypatch):
+        """Гонка с продлением: UPDATE не трогает ни одной строки."""
+        import database.core as core
+        import database.subscription_state as st
+
+        telegram_id = 555
+        uuid = "11111111-1111-4111-8111-111111111111"
+        row = {
+            "id": 7,
+            "telegram_id": telegram_id,
+            "uuid": uuid,
+            "status": "active",
+            "expires_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "source": "payment",
+        }
+
+        conn = MagicMock()
+        # 1) чтение истёкшей строки, 2) перепроверка перед фазой 2
+        conn.fetchrow = AsyncMock(side_effect=[row, {"ok": 1}])
+        conn.fetchval = AsyncMock(return_value=None)  # bypass-сущности нет
+        conn.execute = AsyncMock(return_value="UPDATE 0")  # продлился первым
+        tx = MagicMock()
+        tx.__aenter__ = AsyncMock(return_value=conn)
+        tx.__aexit__ = AsyncMock(return_value=None)
+        conn.transaction = MagicMock(return_value=tx)
+        pool = MagicMock()
+        acq = MagicMock()
+        acq.__aenter__ = AsyncMock(return_value=conn)
+        acq.__aexit__ = AsyncMock(return_value=None)
+        pool.acquire.return_value = acq
+
+        audit = AsyncMock()
+        monkeypatch.setattr(core, "DB_READY", True)
+        monkeypatch.setattr(st, "get_pool", AsyncMock(return_value=pool))
+        monkeypatch.setattr(st, "_log_vpn_lifecycle_audit_async", audit)
+        monkeypatch.setattr(
+            st.vpn_utils, "safe_remove_vless_user_with_retry", AsyncMock(),
+        )
+
+        assert await st.check_and_disable_expired_subscription(telegram_id) is False
+        assert audit.await_count == 0, (
+            "подписка осталась активной, а в журнале появилось «истекла»"
+        )
+
+    @pytest.mark.asyncio
+    async def test_audit_follows_the_update_that_closed_the_row(self, monkeypatch):
+        """Обратная сторона: строку закрыли — запись обязана появиться, и
+        именно после UPDATE-а."""
+        import database.core as core
+        import database.subscription_state as st
+
+        telegram_id = 556
+        uuid = "11111111-1111-4111-8111-111111111111"
+        row = {
+            "id": 8,
+            "telegram_id": telegram_id,
+            "uuid": uuid,
+            "status": "active",
+            "expires_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "source": "trial",
+        }
+        order = []
+
+        async def _execute(*_args, **_kwargs):
+            order.append("update")
+            return "UPDATE 1"
+
+        async def _audit(**kwargs):
+            order.append(f"audit:{kwargs.get('action')}")
+
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(side_effect=[row, {"ok": 1}])
+        conn.fetchval = AsyncMock(return_value=None)
+        conn.execute = AsyncMock(side_effect=_execute)
+        tx = MagicMock()
+        tx.__aenter__ = AsyncMock(return_value=conn)
+        tx.__aexit__ = AsyncMock(return_value=None)
+        conn.transaction = MagicMock(return_value=tx)
+        pool = MagicMock()
+        acq = MagicMock()
+        acq.__aenter__ = AsyncMock(return_value=conn)
+        acq.__aexit__ = AsyncMock(return_value=None)
+        pool.acquire.return_value = acq
+
+        import app.services.remnawave_service as rs
+        monkeypatch.setattr(rs, "disable_remnawave_user_bg", MagicMock())
+        monkeypatch.setattr(core, "DB_READY", True)
+        monkeypatch.setattr(st, "get_pool", AsyncMock(return_value=pool))
+        monkeypatch.setattr(st, "_log_vpn_lifecycle_audit_async", _audit)
+        monkeypatch.setattr(
+            st.vpn_utils, "safe_remove_vless_user_with_retry", AsyncMock(),
+        )
+
+        assert await st.check_and_disable_expired_subscription(telegram_id) is True
+        assert order == ["update", "audit:vpn_expire"], order
+
+
 # Reconciliation worker removed: DB is source of truth; no background Xray state diffing.
