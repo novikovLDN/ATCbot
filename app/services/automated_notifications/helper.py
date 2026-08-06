@@ -15,6 +15,7 @@ Runtime helper для автоуведомлений.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any, Dict, Optional
@@ -98,6 +99,31 @@ def _to_json(d: Dict[str, Any]) -> str:
     return json.dumps(d, ensure_ascii=False)
 
 
+def _coerce_trigger_config(value: Any) -> Dict[str, Any]:
+    """Нормализовать trigger_config из БД к dict.
+
+    asyncpg по-умолчанию отдаёт jsonb-колонку строкой (без зарегистрированного
+    кодека), поэтому парсим её здесь. Пустые/битые значения → {}.
+    """
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode("utf-8")
+        except Exception:
+            return {}
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            logger.warning("automated_notifications: bad trigger_config json: %r", value[:200])
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 async def _load_cache() -> None:
     """Полная загрузка cache из БД (все ключи)."""
     global _CACHE, _CACHE_TS
@@ -114,7 +140,7 @@ async def _load_cache() -> None:
         r["key"]: {
             "is_enabled": bool(r["is_enabled"]),
             "text": r["custom_text_ru"] or r["default_text_ru"],
-            "trigger_config": r["trigger_config"] or {},
+            "trigger_config": _coerce_trigger_config(r["trigger_config"]),
         }
         for r in rows
     }
@@ -181,7 +207,9 @@ async def get_trigger_config(key: str) -> Dict[str, Any]:
     """Вернуть trigger_config (с fallback на дефолт из REGISTRY)."""
     row = await get_row(key)
     if row is not None and row["trigger_config"]:
-        return dict(row["trigger_config"])
+        cfg = _coerce_trigger_config(row["trigger_config"])
+        if cfg:
+            return cfg
     spec = REGISTRY.get(key)
     return dict(spec.default_trigger) if spec else {}
 
