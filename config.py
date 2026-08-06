@@ -600,11 +600,11 @@ REMNAWAVE_BYPASS_USERNAME_PATTERN = env(
 )
 
 # Trial-specific bypass allowance in megabytes (premium is duration-limited,
-# bypass is byte-limited).  Default 1024 MB (1 GB).
+# bypass is byte-limited).  Default 500 MB.
 try:
-    TRIAL_BYPASS_MB = int(env("TRIAL_BYPASS_MB", default="1024"))
+    TRIAL_BYPASS_MB = int(env("TRIAL_BYPASS_MB", default="500"))
 except (TypeError, ValueError):
-    TRIAL_BYPASS_MB = 1024
+    TRIAL_BYPASS_MB = 500
 
 # Bypass entity device limit (default 5; TZ matches premium=5/7).
 try:
