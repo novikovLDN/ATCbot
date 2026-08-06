@@ -441,25 +441,31 @@ async def cmd_start(message: Message, state: FSMContext):
                 }
             )
     
-    # 2026-XX: удалили экран выбора языка — сразу показываем главное меню.
-    # Для новых юзеров дефолт 'ru'; переключение на 'en' доступно в
-    # /settings → «Язык». Legacy юзеры с language='de'/'ar'/…'
-    # получают ru через fallback в i18n.get_text.
+    # 2026-08: /start показывает язык-picker (ru/en). После выбора языка
+    # callback start_lang_* активирует триал (если eligible) и показывает
+    # экран согласия с 2 кнопками (Подключиться + Пользовательское соглашение).
+    from app.handlers.callbacks.language import START_LANG_PHOTO_FILE_ID
     language = await resolve_user_language(telegram_id)
-    text = i18n_get_text(language, "main.welcome")
-    keyboard = await get_main_menu_keyboard(language, telegram_id)
+    title = i18n_get_text(language, "start_lang.title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ru"),
+                                 callback_data="start_lang_ru"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_en"),
+                                 callback_data="start_lang_en"),
+        ],
+    ])
     try:
-        from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID
         await message.bot.send_photo(
             chat_id=telegram_id,
-            photo=MAIN_PHOTO_FILE_ID,
-            caption=text,
+            photo=START_LANG_PHOTO_FILE_ID,
+            caption=title,
             reply_markup=keyboard,
             parse_mode="HTML",
         )
     except Exception:
         # Fallback без фото если photo_file_id устарел на текущем боте
-        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await message.answer(title, reply_markup=keyboard, parse_mode="HTML")
 
 
 _SHARE_DISCOUNT_PERCENT = 30
