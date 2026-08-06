@@ -179,6 +179,157 @@ export interface SummaryEvent {
   detail: string | null;
 }
 
+// ── Экран «События»: журнал audit_log ────────────────────────────────
+//
+// Категорию считает сервер (CASE в SQL, database/dashboard_events.py) —
+// клиент её не выводит из названия действия. Раскладывать действия по
+// категориям на двух сторонах значит гарантированно разъехаться:
+// счётчики на фильтре показывали бы не то, что в списке.
+export interface AuditEvent {
+  id: number;
+  at: string | null;
+  action: string;
+  category: string;
+  actor_id: number | null;
+  actor_username: string | null;
+  target_id: number | null;
+  target_username: string | null;
+  source: string | null;
+  /** 'success' | 'error' | null. Пусто — «не сообщалось», не «успешно». */
+  result: string | null;
+  /** Уже прогнано через scrub_secrets и укорочено на сервере. */
+  details: string | null;
+}
+
+export interface AuditEventsPage {
+  items: AuditEvent[];
+  /** Сколько записей проходит под текущие фильтры целиком. */
+  total: number;
+  /** По категориям — считаются БЕЗ фильтра по категории. */
+  counts: Record<string, number>;
+  has_more: boolean;
+}
+
+export interface AuditEventsQuery {
+  limit?: number;
+  offset?: number;
+  /** Окно в часах. 0 или undefined — за всё время. */
+  hours?: number;
+  /** telegram_id: ищет и как автора действия, и как адресата. */
+  who?: number | null;
+  q?: string;
+  categories?: string[];
+}
+
+// ── Пользователи и платежи: строки плотных таблиц ────────────────────
+//
+// Типы описаны здесь, а не в компонентах, потому что одну и ту же строку
+// читают таблица, панель разбора и карточка пользователя. Разошлись бы
+// три копии — разошлись бы молча: TypeScript проверяет форму, а не смысл.
+
+/** Строка таблицы «Пользователи». Приходит из GET /users/list. */
+export interface UserListRow {
+  telegram_id: number;
+  username: string | null;
+  created_at: string | null;
+  language: string | null;
+  /** null — список пришёл из отбора подписок, где VIP не считался. */
+  is_vip: boolean | null;
+  balance_rubles: number | null;
+  subscription_type: string | null;
+  /** «Комбо Плюс» вместо «combo_plus» — считает бэкенд, не интерфейс. */
+  tariff_display: string | null;
+  is_combo: boolean;
+  is_bypass_only: boolean;
+  source: string | null;
+  status: string | null;
+  auto_renew: boolean;
+  expires_at: string | null;
+  has_active_sub: boolean | null;
+}
+
+export interface UsersListResponse {
+  filter: "all" | "active" | "expiring_7d";
+  query: string;
+  items: UserListRow[];
+  total: number;
+  offset: number;
+  has_more: boolean;
+}
+
+/** Покупка в ленте платежей и в истории пользователя. */
+export interface PurchaseRow {
+  id: number;
+  purchase_id: string | null;
+  telegram_id?: number | null;
+  username?: string | null;
+  tariff: string | null;
+  purchase_type: string | null;
+  period_days: number | null;
+  price_rubles: number | null;
+  status: string | null;
+  payment_provider: string | null;
+  provider_invoice_id?: string | null;
+  promo_code: string | null;
+  country: string | null;
+  is_combo: boolean | null;
+  farm_plot_id?: number | null;
+  created_at: string | null;
+  expires_at?: string | null;
+}
+
+/**
+ * Отказ оплаты. Рядом с самой ошибкой едет её ИСХОД: чем кончилась
+ * покупка и есть ли у человека доступ сейчас. Без этих полей строка
+ * не отвечает на вопрос «надо ли что-то делать руками».
+ */
+export interface PaymentErrorRow {
+  id: number;
+  telegram_id: number | null;
+  username: string | null;
+  purchase_id: string | null;
+  payment_provider: string | null;
+  amount_rubles: number | null;
+  stage: string;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string | null;
+  /** paid / pending / expired, либо null — покупки с таким id нет вовсе. */
+  purchase_status: string | null;
+  purchase_price_rubles: number | null;
+  purchase_tariff: string | null;
+  purchase_type: string | null;
+  subscription_expires_at: string | null;
+  subscription_status: string | null;
+}
+
+/** Разбор одной покупки: GET /payments/purchases/{id}. */
+export interface PurchaseDetail {
+  purchase: PurchaseRow;
+  user: {
+    telegram_id: number | null;
+    username: string | null;
+    balance_rubles: number;
+  };
+  subscription: {
+    subscription_type: string | null;
+    expires_at: string | null;
+    status: string | null;
+    source: string | null;
+    is_combo: boolean;
+    auto_renew: boolean;
+  } | null;
+  errors: Array<{
+    id: number;
+    stage: string;
+    payment_provider: string | null;
+    error_code: string | null;
+    error_message: string | null;
+    amount_rubles: number | null;
+    created_at: string | null;
+  }>;
+}
+
 export const endpoints = {
   authStatus: () =>
     api.get<{
@@ -374,10 +525,33 @@ export const endpoints = {
       body,
     ),
   userPayments: (tg: number, limit = 20) =>
-    api.get<Array<Record<string, unknown>>>(`/users/${tg}/payments?limit=${limit}`),
+    api.get<PurchaseRow[]>(`/users/${tg}/payments?limit=${limit}`),
 
-  auditRecent: (limit = 50) =>
-    api.get<Array<Record<string, unknown>>>(`/audit/recent?limit=${limit}`),
+  // Экран «События». Один запрос отдаёт и страницу, и счётчики по
+  // категориям: считать их вторым запросом значит показывать на фильтре
+  // цифры, снятые в другой момент времени.
+  auditEvents: ({
+    limit = 50,
+    offset = 0,
+    hours = 0,
+    who = null,
+    q = "",
+    categories = [],
+  }: AuditEventsQuery = {}) => {
+    const p = new URLSearchParams();
+    p.set("limit", String(limit));
+    p.set("offset", String(offset));
+    p.set("hours", String(hours));
+    if (who != null) p.set("who", String(who));
+    if (q.trim()) p.set("q", q.trim());
+    for (const c of categories) p.append("category", c);
+    return api.get<AuditEventsPage>(`/audit/events?${p.toString()}`);
+  },
+  // Привязки к GET /audit/recent здесь больше нет: экран «События» ходит
+  // в /audit/events, а `endpoints` целиком лежит в стартовом чанке —
+  // Rollup не выбрасывает неиспользуемые свойства объекта, и мёртвая
+  // строка ехала бы в браузер при каждом первом открытии панели. Сам
+  // маршрут на сервере остался, для внешних вызовов.
 
   broadcastsRecent: (limit = 20) =>
     api.get<Array<Record<string, unknown>>>(`/broadcasts/recent?limit=${limit}`),
@@ -627,15 +801,18 @@ export const endpoints = {
         revenue_rubles: number;
       }>;
     }>(`/payments/breakdown?hours=${hours}`),
-  paymentsRecent: (params: { limit?: number; hours?: number; status?: string } = {}) => {
+  // provider — способ оплаты. Значение 'balance' означает покупку с
+  // внутреннего баланса: в ленте она есть, в выручке её нет.
+  paymentsRecent: (
+    params: { limit?: number; hours?: number; status?: string; provider?: string } = {},
+  ) => {
     const u = new URLSearchParams();
     if (params.limit !== undefined) u.set("limit", String(params.limit));
     if (params.hours !== undefined) u.set("hours", String(params.hours));
     if (params.status) u.set("status", params.status);
+    if (params.provider) u.set("provider", params.provider);
     const qs = u.toString();
-    return api.get<Array<Record<string, unknown>>>(
-      "/payments/recent" + (qs ? `?${qs}` : ""),
-    );
+    return api.get<PurchaseRow[]>("/payments/recent" + (qs ? `?${qs}` : ""));
   },
   paymentsTraffic: (hours: number) =>
     api.get<{
@@ -662,9 +839,7 @@ export const endpoints = {
     if (params.provider) u.set("provider", params.provider);
     if (params.stage) u.set("stage", params.stage);
     const qs = u.toString();
-    return api.get<Array<Record<string, unknown>>>(
-      "/payments/errors" + (qs ? `?${qs}` : ""),
-    );
+    return api.get<PaymentErrorRow[]>("/payments/errors" + (qs ? `?${qs}` : ""));
   },
   paymentDetail: (id: number) =>
     api.get<Record<string, unknown>>(`/payments/${id}`),
@@ -956,6 +1131,32 @@ export const endpoints = {
   }) => api.put<{ ok: boolean; percent: number }>("/pricing/global-discount", body),
   pricingClearGlobalDiscount: () =>
     api.del<{ ok: boolean; cleared: boolean }>("/pricing/global-discount"),
+
+  // ── Экраны «Пользователи» и «Платежи» ─────────────────────────────
+  //
+  // usersList — одна страница плотной таблицы. filter=active и
+  // filter=expiring_7d берут на сервере ровно те строки, по которым
+  // сводка посчитала число на плитке, поэтому длина списка совпадает с
+  // числом. Не собирайте этот список фильтрацией на клиенте.
+  usersList: (
+    params: {
+      filter?: "all" | "active" | "expiring_7d";
+      q?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => {
+    const u = new URLSearchParams();
+    u.set("filter", params.filter ?? "all");
+    if (params.q) u.set("q", params.q);
+    u.set("limit", String(params.limit ?? 50));
+    u.set("offset", String(params.offset ?? 0));
+    return api.get<UsersListResponse>(`/users/list?${u.toString()}`);
+  },
+  /** Разбор покупки из ленты. Не путать с paymentDetail: тот читает
+   *  устаревшую таблицу payments с другой нумерацией строк. */
+  purchaseDetail: (id: number) =>
+    api.get<PurchaseDetail>(`/payments/purchases/${id}`),
 };
 
 // Auth-aware CSV download via fetch + blob. Returns nothing; triggers

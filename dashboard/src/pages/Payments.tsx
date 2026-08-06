@@ -1,815 +1,279 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  PieChart,
-  Pie,
-  Cell,
-  ResponsiveContainer,
-  Tooltip as RTooltip,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Legend,
-} from "recharts";
-import {
-  Wallet,
-  CreditCard,
-  TrendingUp,
-  Database,
-  Gauge,
-  ChevronDown,
-  ChevronRight,
-  ExternalLink,
-  AlertCircle,
-} from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+
 import { endpoints } from "@/lib/api";
-import { fmtNum, fmtRub, fmtDate } from "@/lib/format";
-import { StatCard } from "@/components/StatCard";
-import { Spinner } from "@/components/Spinner";
-import { EmptyState } from "@/components/EmptyState";
-import { Link, useSearchParams } from "react-router-dom";
+import { fmtNum } from "@/lib/format";
+import { Button, DensityToggle, type Density } from "@/components/ui";
+import { MoneyStrip } from "@/components/payments/MoneyStrip";
+import { PaymentsFeed, type FeedStatus } from "@/components/payments/PaymentsFeed";
+import { PaymentPanel } from "@/components/payments/PaymentPanel";
+import { PaymentErrors } from "@/components/payments/PaymentErrors";
+import { providerLabel } from "@/components/payments/labels";
 
-const RANGES = [
-  { label: "24ч", hours: 24 },
-  { label: "7д", hours: 168 },
-  { label: "30д", hours: 720 },
-  { label: "180д", hours: 4320 },
-  { label: "1г", hours: 8760 },
+/**
+ * Платежи — две задачи на одном экране, разведённые вкладками.
+ *
+ *   ЛЕНТА   что купили за окно; строка открывает разбор конкретной
+ *           покупки: провайдер, счёт, кто платил, выдан ли доступ.
+ *   ОТКАЗЫ  почему оплата не прошла: стадия, исход, что делать.
+ *
+ * СО СВОДКИ СЮДА ВЕДЁТ ССЫЛКА ?focus=errors — плитка «сорвалось оплат за
+ * 24 ч». Она обязана открывать сразу вкладку отказов, а не страницу
+ * вообще: число, ведущее «примерно туда», ничем не лучше текста.
+ * Ссылка ?purchase=<id> открывает разбор конкретной покупки — по ней
+ * приходят из карточки пользователя.
+ *
+ * ЧЕГО ЗДЕСЬ БОЛЬШЕ НЕТ И ГДЕ ЭТО ТЕПЕРЬ. Круговая диаграмма по
+ * провайдерам и столбики по тарифам уехали в /analytics/stats
+ * (research §9.2: глубина, а не удаление). Экран платежей — про разбор
+ * конкретных строк, а не про форму пирога; заодно с него ушёл recharts,
+ * который тянулся в чанк ради двух картинок.
+ */
+
+const WINDOWS: Array<{ label: string; hours: number }> = [
+  { label: "24 часа", hours: 24 },
+  { label: "7 дней", hours: 168 },
+  { label: "30 дней", hours: 720 },
+  { label: "90 дней", hours: 2160 },
 ];
 
-const PROVIDER_LABELS: Record<string, string> = {
-  platega: "Platega",
-  cryptobot: "CryptoBot",
-  telegram_stars: "Telegram Stars",
-  telegram_payment: "Telegram",
-  lava: "Lava",
-  balance: "Балансом",
-  unknown: "Не определено",
-};
-
-// Палитра для donut-сегментов и bar-чарта. Accent-первый (deep slate) —
-// он совпадает с глобальным accent дашборда, ложится на крупный сегмент.
-// Остальные — контрастные категорические цвета (info/success/warning/etc),
-// каждый сам по себе виден на белом фоне.
-const CHART_COLORS = [
-  "#0F1720", // accent — deep slate (dominant)
-  "#2563EB", // info — blue
-  "#10B981", // success — emerald
-  "#F59E0B", // warning — amber
-  "#EC4899", // pink
-  "#7C3AED", // special — violet
-  "#64748B", // slate fallback
+const STATUSES: Array<[FeedStatus, string]> = [
+  ["", "Все"],
+  ["paid", "Оплачены"],
+  ["pending", "Ждут оплаты"],
+  ["expired", "Счёт истёк"],
 ];
+
+/** Следующее окно из списка. Последнее остаётся последним. */
+function nextWindow(hours: number): number {
+  const wider = WINDOWS.find((w) => w.hours > hours);
+  return wider ? wider.hours : WINDOWS[WINDOWS.length - 1].hours;
+}
+
+const DENSITY_KEY = "atlas.payments.density";
+
+function readDensity(): Density {
+  const saved = localStorage.getItem(DENSITY_KEY);
+  return saved === "compact" || saved === "comfortable" ? saved : "comfortable";
+}
 
 export function Payments() {
-  const [hours, setHours] = useState(168);
-  // Плитка «сорвалось оплат за 24 ч» на сводке ведёт сюда с ?focus=errors.
-  // Без этого клик по числу открывал бы страницу платежей вообще, а блок
-  // ошибок остался бы свёрнутым внизу — число вело бы «примерно туда».
-  const [params] = useSearchParams();
-  const focusErrors = params.get("focus") === "errors";
-  useEffect(() => {
-    if (!focusErrors) return;
-    document
-      .getElementById("payment-errors")
-      ?.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, [focusErrors]);
+  const [params, setParams] = useSearchParams();
+  const [density, setDensity] = useState<Density>(readDensity);
 
-  const revenue = useQuery({
-    queryKey: ["payments", "revenue", hours],
-    queryFn: () => endpoints.paymentsRevenue(hours),
-    refetchInterval: 15_000,
-  });
-  const byProvider = useQuery({
+  useEffect(() => localStorage.setItem(DENSITY_KEY, density), [density]);
+
+  const tab = params.get("focus") === "errors" ? "errors" : "feed";
+  const hours = Number(params.get("hours")) || 168;
+  const status = (params.get("status") ?? "") as FeedStatus;
+  const provider = params.get("provider") ?? "";
+  const purchaseParam = params.get("purchase");
+  const purchaseId = purchaseParam && /^\d+$/.test(purchaseParam) ? Number(purchaseParam) : null;
+
+  const patch = (next: Record<string, string | null>) => {
+    const usp = new URLSearchParams(params);
+    for (const [key, value] of Object.entries(next)) {
+      if (value === null || value === "") usp.delete(key);
+      else usp.set(key, value);
+    }
+    setParams(usp, { replace: true });
+  };
+
+  // Список провайдеров для фильтра берём из разбивки за то же окно:
+  // так в фильтре нет способов оплаты, которыми в этом периоде никто не
+  // пользовался, и рядом с каждым стоит число.
+  const providers = useQuery({
     queryKey: ["payments", "by-provider", hours],
     queryFn: () => endpoints.paymentsByProvider(hours),
-    refetchInterval: 20_000,
-  });
-  const traffic = useQuery({
-    queryKey: ["payments", "traffic", hours],
-    queryFn: () => endpoints.paymentsTraffic(hours),
-    refetchInterval: 20_000,
-  });
-
-  return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Деньги
-          </div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg md:text-3xl">
-            Платежи
-          </h1>
-        </div>
-        <div className="card flex items-center gap-1 p-1">
-          {RANGES.map((r) => (
-            <button
-              key={r.hours}
-              type="button"
-              onClick={() => setHours(r.hours)}
-              className={
-                hours === r.hours
-                  ? "rounded-lg bg-accent/15 px-3 py-1.5 text-xs font-medium text-accent"
-                  : "rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted hover:bg-bg-elevated hover:text-fg"
-              }
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
-      </header>
-
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard
-          label="Доход"
-          value={fmtRub(revenue.data?.revenue_rubles)}
-          icon={Wallet}
-          tone="success"
-          loading={revenue.isLoading}
-        />
-        <StatCard
-          label="Платежей"
-          value={fmtNum(revenue.data?.payments_count)}
-          icon={CreditCard}
-          tone="accent"
-          loading={revenue.isLoading}
-        />
-        <StatCard
-          label="Средний чек"
-          value={fmtRub(revenue.data?.avg_check_rubles)}
-          icon={Gauge}
-          loading={revenue.isLoading}
-        />
-        <StatCard
-          label="Трафик: продано"
-          value={`${fmtNum(traffic.data?.total_gb)} GB`}
-          hint={
-            traffic.data ? `${fmtRub(traffic.data.revenue_rubles)} · ${fmtNum(traffic.data.count)} покупок` : undefined
-          }
-          icon={Database}
-          tone="warning"
-          loading={traffic.isLoading}
-        />
-      </section>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="По провайдерам" subtitle="Доход за период">
-          <ProviderPie data={byProvider.data ?? []} loading={byProvider.isLoading} />
-        </ChartCard>
-        <ChartCard title="По тарифам" subtitle="Доход и количество">
-          <TypeBar data={revenue.data?.by_type ?? {}} loading={revenue.isLoading} />
-        </ChartCard>
-      </div>
-
-      {traffic.data && traffic.data.by_method.length > 0 && (
-        <div className="card p-5">
-          <div className="mb-3 flex items-center gap-2">
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Трафик: способы оплаты
-            </div>
-            <TrendingUp className="h-3 w-3 text-fg-subtle" />
-          </div>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            {traffic.data.by_method.map((m) => (
-              <div key={m.method} className="rounded-xl border border-border bg-bg-subtle/60 p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-fg">
-                    {PROVIDER_LABELS[m.method] ?? m.method}
-                  </span>
-                  <span className="text-xs text-fg-subtle">{fmtNum(m.count)}</span>
-                </div>
-                <div className="mt-2 text-lg font-semibold text-success">
-                  {fmtRub(m.revenue_rubles)}
-                </div>
-                <div className="text-xs text-fg-muted">{fmtNum(m.total_gb)} GB</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <PaymentErrors hours={hours} defaultExpanded={focusErrors} />
-      <PaymentsFeed hours={hours} />
-    </div>
-  );
-}
-
-function PaymentErrors({
-  hours,
-  defaultExpanded = false,
-}: {
-  hours: number;
-  defaultExpanded?: boolean;
-}) {
-  const summary = useQuery({
-    queryKey: ["payments", "errors", "summary", hours],
-    queryFn: () => endpoints.paymentsErrorsSummary(hours),
-    refetchInterval: 15_000,
-  });
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  const rows = useQuery({
-    queryKey: ["payments", "errors", "list", hours],
-    queryFn: () => endpoints.paymentsErrors({ hours, limit: 200 }),
-    enabled: expanded,
-    refetchInterval: expanded ? 15_000 : false,
-  });
-
-  const total = summary.data?.total ?? 0;
-  const empty = total === 0;
-
-  return (
-    <section
-      id="payment-errors"
-      className={
-        empty
-          ? "card scroll-mt-20 p-5"
-          : "card scroll-mt-20 border-danger/30 bg-danger/[0.04] p-5"
-      }
-    >
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between text-left"
-      >
-        <div className="flex items-center gap-3">
-          <div
-            className={
-              empty
-                ? "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border"
-                : "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-danger/15 text-danger"
-            }
-          >
-            <AlertCircle className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Ошибки платежей
-            </div>
-            <h2 className="text-lg font-semibold text-fg">
-              {empty ? "Без сбоев" : `${fmtNum(total)} событий`}
-            </h2>
-          </div>
-        </div>
-        <ChevronDown
-          className={
-            expanded
-              ? "h-4 w-4 rotate-180 text-fg-subtle transition"
-              : "h-4 w-4 text-fg-subtle transition"
-          }
-        />
-      </button>
-
-      {!empty && !expanded && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {summary.data?.by_stage.slice(0, 6).map((s) => (
-            <span key={s.stage} className="badge-danger">
-              {labelForStage(s.stage)} · {fmtNum(s.count)}
-            </span>
-          ))}
-          {summary.data?.by_provider.slice(0, 6).map((p) => (
-            <span key={p.provider} className="badge-muted">
-              {PROVIDER_LABELS[p.provider] ?? p.provider} · {fmtNum(p.count)}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {expanded && (
-        <div className="mt-4 space-y-3">
-          {!empty && (
-            <div className="flex flex-wrap gap-1.5">
-              {summary.data?.by_stage.map((s) => (
-                <span key={s.stage} className="badge-danger">
-                  {labelForStage(s.stage)} · {fmtNum(s.count)}
-                </span>
-              ))}
-              {summary.data?.by_provider.map((p) => (
-                <span key={p.provider} className="badge-muted">
-                  {PROVIDER_LABELS[p.provider] ?? p.provider} · {fmtNum(p.count)}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {rows.isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-fg-muted">
-              <Spinner /> Загружаю...
-            </div>
-          ) : !rows.data || rows.data.length === 0 ? (
-            <div className="text-sm text-fg-muted">
-              Под текущие фильтры ошибок нет.
-            </div>
-          ) : (
-            <ul className="divide-y divide-border/60">
-              {rows.data.map((r, i) => {
-                const provider = String(r.payment_provider ?? "unknown");
-                const stage = String(r.stage ?? "");
-                const tg = asNum(r.telegram_id);
-                const code = r.error_code ? String(r.error_code) : "";
-                const msg = r.error_message ? String(r.error_message) : "";
-                const created =
-                  typeof r.created_at === "string"
-                    ? fmtDate(r.created_at)
-                    : "";
-                const amt = asNum(r.amount_rubles);
-                return (
-                  <li key={String(r.id ?? i)} className="py-2 text-sm">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="badge-danger">
-                        {labelForStage(stage)}
-                      </span>
-                      <span className="badge-muted">
-                        {PROVIDER_LABELS[provider] ?? provider}
-                      </span>
-                      {tg != null && (
-                        <span className="text-fg">tg:{tg}</span>
-                      )}
-                      {r.username ? (
-                        <span className="text-fg-muted">
-                          @{String(r.username)}
-                        </span>
-                      ) : null}
-                      {amt != null && (
-                        <span className="text-fg-muted">
-                          · {fmtRub(amt)}
-                        </span>
-                      )}
-                      {code && (
-                        <code className="rounded bg-bg-elevated px-1.5 py-0.5 text-[11px] text-fg-muted">
-                          {code}
-                        </code>
-                      )}
-                    </div>
-                    {msg && (
-                      <div className="mt-1 font-mono text-xs text-fg-muted line-clamp-2">
-                        {msg}
-                      </div>
-                    )}
-                    <div className="mt-1 text-[11px] text-fg-subtle">
-                      {created}{" "}
-                      {r.purchase_id ? (
-                        <span>· {String(r.purchase_id).slice(0, 20)}</span>
-                      ) : null}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function labelForStage(stage: string): string {
-  const map: Record<string, string> = {
-    webhook_invalid_json: "Неверный JSON",
-    setup_missing: "Бот не готов",
-    service_missing: "Сервис не подключён",
-    transient: "Временная ошибка",
-    timeout: "Таймаут",
-    unhandled_exception: "Исключение",
-    amount_mismatch: "Сумма не совпадает",
-    provider_callback_invalid: "Невалидный callback",
-    provision_failed: "Provisioning",
-    idempotency_rejected: "Идемпотентность",
-  };
-  return map[stage] ?? stage;
-}
-
-function ChartCard({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="card p-5">
-      <div className="mb-4">
-        <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-          {title}
-        </div>
-        {subtitle && (
-          <div className="text-sm text-fg-muted">{subtitle}</div>
-        )}
-      </div>
-      <div className="h-[260px]">{children}</div>
-    </div>
-  );
-}
-
-function ProviderPie({
-  data,
-  loading,
-}: {
-  data: Array<{ provider: string; revenue_rubles: number; count: number }>;
-  loading: boolean;
-}) {
-  const rows = useMemo(
-    () =>
-      data
-        .filter((d) => d.revenue_rubles > 0)
-        .map((d) => ({
-          name: PROVIDER_LABELS[d.provider] ?? d.provider,
-          value: d.revenue_rubles,
-          count: d.count,
-        })),
-    [data],
-  );
-
-  if (loading) {
-    return (
-      <div className="grid h-full place-items-center text-sm text-fg-muted">
-        <Spinner />
-      </div>
-    );
-  }
-  if (rows.length === 0) {
-    return (
-      <div className="grid h-full place-items-center text-sm text-fg-subtle">
-        Нет данных за период
-      </div>
-    );
-  }
-
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <PieChart>
-        <Pie
-          data={rows}
-          dataKey="value"
-          nameKey="name"
-          cx="50%"
-          cy="50%"
-          innerRadius={50}
-          outerRadius={90}
-          paddingAngle={2}
-        >
-          {rows.map((_, i) => (
-            <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-          ))}
-        </Pie>
-        <RTooltip
-          contentStyle={{
-            background: "#FFFFFF",
-            border: "1px solid #E2E8F0",
-            borderRadius: 12,
-            fontSize: 12,
-            boxShadow: "0 4px 16px -4px rgba(0,0,0,0.08)",
-          }}
-          formatter={(value: number, _name: string, item) =>
-            [`${fmtRub(value)} · ${fmtNum(item?.payload?.count)} шт`, item?.payload?.name]
-          }
-        />
-        <Legend
-          verticalAlign="bottom"
-          iconType="circle"
-          wrapperStyle={{ fontSize: 11, color: "#64748B" }}
-        />
-      </PieChart>
-    </ResponsiveContainer>
-  );
-}
-
-function TypeBar({
-  data,
-  loading,
-}: {
-  data: Record<string, { count: number; revenue_rubles: number }>;
-  loading: boolean;
-}) {
-  const rows = useMemo(
-    () =>
-      Object.entries(data)
-        .map(([type, v]) => ({
-          name: type,
-          revenue: v.revenue_rubles,
-          count: v.count,
-        }))
-        .sort((a, b) => b.revenue - a.revenue),
-    [data],
-  );
-
-  if (loading) {
-    return (
-      <div className="grid h-full place-items-center text-sm text-fg-muted">
-        <Spinner />
-      </div>
-    );
-  }
-  if (rows.length === 0) {
-    return (
-      <div className="grid h-full place-items-center text-sm text-fg-subtle">
-        Нет данных
-      </div>
-    );
-  }
-
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
-        <XAxis
-          dataKey="name"
-          tick={{ fill: "#94A3B8", fontSize: 11 }}
-          axisLine={{ stroke: "#E2E8F0" }}
-          tickLine={false}
-        />
-        <YAxis
-          tick={{ fill: "#94A3B8", fontSize: 11 }}
-          axisLine={false}
-          tickLine={false}
-        />
-        <RTooltip
-          cursor={{ fill: "rgba(15,23,32,0.05)" }}
-          contentStyle={{
-            background: "#FFFFFF",
-            border: "1px solid #E2E8F0",
-            borderRadius: 12,
-            fontSize: 12,
-            boxShadow: "0 4px 16px -4px rgba(0,0,0,0.08)",
-          }}
-          formatter={(value: number, _name: string, item) =>
-            item?.dataKey === "revenue"
-              ? [fmtRub(value), "Доход"]
-              : [fmtNum(value), "Штук"]
-          }
-        />
-        <Legend
-          verticalAlign="top"
-          height={28}
-          iconType="circle"
-          wrapperStyle={{ fontSize: 11, color: "#64748B" }}
-        />
-        <Bar dataKey="revenue" name="Доход" fill="#0F1720" radius={[4, 4, 0, 0]} />
-        <Bar dataKey="count" name="Штук" fill="#2563EB" radius={[4, 4, 0, 0]} />
-      </BarChart>
-    </ResponsiveContainer>
-  );
-}
-
-interface PaymentRow extends Record<string, unknown> {
-  id?: number;
-  purchase_id?: string;
-  telegram_id?: number;
-  username?: string;
-  tariff?: string;
-  purchase_type?: string;
-  period_days?: number;
-  price_rubles?: number;
-  price_kopecks?: number;
-  payment_provider?: string;
-  status?: string;
-  promo_code?: string;
-  is_combo?: boolean;
-  country?: string;
-  created_at?: string;
-}
-
-function PaymentsFeed({ hours }: { hours: number }) {
-  const [status, setStatus] = useState<"" | "paid" | "pending" | "expired">("");
-
-  const feed = useQuery({
-    queryKey: ["payments", "recent", hours, status],
-    queryFn: () =>
-      endpoints.paymentsRecent({
-        limit: 200,
-        hours,
-        status: status || undefined,
-      }) as Promise<PaymentRow[]>,
-    refetchInterval: 15_000,
-  });
-
-  return (
-    <section className="card p-5">
-      <div className="mb-4 flex items-center justify-between gap-2">
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Лента
-          </div>
-          <h2 className="text-lg font-semibold text-fg">
-            Последние платежи
-          </h2>
-        </div>
-        <div className="flex items-center gap-2">
-          {(["", "paid", "pending", "expired"] as const).map((s) => (
-            <button
-              key={s || "all"}
-              type="button"
-              onClick={() => setStatus(s)}
-              className={
-                status === s
-                  ? "rounded-lg bg-accent/15 px-3 py-1.5 text-xs font-medium text-accent"
-                  : "rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted hover:bg-bg-elevated hover:text-fg"
-              }
-            >
-              {s === "" ? "Все" : s === "paid" ? "Успех" : s === "pending" ? "В обработке" : "Истекли"}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {feed.isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-fg-muted">
-          <Spinner /> Загружаю...
-        </div>
-      ) : !feed.data || feed.data.length === 0 ? (
-        <EmptyState
-          icon={Wallet}
-          title="Пусто"
-          description="Под текущие фильтры платежей нет."
-        />
-      ) : (
-        <ul className="divide-y divide-border/60">
-          {feed.data.map((p) => (
-            <PaymentRowItem key={String(p.id ?? Math.random())} p={p} />
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function PaymentRowItem({ p }: { p: PaymentRow }) {
-  const [expanded, setExpanded] = useState(false);
-  const tg = Number(p.telegram_id ?? 0);
-
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-start gap-3 py-3 text-left transition hover:bg-accent/[0.04]"
-      >
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
-          {expanded ? (
-            <ChevronDown className="h-3.5 w-3.5" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5" />
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="font-medium text-fg">
-              {p.username ? `@${String(p.username)}` : `tg:${tg}`}
-            </span>
-            {p.username && tg > 0 && (
-              <span className="font-mono text-[11px] text-fg-subtle">
-                tg:{tg}
-              </span>
-            )}
-            <StatusBadge status={String(p.status ?? "")} />
-            <span className="badge-muted">
-              {String(p.purchase_type ?? "—")}
-              {p.tariff ? ` · ${String(p.tariff)}` : ""}
-              {p.is_combo ? " · combo" : ""}
-            </span>
-            {p.payment_provider && p.payment_provider !== "unknown" && (
-              <span className="badge-accent">
-                {PROVIDER_LABELS[String(p.payment_provider)] ?? String(p.payment_provider)}
-              </span>
-            )}
-            {p.promo_code && (
-              <span className="badge-warning">promo: {String(p.promo_code)}</span>
-            )}
-          </div>
-          <div className="mt-1 flex items-center gap-3 text-xs text-fg-muted">
-            <span>{fmtDate(String(p.created_at ?? ""))}</span>
-            {p.period_days != null && (
-              <span>· {fmtNum(asNum(p.period_days))} дн</span>
-            )}
-            {p.country && <span>· {String(p.country)}</span>}
-          </div>
-        </div>
-        <div className="shrink-0 text-right">
-          <div className="text-sm font-semibold text-fg">
-            {fmtRub(p.price_rubles)}
-          </div>
-          <div className="text-[11px] text-fg-subtle">
-            {String(p.purchase_id ?? "").slice(0, 16) || "—"}
-          </div>
-        </div>
-      </button>
-
-      {expanded && tg > 0 && <ExpandedUser telegramId={tg} />}
-    </li>
-  );
-}
-
-function ExpandedUser({ telegramId }: { telegramId: number }) {
-  const detail = useQuery({
-    queryKey: ["users", "detail", telegramId],
-    queryFn: () => endpoints.userDetail(telegramId),
     staleTime: 60_000,
   });
 
-  if (detail.isLoading) {
-    return (
-      <div className="ml-12 mb-3 flex items-center gap-2 text-sm text-fg-muted">
-        <Spinner /> Загружаю профиль...
-      </div>
-    );
-  }
-  if (detail.isError || !detail.data) {
-    return (
-      <div className="ml-12 mb-3 flex items-center gap-2 text-sm text-danger">
-        <AlertCircle className="h-3.5 w-3.5" /> Не удалось загрузить юзера
-      </div>
-    );
-  }
-  const d = detail.data;
-  const u = d.user as Record<string, unknown>;
-  const sub = d.subscription as Record<string, unknown> | null;
+  // Счётчик отказов на вкладке. Отказ этого запроса не рисует ноль:
+  // вкладка просто остаётся без числа, а не сообщает, что сбоев нет.
+  const errorsSummary = useQuery({
+    queryKey: ["payments", "errors", "summary", hours],
+    queryFn: () => endpoints.paymentsErrorsSummary(hours),
+    refetchInterval: 60_000,
+  });
 
   return (
-    <div className="ml-12 mb-3 rounded-xl border border-border bg-bg-subtle/40 p-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 md:grid-cols-4">
-        <Pair label="Баланс" value={fmtRub(d.balance_rubles)} />
-        <Pair label="VIP" value={d.is_vip ? "да" : "нет"} />
-        {/* Бэкенд отдаёт tariff_display — уже переведённое название вида
-            «Комбо Плюс». Откат на subscription_type оставлен на случай
-            старого ответа без обогащения. */}
-        <Pair
-          label="Тариф"
-          value={
-            sub
-              ? String(sub.tariff_display ?? sub.subscription_type ?? "—")
-              : "—"
-          }
+    <div className="mx-auto max-w-[1400px] space-y-4">
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-fg">Платежи</h1>
+          <p className="mt-0.5 text-base text-fg-muted">
+            Что купили за период и почему часть оплат не прошла.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={hours}
+            onChange={(e) => patch({ hours: e.target.value })}
+            aria-label="Период"
+            className="h-9 rounded-md border border-border-control bg-bg-card px-2 text-base text-fg"
+          >
+            {WINDOWS.map((w) => (
+              <option key={w.hours} value={w.hours}>
+                {w.label}
+              </option>
+            ))}
+          </select>
+          <DensityToggle
+            value={density}
+            onChange={setDensity}
+            className="hidden md:inline-flex"
+          />
+        </div>
+      </header>
+
+      {/* Вкладки. Отказы — не свёрнутая секция внизу, а равноправная
+          половина экрана: с ними приходят по жалобе, и искать их
+          прокруткой неправильно. */}
+      <div
+        role="tablist"
+        aria-label="Раздел платежей"
+        className="inline-flex items-center gap-0.5 rounded-md border border-border bg-bg-subtle p-0.5"
+      >
+        <TabButton
+          active={tab === "feed"}
+          onClick={() => patch({ focus: null })}
+          label="Лента платежей"
         />
-        <Pair
-          label="Истекает"
-          value={sub ? fmtDate(String(sub.expires_at ?? "")) : "—"}
-        />
-        <Pair
-          label="Зарегистрирован"
-          value={
-            typeof u.created_at === "string" ? fmtDate(u.created_at) : "—"
-          }
-        />
-        <Pair
-          label="Язык"
-          value={(u.language as string | undefined) ?? "—"}
-        />
-        <Pair
-          label="Триал"
-          value={d.trial ? "использован" : "—"}
-        />
-        <Pair
-          label="Скидка"
-          value={
-            d.discount
-              ? `${String(
-                  (d.discount as Record<string, unknown>).discount_percent ?? "—",
-                )}%`
-              : "—"
+        <TabButton
+          active={tab === "errors"}
+          onClick={() => patch({ focus: "errors" })}
+          label={
+            errorsSummary.data && errorsSummary.data.total > 0
+              ? `Отказы · ${fmtNum(errorsSummary.data.total)}`
+              : "Отказы"
           }
         />
       </div>
-      <div className="mt-3 flex justify-end">
-        <Link
-          to={`/users?tg=${telegramId}`}
-          className="btn-ghost"
-        >
-          <ExternalLink className="h-3 w-3" /> Полная карточка
-        </Link>
-      </div>
+
+      {tab === "errors" ? (
+        <PaymentErrors hours={hours} />
+      ) : (
+        <>
+          <MoneyStrip hours={hours} />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              role="radiogroup"
+              aria-label="Состояние платежа"
+              className="inline-flex items-center gap-0.5 rounded-md border border-border bg-bg-subtle p-0.5"
+            >
+              {STATUSES.map(([key, label]) => (
+                <button
+                  key={key || "all"}
+                  type="button"
+                  role="radio"
+                  aria-checked={status === key}
+                  onClick={() => patch({ status: key || null })}
+                  className={
+                    status === key
+                      ? "rounded-sm bg-bg-card px-2 py-1 text-xs font-medium text-fg"
+                      : "rounded-sm px-2 py-1 text-xs font-medium text-fg-muted transition-colors hover:text-fg"
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <select
+              value={provider}
+              onChange={(e) => patch({ provider: e.target.value || null })}
+              aria-label="Способ оплаты"
+              className="h-8 rounded-md border border-border-control bg-bg-card px-2 text-xs text-fg"
+            >
+              <option value="">Любой способ оплаты</option>
+              {(providers.data ?? []).map((p) => (
+                <option key={p.provider} value={p.provider}>
+                  {providerLabel(p.provider)} · {fmtNum(p.count)}
+                </option>
+              ))}
+            </select>
+
+            {providers.isError && (
+              <span className="text-xs text-fg-muted">
+                Список способов оплаты не загрузился — фильтр по нему сейчас
+                неполный.
+                <button
+                  type="button"
+                  onClick={() => providers.refetch()}
+                  className="ml-1 text-accent-text underline-offset-2 hover:underline"
+                >
+                  Повторить
+                </button>
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]">
+            <div className={purchaseId !== null ? "hidden lg:block" : undefined}>
+              <PaymentsFeed
+                hours={hours}
+                status={status}
+                provider={provider}
+                selected={purchaseId}
+                onSelect={(id) => patch({ purchase: String(id) })}
+                onResetFilters={() => patch({ status: null, provider: null })}
+                // Следующее окно из списка, а не «умножить на четыре»:
+                // произвольное число не совпало бы ни с одним пунктом
+                // выбора периода, и селектор наверху опустел бы.
+                onWiden={() => patch({ hours: String(nextWindow(hours)) })}
+                density={density}
+              />
+            </div>
+
+            {purchaseId !== null ? (
+              <div className="lg:sticky lg:top-4 lg:self-start">
+                <div className="mb-2 lg:hidden">
+                  <Button size="sm" onClick={() => patch({ purchase: null })}>
+                    ← К ленте
+                  </Button>
+                </div>
+                <PaymentPanel
+                  purchaseId={purchaseId}
+                  onClose={() => patch({ purchase: null })}
+                />
+              </div>
+            ) : (
+              <div className="hidden rounded-lg border border-dashed border-border p-6 text-center text-base text-fg-muted lg:block">
+                Выберите платёж — здесь будет видно, кто платил, чем платил и
+                выдан ли доступ.
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-function Pair({ label, value }: { label: string; value: string }) {
+function TabButton({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
   return (
-    <div>
-      <div className="text-[11px] uppercase tracking-wider text-fg-subtle">
-        {label}
-      </div>
-      <div className="font-medium text-fg">{value}</div>
-    </div>
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={
+        active
+          ? "rounded-sm bg-bg-card px-3 py-1.5 text-xs font-medium text-fg"
+          : "rounded-sm px-3 py-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-fg"
+      }
+    >
+      {label}
+    </button>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const s = status.toLowerCase();
-  if (s === "paid") return <span className="tag-green">оплачен</span>;
-  if (s === "pending") return <span className="tag-amber">ожидает</span>;
-  if (s === "expired") return <span className="badge-muted">истёк</span>;
-  if (s === "failed") return <span className="tag-rose">ошибка</span>;
-  return <span className="badge-muted">{status || "—"}</span>;
-}
-
-function asNum(v: unknown): number | undefined {
-  if (typeof v === "number") return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : undefined;
-  }
-  return undefined;
 }

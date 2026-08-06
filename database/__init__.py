@@ -176,6 +176,7 @@ from database.analytics import (  # noqa: F401
     log_payment_error,
     get_recent_payment_errors,
     get_payment_errors_summary,
+    get_purchase_detail,
     get_traffic_stats,
     get_purchase_breakdown,
     get_extended_bot_stats,
@@ -379,6 +380,14 @@ from database.dashboard_summary import (  # noqa: F401
     get_summary_events,
 )
 
+# Экран «События» — журнал audit_log с фильтрами и листанием. То же
+# правило, что и у сводки: отказ поднимается наверх, потому что пустой
+# журнал читается как «ничего не происходило».
+from database.dashboard_events import (  # noqa: F401
+    get_audit_events,
+    get_audit_category_counts,
+)
+
 # Admin: stats, broadcasts, analytics, exports, gifts, VIP, discounts
 # Покупка и пополнение с внутреннего баланса — денежное ядро, вынесено
 # из admin.py: его правят по другим причинам, чем отчёты и рассылки.
@@ -396,6 +405,8 @@ from database.admin import (  # noqa: F401
     get_active_subscriptions_for_export,
     get_subscription_history,
     get_user_extended_stats,
+    list_users_dashboard,
+    get_balances_bulk,
     admin_grant_access_atomic,
     admin_grant_access_minutes_atomic,
     admin_revoke_access_atomic,

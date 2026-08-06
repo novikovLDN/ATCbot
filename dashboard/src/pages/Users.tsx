@@ -1,1319 +1,164 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import {
-  Search,
-  ShieldCheck,
-  Crown,
-  Wallet,
-  Percent,
-  Calendar,
-  Hash,
-  UserCircle2,
-  RefreshCcw,
-  Plus,
-  Minus,
-  Trash2,
-  ChevronRight,
-} from "lucide-react";
-import { endpoints, ApiError, type UserDetail } from "@/lib/api";
-import { fmtNum, fmtRub, fmtDate } from "@/lib/format";
-import { toast } from "@/store/toast";
-import { Spinner } from "@/components/Spinner";
-import { EmptyState } from "@/components/EmptyState";
-import {
-  SubscriptionFilterList,
-  type SubscriptionFilter,
-} from "@/components/users/SubscriptionFilterList";
+import { Search } from "lucide-react";
+
+import { Button, DensityToggle, Input, type Density } from "@/components/ui";
+import { UsersTable, type UsersFilter } from "@/components/users/UsersTable";
+import { UserPanel } from "@/components/users/UserPanel";
+
+/**
+ * Пользователи — плотная таблица слева, панель деталей справа.
+ *
+ * ВСЁ СОСТОЯНИЕ ЭКРАНА ЖИВЁТ В АДРЕСЕ: ?filter=, ?q=, ?tg=. Так ссылка на
+ * конкретного человека или на отфильтрованный список работает из
+ * переписки, из закладки и с плиток сводки. Плитки зоны B ведут сюда с
+ * ?filter=active и ?filter=expiring_7d — сломаете разбор параметров, и
+ * числа на главной станут мёртвыми ссылками.
+ *
+ * ПОЧЕМУ ЭТОТ ФАЙЛ КОРОТКИЙ. Он был на 1319 строк и держал в себе восемь
+ * форм, шесть мутаций и таблицу покупок. Теперь здесь только расстановка
+ * и разбор адреса: таблица, панель, действия и покупки — отдельные
+ * компоненты в components/users. Складывать сюда логику не надо, она
+ * уедет обратно к тысяче строк.
+ *
+ * ПЛОТНОСТЬ ТАБЛИЦЫ запоминается между сессиями (research §5): человек,
+ * который переключился на компактный режим, ждёт его и завтра.
+ */
+
+const DENSITY_KEY = "atlas.users.density";
+
+function readDensity(): Density {
+  const saved = localStorage.getItem(DENSITY_KEY);
+  return saved === "compact" || saved === "comfortable" ? saved : "comfortable";
+}
 
 export function Users() {
   const [params, setParams] = useSearchParams();
-  const initialTg = params.get("tg") || "";
-  // ?filter= приходит с плиток сводки: «активные подписки» и «истекают за
-  // 7 дней». Число там кликабельно ровно ради этого списка — без него
-  // клик открывал бы пустой экран поиска, то есть был бы мёртвым.
+
   const rawFilter = params.get("filter");
-  const filter: SubscriptionFilter | null =
-    rawFilter === "active" || rawFilter === "expiring_7d" ? rawFilter : null;
-  const [query, setQuery] = useState(initialTg);
-  const [submitted, setSubmitted] = useState(initialTg);
-  // After the search returns >1 match the admin picks one from the
-  // list. After picking, we render the full card for that telegram_id.
-  const [picked, setPicked] = useState<number | null>(
-    initialTg && /^\d+$/.test(initialTg) ? Number(initialTg) : null,
-  );
+  const filter: UsersFilter =
+    rawFilter === "active" || rawFilter === "expiring_7d" ? rawFilter : "all";
+  const query = params.get("q") ?? "";
+  const tg = params.get("tg");
+  const selected = tg && /^\d+$/.test(tg) ? Number(tg) : null;
 
-  // Re-trigger search if the ?tg=… changes (e.g. user clicks
-  // multiple "Полная карточка" links from the payments feed).
-  useEffect(() => {
-    const tg = params.get("tg") || "";
-    if (tg && tg !== submitted) {
-      setQuery(tg);
-      setSubmitted(tg);
-      setPicked(/^\d+$/.test(tg) ? Number(tg) : null);
+  // Поле ввода живёт своей жизнью до нажатия «Найти»: поиск по каждой
+  // букве дёргал бы сервер на каждый символ, а список — не подсказка.
+  const [draft, setDraft] = useState(query);
+  const [density, setDensity] = useState<Density>(readDensity);
+
+  useEffect(() => setDraft(query), [query]);
+  useEffect(() => localStorage.setItem(DENSITY_KEY, density), [density]);
+
+  const patch = (next: Record<string, string | null>) => {
+    const usp = new URLSearchParams(params);
+    for (const [key, value] of Object.entries(next)) {
+      if (value === null || value === "") usp.delete(key);
+      else usp.set(key, value);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params]);
-
-  const search = useQuery({
-    queryKey: ["users", "search", submitted],
-    queryFn: () => endpoints.userSearch(submitted),
-    enabled: submitted.length > 0,
-    retry: false,
-  });
-
-  const matches = search.data?.matches ?? [];
-
-  // Auto-pick when search returns exactly one result so the admin
-  // doesn't have to click again — same UX as the old single-result
-  // endpoint. Multiple matches always need an explicit pick.
-  useEffect(() => {
-    if (!search.data) return;
-    if (matches.length === 1) {
-      setPicked(matches[0].telegram_id);
-    } else if (matches.length === 0) {
-      setPicked(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search.data]);
+    setParams(usp, { replace: true });
+  };
 
   return (
-    <div className="space-y-6">
-      <header>
-        <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-          Управление
+    <div className="mx-auto max-w-[1400px] space-y-4">
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-fg">Пользователи</h1>
+          <p className="mt-0.5 text-base text-fg-muted">
+            Найти человека, посмотреть подписку и покупки, продлить или отозвать доступ.
+          </p>
         </div>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg md:text-3xl">
-          Пользователи
-        </h1>
+        <DensityToggle value={density} onChange={setDensity} className="hidden md:inline-flex" />
       </header>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          const q = query.trim();
-          setSubmitted(q);
-          setPicked(null);
-        }}
-        className="card flex items-center gap-2 p-2"
-      >
-        <Search className="ml-2 h-4 w-4 text-fg-subtle" />
-        <input
-          className="flex-1 bg-transparent px-2 py-2 text-sm text-fg placeholder:text-fg-subtle outline-none"
-          placeholder="Telegram ID, @username или часть имени"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          inputMode="search"
-          autoComplete="off"
-          autoCapitalize="none"
-          autoCorrect="off"
-        />
-        <button type="submit" className="btn-primary" disabled={!query.trim()}>
-          Найти
-        </button>
-      </form>
-
-      {filter && (
-        <SubscriptionFilterList
-          filter={filter}
-          onReset={() => {
-            const next = new URLSearchParams(params);
-            next.delete("filter");
-            setParams(next, { replace: true });
+      <div className="flex flex-wrap items-center gap-2">
+        <form
+          className="flex min-w-[260px] flex-1 items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            patch({ q: draft.trim() || null });
           }}
-        />
-      )}
-
-      {submitted && search.isLoading && (
-        <div className="card flex items-center gap-3 p-6 text-sm text-fg-muted">
-          <Spinner /> Ищу...
-        </div>
-      )}
-
-      {submitted && search.isError && (
-        <EmptyState
-          icon={UserCircle2}
-          title="Не удалось выполнить поиск"
-          description={(search.error as ApiError)?.detail}
-        />
-      )}
-
-      {submitted &&
-        !search.isLoading &&
-        !search.isError &&
-        matches.length === 0 && (
-          <EmptyState
-            icon={UserCircle2}
-            title="Никого не нашли"
-            description={`По запросу «${submitted}» нет совпадений ни по telegram_id, ни по username.`}
-          />
-        )}
-
-      {matches.length > 1 && picked === null && (
-        <SearchResultsList
-          query={submitted}
-          matches={matches}
-          onPick={setPicked}
-        />
-      )}
-
-      {picked !== null && (
-        <UserCard
-          telegramId={picked}
-          onBack={
-            matches.length > 1 ? () => setPicked(null) : undefined
-          }
-        />
-      )}
-    </div>
-  );
-}
-
-function SearchResultsList({
-  query,
-  matches,
-  onPick,
-}: {
-  query: string;
-  matches: Array<{
-    telegram_id: number;
-    username: string | null;
-    language: string | null;
-    created_at: string | null;
-    has_active_sub: boolean;
-  }>;
-  onPick: (tg: number) => void;
-}) {
-  return (
-    <div className="card p-5">
-      <div className="mb-3 flex items-center justify-between">
-        <div>
-          <div className="text-xs uppercase tracking-wider text-fg-subtle">
-            Найдено
+        >
+          <div className="flex-1">
+            <Input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Telegram ID, @username или часть имени"
+              leading={<Search className="h-3.5 w-3.5" />}
+              inputMode="search"
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              aria-label="Поиск пользователя"
+            />
           </div>
-          <h2 className="text-base font-semibold text-fg">
-            {matches.length} совпадений по «{query}»
-          </h2>
-        </div>
-      </div>
-      <ul className="divide-y divide-border/60">
-        {matches.map((m) => (
-          <li key={m.telegram_id}>
+          <Button type="submit" variant="primary">
+            Найти
+          </Button>
+        </form>
+
+        {/* Отборы. Названия те же, что на плитках сводки: человек приходит
+            оттуда по клику и должен узнать, куда попал. */}
+        <div
+          role="radiogroup"
+          aria-label="Отбор пользователей"
+          className="inline-flex items-center gap-0.5 rounded-md border border-border bg-bg-subtle p-0.5"
+        >
+          {(
+            [
+              ["all", "Все"],
+              ["active", "Активные"],
+              ["expiring_7d", "Истекают за 7 дней"],
+            ] as Array<[UsersFilter, string]>
+          ).map(([key, label]) => (
             <button
+              key={key}
               type="button"
-              onClick={() => onPick(m.telegram_id)}
-              className="flex w-full items-center gap-3 py-3 text-left transition-colors hover:bg-accent/[0.04]"
+              role="radio"
+              aria-checked={filter === key}
+              onClick={() => patch({ filter: key === "all" ? null : key })}
+              className={
+                filter === key
+                  ? "rounded-sm bg-bg-card px-2 py-1 text-xs font-medium text-fg"
+                  : "rounded-sm px-2 py-1 text-xs font-medium text-fg-muted transition-colors hover:text-fg"
+              }
             >
-              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border">
-                <UserCircle2 className="h-4 w-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate font-medium text-fg">
-                    {m.username ? `@${m.username}` : `tg:${m.telegram_id}`}
-                  </span>
-                  {m.username && (
-                    <span className="badge-muted font-mono text-[10px]">
-                      tg:{m.telegram_id}
-                    </span>
-                  )}
-                  {m.has_active_sub ? (
-                    <span className="badge-success text-[10px]">
-                      <ShieldCheck className="h-3 w-3" /> active
-                    </span>
-                  ) : (
-                    <span className="badge-muted text-[10px]">no sub</span>
-                  )}
-                </div>
-                {m.created_at && (
-                  <div className="mt-0.5 text-xs text-fg-muted">
-                    зарегистрирован {fmtDate(m.created_at)}
-                  </div>
-                )}
-              </div>
-              <ChevronRight className="h-4 w-4 shrink-0 text-fg-subtle" />
+              {label}
             </button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function UserCard({
-  telegramId,
-  onBack,
-}: {
-  telegramId: number;
-  onBack?: () => void;
-}) {
-  const qc = useQueryClient();
-  const detail = useQuery({
-    queryKey: ["users", "detail", telegramId],
-    queryFn: () => endpoints.userDetail(telegramId),
-  });
-
-  const invalidate = () =>
-    qc.invalidateQueries({ queryKey: ["users", "detail", telegramId] });
-
-  if (detail.isLoading) {
-    return (
-      <div className="card flex items-center gap-3 p-6 text-sm text-fg-muted">
-        <Spinner /> Загружаю карточку...
+          ))}
+        </div>
       </div>
-    );
-  }
 
-  if (detail.isError || !detail.data) {
-    return (
-      <EmptyState
-        icon={UserCircle2}
-        title="Не удалось загрузить"
-        description={(detail.error as ApiError)?.detail}
-      />
-    );
-  }
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(380px,440px)]">
+        {/* На телефоне открытая карточка заменяет список: две колонки на
+            375 px превращаются в кашу, а сравнивать людей между собой на
+            этом экране не нужно. */}
+        <div className={selected ? "hidden lg:block" : undefined}>
+          <UsersTable
+            filter={filter}
+            query={query}
+            selected={selected}
+            onSelect={(id) => patch({ tg: String(id) })}
+            onResetFilters={() => patch({ filter: null, q: null })}
+            density={density}
+          />
+        </div>
 
-  const d = detail.data;
-  const u = d.user as Record<string, unknown>;
-  const sub = d.subscription;
-
-  return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-      <div className="card p-5 lg:col-span-2">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="text-xs uppercase tracking-wider text-fg-subtle">Карточка</div>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <h2 className="text-xl font-semibold text-fg">
-                {typeof u.username === "string" && u.username
-                  ? `@${u.username}`
-                  : `tg:${telegramId}`}
-              </h2>
-              {typeof u.username === "string" && u.username && (
-                <span className="badge-muted font-mono">tg:{telegramId}</span>
-              )}
-              {d.is_vip && (
-                <span className="badge-warning">
-                  <Crown className="h-3 w-3" /> VIP
-                </span>
-              )}
-              {sub && (sub as Record<string, unknown>).status === "active" ? (
-                <span className="badge-success">
-                  <ShieldCheck className="h-3 w-3" /> active
-                </span>
-              ) : (
-                <span className="badge-muted">no sub</span>
-              )}
+        {selected !== null ? (
+          <div className="lg:sticky lg:top-4 lg:self-start">
+            <div className="mb-2 lg:hidden">
+              <Button size="sm" onClick={() => patch({ tg: null })}>
+                ← К списку
+              </Button>
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-fg-muted">
-              <span className="inline-flex items-center gap-1.5">
-                <Hash className="h-3 w-3" /> {telegramId}
-              </span>
-              {typeof u.created_at === "string" && (
-                <span className="inline-flex items-center gap-1.5">
-                  <Calendar className="h-3 w-3" /> зарегистрирован {fmtDate(u.created_at)}
-                </span>
-              )}
-            </div>
+            <UserPanel telegramId={selected} onClose={() => patch({ tg: null })} />
           </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {onBack && (
-              <button
-                type="button"
-                onClick={onBack}
-                className="btn-ghost"
-              >
-                ← к списку
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => detail.refetch()}
-              className="btn-ghost"
-              aria-label="Обновить"
-            >
-              <RefreshCcw className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Cell
-            icon={Wallet}
-            label="Баланс"
-            value={fmtRub(d.balance_rubles)}
-          />
-          <Cell
-            icon={ShieldCheck}
-            label="Тариф"
-            value={
-              sub
-                ? String(
-                    (sub as Record<string, unknown>).tariff_display ??
-                      (sub as Record<string, unknown>).subscription_type ??
-                      "—",
-                  )
-                : "—"
-            }
-          />
-          <Cell
-            icon={Calendar}
-            label="Истекает"
-            value={fmtDate(
-              sub ? String((sub as Record<string, unknown>).expires_at ?? "") : null,
-            )}
-          />
-          <Cell
-            icon={Percent}
-            label="Скидка"
-            value={
-              d.discount
-                ? `${String((d.discount as Record<string, unknown>).discount_percent ?? "—")}%`
-                : "—"
-            }
-          />
-        </div>
-
-        <Actions telegramId={telegramId} detail={d} onChange={invalidate} />
-      </div>
-
-      <div className="space-y-4">
-        <TrialCard detail={d} />
-        <BalanceCard
-          telegramId={telegramId}
-          balance={d.balance_rubles}
-          onChange={invalidate}
-        />
-        <DiscountCard
-          telegramId={telegramId}
-          detail={d}
-          onChange={invalidate}
-        />
-        <TrafficDiscountCard
-          telegramId={telegramId}
-          detail={d}
-          onChange={invalidate}
-        />
-        <CashbackFixCard
-          telegramId={telegramId}
-          detail={d}
-          onChange={invalidate}
-        />
-        <ExtendedProfileCard telegramId={telegramId} />
-      </div>
-
-      <div className="lg:col-span-3">
-        <PaymentsCard telegramId={telegramId} />
-      </div>
-    </div>
-  );
-}
-
-function Cell({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: typeof Wallet;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-xl border border-border bg-bg-subtle/60 p-3">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
-        <Icon className="h-3 w-3" /> {label}
-      </div>
-      <div className="mt-1 truncate text-sm font-semibold text-fg">{value}</div>
-    </div>
-  );
-}
-
-function TrialCard({ detail }: { detail: UserDetail }) {
-  const t = detail.trial as Record<string, unknown> | null;
-  return (
-    <div className="card p-4">
-      <div className="text-xs uppercase tracking-wider text-fg-subtle">Триал</div>
-      {!t ? (
-        <div className="mt-2 text-sm text-fg-muted">Не использовался</div>
-      ) : (
-        <div className="mt-2 space-y-1.5 text-sm">
-          <Row label="Активирован" value={fmtDate(t.trial_used_at as string)} />
-          <Row label="Истекает" value={fmtDate(t.trial_expires_at as string)} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DiscountCard({
-  telegramId,
-  detail,
-  onChange,
-}: {
-  telegramId: number;
-  detail: UserDetail;
-  onChange: () => void;
-}) {
-  const [percent, setPercent] = useState(30);
-  const [hours, setHours] = useState<number | "">(24);
-  const create = useMutation({
-    mutationFn: () =>
-      endpoints.userDiscountCreate(telegramId, {
-        percent,
-        expires_in_hours: typeof hours === "number" ? hours : null,
-      }),
-    onSuccess: () => {
-      toast.success("Скидка создана");
-      onChange();
-    },
-    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
-  });
-  const del = useMutation({
-    mutationFn: () => endpoints.userDiscountDelete(telegramId),
-    onSuccess: () => {
-      toast.success("Скидка удалена");
-      onChange();
-    },
-    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
-  });
-
-  const existing = detail.discount as Record<string, unknown> | null;
-
-  return (
-    <div className="card p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-xs uppercase tracking-wider text-fg-subtle">Персональная скидка</div>
-        {existing && (
-          <button
-            type="button"
-            onClick={() => del.mutate()}
-            className="btn-ghost text-danger hover:text-danger"
-            disabled={del.isPending}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      {existing && (
-        <div className="mt-2 rounded-lg bg-bg-elevated px-3 py-2 text-sm text-fg">
-          <b>{String(existing.discount_percent ?? "—")}%</b> до{" "}
-          {fmtDate(existing.expires_at as string) || "бессрочно"}
-        </div>
-      )}
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <input
-          className="input"
-          type="number"
-          min={1}
-          max={100}
-          value={percent}
-          onChange={(e) => setPercent(Number(e.target.value) || 0)}
-          placeholder="%"
-        />
-        <input
-          className="input"
-          type="number"
-          min={1}
-          value={hours}
-          onChange={(e) =>
-            setHours(e.target.value === "" ? "" : Number(e.target.value))
-          }
-          placeholder="часов"
-        />
-      </div>
-      <button
-        type="button"
-        onClick={() => create.mutate()}
-        className="btn-primary mt-2 w-full"
-        disabled={create.isPending || percent < 1 || percent > 100}
-      >
-        {create.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
-        Применить
-      </button>
-    </div>
-  );
-}
-
-function TrafficDiscountCard({
-  telegramId,
-  detail,
-  onChange,
-}: {
-  telegramId: number;
-  detail: UserDetail;
-  onChange: () => void;
-}) {
-  const [percent, setPercent] = useState(30);
-  const [hours, setHours] = useState<number | "">(24);
-  const create = useMutation({
-    mutationFn: () =>
-      endpoints.userTrafficDiscountCreate(telegramId, {
-        percent,
-        expires_in_hours: typeof hours === "number" ? hours : null,
-      }),
-    onSuccess: () => {
-      toast.success("Скидка на GB создана");
-      onChange();
-    },
-    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
-  });
-  const del = useMutation({
-    mutationFn: () => endpoints.userTrafficDiscountDelete(telegramId),
-    onSuccess: () => {
-      toast.success("Скидка на GB удалена");
-      onChange();
-    },
-    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
-  });
-
-  const existing = detail.traffic_discount as Record<string, unknown> | null;
-
-  return (
-    <div className="card p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-xs uppercase tracking-wider text-fg-subtle">
-          Скидка на GB (Обход)
-        </div>
-        {existing && (
-          <button
-            type="button"
-            onClick={() => del.mutate()}
-            className="btn-ghost text-danger hover:text-danger"
-            disabled={del.isPending}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      {existing && (
-        <div className="mt-2 rounded-lg bg-bg-elevated px-3 py-2 text-sm text-fg">
-          <b>{String(existing.discount_percent ?? "—")}%</b> до{" "}
-          {fmtDate(existing.expires_at as string) || "бессрочно"}
-        </div>
-      )}
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <input
-          className="input"
-          type="number"
-          min={1}
-          max={100}
-          value={percent}
-          onChange={(e) => setPercent(Number(e.target.value) || 0)}
-          placeholder="%"
-        />
-        <input
-          className="input"
-          type="number"
-          min={1}
-          value={hours}
-          onChange={(e) =>
-            setHours(e.target.value === "" ? "" : Number(e.target.value))
-          }
-          placeholder="часов"
-        />
-      </div>
-      <button
-        type="button"
-        onClick={() => create.mutate()}
-        className="btn-primary mt-2 w-full"
-        disabled={create.isPending || percent < 1 || percent > 100}
-      >
-        {create.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
-        Применить
-      </button>
-    </div>
-  );
-}
-
-function CashbackFixCard({
-  telegramId,
-  detail,
-  onChange,
-}: {
-  telegramId: number;
-  detail: UserDetail;
-  onChange: () => void;
-}) {
-  const current = detail.cashback_fixed_percent;
-  const effective = detail.cashback_effective_percent;
-  const [percent, setPercent] = useState<number | "">(
-    typeof current === "number" ? current : 10,
-  );
-
-  const setMut = useMutation({
-    mutationFn: () =>
-      endpoints.userCashbackFixSet(telegramId, {
-        percent: typeof percent === "number" ? percent : 0,
-      }),
-    onSuccess: (data) => {
-      if (data.notify_sent) {
-        toast.success("Фикс установлен, уведомление отправлено");
-      } else {
-        toast.info(
-          "Фикс установлен. Уведомление не доставлено — юзер, возможно, заблокировал бота (см. логи).",
-        );
-      }
-      onChange();
-    },
-    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
-  });
-  const clearMut = useMutation({
-    mutationFn: () => endpoints.userCashbackFixClear(telegramId),
-    onSuccess: () => {
-      toast.success("Фикс выключен — вернулась обычная логика");
-      onChange();
-    },
-    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
-  });
-
-  const isFixed = typeof current === "number";
-
-  return (
-    <div className="card p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-xs uppercase tracking-wider text-fg-subtle">
-          Кешбэк · фикс %
-        </div>
-        {isFixed && (
-          <button
-            type="button"
-            onClick={() => clearMut.mutate()}
-            className="btn-ghost text-danger hover:text-danger"
-            disabled={clearMut.isPending}
-            title="Выключить фикс — вернётся тир + floor"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-
-      <div className="mt-2 rounded-lg bg-bg-elevated px-3 py-2 text-sm text-fg">
-        <div className="flex items-center justify-between">
-          <span className="text-fg-muted">Сейчас применяется</span>
-          <b className={isFixed ? "text-special" : "text-fg"}>{effective}%</b>
-        </div>
-        <div className="mt-0.5 text-[11px] text-fg-subtle">
-          {isFixed ? (
-            <>
-              Зафиксировано админом. Не суммируется с тиром / floor.
-            </>
-          ) : (
-            <>По тиру + grandfather-floor.</>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-3 grid grid-cols-1 gap-2">
-        <input
-          className="input"
-          type="number"
-          min={0}
-          max={100}
-          value={percent}
-          onChange={(e) => setPercent(Number(e.target.value) || 0)}
-          placeholder="% (0–100)"
-        />
-      </div>
-      <button
-        type="button"
-        onClick={() => setMut.mutate()}
-        className="btn-primary mt-2 w-full"
-        disabled={
-          setMut.isPending ||
-          typeof percent !== "number" ||
-          percent < 0 ||
-          percent > 100
-        }
-      >
-        {setMut.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
-        {isFixed ? "Обновить фикс" : "Зафиксировать"}
-      </button>
-    </div>
-  );
-}
-
-function ExtendedProfileCard({ telegramId }: { telegramId: number }) {
-  const q = useQuery({
-    queryKey: ["users", "extended", telegramId],
-    queryFn: () => endpoints.userExtended(telegramId),
-    staleTime: 30_000,
-  });
-  if (q.isLoading) {
-    return (
-      <div className="card p-4">
-        <div className="text-xs uppercase tracking-wider text-fg-subtle">Профиль</div>
-        <div className="mt-2 flex items-center gap-2 text-sm text-fg-muted">
-          <Spinner /> Загружаю статистику...
-        </div>
-      </div>
-    );
-  }
-  if (q.isError || !q.data) return null;
-  const s = q.data as Record<string, unknown>;
-  const num = (v: unknown): number =>
-    typeof v === "number" ? v : typeof v === "string" ? Number(v) || 0 : 0;
-  const str = (v: unknown): string | null =>
-    typeof v === "string" && v ? v : null;
-  const totalSpent = num(s.total_spent_rubles);
-  const totalPayments = num(s.total_payments_count);
-  const firstPaid = str(s.first_paid_at);
-  const lastPaid = str(s.last_paid_at);
-  const renewals = num(s.renewals_count);
-  const reissues = num(s.reissues_count);
-  const referrerId = str(s.referrer_telegram_id) ?? (s.referrer_telegram_id as number | null | undefined);
-  const referrerUsername = str(s.referrer_username);
-  const invited = num(s.referrals_invited_count);
-  const rewarded = num(s.referrals_rewarded_count);
-  const gbTotal = num(s.traffic_gb_purchased_total);
-  const gbCount = num(s.traffic_purchases_count);
-
-  return (
-    <div className="card p-4">
-      <div className="text-xs uppercase tracking-wider text-fg-subtle">Профиль</div>
-      <div className="mt-3 space-y-1.5 text-sm">
-        <Row label="Всего оплачено" value={fmtRub(totalSpent)} />
-        <Row label="Платежей" value={fmtNum(totalPayments)} />
-        {firstPaid && <Row label="Первая покупка" value={fmtDate(firstPaid)} />}
-        {lastPaid && <Row label="Последняя покупка" value={fmtDate(lastPaid)} />}
-        <Row label="Продлений подписки" value={fmtNum(renewals)} />
-        {reissues > 0 && <Row label="Перевыпусков ключа" value={fmtNum(reissues)} />}
-      </div>
-      <div className="mt-3 border-t border-border pt-3 space-y-1.5 text-sm">
-        <div className="text-[11px] uppercase tracking-wider text-fg-subtle">Обход · GB</div>
-        <Row label="GB куплено всего" value={fmtNum(gbTotal)} />
-        <Row label="Покупок GB-паков" value={fmtNum(gbCount)} />
-      </div>
-      <div className="mt-3 border-t border-border pt-3 space-y-1.5 text-sm">
-        <div className="text-[11px] uppercase tracking-wider text-fg-subtle">Реферальная связка</div>
-        {referrerId ? (
-          <Row
-            label="Пригласил"
-            value={
-              referrerUsername
-                ? `@${referrerUsername} · ${String(referrerId)}`
-                : String(referrerId)
-            }
-          />
         ) : (
-          <Row label="Пригласил" value="— (органика)" />
-        )}
-        <Row label="Сам пригласил" value={fmtNum(invited)} />
-        {invited > 0 && (
-          <Row label="Из них с наградой" value={fmtNum(rewarded)} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Actions({
-  telegramId,
-  detail,
-  onChange,
-}: {
-  telegramId: number;
-  detail: UserDetail;
-  onChange: () => void;
-}) {
-  const [days, setDays] = useState(30);
-  const [tariff, setTariff] = useState("basic");
-
-  const grant = useMutation({
-    mutationFn: () => endpoints.userGrant(telegramId, { days, tariff }),
-    onSuccess: () => {
-      toast.success(`Выдано ${days} дн (${tariff})`);
-      onChange();
-    },
-    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
-  });
-
-  const revoke = useMutation({
-    mutationFn: () => endpoints.userRevoke(telegramId),
-    onSuccess: () => {
-      toast.success("Доступ отозван");
-      onChange();
-    },
-    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
-  });
-
-  const vipGrant = useMutation({
-    mutationFn: () => endpoints.userVipGrant(telegramId),
-    onSuccess: () => {
-      toast.success("VIP выдан");
-      onChange();
-    },
-    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
-  });
-
-  const vipRevoke = useMutation({
-    mutationFn: () => endpoints.userVipRevoke(telegramId),
-    onSuccess: () => {
-      toast.success("VIP снят");
-      onChange();
-    },
-    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
-  });
-
-  return (
-    <div className="mt-6 rounded-2xl border border-border bg-bg-subtle/40 p-4">
-      <div className="text-xs uppercase tracking-wider text-fg-subtle">Действия</div>
-
-      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
-        <label className="flex items-center gap-2 rounded-xl border border-border bg-bg-card px-3">
-          <span className="text-xs text-fg-subtle">Дней</span>
-          <input
-            type="number"
-            min={1}
-            max={3650}
-            value={days}
-            onChange={(e) => setDays(Math.max(1, Number(e.target.value) || 1))}
-            className="w-full bg-transparent py-2 text-sm text-fg outline-none"
-          />
-        </label>
-        {/* Комбо — отдельные тарифы, а не галочка к обычной подписке:
-            у них своя цена и свой пакет ГБ обхода. Значения должны
-            совпадать с config.GRANTABLE_TARIFF_TYPES на бэкенде. */}
-        <select
-          value={tariff}
-          onChange={(e) => setTariff(e.target.value)}
-          className="input"
-        >
-          <option value="basic">Базовый</option>
-          <option value="plus">Плюс</option>
-          <option value="combo_basic">Комбо Базовый</option>
-          <option value="combo_plus">Комбо Плюс</option>
-        </select>
-        <button
-          type="button"
-          onClick={() => grant.mutate()}
-          className="btn-primary"
-          disabled={grant.isPending}
-        >
-          {grant.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
-          Выдать
-        </button>
-      </div>
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            if (confirm("Отозвать подписку?")) revoke.mutate();
-          }}
-          className="btn-danger"
-          disabled={revoke.isPending}
-        >
-          <Minus className="h-3.5 w-3.5" /> Отозвать доступ
-        </button>
-        {detail.is_vip ? (
-          <button
-            type="button"
-            onClick={() => vipRevoke.mutate()}
-            className="btn-secondary"
-            disabled={vipRevoke.isPending}
-          >
-            <Crown className="h-3.5 w-3.5" /> Снять VIP
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => vipGrant.mutate()}
-            className="btn-secondary"
-            disabled={vipGrant.isPending}
-          >
-            <Crown className="h-3.5 w-3.5" /> Выдать VIP
-          </button>
-        )}
-      </div>
-
-      <DeleteUserSection telegramId={telegramId} />
-    </div>
-  );
-}
-
-function DeleteUserSection({ telegramId }: { telegramId: number }) {
-  const [confirming, setConfirming] = useState(false);
-  const [typed, setTyped] = useState("");
-
-  const del = useMutation({
-    mutationFn: () => endpoints.userDelete(telegramId),
-    onSuccess: () => {
-      toast.success("Пользователь полностью удалён");
-      // Hard-reload — карточка больше не существует.
-      window.location.assign("/dashboard/users");
-    },
-    onError: (e: unknown) =>
-      toast.error((e as ApiError)?.detail ?? "Не удалось удалить"),
-  });
-
-  if (!confirming) {
-    return (
-      <div className="mt-6 flex items-center justify-end">
-        <button
-          type="button"
-          onClick={() => setConfirming(true)}
-          className="btn-ghost text-danger hover:text-danger"
-        >
-          <Trash2 className="h-3.5 w-3.5" /> Удалить пользователя
-        </button>
-      </div>
-    );
-  }
-
-  const required = String(telegramId);
-  const ok = typed === required;
-
-  return (
-    <div className="mt-6 rounded-2xl border border-danger/40 bg-danger/10 p-4">
-      <div className="text-xs font-medium uppercase tracking-wider text-danger">
-        Полное удаление
-      </div>
-      <div className="mt-1 text-sm text-fg">
-        Сотрёт: профиль, подписки, рефералов, гифты, VIP, скидки — и удалит
-        entity в Remnawave. <b>Это необратимо.</b>
-      </div>
-      <div className="mt-2 text-sm text-fg-muted">
-        История платежей сохранится: иначе выручка, ARPU и график по дням
-        пересчитались бы задним числом. В журнал запишется, сколько строк и
-        на какую сумму осталось.
-      </div>
-      <div className="mt-3">
-        <div className="mb-1 text-xs text-fg-muted">
-          Введи Telegram ID <span className="font-mono text-fg">{required}</span>{" "}
-          для подтверждения:
-        </div>
-        <input
-          className="input"
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-          placeholder={required}
-        />
-      </div>
-      <div className="mt-3 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            setConfirming(false);
-            setTyped("");
-          }}
-          className="btn-ghost"
-          disabled={del.isPending}
-        >
-          Отмена
-        </button>
-        <button
-          type="button"
-          onClick={() => del.mutate()}
-          disabled={!ok || del.isPending}
-          className="btn-danger"
-        >
-          {del.isPending ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" />}
-          Подтвердить удаление
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-fg-muted">{label}</span>
-      <span className="font-medium text-fg">{value}</span>
-    </div>
-  );
-}
-
-function BalanceCard({
-  telegramId,
-  balance,
-  onChange,
-}: {
-  telegramId: number;
-  balance: number;
-  onChange: () => void;
-}) {
-  const [delta, setDelta] = useState<number | "">("");
-  const [reason, setReason] = useState("");
-
-  const change = useMutation({
-    mutationFn: () =>
-      endpoints.userBalanceChange(telegramId, {
-        delta_rubles: typeof delta === "number" ? delta : 0,
-        reason: reason || undefined,
-      }),
-    onSuccess: (data) => {
-      toast.success(
-        `Баланс ${(typeof delta === "number" ? delta : 0) > 0 ? "пополнен" : "списан"}: ${fmtRub(
-          data.new_balance_rubles,
-        )}`,
-      );
-      setDelta("");
-      setReason("");
-      onChange();
-    },
-    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
-  });
-
-  return (
-    <div className="card p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-xs uppercase tracking-wider text-fg-subtle">Баланс</div>
-        <span className="font-mono text-sm font-semibold text-fg">
-          {fmtRub(balance)}
-        </span>
-      </div>
-      <div className="mt-3 space-y-2">
-        <input
-          className="input"
-          type="number"
-          step="0.01"
-          placeholder="± рублей (плюс — начисление, минус — списание)"
-          value={delta}
-          onChange={(e) =>
-            setDelta(e.target.value === "" ? "" : Number(e.target.value))
-          }
-        />
-        <input
-          className="input"
-          type="text"
-          maxLength={200}
-          placeholder="Причина (необязательно)"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-        />
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              if (typeof delta !== "number" || delta === 0) return;
-              change.mutate();
-            }}
-            disabled={
-              change.isPending || typeof delta !== "number" || delta <= 0
-            }
-            className="btn-primary"
-          >
-            <Plus className="h-3.5 w-3.5" /> Пополнить
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (typeof delta !== "number" || delta === 0) return;
-              const v = -Math.abs(delta);
-              setDelta(v);
-              window.setTimeout(() => change.mutate(), 0);
-            }}
-            disabled={
-              change.isPending || typeof delta !== "number" || delta === 0
-            }
-            className="btn-secondary"
-          >
-            <Minus className="h-3.5 w-3.5" /> Списать
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PaymentsCard({ telegramId }: { telegramId: number }) {
-  const payments = useQuery({
-    queryKey: ["users", "payments", telegramId],
-    queryFn: () => endpoints.userPayments(telegramId, 100),
-  });
-
-  const rows = (payments.data ?? []) as PurchaseRow[];
-  const paidTotal = rows
-    .filter((p) => p.status === "paid")
-    .reduce((s, p) => s + (p.price_rubles ?? 0), 0);
-  const paidCount = rows.filter((p) => p.status === "paid").length;
-  const pendingCount = rows.filter((p) => p.status === "pending").length;
-
-  return (
-    <div className="card p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-xs uppercase tracking-wider text-fg-subtle">
-            История покупок
+          <div className="hidden rounded-lg border border-dashed border-border p-6 text-center text-base text-fg-muted lg:block">
+            Выберите строку слева — карточка, покупки и действия откроются здесь.
           </div>
-          <h3 className="text-base font-semibold text-fg">
-            Все операции в боте
-          </h3>
-          <div className="mt-1 text-xs text-fg-muted">
-            оплачено {paidCount} · потрачено {fmtRub(paidTotal)}
-            {pendingCount > 0 && ` · в ожидании ${pendingCount}`}
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {payments.isFetching && <Spinner />}
-          <button
-            type="button"
-            onClick={() => payments.refetch()}
-            className="btn-ghost"
-            aria-label="Обновить"
-          >
-            <RefreshCcw className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        )}
       </div>
-
-      {payments.isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-fg-muted">
-          <Spinner /> Загружаю...
-        </div>
-      ) : rows.length === 0 ? (
-        <EmptyState
-          icon={Wallet}
-          title="Покупок нет"
-          description="Пользователь ещё ничего не покупал — ни подписку, ни traffic-паки, ни пополнение баланса."
-        />
-      ) : (
-        <div className="-mx-2 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-fg-subtle">
-                <th className="px-2 py-2 font-medium">Дата</th>
-                <th className="px-2 py-2 font-medium">Что куплено</th>
-                <th className="px-2 py-2 font-medium">Сумма</th>
-                <th className="px-2 py-2 font-medium">Провайдер</th>
-                <th className="px-2 py-2 font-medium">Промо</th>
-                <th className="px-2 py-2 font-medium">Статус</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/60">
-              {rows.map((p) => (
-                <tr
-                  key={String(p.id ?? p.purchase_id ?? Math.random())}
-                  className="hover:bg-accent/[0.04]"
-                >
-                  <td className="px-2 py-2 align-top text-fg-muted whitespace-nowrap">
-                    {fmtDate(p.created_at)}
-                  </td>
-                  <td className="px-2 py-2 align-top">
-                    <div className="font-medium text-fg">
-                      {purchaseLabel(p)}
-                    </div>
-                    {p.purchase_id && (
-                      <div
-                        className="mt-0.5 font-mono text-[10px] text-fg-subtle"
-                        title={p.purchase_id}
-                      >
-                        {p.purchase_id.length > 22
-                          ? p.purchase_id.slice(0, 22) + "…"
-                          : p.purchase_id}
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-2 py-2 align-top font-mono text-fg whitespace-nowrap">
-                    {typeof p.price_rubles === "number"
-                      ? fmtRub(p.price_rubles)
-                      : "—"}
-                  </td>
-                  <td className="px-2 py-2 align-top text-fg-muted whitespace-nowrap">
-                    {providerLabel(p.payment_provider)}
-                  </td>
-                  <td className="px-2 py-2 align-top">
-                    {p.promo_code ? (
-                      <span className="badge-accent font-mono text-[10px]">
-                        {p.promo_code}
-                      </span>
-                    ) : (
-                      <span className="text-fg-subtle">—</span>
-                    )}
-                  </td>
-                  <td className="px-2 py-2 align-top">
-                    <PaymentStatus status={p.status ?? ""} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
-}
-
-interface PurchaseRow {
-  id?: number;
-  purchase_id?: string;
-  tariff?: string | null;
-  purchase_type?: string | null;
-  period_days?: number | null;
-  price_kopecks?: number | null;
-  price_rubles?: number | null;
-  status?: string;
-  created_at?: string | null;
-  expires_at?: string | null;
-  promo_code?: string | null;
-  is_combo?: boolean | null;
-  country?: string | null;
-  farm_plot_id?: number | null;
-  payment_provider?: string | null;
-  provider_invoice_id?: string | null;
-}
-
-const TARIFF_RU: Record<string, string> = {
-  basic: "Basic",
-  plus: "Plus",
-  biz_starter: "Biz Starter",
-  biz_team: "Biz Team",
-  biz_business: "Biz Business",
-  biz_pro: "Biz Pro",
-  biz_enterprise: "Biz Enterprise",
-  biz_ultimate: "Biz Ultimate",
-};
-
-function purchaseLabel(p: PurchaseRow): string {
-  const t = p.purchase_type ?? "subscription";
-  if (t === "subscription") {
-    const tariff = p.tariff ? TARIFF_RU[p.tariff] ?? p.tariff : "Подписка";
-    const period = p.period_days ? ` · ${p.period_days} дн` : "";
-    const combo = p.is_combo ? " (комбо)" : "";
-    return `${tariff}${period}${combo}`;
-  }
-  if (t === "traffic_pack") {
-    return p.country
-      ? `Traffic-пак · ${p.country.toUpperCase()}`
-      : "Traffic-пак";
-  }
-  if (t === "balance_topup") return "Пополнение баланса";
-  if (t === "telegram_premium") return "Telegram Premium";
-  if (t === "steam") return "Steam пополнение";
-  if (t === "proxy") return "Прокси";
-  if (t === "farm_plot") {
-    return p.farm_plot_id
-      ? `Фарм-участок #${p.farm_plot_id}`
-      : "Фарм-участок";
-  }
-  return t;
-}
-
-const PROVIDER_RU: Record<string, string> = {
-  platega: "Platega",
-  cryptobot: "CryptoBot",
-  telegram_stars: "Stars",
-  lava: "Lava",
-  balance: "С баланса",
-  unknown: "—",
-};
-
-function providerLabel(p: string | null | undefined): string {
-  if (!p) return "—";
-  return PROVIDER_RU[p] ?? p;
-}
-
-function PaymentStatus({ status }: { status: string }) {
-  const s = status.toLowerCase();
-  if (s === "approved" || s === "paid")
-    return <span className="badge-success">оплачено</span>;
-  if (s === "pending" || s === "processing")
-    return <span className="badge-warning">ожидает</span>;
-  if (s === "expired")
-    return <span className="badge-muted">истёк</span>;
-  if (s === "failed" || s === "rejected" || s === "cancelled")
-    return <span className="badge-danger">{status}</span>;
-  return <span className="badge-muted">{status || "—"}</span>;
 }

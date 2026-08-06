@@ -52,6 +52,10 @@ import asyncpg
 import config
 from app.utils.security import scrub_secrets
 from database.core import get_pool, _to_db_utc
+# Что в audit_log событие, а что фон, решается в одном месте на оба
+# экрана — здесь и на «Событиях». Вторая копия правила разошлась бы с
+# первой молча: два экрана показывали бы разное на одних данных.
+from database.dashboard_events import NOISE_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -367,7 +371,7 @@ async def get_summary_events(limit: int = 20) -> List[Dict[str, Any]]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             (SELECT 'payment'::text        AS kind,
                     pp.created_at          AS happened_at,
                     pp.telegram_id::bigint AS actor_id,
@@ -398,8 +402,7 @@ async def get_summary_events(limit: int = 20) -> List[Dict[str, Any]]:
                     OR a.action IN ('vip_granted', 'vip_revoked',
                                     'broadcast_sent', 'broadcast_deleted',
                                     'broadcast_delete_cancelled'))
-               AND a.action NOT LIKE 'admin\\_view%'
-               AND a.action NOT LIKE '%\\_viewed'
+               AND {NOISE_SQL}
              ORDER BY a.created_at DESC
              LIMIT $1)
             ORDER BY happened_at DESC

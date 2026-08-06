@@ -112,6 +112,116 @@ async def users_subscriptions(
     return {"filter": filter, "items": rows, "total": len(rows)}
 
 
+def _list_row(row: dict, balance: Optional[float]) -> dict:
+    """Строка плотной таблицы в едином виде, откуда бы она ни пришла.
+
+    Источников два, и это не случайность:
+
+      • filter=active / expiring_7d — database.list_paid_subscriptions,
+        то есть РОВНО тот набор строк, по которому сводка посчитала своё
+        число. Копировать сюда условия отбора нельзя: разъедутся — плитка
+        покажет 412, а список отдаст 380, и понять, какое число верное,
+        будет нечем.
+
+      • filter=all — database.list_users_dashboard: все пользователи,
+        включая тех, у кого подписки нет вовсе.
+
+    Формы строк у них разные, поэтому таблица получает одну — эту.
+    Название тарифа считается здесь через app.constants.tariffs, чтобы
+    интерфейс не знал про два способа хранить комбо.
+    """
+    tariff = row.get("subscription_type")
+    is_combo = tariff_ref.is_combo_tariff(tariff) or bool(row.get("is_combo"))
+    return {
+        "telegram_id": row["telegram_id"],
+        "username": row.get("username") or None,
+        "created_at": row.get("created_at"),
+        "language": row.get("language"),
+        "is_vip": row.get("is_vip"),
+        "balance_rubles": balance,
+        "subscription_type": tariff,
+        "tariff_display": tariff_ref.display_name(tariff, is_combo=bool(row.get("is_combo"))) if tariff else None,
+        "is_combo": is_combo,
+        "is_bypass_only": bool(row.get("is_bypass_only")),
+        "source": row.get("source"),
+        "status": row.get("status"),
+        "auto_renew": bool(row.get("auto_renew")),
+        "expires_at": row.get("expires_at"),
+        "has_active_sub": row.get("has_active_sub"),
+    }
+
+
+@router.get("/list")
+async def users_list(
+    filter: str = Query("all", pattern="^(all|active|expiring_7d)$"),
+    q: Optional[str] = Query(None, max_length=64),
+    limit: int = Query(50, gt=0, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """Плотная таблица экрана «Пользователи»: одна страница строк.
+
+    ПОРЯДОК ОБЪЯВЛЕНИЯ. Маршрут литеральный и обязан стоять ВЫШЕ
+    `GET /{telegram_id}` — иначе слово «list» уедет в параметр-число и
+    экран ответит 422 (так в этом проекте умерли отложенные рассылки).
+
+    filter=active | expiring_7d берут строки у dashboard_summary, поэтому
+    длина списка совпадает с числом на плитке сводки. Поиск q по такому
+    списку идёт по уже отобранным строкам: сузить отбор можно, расширить
+    нельзя — иначе список перестанет отвечать плитке, из которой пришли.
+
+    Ошибка НЕ превращается в пустой список: пустая таблица здесь читается
+    как «пользователей нет», и это ровно тот дефект, ради которого весь
+    экран переделывался.
+    """
+    term = (q or "").strip().lstrip("@").lower()
+    try:
+        if filter == "all":
+            page = await database.list_users_dashboard(
+                q=term or None, limit=limit, offset=offset,
+            )
+            rows = page["items"]
+            total = page["total"]
+            items = [_list_row(r, r.get("balance_rubles")) for r in rows]
+        else:
+            # Потолок 500 — тот же, что у эндпоинта /subscriptions. Дальше
+            # этого числа список перестаёт быть инструментом разбора и
+            # становится выгрузкой; для выгрузки есть CSV.
+            all_rows = await database.list_paid_subscriptions(filter, limit=500)
+            if term:
+                all_rows = [
+                    r for r in all_rows
+                    if term in str(r["telegram_id"])
+                    or term in (r.get("username") or "").lower()
+                ]
+            total = len(all_rows)
+            window = all_rows[offset:offset + limit]
+            balances = await database.get_balances_bulk(
+                [r["telegram_id"] for r in window],
+            )
+            items = [
+                _list_row(r, balances.get(r["telegram_id"])) for r in window
+            ]
+    except Exception as e:
+        logger.exception(
+            "DASHBOARD_USERS_LIST_FAILED filter=%s has_query=%s limit=%s offset=%s",
+            filter, bool(term), limit, offset,
+        )
+        raise HTTPException(500, f"users_list_failed: {e}")
+
+    logger.info(
+        "DASHBOARD_USERS_LIST_OK filter=%s has_query=%s returned=%s total=%s offset=%s",
+        filter, bool(term), len(items), total, offset,
+    )
+    return {
+        "filter": filter,
+        "query": q or "",
+        "items": items,
+        "total": total,
+        "offset": offset,
+        "has_more": offset + len(items) < total,
+    }
+
+
 def _describe_subscription(subscription: Optional[dict]) -> Optional[dict]:
     """Дополнить подписку понятным описанием тарифа для интерфейса.
 

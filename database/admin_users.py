@@ -19,10 +19,10 @@
 """
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import database.core as _core
-from database.core import get_pool, _to_db_utc
+from database.core import get_pool, _from_db_utc, _to_db_utc
 
 logger = logging.getLogger(__name__)
 
@@ -204,3 +204,190 @@ async def get_all_users_telegram_ids() -> list:
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT telegram_id FROM users")
         return [row["telegram_id"] for row in rows]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Плотная таблица экрана «Пользователи»
+#
+# Одна строка = один человек со всем, что нужно решить прямо в списке:
+# кто это, что у него за подписка, когда кончится, есть ли чем продлить
+# (баланс). Открывать карточку ради этих четырёх вопросов не надо.
+#
+# ЧЕГО ЗДЕСЬ НЕТ И ПОЧЕМУ. Суммы потраченного на человека в списке нет:
+# она считается по pending_purchases и на сотне строк дала бы сотню
+# агрегатов. Её место — карточка (get_user_extended_stats), где она
+# считается один раз для одного telegram_id.
+# ──────────────────────────────────────────────────────────────────────
+
+# Подписка берётся ОДНА, самая живая: сперва действующая, потом самая
+# свежая по сроку. Без ORDER BY человек с историей из пяти подписок
+# показывал бы в списке случайную из них.
+_LATEST_SUBSCRIPTION_LATERAL = """
+    LEFT JOIN LATERAL (
+        SELECT s.subscription_type, s.expires_at, s.activated_at, s.source,
+               s.status, s.auto_renew,
+               COALESCE(s.is_combo, FALSE) AS is_combo,
+               COALESCE(s.is_bypass_only, FALSE) AS is_bypass_only
+        FROM subscriptions s
+        WHERE s.telegram_id = u.telegram_id
+        ORDER BY (s.status = 'active' AND s.expires_at > $1) DESC,
+                 s.expires_at DESC NULLS LAST
+        LIMIT 1
+    ) sub ON TRUE
+"""
+
+
+def _user_row(record, now: datetime) -> Dict[str, Any]:
+    """Строка списка в том виде, в каком её рисует таблица.
+
+    Баланс приводится к рублям здесь: в базе он в копейках, и деление на
+    100 в трёх разных местах интерфейса рано или поздно разъедется.
+
+    Каждая дата проходит через _from_db_utc: колонки в проекте разъехались
+    по типам (TIMESTAMP и TIMESTAMPTZ), и сравнение naive-времени с aware
+    падает TypeError прямо на выдаче списка.
+    """
+    expires_at = _from_db_utc(record["expires_at"]) if record["expires_at"] else None
+    activated_at = _from_db_utc(record["activated_at"]) if record["activated_at"] else None
+    created_at = _from_db_utc(record["created_at"]) if record["created_at"] else None
+    has_active = bool(
+        record["status"] == "active"
+        and expires_at is not None
+        and expires_at > now
+    )
+    return {
+        "telegram_id": int(record["telegram_id"]),
+        "username": record["username"] or None,
+        "language": record["language"],
+        "created_at": created_at.isoformat() if created_at else None,
+        "balance_rubles": float(record["balance_kopecks"] or 0) / 100.0,
+        "is_vip": bool(record["is_vip"]),
+        "subscription_type": record["subscription_type"],
+        "is_combo": bool(record["is_combo"]) if record["subscription_type"] else False,
+        "is_bypass_only": bool(record["is_bypass_only"]) if record["subscription_type"] else False,
+        "source": record["source"],
+        "status": record["status"],
+        "auto_renew": bool(record["auto_renew"]) if record["subscription_type"] else False,
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "activated_at": activated_at.isoformat() if activated_at else None,
+        "has_active_sub": has_active,
+    }
+
+
+async def list_users_dashboard(
+    q: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """Страница списка пользователей с подпиской и балансом.
+
+    q — та же подстрока, что в search_users_dashboard: цифры ищутся по
+    telegram_id как по тексту (префикс «123» находит 1234567890), буквы —
+    по username без учёта регистра, ведущая @ отбрасывается. Порядок при
+    поиске ранжированный: точное совпадение, потом начало, потом середина.
+    Без q — свежезарегистрированные сверху.
+
+    Возвращает {'items': [...], 'total': N}: total — сколько подходит под
+    условие ВСЕГО, а не сколько отдано. Без него «показаны 50 из 50»
+    неотличимо от «всего 50», и человек не знает, есть ли дальше строки.
+
+    Исключения НЕ гасятся: пустой список вместо отказа на этом экране
+    читался бы как «пользователей нет».
+    """
+    pool = await get_pool()
+    if pool is None:
+        raise RuntimeError("db pool is not initialised")
+
+    now = datetime.now(timezone.utc)
+    now_db = _to_db_utc(now)
+    term = (q or "").strip().lstrip("@")
+
+    # Порядок append в params обязан совпадать с порядком $N в тексте
+    # запроса: $1 занят временем для LATERAL выше, дальше идут условия
+    # поиска. Перепутаете — запрос отфильтрует не по тому полю и не упадёт.
+    params: List[Any] = [now_db]
+    where = "TRUE"
+    order = "u.created_at DESC NULLS LAST"
+
+    if term:
+        params.append(f"%{term}%")      # $2 — подстрока
+        params.append(term)             # $3 — точное совпадение
+        params.append(f"{term}%")       # $4 — начало строки
+        where = "(CAST(u.telegram_id AS TEXT) ILIKE $2 OR u.username ILIKE $2)"
+        order = """
+            CASE
+                WHEN CAST(u.telegram_id AS TEXT) = $3 THEN 0
+                WHEN LOWER(u.username) = LOWER($3) THEN 1
+                WHEN CAST(u.telegram_id AS TEXT) ILIKE $4 THEN 2
+                WHEN u.username ILIKE $4 THEN 3
+                ELSE 4
+            END,
+            u.created_at DESC NULLS LAST
+        """
+
+    params.append(limit)
+    limit_idx = len(params)
+    params.append(offset)
+    offset_idx = len(params)
+
+    sql = f"""
+        SELECT u.telegram_id, u.username, u.language, u.created_at,
+               COALESCE(u.balance, 0) AS balance_kopecks,
+               EXISTS (
+                   SELECT 1 FROM vip_users v WHERE v.telegram_id = u.telegram_id
+               ) AS is_vip,
+               sub.subscription_type, sub.expires_at, sub.activated_at,
+               sub.source, sub.status, sub.auto_renew, sub.is_combo,
+               sub.is_bypass_only
+        FROM users u
+        {_LATEST_SUBSCRIPTION_LATERAL}
+        WHERE {where}
+        ORDER BY {order}
+        LIMIT ${limit_idx} OFFSET ${offset_idx}
+    """
+    # У счётчика собственная нумерация параметров: подстрока в нём $1, а не
+    # $2. Переиспользовать текст условия из выборки нельзя — там номера
+    # сдвинуты временем для LATERAL, и запрос искал бы по времени.
+    if term:
+        count_sql = (
+            "SELECT COUNT(*)::BIGINT FROM users u "
+            "WHERE (CAST(u.telegram_id AS TEXT) ILIKE $1 OR u.username ILIKE $1)"
+        )
+        count_params: List[Any] = [f"%{term}%"]
+    else:
+        count_sql = "SELECT COUNT(*)::BIGINT FROM users"
+        count_params = []
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, *params)
+        total = await conn.fetchval(count_sql, *count_params)
+
+    return {
+        "items": [_user_row(r, now) for r in rows],
+        "total": int(total or 0),
+    }
+
+
+async def get_balances_bulk(telegram_ids: List[int]) -> Dict[int, float]:
+    """Балансы пачкой, в рублях. Пустой вход — пустой ответ.
+
+    Нужен списку подписок: его строки приходят из dashboard_summary (там
+    отбор совпадает с плитками сводки), а баланса в них нет. Отдельный
+    запрос на строку дал бы двести запросов на страницу.
+    """
+    ids = [int(t) for t in telegram_ids if t]
+    if not ids:
+        return {}
+    pool = await get_pool()
+    if pool is None:
+        return {}
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT telegram_id, COALESCE(balance, 0) AS balance_kopecks "
+            "FROM users WHERE telegram_id = ANY($1::bigint[])",
+            ids,
+        )
+    return {
+        int(r["telegram_id"]): float(r["balance_kopecks"] or 0) / 100.0
+        for r in rows
+    }

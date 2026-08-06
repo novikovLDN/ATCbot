@@ -50,6 +50,10 @@ from database.admin_users import (  # noqa: F401,E402
     get_subscription_history,
     get_user_extended_stats,
     get_all_users_telegram_ids,
+    # Плотная таблица экрана «Пользователи»: страница списка и балансы
+    # пачкой. Добавлено вместе с редизайном экрана — см. admin_users.py.
+    list_users_dashboard,
+    get_balances_bulk,
 )
 
 # Кому можно слать: подбор аудитории для рассылок.

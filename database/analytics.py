@@ -53,6 +53,7 @@ from database.analytics_payments import (  # noqa: F401
     log_payment_error,
     get_recent_payment_errors,
     get_payment_errors_summary,
+    get_purchase_detail,
 )
 from database.analytics_stats import (  # noqa: F401
     get_business_metrics,

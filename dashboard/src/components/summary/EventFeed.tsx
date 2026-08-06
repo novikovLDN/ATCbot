@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { CreditCard, ShieldCheck, UserPlus } from "lucide-react";
 
 import { endpoints, type SummaryEvent } from "@/lib/api";
+import { actionLabel, purchaseLabel } from "@/lib/events";
 import { fmtRelative, fmtRub } from "@/lib/format";
 import { useEventStream } from "@/lib/ws";
 import { Card, CardHeader, EmptyFailure, LoadingGate, Skeleton } from "@/components/ui";
@@ -126,34 +127,13 @@ const KIND_TONE = {
   admin: "text-fg-muted",
 } as const;
 
-/** Названия действий из audit_log по-русски. Незнакомое действие не
- *  прячем — показываем как есть: лучше сырой ключ, чем пропавшее событие. */
-const ACTION_LABELS: Record<string, string> = {
-  admin_revoke: "Доступ отозван",
-  admin_reissue: "Ключ перевыпущен",
-  admin_reissue_key: "Ключ перевыпущен",
-  admin_reissue_all_active: "Массовый перевыпуск ключей",
-  admin_create_discount: "Выдана скидка",
-  admin_delete_discount: "Скидка снята",
-  admin_delete_user: "Пользователь удалён",
-  admin_bonus_distribute: "Начислен бонус",
-  admin_remnawave_mass_provision: "Массовая выдача в Remnawave",
-  admin_test_executed: "Запущен тест",
-  vip_granted: "Выдан VIP",
-  vip_revoked: "VIP снят",
-  broadcast_sent: "Рассылка отправлена",
-  broadcast_deleted: "Рассылка удалена у получателей",
-  broadcast_delete_cancelled: "Удаление рассылки отменено",
-};
-
-const PURCHASE_LABELS: Record<string, string> = {
-  subscription: "Подписка",
-  balance_topup: "Пополнение баланса",
-  gift: "Подарок",
-  telegram_premium: "Telegram Premium",
-  steam: "Steam",
-  proxy: "MTProxy",
-};
+// Названия действий и типов покупок — общие с экраном «События»
+// (src/lib/events.ts). Здесь лежали свои копии, и они разошлись: эта не
+// знала admin_grant, payment_approved, subscription_renewed и всю группу
+// vpn_*, а копия на экране журнала не знала admin_delete_user и
+// broadcast_deleted. Незнакомое действие показывается сырым ключом —
+// то есть на одном экране человек читал «Выдан доступ», на другом
+// «admin_grant», и это выглядело как два разных события.
 
 function EventRow({ event }: { event: SummaryEvent }) {
   const Icon = KIND_ICON[event.kind];
@@ -164,7 +144,7 @@ function EventRow({ event }: { event: SummaryEvent }) {
   let to = "/events";
 
   if (event.kind === "payment") {
-    const what = PURCHASE_LABELS[event.title_key ?? ""] ?? event.title_key ?? "Покупка";
+    const what = purchaseLabel(event.title_key);
     title = `${what} · ${fmtRub(event.amount_rubles)}`;
     detail = [who, event.tariff].filter(Boolean).join(" · ");
     to = `/users?tg=${event.actor_id}`;
@@ -173,7 +153,7 @@ function EventRow({ event }: { event: SummaryEvent }) {
     detail = who;
     to = `/users?tg=${event.actor_id}`;
   } else {
-    title = ACTION_LABELS[event.title_key ?? ""] ?? event.title_key ?? "Действие админа";
+    title = actionLabel(event.title_key);
     detail = [
       event.target_id ? `кому: tg:${event.target_id}` : null,
       `админ: tg:${event.actor_id ?? "—"}`,

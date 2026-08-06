@@ -23,9 +23,9 @@ import { SetupPassword } from "@/pages/SetupPassword";
 const Dashboard = lazy(() => import("@/pages/Dashboard").then((m) => ({ default: m.Dashboard })));
 const Users = lazy(() => import("@/pages/Users").then((m) => ({ default: m.Users })));
 const Payments = lazy(() => import("@/pages/Payments").then((m) => ({ default: m.Payments })));
-const Audit = lazy(() => import("@/pages/Audit").then((m) => ({ default: m.Audit })));
-const BypassAudit = lazy(() =>
-  import("@/pages/BypassAudit").then((m) => ({ default: m.BypassAudit })),
+const Events = lazy(() => import("@/pages/Events").then((m) => ({ default: m.Events })));
+const EventsBypass = lazy(() =>
+  import("@/pages/EventsBypass").then((m) => ({ default: m.EventsBypass })),
 );
 const Analytics = lazy(() => import("@/pages/Analytics").then((m) => ({ default: m.Analytics })));
 const Statistics = lazy(() =>
@@ -206,10 +206,12 @@ function AppRoutes() {
         <Route path="users" element={<Users />} />
         <Route path="payments" element={<Payments />} />
 
-        {/* События = слияние двух журналов: «Аудит» и «Bypass Audit». */}
+        {/* События = слияние двух журналов: «Аудит» и «Bypass Audit».
+            Оба отвечали на вопрос «что произошло» и стояли в меню
+            отдельными пунктами (research §4.7). */}
         <Route path="events" element={<SectionTabs />}>
-          <Route index element={<Audit />} />
-          <Route path="bypass" element={<BypassAudit />} />
+          <Route index element={<Events />} />
+          <Route path="bypass" element={<EventsBypass />} />
         </Route>
 
         <Route path="analytics" element={<SectionTabs />}>
