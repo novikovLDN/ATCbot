@@ -346,7 +346,7 @@ LANG = {
     'lang.button_en': "🇺🇸 English",
     'lang.button_ru': "🇷🇺 Русский",
     'start_lang.title': "🌍 Select language / Выберите язык",
-    'start_trial.received': "🎁 You've received a trial subscription:\n\n▪️ 3 days of access\n▪️ unlimited VPN\n▪️ 500 MB for bypass\n\nBy tapping «Connect», you confirm that you have read and agree to the <a href=\"https://telegra.ph/Polzovatelskoe-soglashenie-08-06-50\">Terms of Service</a>.",
+    'start_trial.received': "🎁 Trial subscription activated!\n\nYou get:\n• 3 days of access\n• unlimited VPN\n• 1 GB for whitelist bypass\n\nBy tapping «Connect», you confirm that you have read and agree to the <a href=\"https://telegra.ph/Polzovatelskoe-soglashenie-08-06-50\">Terms of Service</a>.",
     'start_trial.btn_connect': "🚀 Connect",
     'start_trial.btn_terms': "📄 Terms of Service",
     'start_trial.already_active': "Your subscription is already active. Opening main menu.",
