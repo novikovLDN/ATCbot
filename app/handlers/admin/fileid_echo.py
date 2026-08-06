@@ -1,12 +1,17 @@
 """
 Admin utility: echo file_id обратно админу при отправке любого медиа.
-Работает только в личке, только для админа, и только если нет активного FSM
-(чтобы не перехватывать загрузку фото в BroadcastCreate / AdminChat / promo_trial).
+Работает только в личке и только для админа.
+
+FSM-загрузки (BroadcastCreate.waiting_for_message, PromoTrialFSM.waiting_for_photo,
+AdminChat.chatting) защищены порядком роутеров — соответствующие FSM-хендлеры
+регистрируются раньше и перехватывают сообщение первыми.
+
+State-filter не ставим намеренно: если у админа висит какое-то посторонее FSM-состояние
+(например брошенная форма ввода суммы), эхо всё равно должно отвечать file_id.
 """
 import logging
 
 from aiogram import Router, F
-from aiogram.filters import StateFilter
 from aiogram.types import Message
 
 from app.utils.security import is_admin
@@ -36,7 +41,6 @@ def _extract(message: Message) -> tuple[str, str] | None:
 
 
 @admin_fileid_echo_router.message(
-    StateFilter(None),
     F.chat.type == "private",
     F.photo | F.animation | F.video | F.video_note
     | F.sticker | F.audio | F.voice | F.document,
@@ -50,6 +54,10 @@ async def echo_file_id(message: Message):
         return
 
     kind, file_id = extracted
+    logger.info(
+        "FILEID_ECHO admin=%s kind=%s file_id=%s",
+        message.from_user.id, kind, file_id,
+    )
     await message.reply(
         f"🆔 <b>{kind}</b>\n<code>{file_id}</code>",
         parse_mode="HTML",
