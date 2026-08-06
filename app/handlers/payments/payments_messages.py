@@ -93,12 +93,15 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
     ~StateFilter(PromoTrialFSM.waiting_for_photo),
 )
 async def log_incoming_photo_file_id(message: Message):
-    """Log file_id of incoming photos for later use (e.g. loyalty images). Does not send reply.
+    """Log file_id of incoming photos for later use (e.g. loyalty images).
 
     Excludes FSM states that legitimately consume an admin-attached
     photo (broadcast wizard, trial-promo photo attach), so the
     intended handler in that router gets the message instead of us
     silently swallowing it for a log line.
+
+    Если фото прислал админ в личку — сразу отвечаем file_id в чат,
+    чтобы не лезть в логи вручную.
     """
     try:
         telegram_id = message.from_user.id if message.from_user else 0
@@ -108,6 +111,16 @@ async def log_incoming_photo_file_id(message: Message):
             telegram_id,
             file_id,
         )
+        from app.utils.security import is_admin
+        if (
+            message.chat.type == "private"
+            and message.from_user
+            and is_admin(telegram_id)
+        ):
+            await message.reply(
+                f"🆔 <b>photo</b>\n<code>{file_id}</code>",
+                parse_mode="HTML",
+            )
     except Exception as e:
         logger.warning("PHOTO_FILE_ID_RECEIVED log failed: %s", e)
 
