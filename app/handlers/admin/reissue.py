@@ -12,11 +12,15 @@
 ВНИМАНИЕ: РАЗДЕЛ СЕЙЧАС НЕДОСТИЖИМ ИЗ ИНТЕРФЕЙСА
     Ни одна клавиатура бота не отдаёт callback_data admin:reissue_key:,
     admin:reissue_all_active и admin:reissue_all_active_go — кнопки жили в
-    удалённом разделе «Ключи». Кнопка «назад» отсюда ведёт на admin:keys,
-    у которого тоже нет обработчика. Код перенесён как есть и не выброшен,
+    удалённом разделе «Ключи». Код перенесён как есть и не выброшен,
     потому что решение об удалении раздела принимает владелец, а не
     рефакторинг. Учитывайте это, прежде чем чинить здесь что-то «по факту
     бага от пользователя»: пользователь сюда не попадает.
+
+    Кнопки «назад» и «отмена» вели на admin:keys — адрес того самого
+    удалённого раздела, то есть тоже в никуда. Переведены на admin:main:
+    если раздел когда-нибудь снова подключат к меню, выход из него уже
+    будет работать, а не молчать.
 
 ЧТО ЛЕГКО СЛОМАТЬ
     Массовый прогон идёт ИТЕРАТИВНО с паузой 1.5 секунды между ключами —
@@ -140,7 +144,11 @@ async def callback_admin_reissue_all_active_confirm(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ Да, перевыпустить", callback_data="admin:reissue_all_active_go"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data="admin:keys"),
+            # Было admin:keys — адрес удалённого раздела «Ключи», у него нет
+            # обработчика. Отмена массового перевыпуска обязана работать
+            # ВСЕГДА: молчащая «Отмена» на экране подтверждения читается как
+            # «не отменилось», и второе нажатие уходит в «Да».
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin:main"),
         ]
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -241,8 +249,10 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
                 failed_list += f" и ещё {len(failed_subscriptions) - 10}"
             final_text += f"\n\nОшибки у подписок: {failed_list}"
         
+        # admin:keys — раздел, удалённый вместе с 23 другими админскими
+        # модулями; обработчика под него нет. Возвращаем в admin:main.
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:keys")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
         ])
         
         try:

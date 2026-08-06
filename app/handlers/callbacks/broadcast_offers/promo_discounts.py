@@ -201,9 +201,19 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
                 callback_data=f"buy_traffic_pack:{gb}",
             )])
 
+        # Расширенные пакеты (300+ ГБ) — это существующий экран
+        # traffic.packs.callback_buy_traffic_extended. Здесь стояло
+        # broadcast_promo_traffic_ext:{id}, под которое обработчика нет
+        # ни одного: человек жал «Больше объёма» и не получал ничего —
+        # ни экрана, ни ошибки, ни строчки в логе.
+        #
+        # broadcast_id в адресе не нужен: скидка на трафик уже записана
+        # в базу выше (create_user_traffic_discount), а buy_traffic_extended
+        # читает её сам через get_user_traffic_discount. Передавать сюда
+        # id рассылки значило бы завести второй источник правды о скидке.
         buttons.append([InlineKeyboardButton(
             text="📦 Больше объёма →",
-            callback_data=f"broadcast_promo_traffic_ext:{broadcast_id}",
+            callback_data="buy_traffic_extended",
         )])
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),

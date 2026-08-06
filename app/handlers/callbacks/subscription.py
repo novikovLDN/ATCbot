@@ -345,7 +345,19 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(error_text, parse_mode="HTML")
 
 
-@subscription_router.callback_query(F.data == "menu_profile", StateFilter(default_state))
+# Один декоратор, а не два.
+#
+# Здесь стояла пара: F.data == "menu_profile" и та же строка ещё раз, но
+# под StateFilter(default_state). Декораторы применяются снизу вверх, то
+# есть первым регистрировался вариант БЕЗ состояния — он принимает любое
+# состояние, включая default_state, и всегда срабатывает первым. Вторая
+# регистрация не могла выполниться ни разу: aiogram отдаёт апдейт первому
+# подошедшему обработчику и дальше не идёт.
+#
+# Поведение не менялось — «работает независимо от FSM состояния» даёт
+# именно нижний декоратор. Возвращать пару нельзя: она создаёт вторую
+# точку входа в дереве роутеров, которую невозможно достичь, и любая
+# правка, внесённая «во второй обработчик», молча не сработает.
 @subscription_router.callback_query(F.data == "menu_profile")
 async def callback_profile(callback: CallbackQuery, state: FSMContext):
     """Мой профиль - работает независимо от FSM состояния"""

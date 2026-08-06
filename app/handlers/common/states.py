@@ -68,6 +68,14 @@ class AdminTrafficDiscountCreate(StatesGroup):
 
 
 class AdminTrafficEdit(StatesGroup):
+    # waiting_for_user_id — вход в раздел «ГБ обхода». Раньше в раздел
+    # попадали с карточки пользователя (admin:show_user), а она уехала в
+    # веб-дашборд вместе с остальным управлением пользователями. Аналога
+    # выдачи ГБ в дашборде нет, поэтому раздел остался в боте — и остался
+    # без единого входа: все его экраны адресуются admin:traffic:{user_id},
+    # а этот адрес никто не выставлял. Состояние спрашивает ID/username и
+    # ведёт на тот же экран, что и раньше карточка.
+    waiting_for_user_id = State()
     waiting_for_amount = State()
     waiting_for_confirm = State()
 

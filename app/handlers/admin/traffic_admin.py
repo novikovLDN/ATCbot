@@ -1,12 +1,31 @@
-"""
-Admin traffic management: view, grant, reduce Remnawave bypass traffic.
+"""Ручная выдача и списание ГБ обхода (Remnawave) — админский раздел.
 
 Callbacks:
-- admin:traffic:{user_id}          — view user traffic
-- admin:traffic_add:{user_id}      — start grant traffic flow
-- admin:traffic_reduce:{user_id}   — start reduce traffic flow
-- admin:traffic_confirm:{user_id}  — confirm traffic change
-- admin:traffic_cancel:{user_id}   — cancel and return to user card
+- admin:traffic_user               — вход: спросить, чей трафик смотрим
+- admin:traffic:{user_id}          — экран трафика пользователя
+- admin:traffic_add:{user_id}      — начать выдачу ГБ
+- admin:traffic_reduce:{user_id}   — начать списание ГБ
+- admin:traffic_confirm:{user_id}  — подтвердить изменение
+- admin:traffic_cancel:{user_id}   — отменить и вернуться на экран трафика
+
+ПОЧЕМУ У РАЗДЕЛА ПОЯВИЛСЯ СОБСТВЕННЫЙ ВХОД
+    Все экраны здесь адресуются по admin:traffic:{user_id}, и раньше этот
+    адрес выставляла карточка пользователя в боте. Карточку убрали вместе с
+    23 другими админскими модулями — их работу делает веб-дашборд. Но
+    выдачи ГБ обхода в дашборде нет, поэтому раздел оставили в боте, а
+    входа он лишился: ни одна клавиатура не выставляла admin:traffic:,
+    значит ни один из шести обработчиков ниже нельзя было выполнить.
+
+    admin:traffic_user спрашивает ID или @username и открывает тот же
+    экран, что открывала карточка. Убрать его — снова сделать раздел
+    недостижимым, причём молча: aiogram на кнопку без обработчика не
+    отвечает и в лог ничего не пишет.
+
+ЧТО ЛЕГКО СЛОМАТЬ
+    Кнопки «назад» вели на admin:show_user:{user_id} — адрес удалённой
+    карточки. Обработчика под него нет, и выход из раздела молчал. Сейчас
+    они ведут на admin:main. Возвращать admin:show_user нельзя, пока
+    карточку не вернут в бота.
 """
 import logging
 
@@ -32,6 +51,69 @@ def _format_bytes(b: int) -> str:
     if b >= 1024**2:
         return f"{b / 1024**2:.0f} МБ"
     return f"{b / 1024:.0f} КБ"
+
+
+# ── Вход в раздел ────────────────────────────────────────────────────
+
+@admin_traffic_router.callback_query(F.data == "admin:traffic_user")
+async def callback_admin_traffic_user(callback: CallbackQuery, state: FSMContext):
+    """Спросить, чей трафик открыть. Единственный вход в раздел."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Access denied", show_alert=True)
+        return
+    await callback.answer()
+    await state.set_state(AdminTrafficEdit.waiting_for_user_id)
+    # Новым сообщением, а не правкой: тот же довод, что и у admin:chat —
+    # кнопка может стоять под уведомлением с данными заказа, и правка
+    # затёрла бы их.
+    await callback.message.answer(
+        "🌐 <b>ГБ обхода</b>\n\n"
+        "Введите Telegram ID или @username пользователя:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:main")],
+        ]),
+        parse_mode="HTML",
+    )
+
+
+@admin_traffic_router.message(StateFilter(AdminTrafficEdit.waiting_for_user_id))
+async def process_traffic_user_id(message: Message, state: FSMContext):
+    """Разобрать ID/@username и открыть экран трафика."""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+    raw = (message.text or "").strip()
+    if raw.lower() in ("/cancel", "отмена"):
+        await state.clear()
+        await message.answer("Отменено.", parse_mode="HTML")
+        return
+
+    user_id = None
+    try:
+        user_id = int(raw)
+    except ValueError:
+        username = raw.lstrip("@").lower()
+        if username:
+            pool = await database.get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT telegram_id FROM users WHERE LOWER(username) = $1",
+                    username,
+                )
+            if row:
+                user_id = row["telegram_id"]
+
+    if not user_id:
+        # Состояние НЕ сбрасываем: админ должен иметь возможность
+        # исправить опечатку, не начиная с меню заново.
+        await message.answer(
+            "❌ Пользователь не найден. Введите корректный ID или @username:",
+            parse_mode="HTML",
+        )
+        return
+
+    await state.clear()
+    text, kb = await _build_traffic_view(user_id)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 # ── View traffic ─────────────────────────────────────────────────────
@@ -65,7 +147,7 @@ async def _build_traffic_view(user_id: int):
             "Пользователь получит его при следующем продлении подписки."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад", callback_data=f"admin:show_user:{user_id}")],
+            [InlineKeyboardButton(text="◀️ В админку", callback_data="admin:main")],
         ])
         return text, kb
 
@@ -78,7 +160,7 @@ async def _build_traffic_view(user_id: int):
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"admin:traffic:{user_id}")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data=f"admin:show_user:{user_id}")],
+            [InlineKeyboardButton(text="◀️ В админку", callback_data="admin:main")],
         ])
         return text, kb
 
@@ -110,7 +192,7 @@ async def _build_traffic_view(user_id: int):
             InlineKeyboardButton(text="➖ Уменьшить", callback_data=f"admin:traffic_reduce:{user_id}"),
         ],
         [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"admin:traffic:{user_id}")],
-        [InlineKeyboardButton(text="◀️ К пользователю", callback_data=f"admin:show_user:{user_id}")],
+        [InlineKeyboardButton(text="◀️ В админку", callback_data="admin:main")],
     ])
     return text, kb
 
@@ -265,7 +347,7 @@ async def callback_admin_traffic_confirm(callback: CallbackQuery, state: FSMCont
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Трафик", callback_data=f"admin:traffic:{user_id}")],
-        [InlineKeyboardButton(text="◀️ К пользователю", callback_data=f"admin:show_user:{user_id}")],
+        [InlineKeyboardButton(text="◀️ В админку", callback_data="admin:main")],
     ])
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
