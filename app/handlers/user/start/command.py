@@ -195,7 +195,18 @@ async def cmd_start(message: Message, state: FSMContext):
                     if _site_enabled():
                         link_result = await link_telegram_account(payload, telegram_id)
                         if link_result:
-                            logger.info("SITE_LINK_SUCCESS user=%s token=%s", telegram_id, payload[:16])
+                            # payload[:16] при len(payload) >= 10 печатал токен
+                            # ЦЕЛИКОМ для всех токенов короче 17 символов.
+                            # Токен предъявительский: кто его прочитал, тот
+                            # привязал свой Telegram к чужому аккаунту сайта,
+                            # а следом идут sync_balance и sync_referrals —
+                            # то есть чужие деньги. Маска обязана считать длину
+                            # сама; любой срез по фиксированному числу символов
+                            # снова откроет короткие токены целиком.
+                            logger.info(
+                                "SITE_LINK_SUCCESS user=%s token=%s",
+                                telegram_id, mask_secret(payload),
+                            )
                             # Mark user as site-linked in local DB
                             # Колонка site_linked заводится при инициализации
                             # схемы (database/legacy_schema.py). Здесь её
@@ -223,7 +234,13 @@ async def cmd_start(message: Message, state: FSMContext):
                                 parse_mode="HTML",
                             )
                         else:
-                            logger.warning("SITE_LINK_FAILED user=%s token=%s", telegram_id, payload[:16])
+                            # Отказ привязки — тот же токен и тот же риск:
+                            # link_telegram_account вернула ложь, но токен
+                            # остался рабочим и лежит в логе.
+                            logger.warning(
+                                "SITE_LINK_FAILED user=%s token=%s",
+                                telegram_id, mask_secret(payload),
+                            )
                 except Exception as e:
                     logger.warning("SITE_LINK_ERROR user=%s error=%s", telegram_id, e)
 

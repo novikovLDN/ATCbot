@@ -40,6 +40,7 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.states import SteamPurchaseState
 from app.core.rate_limit import check_rate_limit
+from app.utils.security import mask_secret
 # Автоудаление счёта — одна общая реализация на весь бот.
 # Здесь была своя копия (INVOICE_TIMEOUT + _schedule_invoice_deletion с тем же
 # телом, но без записи INVOICE_EXPIRED в лог): срок жизни счёта правился в
@@ -405,9 +406,15 @@ async def _create_pending_purchase(telegram_id: int, login: str, amount: int, pr
         purchase_type="steam",
         country=login,
     )
+    # login — учётная запись покупателя в Steam, лежит в переиспользованной
+    # колонке country. database/pending_purchases.py:_country_for_log
+    # редактирует её до <redacted:account> ровно по этой причине; здесь она
+    # печаталась целиком, рядом с telegram_id, на каждой покупке.
+    # Маска оставляет хвост — его хватает, чтобы сверить лог с карточкой
+    # заказа, но не хватает, чтобы узнать чужой логин из лога.
     logger.info(
         "STEAM_PURCHASE_CREATED user=%s purchase_id=%s amount=%s login=%s price=%s",
-        telegram_id, purchase_id, amount, login, price,
+        telegram_id, purchase_id, amount, mask_secret(login), price,
     )
     return purchase_id, price_kopecks
 
@@ -710,9 +717,19 @@ async def send_steam_success(
         await bot.send_message(
             config.ADMIN_TELEGRAM_ID, admin_text, reply_markup=admin_kb, parse_mode="HTML",
         )
+        # То же значение, прочитанное обратно из purchase["country"]. Маска
+        # обязана стоять и здесь: иначе логин просто утекает на строку ниже.
         logger.info(
-            "STEAM_ADMIN_NOTIFIED buyer=%s login=%s amount=%s price=%s",
-            telegram_id, login, amount, price_rubles,
+            "STEAM_ADMIN_NOTIFIED buyer=%s purchase_id=%s login=%s amount=%s price=%s",
+            telegram_id, purchase_id, mask_secret(login), amount, price_rubles,
         )
     except Exception as e:
-        logger.error("STEAM_ADMIN_NOTIFY_FAILED err=%s", e)
+        # Уведомление админу — ЕДИНСТВЕННЫЙ канал выдачи Steam-пополнения.
+        # Запись стояла без telegram_id и purchase_id, поэтому связать её с
+        # оплатой было нечем: в аудите заказ выглядел выданным. Логин здесь
+        # не пишем — он есть в карточке заказа по purchase_id.
+        logger.error(
+            "STEAM_ADMIN_NOTIFY_FAILED buyer=%s purchase_id=%s amount=%s price=%s err=%s "
+            "— оплачено, заявка админу не доставлена, выдайте вручную",
+            telegram_id, purchase_id, amount, price_rubles, e,
+        )

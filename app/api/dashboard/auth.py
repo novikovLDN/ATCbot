@@ -71,6 +71,23 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _ip_or_unknown(request: Optional[Request]) -> str:
+    """IP там, где Request может отсутствовать.
+
+    Обработчики, которым Request нужен только ради записи в лог, объявляют
+    его с умолчанием None: FastAPI подставит настоящий объект по аннотации,
+    а прямые вызовы из тестов продолжают работать с двумя аргументами.
+    Логирование не должно ронять вход в дашборд — отсюда «unknown» вместо
+    обращения к атрибутам None.
+    """
+    if request is None:
+        return "unknown"
+    try:
+        return _client_ip(request)
+    except Exception:
+        return "unknown"
+
+
 def _prune_attempts(ip: str, now: float) -> list:
     recent = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW_SECONDS]
     if recent:
@@ -199,8 +216,16 @@ async def auth_status(
     try:
         from app.services import admin_passkeys
         has_passkey = (await admin_passkeys.passkey_count()) > 0
-    except Exception:
-        pass
+    except Exception as e:
+        # Раньше `except Exception: pass`. Экран входа при этом молча терял
+        # кнопку «Войти через Face ID», и обращение «пропал вход по ключу»
+        # разбиралось вслепую: отличить «passkey не заведён» от «база не
+        # ответила» было нечем. Ронять /status нельзя — это единственная
+        # ручка, по которой SPA решает, что вообще рисовать.
+        _log.warning(
+            "DASHBOARD_PASSKEY_COUNT_FAILED err=%s — кнопка входа по ключу "
+            "скрыта, хотя ключи могут существовать", e,
+        )
     return {
         "has_password": has_password,
         "has_session": has_session,
@@ -209,7 +234,7 @@ async def auth_status(
 
 
 @router.post("/setup")
-async def auth_setup(body: SetupRequest, response: Response):
+async def auth_setup(body: SetupRequest, response: Response, request: Request = None):
     """Set username + password. Only allowed when (a) no password
     is set yet OR (b) the password has just been cleared by the bot's
     reset button. In both cases the caller must present a valid
@@ -248,10 +273,22 @@ async def auth_setup(body: SetupRequest, response: Response):
 
     ok = await admin_auth.set_credentials(body.username, body.password)
     if not ok:
+        _log.error(
+            "DASHBOARD_CREDENTIALS_SET_FAILED admin=%s ip=%s", tg, _ip_or_unknown(request),
+        )
         raise HTTPException(500, "setup_failed")
 
     token = await admin_auth.create_session(tg)
     _set_session_cookie(response, token)
+    # Установка пароля + немедленная сессия — это захват админки в один
+    # вызов, если magic-ссылку прочитал не владелец. Событие происходит
+    # один раз за жизнь установки и обязано быть видно: без него разбор
+    # «кто вообще завёл этот пароль» упирается в пустоту.
+    _log.warning(
+        "DASHBOARD_CREDENTIALS_SET admin=%s ip=%s — задан пароль и открыта "
+        "сессия по magic-ссылке",
+        tg, _ip_or_unknown(request),
+    )
     return {"ok": True}
 
 
@@ -282,6 +319,15 @@ async def auth_login(body: LoginRequest, response: Response, request: Request):
     _reset_login_attempts(client_ip)
     token = await admin_auth.create_session(config.ADMIN_TELEGRAM_ID)
     _set_session_cookie(response, token)
+    # Провалы входа писались (DASHBOARD_LOGIN_FAILED выше), успех — нет.
+    # Разбор «кто поменял цены / выдал себе VIP» начинать было не с чего:
+    # подобранный пароль и штатный вход по логам неотличимы, видны только
+    # неудачные попытки. Уровень WARNING осознанно: это редкое событие,
+    # которое должно быть видно в проде и не теряться в INFO-потоке.
+    _log.warning(
+        "DASHBOARD_LOGIN_OK admin=%s ip=%s method=password",
+        config.ADMIN_TELEGRAM_ID, client_ip,
+    )
     return {"ok": True}
 
 
@@ -359,7 +405,14 @@ async def passkey_register_verify(
         label=body.label,
     )
     if not ok:
+        _log.warning("DASHBOARD_PASSKEY_REGISTER_FAILED admin=%s reason=%s", _tg, err)
         raise HTTPException(400, f"register_failed: {err}")
+    # Заведение фактора аутентификации: с этого момента в админку пускает
+    # ещё один ключ, переживающий сброс пароля. Не запишешь — при разборе
+    # «откуда взялся вход, которого не было» этот ключ не с чем связать.
+    _log.warning(
+        "DASHBOARD_PASSKEY_REGISTERED admin=%s label=%s", _tg, body.label or "—",
+    )
     return {"ok": True}
 
 
@@ -379,16 +432,31 @@ async def passkey_auth_options():
 async def passkey_auth_verify(
     body: PasskeyAuthVerifyRequest,
     response: Response,
+    request: Request = None,
 ):
     from app.services import admin_passkeys
+    client_ip = _ip_or_unknown(request)
     ok, err = await admin_passkeys.verify_authentication(
         challenge_token=body.challenge_token,
         credential=body.credential,
     )
     if not ok:
+        # Второй путь входа в админку не писал НИЧЕГО — ни успех, ни провал —
+        # и не ограничен _login_attempts. Перебор по нему был полностью
+        # невидим: в логах видны только неудачи по паролю.
+        _log.warning(
+            "DASHBOARD_PASSKEY_AUTH_FAILED ip=%s reason=%s", client_ip, err,
+        )
         raise HTTPException(401, f"auth_failed: {err}")
     token = await admin_auth.create_session(config.ADMIN_TELEGRAM_ID)
     _set_session_cookie(response, token)
+    # Тот же маркер, что и у входа по паролю, с отличием в method=. Так
+    # «кто и когда входил в дашборд» отвечается одним grep по DASHBOARD_LOGIN_OK,
+    # а не двумя разными по разным именам событий.
+    _log.warning(
+        "DASHBOARD_LOGIN_OK admin=%s ip=%s method=passkey",
+        config.ADMIN_TELEGRAM_ID, client_ip,
+    )
     return {"ok": True}
 
 
@@ -404,6 +472,10 @@ async def passkey_delete(pk_id: int, _tg: int = Depends(_require_session)):
     ok = await admin_passkeys.delete_passkey(pk_id)
     if not ok:
         raise HTTPException(404, "not_found")
+    # Снятие фактора аутентификации — такое же событие безопасности, как и
+    # его заведение. Пара REGISTERED/DELETED позволяет восстановить, какие
+    # ключи существовали в момент спорного входа.
+    _log.warning("DASHBOARD_PASSKEY_DELETED admin=%s passkey_id=%s", _tg, pk_id)
     return {"ok": True}
 
 

@@ -141,6 +141,17 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
     # КРИТИЧНО: Переходим в состояние processing_payment ПЕРЕД списанием баланса
     # Это блокирует повторные клики до завершения транзакции
     await state.set_state(PurchaseState.processing_payment)
+
+    # Единственная запись ДО того, как деньги двинулись. Ниже FSM очищается, и
+    # состав покупки (тариф, срок, цена, баланс на момент нажатия) больше
+    # неоткуда взять: у покупки с баланса нет строки в pending_purchases.
+    # Если процесс упадёт внутри finalize_balance_purchase, это будет
+    # единственный след того, что человек до списания дошёл.
+    logger.info(
+        "BALANCE_PURCHASE_START user=%s tariff=%s period_days=%s "
+        "price_rub=%.2f balance_rub=%.2f",
+        telegram_id, tariff_type, period_days, final_price_rubles, balance_rubles,
+    )
     
     # КРИТИЧНО: Формируем данные для активации подписки
     months = period_days // 30
@@ -181,6 +192,26 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         )
         
         if not result or not result.get("success"):
+            # Раньше ветка молчала: человек видел «ошибка обработки платежа», а
+            # в логе покупки не существовало вовсе. «Списали деньги, подписку
+            # не дали» разбирать было не по чему.
+            #
+            # Исход списания здесь ЧЕСТНО неизвестен: finalize_balance_purchase
+            # на большинстве отказов бросает исключение (его ловит внешний
+            # except ниже), а сюда попадают случаи, когда функция вернула None
+            # или словарь без success — то есть транзакция дошла до конца, но
+            # результат не собрался. Утверждать «деньги не списаны» нельзя,
+            # поэтому запись называет состав покупки и то, что вернула база,
+            # и прямо требует сверки баланса.
+            logger.error(
+                "BALANCE_PURCHASE_FAILED user=%s tariff=%s period_days=%s "
+                "price_rub=%.2f balance_before_rub=%.2f result=%s reason=%s "
+                "— подписка не выдана, исход списания неизвестен, сверьте баланс",
+                telegram_id, tariff_type, period_days, final_price_rubles,
+                balance_rubles,
+                "none" if not result else "no_success",
+                (result or {}).get("reason") or "unknown",
+            )
             error_text = i18n_get_text(language, "errors.payment_processing")
             await callback.message.answer(error_text, parse_mode="HTML")
             await state.set_state(None)
@@ -219,8 +250,16 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                     telegram_id, period_days, tariff_type, final_price_rubles,
                     f"balance_{payment_id}",
                 ))
-        except Exception:
-            pass
+        except Exception as sync_err:
+            # Раньше здесь стоял `except Exception: pass`. Синхронизация с
+            # сайтом — не выдача, ронять покупку из-за неё нельзя, но и
+            # молчать нечестно: расхождение «в боте подписка есть, на сайте
+            # нет» разбиралось без единого следа, откуда оно взялось.
+            logger.warning(
+                "SITE_SYNC_SCHEDULE_FAILED user=%s payment_id=%s err=%s "
+                "— подписка выдана, синхронизация с сайтом не запущена",
+                telegram_id, payment_id, sync_err,
+            )
 
         # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
         # Для продлений vpn_key может быть пустым - получаем из подписки
@@ -522,7 +561,18 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             logger.warning("REMNAWAVE_HOOK_FAIL: balance tg=%s %s", telegram_id, rmn_err)
 
     except Exception as e:
-        logger.exception(f"CRITICAL: Unexpected error in callback_pay_balance: {e}")
+        # Основной путь отказа: finalize_balance_purchase на большинстве
+        # проверок бросает исключение, а не возвращает success=False.
+        # Запись стояла без единого идентификатора — трейсбэк был, а кто, что
+        # и почём покупал, приходилось угадывать. Состав покупки берём из
+        # локальных переменных: FSM к этому моменту мог быть уже очищен.
+        logger.exception(
+            "BALANCE_PURCHASE_CRASHED user=%s tariff=%s period_days=%s "
+            "price_rub=%.2f balance_before_rub=%.2f — подписка не выдана, "
+            "исход списания неизвестен, сверьте баланс: %s",
+            telegram_id, tariff_type, period_days, final_price_rubles,
+            balance_rubles, e,
+        )
         error_text = i18n_get_text(language, "errors.payment_processing")
         await callback.answer(error_text, show_alert=True)
         await state.set_state(None)

@@ -31,6 +31,7 @@
     Экран обязан отрисоваться в любом случае.
 """
 import io
+import logging
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
@@ -42,6 +43,7 @@ from app.services.language_service import resolve_user_language
 from app.handlers.common.utils import safe_edit_text
 
 qr_router = Router()
+logger = logging.getLogger(__name__)
 
 
 @qr_router.callback_query(F.data.startswith("setup_qr:"))
@@ -186,6 +188,22 @@ async def callback_setup_qr_app(callback: CallbackQuery):
             url = None
 
         if not url:
+            # Тот же инцидент, что и на экране ключей, только другим входом:
+            # QR рисуется из той же ссылки. subscription непустой означает
+            # активную оплаченную строку (database.get_subscription фильтрует
+            # по status='active' AND expires_at > now) — значит ссылку не
+            # отдала выдача, а не «человек не покупал».
+            if subscription:
+                logger.error(
+                    "CONNECT_QR_EMPTY_FOR_ACTIVE user=%s platform=%s client=%s "
+                    "expires_at=%s — оплачено, ссылки для QR нет",
+                    telegram_id, platform, client, subscription.get("expires_at"),
+                )
+            else:
+                logger.info(
+                    "CONNECT_QR_EMPTY user=%s platform=%s client=%s — подписки нет",
+                    telegram_id, platform, client,
+                )
             text = i18n_get_text(language, "get_key.no_subscription")
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),

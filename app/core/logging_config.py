@@ -153,6 +153,44 @@ def _extra_fields(record: logging.LogRecord) -> dict:
     }
 
 
+def _clean_deep(value):
+    """Очистить значение из extra, каким бы оно ни было.
+
+    ПОЧЕМУ НЕ ПРОСТО isinstance(value, str)
+
+        Так и было, и в JSON-режиме — штатном для прода — это давало дыру:
+        `extra={"payload": {"link": "https://host/api/sub/<токен>"}}` уезжало
+        в лог как есть, потому что значение — dict, а не str. В текстовом
+        режиме та же запись редактировалась (хвост собирается f-строкой и
+        чистится целиком), то есть два формата вывода расходились в том,
+        что именно они прячут.
+
+        Проверено запуском: до этой правки строковый extra редактировался,
+        вложенный в dict/list — нет.
+
+    Ключи словарей чистим тоже: секрет может лежать и в имени поля
+    (например, {"https://host/api/sub/<токен>": "ok"}).
+    """
+    _clean = PIISanitizingFilter._sanitize
+    if isinstance(value, str):
+        return _clean(value)
+    if isinstance(value, dict):
+        return {
+            (_clean(k) if isinstance(k, str) else k): _clean_deep(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        # Множества и кортежи приводим к списку: json.dumps их всё равно не
+        # сериализует напрямую, а default=str превратил бы весь контейнер в
+        # одну строку — уже мимо очистки.
+        return [_clean_deep(v) for v in value]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    # Всё остальное (объекты, datetime, исключения) до вывода всё равно станет
+    # строкой через default=str — приводим сами, чтобы очистить.
+    return _clean(str(value))
+
+
 class JSONFormatter(logging.Formatter):
     """Structured JSON log formatter for production log aggregators."""
 
@@ -168,7 +206,7 @@ class JSONFormatter(logging.Formatter):
         # агрегаторе по ним фильтруют. Строки чистим теми же правилами —
         # в extra попадают и ссылки на подписку, и коды.
         for key, value in _extra_fields(record).items():
-            log_entry[key] = _clean(value) if isinstance(value, str) else value
+            log_entry[key] = _clean_deep(value)
         if record.exc_info and record.exc_info[0] is not None:
             # Собиралось напрямую из exc_info, мимо exc_text, — то есть мимо
             # PIISanitizingFilter: в JSON-режиме (LOG_FORMAT=json, штатный для

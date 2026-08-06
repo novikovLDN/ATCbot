@@ -134,6 +134,18 @@ _BEARER_CODE_FILES = {
     # /start разрезан на пакет; обе ветки активации кодов живут в command.py.
     "app/handlers/user/start/command.py": ("gift_code", "bgift_code"),
     "app/handlers/payments/goods_delivery.py": ("gift_code",),
+    # Промокод — код на скидку с лимитом max_uses (обычно больше единицы):
+    # кто прочитал его в логе, тот получил рабочую скидку. Проверяем ТОЛЬКО
+    # файлы, где код на момент записи заведомо живой.
+    #
+    # `database/promo.py` в список НЕ входит намеренно: там есть записи о
+    # заведомо мёртвых кодах (PROMO_EXHAUSTED — исчерпан, PROMO_DEACTIVATED —
+    # выключен), и код в них оставлен целиком. Маскировать то, что уже не
+    # работает, значит выкинуть единственный полезный факт записи и ничего
+    # при этом не спрятать. Живые ветки того файла закрыты отдельным
+    # тестом ниже — test_live_promocodes_are_masked_in_the_store.
+    "app/handlers/common/utils.py": ("promo_code",),
+    "app/handlers/payments/callbacks/purchase_flow.py": ("promo_code",),
 }
 
 
@@ -157,6 +169,142 @@ def test_bearer_codes_never_logged_raw(rel_path, names):
     assert not offenders, (
         "предъявительский код пишется в лог целиком:\n" + "\n".join(offenders)
     )
+
+
+def test_live_promocodes_are_masked_in_the_store():
+    """`database/promo.py` пишет и живые коды, и мёртвые. Маска нужна ровно
+    на живых.
+
+    Живой код — тот, которым в момент записи ещё можно воспользоваться:
+    только что созданный (PROMO_CREATED — впереди весь max_uses), заново
+    включённый (PROMO_REACTIVATED), успешно провалидированный
+    (PROMOCODE_VALIDATED — валидация проходит ТОЛЬКО для активного
+    неисчерпанного кода), потреблённый (PROMOCODE_CONSUMED — остаётся
+    рабочим, пока used_count < max_uses).
+
+    Мёртвый — исчерпанный (PROMO_EXHAUSTED) и выключенный
+    (PROMO_DEACTIVATED). Там код оставлен целиком сознательно: прятать
+    нечего, а «какая кампания кончилась» — единственный смысл записи.
+    """
+    path = REPO_ROOT / "database/promo.py"
+    live_markers = (
+        "PROMO_CREATED", "PROMO_RECREATED", "PROMO_REACTIVATED",
+        "PROMO_CONFLICT", "PROMOCODE_VALIDATED", "PROMOCODE_CONSUMED",
+        "PROMO_USAGE_INCREMENTED",
+    )
+    offenders = []
+    for lineno, snippet in _log_calls(path):
+        if not any(m in snippet for m in live_markers):
+            continue
+        if "mask_secret" in snippet:
+            continue
+        offenders.append(f"database/promo.py:{lineno} -> {snippet.strip()[:120]}")
+
+    assert not offenders, (
+        "рабочий промокод пишется в лог целиком — кто прочитал, тот получил "
+        "скидку:\n" + "\n".join(offenders)
+    )
+
+
+def test_dead_promocodes_are_left_readable():
+    """Обратная сторона: маскировка того, что не секрет, мешает разбору.
+
+    Исчерпанный и выключенный код уже не работает. Спрятать его — значит
+    выкинуть из записи единственный факт, ради которого её читают, и не
+    закрыть при этом ничего.
+    """
+    src = (REPO_ROOT / "database/promo.py").read_text(encoding="utf-8")
+    for marker in ("PROMO_EXHAUSTED", "PROMO_DEACTIVATED"):
+        line = next(ln for ln in src.splitlines() if marker in ln and "logger" in ln)
+        assert "mask_secret" not in line, (
+            f"{marker}: замаскирован код, который уже не работает — "
+            f"запись стала бесполезной, не закрыв ничего"
+        )
+
+
+def test_promo_rejection_keeps_the_code_readable():
+    """`promo_validation_failed` — единственная запись, отвечающая на самое
+    частое обращение «промокод не принимается».
+
+    Ветка достижима только когда get_active_promo_by_code ничего не нашла:
+    код неактивен, просрочен, исчерпан или это опечатка. Рабочим он здесь
+    быть не может, поэтому маска не спрятала бы ничего, а разбор («что
+    именно человек ввёл») сделала бы невозможным.
+    """
+    src = (REPO_ROOT / "app/handlers/payments/promo_fsm.py").read_text(encoding="utf-8")
+    block = src[src.index("promo_validation_failed"):][:200]
+    assert "mask_secret" not in block, (
+        "замаскирован отвергнутый код — обращение «промокод не работает» "
+        "снова нечем разбирать"
+    )
+    applied = src[src.index("promo_applied:"):][:200]
+    assert "mask_secret" in applied, (
+        "успешно применённый (то есть рабочий) промокод пишется целиком"
+    )
+
+
+def test_steam_account_login_is_not_logged_raw():
+    """Логин Steam лежит в переиспользованной колонке `country`, и
+    `database/pending_purchases.py:_country_for_log` редактирует её до
+    <redacted:account> именно потому, что это учётка покупателя.
+
+    Две записи в обработчике печатали то же значение целиком, рядом с
+    telegram_id, на каждой покупке — в обход уже принятого решения по
+    этому классу данных (email Spotify лежит в той же колонке).
+    """
+    path = REPO_ROOT / "app/handlers/payments/steam_purchase.py"
+    offenders = []
+    for lineno, snippet in _log_calls(path):
+        if "login" not in snippet:
+            continue
+        if "mask_secret" in snippet:
+            continue
+        offenders.append(f"steam_purchase.py:{lineno} -> {snippet.strip()[:120]}")
+
+    assert not offenders, (
+        "учётная запись покупателя в Steam пишется в лог целиком:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_site_link_token_is_never_printed_by_a_fixed_slice():
+    """Токен привязки сайта печатался как `payload[:16]` при проверке длины
+    `len(payload) >= 10`.
+
+    То есть любой токен короче 17 символов уходил в лог ЦЕЛИКОМ. Токен
+    предъявительский: кто его прочитал, тот привязал свой Telegram к чужому
+    аккаунту на сайте, а следом идут sync_balance и sync_referrals — то есть
+    чужие деньги. Маска обязана считать длину сама; срез по фиксированному
+    числу символов снова откроет короткие токены целиком.
+    """
+    path = REPO_ROOT / "app/handlers/user/start/command.py"
+    seen = set()
+    for lineno, snippet in _log_calls(path):
+        if "SITE_LINK_SUCCESS" not in snippet and "SITE_LINK_FAILED" not in snippet:
+            continue
+        seen.add("SITE_LINK_SUCCESS" if "SITE_LINK_SUCCESS" in snippet else "SITE_LINK_FAILED")
+        assert "payload[:" not in snippet, (
+            f"command.py:{lineno}: токен привязки снова режется срезом — "
+            f"короткие токены пишутся целиком"
+        )
+        assert "mask_secret(payload)" in snippet, (
+            f"command.py:{lineno}: токен привязки не замаскирован"
+        )
+    assert seen == {"SITE_LINK_SUCCESS", "SITE_LINK_FAILED"}, (
+        f"проверены не все записи о привязке сайта: {seen}"
+    )
+
+
+def test_the_mask_hides_a_short_token_completely():
+    """Проверка самой маски на границе: токен минимальной допустимой длины
+    (10 символов) не должен узнаваться по своему следу в логе."""
+    from app.utils.security import mask_secret
+
+    token = "abcdefghij"
+    masked = mask_secret(token)
+    assert token not in masked
+    assert masked.startswith("*")
+    assert len(masked) == len(token)
 
 
 def test_spotify_account_email_not_logged_on_purchase_creation():
@@ -502,6 +650,56 @@ class TestExtraReachesTheOutput:
         )
         for out in (as_json, as_text):
             assert leak not in out, f"секрет из extra утёк в вывод: {out}"
+
+    @pytest.mark.parametrize("value", [
+        {"link": "https://panel.example.com/api/sub/LEAKED_TOKEN"},
+        ["https://panel.example.com/api/sub/LEAKED_TOKEN"],
+        ("https://panel.example.com/api/sub/LEAKED_TOKEN",),
+        {"nested": {"deeper": ["https://panel.example.com/api/sub/LEAKED_TOKEN"]}},
+        {"https://panel.example.com/api/sub/LEAKED_TOKEN": "ok"},
+    ])
+    def test_secrets_nested_inside_extra_are_redacted_too(self, value):
+        """Дыра, найденная замером живого конвейера, а не чтением кода.
+
+        JSONFormatter чистил значение из extra ТОЛЬКО если это `str`:
+
+            log_entry[key] = _clean(value) if isinstance(value, str) else value
+
+        Достаточно было положить ту же ссылку в словарь или список, и она
+        уезжала в лог как есть. При этом в текстовом режиме та же запись
+        редактировалась — хвост собирается f-строкой и чистится целиком.
+        То есть два формата вывода расходились в том, что именно прячут,
+        а дыра была ровно в том, который включён в проде (LOG_FORMAT=json).
+        """
+        import json as json_module
+
+        from app.core.logging_config import JSONFormatter, TextFormatter
+
+        as_json = JSONFormatter().format(_record_with_extra("KEY_ISSUED", payload=value))
+        as_text = TextFormatter("%(message)s").format(
+            _record_with_extra("KEY_ISSUED", payload=value),
+        )
+        for out in (as_json, as_text):
+            assert "LEAKED_TOKEN" not in out, (
+                f"секрет во вложенном extra утёк в вывод: {out}"
+            )
+        # Запись обязана остаться разбираемой: вычистили секрет, а не поле.
+        assert "payload" in json_module.loads(as_json)
+
+    def test_non_string_extra_values_keep_their_type(self):
+        """Обратная ошибка: превратить всё в строку. Тогда в агрегаторе
+        пропадёт возможность фильтровать по числовым полям."""
+        import json as json_module
+
+        from app.core.logging_config import JSONFormatter
+
+        out = json_module.loads(JSONFormatter().format(
+            _record_with_extra("X", telegram_id=12345, ok=True, ratio=1.5, nothing=None),
+        ))
+        assert out["telegram_id"] == 12345 and isinstance(out["telegram_id"], int)
+        assert out["ok"] is True
+        assert out["ratio"] == 1.5
+        assert out["nothing"] is None
 
     def test_no_service_fields_leak_into_the_output(self):
         """Обратная ошибка: в вывод поедет весь служебный состав записи."""

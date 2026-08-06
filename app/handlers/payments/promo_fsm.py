@@ -15,6 +15,7 @@ from app.utils.security import (
     validate_telegram_id,
     validate_promo_code,
     log_security_warning,
+    mask_secret,
 )
 from app.handlers.common.guards import ensure_db_ready_message
 from app.handlers.common.states import PromoCodeInput
@@ -126,8 +127,10 @@ async def process_promo_code(message: Message, state: FSMContext):
         # old_purchases_cancelled=True было прямой ложью: отмены pending-покупок
         # в этой ветке нет и не задумано (см. комментарий выше). По записи разбор
         # уходил искать, почему отмена не сработала, вместо «отмены нет by design».
+        # Код маскируем: сюда доходят только успешно провалидированные, то
+        # есть РАБОЧИЕ коды. Кто прочитал такую строку, тот получил скидку.
         logger.info(
-            f"promo_applied: user={telegram_id}, promo_code={promo_code}, "
+            f"promo_applied: user={telegram_id}, promo_code={mask_secret(promo_code)}, "
             f"discount_percent={discount_percent}%, pending_purchases_left_intact=True"
         )
         
@@ -141,6 +144,11 @@ async def process_promo_code(message: Message, state: FSMContext):
         from app.handlers.common.keyboards import _get_promo_error_keyboard
         text = i18n_get_text(language, "main.invalid_promo")
         await message.answer(text, reply_markup=_get_promo_error_keyboard(language), parse_mode="HTML")
+        # Код НЕ маскируем — сознательно. Ветка достижима только когда
+        # get_active_promo_by_code ничего не нашла, то есть код неактивен,
+        # просрочен, исчерпан или это просто опечатка: рабочим он тут быть
+        # не может. Зато это ЕДИНСТВЕННАЯ запись, отвечающая на самое частое
+        # обращение «промокод не принимается» — под маской она бесполезна.
         logger.info(
             f"promo_validation_failed: user={telegram_id}, promo_code={promo_code}, "
             f"reason={error_reason}"

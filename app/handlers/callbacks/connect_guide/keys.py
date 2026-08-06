@@ -25,6 +25,7 @@
     человек уже заплатил.
 """
 import asyncio
+import logging
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -40,6 +41,7 @@ from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID as _MAIN_PHOTO_ID
 from app.handlers.callbacks.connect_guide.catalog import _get_photo_id
 
 keys_router = Router()
+logger = logging.getLogger(__name__)
 
 
 @keys_router.callback_query(F.data.startswith("setup_step2:"))
@@ -76,6 +78,30 @@ async def callback_setup_step2(callback: CallbackQuery):
     # отваливаются, и человек упирался в экран с одним «Назад» — тупик
     # вместо инструкции. Показываем честное состояние и путь дальше.
     if not sub_url and not bypass_url:
+        # Единственная запись на всём пути выдачи ключа. Различает два
+        # состояния, которые с экрана выглядят одинаково:
+        #   — подписки нет (человек пришёл в инструкцию из меню помощи) —
+        #     штатный экран покупки, INFO;
+        #   — подписка активна и оплачена, а ссылок нет — инцидент: ссылку
+        #     не отдали ни get_user_primary_subscription_url, ни панель.
+        # database.get_subscription возвращает ТОЛЬКО активную строку
+        # (status='active' AND expires_at > now), поэтому непустой
+        # subscription здесь и означает «человек заплатил».
+        # Если заменить его на get_subscription_any — ERROR начнёт срабатывать
+        # на истёкших подписках и утонет в шуме.
+        if subscription:
+            logger.error(
+                "CONNECT_KEYS_EMPTY_FOR_ACTIVE user=%s platform=%s expires_at=%s "
+                "type=%s remnawave_enabled=%s — оплачено, ссылок нет, ручной разбор",
+                telegram_id, platform, subscription.get("expires_at"),
+                subscription.get("subscription_type"), config.REMNAWAVE_ENABLED,
+            )
+        else:
+            logger.info(
+                "CONNECT_KEYS_EMPTY user=%s platform=%s — подписки нет, показан "
+                "экран покупки",
+                telegram_id, platform,
+            )
         await safe_edit_text(
             callback.message,
             i18n_get_text(
@@ -198,6 +224,15 @@ async def callback_setup_step2(callback: CallbackQuery):
             parse_mode="HTML",
         )
 
+    # Запись СТРОГО после отправки: она утверждает «человек увидел кнопки с
+    # ключами», а не «мы собрались их показать». Отправка выше не обёрнута в
+    # try — упадёт она, обработчик упадёт вместе с ней и записи не будет,
+    # что и есть правда. Печатаем наличие ссылок (bool), сами ссылки — секрет.
+    logger.info(
+        "CONNECT_KEYS_SHOWN user=%s platform=%s premium=%s bypass=%s",
+        telegram_id, platform, bool(sub_url), bool(bypass_url),
+    )
+
 
 @keys_router.callback_query(F.data.startswith("setup_manual:"))
 async def callback_setup_manual(callback: CallbackQuery):
@@ -268,7 +303,23 @@ async def callback_setup_manual(callback: CallbackQuery):
     if keys_section:
         text = f"{connect_text}\n{keys_section}"
     else:
+        # Здесь ветки «пока нечего подключать» нет: экран молча вырождается в
+        # голую инструкцию без единого ключа. Для человека с активной подпиской
+        # это тот же инцидент, что и на step2, но выглядит он безобиднее —
+        # поэтому и нужна отдельная запись, иначе обращение «инструкция есть,
+        # ключа нет» не отличить от «человек не долистал».
         text = connect_text
+        if subscription:
+            logger.error(
+                "CONNECT_MANUAL_KEYS_EMPTY_FOR_ACTIVE user=%s platform=%s "
+                "expires_at=%s — оплачено, ключей в инструкции нет",
+                telegram_id, platform, subscription.get("expires_at"),
+            )
+        else:
+            logger.info(
+                "CONNECT_MANUAL_KEYS_EMPTY user=%s platform=%s — подписки нет",
+                telegram_id, platform,
+            )
 
     buttons = [
         [InlineKeyboardButton(

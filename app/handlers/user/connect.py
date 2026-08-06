@@ -70,6 +70,17 @@ async def cmd_hwadd(message: Message):
 
     subscription = await database.get_subscription(telegram_id)
     if not subscription:
+        # Единственная запись на команде выдачи ключа. Отвечает на вопрос
+        # «человек жалуется, что бот не даёт добавить устройство»: команда
+        # вообще вызывалась, и активной строки на этот момент в базе не было.
+        # Без неё «подписка кончилась», «база не ответила» (get_subscription
+        # возвращает None и при DB_READY=False) и «человек не нажимал» —
+        # неразличимы.
+        logger.info(
+            "HWADD_NO_SUBSCRIPTION user=%s — активной подписки нет, "
+            "экран добавления устройства не показан",
+            telegram_id,
+        )
         text = i18n_get_text(language, "get_key.no_subscription")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),

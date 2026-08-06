@@ -47,6 +47,7 @@ from app.handlers.common.utils import (
 )
 from app.handlers.common.states import PromoCodeInput, PurchaseState
 from app.core.structured_logger import log_event
+from app.utils.security import mask_secret
 from app.handlers.payments.callbacks.tariff_meta import _period_badge
 
 router = Router()
@@ -181,7 +182,7 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         expires_in = max(0, int(expires_at - time.time()))
         logger.info(
             f"Price calculation with promo session: user={telegram_id}, tariff={tariff_type}, "
-            f"promo_code={promo_code}, discount={promo_session.get('discount_percent')}%, "
+            f"promo_code={mask_secret(promo_code)}, discount={promo_session.get('discount_percent')}%, "
             f"expires_in={expires_in}s"
         )
     
@@ -215,7 +216,8 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         logger.debug(
             f"Price recalculated: tariff={tariff_type}, period={period_days}, "
             f"base={price_info['base_price_kopecks']}, discount={price_info['discount_percent']}%, "
-            f"final={price_info['final_price_kopecks']}, promo_code={promo_code or 'none'}"
+            f"final={price_info['final_price_kopecks']}, "
+            f"promo_code={mask_secret(promo_code) if promo_code else 'none'}"
         )
         
         # Формируем правильное склонение периода
@@ -422,7 +424,7 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         discount_percent = promo_session.get("discount_percent", 0)
         logger.info(
             f"Period selection with promo session: user={telegram_id}, tariff={tariff_type}, "
-            f"period={period_days}, promo_code={promo_code}, discount={discount_percent}%, "
+            f"period={period_days}, promo_code={mask_secret(promo_code)}, discount={discount_percent}%, "
             f"expires_in={expires_in}s"
         )
     
@@ -488,7 +490,7 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         f"Period selected: user={telegram_id}, tariff={tariff_type}, period={period_days}, "
         f"base_price_kopecks={price_info['base_price_kopecks']}, final_price_kopecks={price_info['final_price_kopecks']}, "
         f"discount_percent={price_info['discount_percent']}%, discount_type={price_info['discount_type']}, "
-        f"promo_code={promo_code or 'none'}"
+        f"promo_code={mask_secret(promo_code) if promo_code else 'none'}"
     )
     
     # КРИТИЧНО: Переходим к выбору способа оплаты (НЕ создаем pending_purchase и invoice)

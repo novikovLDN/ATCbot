@@ -15,6 +15,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 
 from app.i18n import get_text as i18n_get_text
+from app.utils.security import mask_secret
 
 logger = logging.getLogger(__name__)
 
@@ -619,9 +620,11 @@ async def get_promo_session(state: FSMContext) -> Optional[Dict[str, Any]]:
     if expires_at and current_time > expires_at:
         await state.update_data(promo_session=None)
         telegram_id = fsm_data.get("_telegram_id", "unknown")
+        # Протухла СЕССИЯ, а не код: сам промокод почти наверняка ещё
+        # рабочий — его валидировали максимум пять минут назад. Маскируем.
         logger.info(
             f"promo_session_expired: user={telegram_id}, "
-            f"promo_code={promo_session.get('promo_code')}"
+            f"promo_code={mask_secret(promo_session.get('promo_code'))}"
         )
         return None
 
@@ -660,8 +663,9 @@ async def create_promo_session(
     await state.update_data(promo_session=promo_session, _telegram_id=telegram_id)
 
     expires_in = int(expires_at - current_time)
+    # Сессия создаётся только после успешной валидации — код рабочий.
     logger.info(
-        f"promo_session_created: user={telegram_id}, promo_code={promo_code.upper()}, "
+        f"promo_session_created: user={telegram_id}, promo_code={mask_secret(promo_code.upper())}, "
         f"discount_percent={discount_percent}%, expires_in={expires_in}s"
     )
 

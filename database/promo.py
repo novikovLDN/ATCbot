@@ -13,6 +13,12 @@ from typing import Any, Dict, Optional
 
 import database.core as _core
 from database.core import get_pool, _to_db_utc
+from app.utils.security import mask_secret
+
+# Промокод — предъявительский код на скидку: max_uses обычно больше единицы,
+# и кто прочитал код в логе, тот получил рабочую скидку. Маскируем там, где
+# код на момент записи РАБОТАЕТ. Там, где он уже мёртв (исчерпан, выключен,
+# не найден), маска не прячет ничего, а разбор ломает — код оставлен целиком.
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +165,8 @@ async def create_promocode_atomic(
         logger.error(f"Invalid promocode length: {len(code_normalized)}")
         return None
     if not all(c.isalnum() for c in code_normalized):
-        logger.error(f"Invalid promocode characters: {code_normalized}")
+        # Отбракованная строка промокодом так и не стала — прятать нечего.
+        logger.error(f"PROMO_INVALID_CHARS code={code_normalized}")
         return None
     if discount_percent < 0 or discount_percent > 100:
         logger.error(f"Invalid discount_percent: {discount_percent}")
@@ -192,7 +199,10 @@ async def create_promocode_atomic(
                         code_normalized
                     )
                     if conflict:
-                        logger.warning(f"PROMO_CONFLICT code={code_normalized} active promo exists id={conflict['id']}")
+                        logger.warning(
+                            f"PROMO_CONFLICT code={mask_secret(code_normalized)} "
+                            f"active promo exists id={conflict['id']}"
+                        )
                         return None
 
                 if has_id:
@@ -226,20 +236,23 @@ async def create_promocode_atomic(
                 is_recreate = has_id and int(prev_count) > 1
                 if is_recreate:
                     logger.info(
-                        f"PROMO_RECREATED code={code_normalized} id={promo_id} discount={discount_percent}% "
+                        f"PROMO_RECREATED code={mask_secret(code_normalized)} id={promo_id} discount={discount_percent}% "
                         f"max_uses={max_uses} created_by={created_by}"
                     )
                 else:
                     logger.info(
-                        f"PROMO_CREATED code={code_normalized} id={promo_id} discount={discount_percent}% "
+                        f"PROMO_CREATED code={mask_secret(code_normalized)} id={promo_id} discount={discount_percent}% "
                         f"max_uses={max_uses} expires_at={expires_at} created_by={created_by}"
                     )
                 return int(promo_id) if promo_id else None
             except asyncpg.UniqueViolationError:
-                logger.warning(f"Promocode unique violation (active conflict): {code_normalized}")
+                logger.warning(
+                    f"PROMO_UNIQUE_VIOLATION code={mask_secret(code_normalized)} "
+                    f"— активный промокод с таким кодом уже есть"
+                )
                 return None
             except Exception as e:
-                logger.exception(f"Error creating promocode {code_normalized}: {e}")
+                logger.exception(f"PROMO_CREATE_ERROR code={mask_secret(code_normalized)}: {e}")
                 return None
 
 
@@ -281,7 +294,7 @@ async def reactivate_promocode(promo_id: Optional[int] = None, code: Optional[st
         else:
             return False
         if row:
-            logger.info("PROMO_REACTIVATED code=%s", row.get("code"))
+            logger.info("PROMO_REACTIVATED code=%s", mask_secret(row.get("code")))
             return True
         return False
 
@@ -326,6 +339,8 @@ async def deactivate_promocode(promo_id: Optional[int] = None, code: Optional[st
         else:
             return False
         if row:
+            # Код НЕ маскируем: его только что выключили, он больше не работает,
+            # а запись существует ровно чтобы ответить «какой именно погасили».
             logger.info(f"PROMO_DEACTIVATED code={row['code']} id={promo_id or 'N/A'}")
             return True
         return False
@@ -372,13 +387,16 @@ async def _consume_promo_in_transaction(
         )
     if not updated:
         ctx = f" purchase_id={purchase_id}" if purchase_id else ""
+        # Код НЕ маскируем: сюда попадают только исчерпанные (used_count >=
+        # max_uses), то есть уже нерабочие коды. Маска не спрятала бы ничего,
+        # а «какая кампания кончилась» — единственный смысл этой записи.
         logger.warning(f"PROMO_EXHAUSTED code={code_normalized} user={telegram_id}{ctx}")
         raise ValueError("PROMO_EXHAUSTED")
 
     used = updated["used_count"]
     max_uses_val = updated["max_uses"]
     logger.info(
-        f"PROMO_USAGE_INCREMENTED code={code_normalized} id={promo_id or 'N/A'} user={telegram_id} "
+        f"PROMO_USAGE_INCREMENTED code={mask_secret(code_normalized)} id={promo_id or 'N/A'} user={telegram_id} "
         f"used_count={used}/{max_uses_val if max_uses_val else 'unlimited'}"
     )
 
@@ -403,12 +421,12 @@ async def validate_promocode_atomic(code: str) -> Dict[str, Any]:
             if not promo:
                 return {"success": False, "promo_data": None, "error": "invalid"}
             logger.info(
-                f"PROMOCODE_VALIDATED code={code_normalized} "
+                f"PROMOCODE_VALIDATED code={mask_secret(code_normalized)} "
                 f"used_count={promo.get('used_count', 0)}/{promo.get('max_uses') or 'unlimited'}"
             )
             return {"success": True, "promo_data": dict(promo), "error": None}
         except Exception as e:
-            logger.exception(f"Error validating promocode {code_normalized}: {e}")
+            logger.exception(f"PROMO_VALIDATE_ERROR code={mask_secret(code_normalized)}: {e}")
             return {"success": False, "promo_data": None, "error": "invalid"}
 
 
@@ -508,7 +526,7 @@ async def consume_promocode_atomic(code: str, telegram_id: int) -> None:
                     )
                 
                 logger.info(
-                    f"PROMOCODE_CONSUMED code={code_normalized} user={telegram_id} "
+                    f"PROMOCODE_CONSUMED code={mask_secret(code_normalized)} user={telegram_id} "
                     f"used_count={new_count}/{max_uses if max_uses else 'unlimited'}"
                 )
                 
@@ -516,5 +534,5 @@ async def consume_promocode_atomic(code: str, telegram_id: int) -> None:
                 # Пробрасываем ValueError как есть
                 raise
             except Exception as e:
-                logger.exception(f"Error consuming promocode {code_normalized}: {e}")
+                logger.exception(f"PROMO_CONSUME_ERROR code={mask_secret(code_normalized)}: {e}")
                 raise ValueError("PROMO_CONSUME_ERROR")
