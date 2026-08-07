@@ -245,6 +245,10 @@ async def segments_list():
         ("has_balance_50plus", "Баланс ≥ 50₽",
          "На балансе не меньше 50₽. Напоминание использовать балансовый чекаут.",
          "Апселл / особые"),
+        ("bought_proxy", "Купил прокси",
+         "Юзер купил отдельный товар «Telegram MT Прокси» (users.proxy_purchased_at IS NOT NULL). "
+         "Целевая для допродажи VPN-подписки, апдейтов по прокси или лояльных предложений.",
+         "Апселл / особые"),
     ]
     out = []
     for key, label, description, group in segments:
