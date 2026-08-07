@@ -894,6 +894,14 @@ def _build_reply_markup(
                 text="🎁 Поделиться скидкой",
                 callback_data="share_discount_open",
             )])
+        elif btn == "my_proxy":
+            # Для рассылок владельцам прокси (сегмент bought_proxy):
+            # callback proxy_open отрисует delivery-screen «Ваш Telegram-
+            # прокси готов» + кнопку «🔌 Подключить прокси».
+            rows.append([InlineKeyboardButton(
+                text="🧩 Мой прокси",
+                callback_data="proxy_open",
+            )])
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 

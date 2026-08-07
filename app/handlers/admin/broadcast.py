@@ -227,6 +227,11 @@ def _build_broadcast_reply_markup(
             )])
         elif btn == "proxy":
             rows.append([InlineKeyboardButton(text="🌐 MT Прокси", callback_data="proxy_open")])
+        elif btn == "my_proxy":
+            # Для рассылок владельцам прокси (сегмент bought_proxy):
+            # callback proxy_open отрисует delivery-screen «Ваш Telegram-
+            # прокси готов» + кнопку «🔌 Подключить прокси».
+            rows.append([InlineKeyboardButton(text="🧩 Мой прокси", callback_data="proxy_open")])
         elif btn == "share_discount":
             # Recipient таппает → переходит на экран «подари другу
             # скидку 30%» (callback share_discount_open). Там уже его
