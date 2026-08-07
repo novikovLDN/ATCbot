@@ -205,7 +205,6 @@ async def cmd_start(message: Message, state: FSMContext):
                             )
                             # Success keyboard: dedicated "Connect Bypass" button
                             # leading to the gift-only setup flow.
-                            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                                 [InlineKeyboardButton(
                                     text=i18n_get_text(language, "bypass_gift.connect_btn"),
