@@ -487,6 +487,7 @@ _BUTTON_TYPES = {
     "web_client",
     "buy_combo",
     "share_discount",
+    "my_proxy",
 }
 
 
