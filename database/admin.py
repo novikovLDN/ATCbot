@@ -1966,6 +1966,23 @@ async def get_users_by_segment(segment: str) -> list:
                      AND s.source = 'payment'"""
             )
             return [row["telegram_id"] for row in rows]
+        elif segment == "bought_proxy":
+            # Купил standalone Telegram MT Прокси (users.proxy_purchased_at IS NOT NULL).
+            # Tolerates missing column: если миграция 051 ещё не проехала,
+            # asyncpg кидает UndefinedColumnError — возвращаем пустой список,
+            # чтобы не ронять роут segments_list.
+            try:
+                rows = await conn.fetch(
+                    """SELECT telegram_id FROM users
+                       WHERE proxy_purchased_at IS NOT NULL"""
+                )
+            except asyncpg.UndefinedColumnError:
+                logging.warning(
+                    "bought_proxy segment: users.proxy_purchased_at missing "
+                    "— migration 051 not applied, returning empty list"
+                )
+                return []
+            return [row["telegram_id"] for row in rows]
         elif segment in ("expired_1d", "expired_2d", "expired_3d"):
             # User's MOST RECENT subscription expired exactly N full days
             # ago (24-hour bucket). MAX(expires_at) делает выборку
