@@ -110,7 +110,7 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
             callback_data="switch_tariff_menu",
         )],
         [InlineKeyboardButton(
-            text="Купить ГБ обхода",
+            text="Купить Pro-трафик",
             callback_data="buy_traffic",
             icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )],
@@ -194,7 +194,7 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
         # Для комбо — показываем преимущества комбо подписки
         combo_benefits = (
             "\n\n💡 <b>Преимущества комбо:</b>\n"
-            "✅ Трафик обхода уже включён в стоимость\n"
+            "✅ Pro-трафик уже включён в стоимость\n"
             "✅ Не нужно покупать ГБ отдельно\n"
             "✅ Экономия до 30% по сравнению с раздельной покупкой"
         )
