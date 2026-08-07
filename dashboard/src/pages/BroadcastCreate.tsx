@@ -48,6 +48,9 @@ const BUTTON_OPTIONS = [
   { key: "happ_ios", label: "📲 Happ iOS" },
   { key: "happ_android", label: "📲 Happ Android" },
   { key: "web_client", label: "🌐 Веб-клиент" },
+  // Для рассылок владельцам прокси (сегмент bought_proxy) —
+  // ведёт на delivery-экран «🧩 Ваш Telegram-прокси готов».
+  { key: "my_proxy", label: "🧩 Мой прокси" },
   // Получатель таппает → бот открывает экран «Подари другу скидку 30%».
   // Внутри — кнопка share с его личной refd-ссылкой. Друг по ссылке
   // получает 30%/24ч (lifetime-once). Без extra discount-параметров —

@@ -316,6 +316,7 @@ def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
         ("🌐 Веб-клиент QoDev", "web_client"),
         ("🏆 Купить Комбо", "buy_combo"),
         ("🌐 MT Прокси", "proxy"),
+        ("🧩 Мой прокси", "my_proxy"),
         ("🎁 Поделиться скидкой", "share_discount"),
     ]
     rows = []
