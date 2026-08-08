@@ -577,7 +577,17 @@ def _happ_advanced_headers(base_url: str, token: str) -> dict:
         # Правильные ключи из dev-docs/app-management.md:
         # backgroundColors, elipseColors, serverRow*, subsHeader*,
         # button*, subscription*, disclosure*, icon-Color, etc.
+        #
+        # ТРОЙНАЯ ПОДАЧА (разные версии Happ читают разное имя/формат):
         "color-profile": b64(color_profile_json),
+        # 1. Альт. имя (title-case) — некоторые версии Happ case-sensitive.
+        "Color-Profile": b64(color_profile_json),
+        # 2. Plain JSON без base64: (доки говорят оба допустимы).
+        # Но не в имя `color-profile` — Happ не поймёт двойное. Кладём
+        # в camelCase-вариант.
+        "colorProfile": color_profile_json,
+        # 3. Альт. под именем "theme" — некоторые Marzban форки.
+        "theme": b64(color_profile_json),
 
         # === Промо-плашка внутри карточки подписки ===
         # Цветной блок с текстом и кнопкой — sub-info-*.
@@ -795,6 +805,68 @@ async def happ_theme(request: Request, token: str = Path(..., min_length=32, max
     # Браузер — красивая HTML темa.
     html = _render_html(user_data, sub_url)
     return HTMLResponse(content=html)
+
+
+@router.get("/happ-theme/{token}/debug")
+async def happ_theme_debug(token: str = Path(..., min_length=32, max_length=32)):
+    """Debug endpoint: возвращает JSON что реально отдаётся Happ клиенту.
+
+    Использование: открываешь в браузере и видишь весь набор Happ headers,
+    body preview + инжектированные `#параметры`. Проверяем что color-profile
+    доехал до клиента.
+    """
+    if not _is_valid_token(token):
+        raise HTTPException(status_code=404, detail="not_found")
+
+    record = await happ_theme_db.get_by_token(token)
+    if record is None:
+        raise HTTPException(status_code=404, detail="not_found")
+
+    try:
+        import config as _cfg
+        admin_id = int(getattr(_cfg, "ADMIN_TELEGRAM_ID", 0) or 0)
+    except Exception:
+        admin_id = 0
+    if admin_id == 0 or int(record["telegram_id"]) != admin_id:
+        raise HTTPException(status_code=404, detail="not_found")
+
+    remnawave_uuid = record["remnawave_uuid"]
+    user_data = await remnawave_api.get_user(remnawave_uuid)
+    if user_data is None:
+        raise HTTPException(status_code=502, detail="panel_api_unavailable")
+
+    sub_url = (user_data.get("subscriptionUrl") or "").strip()
+    body, upstream_headers = await _fetch_subscription_content(sub_url)
+    if body is None:
+        raise HTTPException(status_code=502, detail="subscription_fetch_failed")
+
+    base_url = "https://your.host"  # placeholder для debug
+    atlas_headers = _happ_advanced_headers(base_url, token)
+    body_after = _inject_theme_into_body(body, atlas_headers)
+
+    # Decode base64 body если оно base64.
+    body_plain_preview = body_after[:500]
+    if "vless://" not in body_after and body_after.strip():
+        try:
+            body_plain_preview = base64.b64decode(
+                body_after.strip(), validate=False,
+            ).decode("utf-8", errors="ignore")[:1000]
+        except Exception:
+            pass
+
+    from fastapi.responses import JSONResponse
+    return JSONResponse({
+        "sub_url_upstream": sub_url,
+        "upstream_headers": upstream_headers,
+        "atlas_headers_added": atlas_headers,
+        "body_upstream_first_200": body[:200],
+        "body_after_inject_first_500": body_after[:500],
+        "body_after_inject_decoded_preview": body_plain_preview,
+        "color_profile_present_in_body": (
+            "#color-profile:" in body_after
+            or "#color-profile:" in body_plain_preview
+        ),
+    })
 
 
 @router.get("/happ-theme/health")
