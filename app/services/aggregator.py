@@ -5,8 +5,10 @@ Rollback: AGG_ENABLED=false → роут не монтируется, кнопк
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
@@ -37,7 +39,36 @@ HAPP_ANNOUNCE_EXPIRED = (
     "Продлите её в @atlassecure_bot, чтобы вернуть скорость."
 )
 
-_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
+_TIMEOUT = httpx.Timeout(connect=3.0, read=6.0, write=3.0, pool=3.0)
+
+# In-memory кэш финального ответа: (premium_uuid, whitelist_uuid) →
+# (timestamp, result). TTL 30s — Happ/v2rayN опрашивают подписку раз в
+# несколько минут (Profile-Update-Interval: 24), так что 30с ok:
+# юзер получает свежую версию, а частые повторные запросы (например
+# сразу после клика Refresh) отдаются мгновенно из памяти.
+_RESPONSE_CACHE_TTL = 30.0
+_response_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+
+
+def _cache_get(premium_uuid: str, whitelist_uuid: str) -> Optional[dict]:
+    key = (premium_uuid, whitelist_uuid)
+    entry = _response_cache.get(key)
+    if entry is None:
+        return None
+    ts, result = entry
+    if time.monotonic() - ts > _RESPONSE_CACHE_TTL:
+        _response_cache.pop(key, None)
+        return None
+    return result
+
+
+def _cache_put(premium_uuid: str, whitelist_uuid: str, result: dict) -> None:
+    _response_cache[(premium_uuid, whitelist_uuid)] = (time.monotonic(), result)
+
+
+def clear_cache() -> None:
+    """Reset in-memory response cache (для тестов и /agg regenerate flow)."""
+    _response_cache.clear()
 
 
 def fake_vless(remark: str) -> str:
@@ -144,6 +175,25 @@ def build_userinfo(premium: dict, whitelist: dict) -> str:
     return f"upload=0; download={used}; total={limit}; expire={exp_ts}"
 
 
+async def _safe_get_user(uuid: str) -> Optional[dict]:
+    """Обёртка для gather с return_exceptions=True — превращаем ошибку в None."""
+    try:
+        return await remnawave_api.get_user(uuid)
+    except Exception as e:
+        logger.warning("agg _safe_get_user uuid=%s err=%s", uuid[:8], e)
+        return None
+
+
+async def _fetch_or_empty(user_data: Optional[dict], active: bool) -> list[str]:
+    if not active or user_data is None:
+        return []
+    try:
+        return await fetch_subscription_lines(user_data)
+    except Exception as e:
+        logger.warning("agg _fetch_or_empty err=%s", e)
+        return []
+
+
 async def build_aggregated_response(
     premium_uuid: str, whitelist_uuid: str,
 ) -> Optional[dict]:
@@ -151,9 +201,22 @@ async def build_aggregated_response(
 
     Возвращает None если Panel API недоступен для обоих UUID (упадём
     в 502). Если один из юзеров удалён — секция заменяется на fake-VLESS.
+
+    Кэш 30s in-memory — повторные запросы в этом окне возвращаются
+    мгновенно из памяти. Параллельные HTTP-вызовы к Panel (2 get_user
+    одновременно + 2 fetch_subscription одновременно) — сокращает
+    total latency почти вдвое.
     """
-    premium_user = await remnawave_api.get_user(premium_uuid)
-    whitelist_user = await remnawave_api.get_user(whitelist_uuid)
+    # 1. Cache hit?
+    cached = _cache_get(premium_uuid, whitelist_uuid)
+    if cached is not None:
+        return cached
+
+    # 2. Параллельно тянем обоих юзеров.
+    premium_user, whitelist_user = await asyncio.gather(
+        _safe_get_user(premium_uuid),
+        _safe_get_user(whitelist_uuid),
+    )
 
     if premium_user is None and whitelist_user is None:
         return None
@@ -162,15 +225,21 @@ async def build_aggregated_response(
     premium_active = premium_user is not None and is_active(premium_user)
     whitelist_active = whitelist_user is not None and is_active(whitelist_user)
 
+    # 3. Параллельно тянем содержимое обеих подписок (только для активных).
+    premium_lines, whitelist_lines = await asyncio.gather(
+        _fetch_or_empty(premium_user, premium_active),
+        _fetch_or_empty(whitelist_user, whitelist_active),
+    )
+
     lines: list[str] = []
 
     if premium_active:
-        lines.extend(await fetch_subscription_lines(premium_user))
+        lines.extend(premium_lines)
     else:
         lines.append(fake_vless(MSG_PREMIUM_EXPIRED))
 
     if whitelist_active:
-        lines.extend(await fetch_subscription_lines(whitelist_user))
+        lines.extend(whitelist_lines)
     else:
         lines.append(fake_vless(MSG_WHITELIST_EXPIRED))
 
@@ -188,8 +257,13 @@ async def build_aggregated_response(
     # Announce меняется по состоянию подписок: если что-то истекло —
     # показываем warning с call-to-action.
     announce = HAPP_ANNOUNCE_ACTIVE if (premium_active and whitelist_active) else HAPP_ANNOUNCE_EXPIRED
+    # HTTP headers по RFC 7230 — latin-1 only. Кириллицу/emoji нельзя
+    # в raw-виде — Starlette/uvicorn падают при encode с UnicodeEncodeError
+    # → 500. Happ Manager принимает "base64:xxx" префикс (как у Profile-Title)
+    # и корректно декодирует UTF-8 обратно.
+    announce_b64 = base64.b64encode(announce.encode("utf-8")).decode("ascii")
 
-    return {
+    result = {
         "body_b64": body_b64,
         "profile_title_b64": profile_title_b64,
         "userinfo": userinfo,
@@ -197,7 +271,9 @@ async def build_aggregated_response(
         "whitelist_active": whitelist_active,
         # Happ theme fields — эти заголовки читает Happ Manager v4+,
         # другие клиенты их молча игнорируют.
-        "support_url": HAPP_SUPPORT_URL,
-        "web_page_url": HAPP_WEB_PAGE_URL,
-        "announce": announce,
+        "support_url": HAPP_SUPPORT_URL,          # ASCII URL
+        "web_page_url": HAPP_WEB_PAGE_URL,        # ASCII URL
+        "announce_b64": announce_b64,             # base64 UTF-8
     }
+    _cache_put(premium_uuid, whitelist_uuid, result)
+    return result
