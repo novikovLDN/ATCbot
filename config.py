@@ -454,8 +454,15 @@ else:
 # + добавляет profile-web-page-url headers (для WebView внутри Happ).
 # Токены создаются только через admin команду /happ_theme.
 HAPP_THEME_ENABLED = env("HAPP_THEME_ENABLED", default="true").lower() in ("1", "true", "yes", "on")
+# Provider ID с happ-proxy.com — нужен чтобы color-profile + sub-info-*
+# + другие "Advanced" параметры реально применились на iOS Happ.
+# Пустой → тема не применится, всё остальное работает.
+HAPP_PROVIDER_ID = env("HAPP_PROVIDER_ID", default="EnWNNyyT").strip()
 if HAPP_THEME_ENABLED:
-    _log.info("HAPP_THEME_ENABLED=true (mounted at /happ-theme/{token})")
+    _log.info(
+        "HAPP_THEME_ENABLED=true (mounted at /happ-theme/{token}, provider_id=%s)",
+        HAPP_PROVIDER_ID or "NONE",
+    )
 
 # Traffic limits per tariff (in bytes). Trial has NO bypass.
 TRAFFIC_LIMITS = {

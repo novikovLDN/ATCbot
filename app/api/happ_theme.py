@@ -572,22 +572,21 @@ def _happ_advanced_headers(base_url: str, token: str) -> dict:
     # но base64 надёжнее (без кавычек в header value).
     color_profile_json = _json.dumps(_ATLAS_COLOR_PROFILE, separators=(",", ":"))
 
-    return {
+    # Provider ID (happ-proxy.com) — активирует color-profile + все
+    # "Advanced" параметры на iOS Happ. Пустой → тема не применится.
+    provider_id = ""
+    try:
+        import config as _cfg
+        provider_id = getattr(_cfg, "HAPP_PROVIDER_ID", "") or ""
+    except Exception:
+        pass
+
+    result = {
         # === Тема Happ (iOS only) — color-profile ===
         # Правильные ключи из dev-docs/app-management.md:
         # backgroundColors, elipseColors, serverRow*, subsHeader*,
         # button*, subscription*, disclosure*, icon-Color, etc.
-        #
-        # ТРОЙНАЯ ПОДАЧА (разные версии Happ читают разное имя/формат):
         "color-profile": b64(color_profile_json),
-        # 1. Альт. имя (title-case) — некоторые версии Happ case-sensitive.
-        "Color-Profile": b64(color_profile_json),
-        # 2. Plain JSON без base64: (доки говорят оба допустимы).
-        # Но не в имя `color-profile` — Happ не поймёт двойное. Кладём
-        # в camelCase-вариант.
-        "colorProfile": color_profile_json,
-        # 3. Альт. под именем "theme" — некоторые Marzban форки.
-        "theme": b64(color_profile_json),
 
         # === Промо-плашка внутри карточки подписки ===
         # Цветной блок с текстом и кнопкой — sub-info-*.
@@ -634,6 +633,16 @@ def _happ_advanced_headers(base_url: str, token: str) -> dict:
         # === Profile Title (уже приходит от Remnawave, но перебиваем на брендированный) ===
         "profile-title": b64("💎 Atlas Secure"),
     }
+
+    # Provider ID (happ-proxy.com) — если задан, добавляем в headers
+    # тремя вариантами регистра (доки говорят "providerid", но разные
+    # версии/форки могут читать иначе).
+    if provider_id:
+        result["providerid"] = provider_id
+        result["provider-id"] = provider_id
+        result["ProviderId"] = provider_id
+
+    return result
 
 
 def _inject_theme_into_body(body: str, atlas_headers: dict) -> str:
