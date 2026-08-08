@@ -136,6 +136,79 @@ async def cmd_wata_status(message: Message):
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
+@admin_base_router.message(Command("agg"))
+@admin_only
+async def cmd_agg(message: Message):
+    """Aggregated subscription (admin-only beta): генерирует URL,
+    объединяющую premium + bypass в одну ссылку с fake-VLESS для
+    истёкших секций. Feature-flag AGG_ENABLED.
+
+    Работа только для админа. Использует его собственную подписку
+    (нужны оба UUID: remnawave_premium_uuid + remnawave_uuid)."""
+    if not getattr(config, "AGG_ENABLED", False):
+        await message.answer(
+            "🚫 Aggregated subscription отключён. "
+            "Установите <code>AGG_ENABLED=true</code> в env и перезапустите бота.",
+            parse_mode="HTML",
+        )
+        return
+
+    telegram_id = message.from_user.id
+    subscription = await database.get_subscription(telegram_id)
+    if not subscription:
+        await message.answer(
+            "❌ У вас нет активной подписки. Aggregator нужны оба UUID "
+            "(premium + bypass) — оформите подписку и повторите.",
+            parse_mode="HTML",
+        )
+        return
+
+    premium_uuid = subscription.get("remnawave_premium_uuid")
+    whitelist_uuid = subscription.get("remnawave_uuid")
+    if not premium_uuid or not whitelist_uuid:
+        await message.answer(
+            "❌ Не найдены оба UUID в вашей подписке:\n"
+            f"• premium_uuid: <code>{premium_uuid or '—'}</code>\n"
+            f"• whitelist_uuid: <code>{whitelist_uuid or '—'}</code>\n\n"
+            "Aggregator работает только когда есть оба Remnawave-юзера.",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        import database.aggregator as agg_db
+        token = await agg_db.get_or_create_token(
+            telegram_id=telegram_id,
+            premium_uuid=str(premium_uuid),
+            whitelist_uuid=str(whitelist_uuid),
+        )
+    except Exception as e:
+        await message.answer(
+            f"❌ DB-ошибка при генерации токена: <code>{e}</code>\n\n"
+            "Возможно не проехала миграция 072_aggregated_subscriptions.sql.",
+            parse_mode="HTML",
+        )
+        return
+
+    if not token:
+        await message.answer("❌ Не удалось сгенерировать токен (DB pool недоступен).")
+        return
+
+    base = (getattr(config, "AGG_BASE_URL", "") or "").rstrip("/") \
+        or (getattr(config, "PUBLIC_BASE_URL", "") or "").rstrip("/") \
+        or (getattr(config, "WEBHOOK_URL", "") or "").rstrip("/")
+    url = f"{base}/agg/{token}" if base else f"/agg/{token}"
+
+    text = (
+        "🧪 <b>Aggregated Subscription (beta)</b>\n\n"
+        f"<code>{url}</code>\n\n"
+        "Добавьте в Happ / v2rayN / Streisand как обычную subscription URL.\n"
+        "Если premium или bypass истекут — соответствующая секция заменится "
+        "на fake-VLESS с текстом «⚠️ … ended — pay @bot»."
+    )
+    await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+
+
 @admin_base_router.callback_query(F.data == "admin:reset_password")
 @admin_only
 async def callback_reset_password(callback: CallbackQuery):

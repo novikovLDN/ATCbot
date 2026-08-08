@@ -448,6 +448,18 @@ if REMNAWAVE_ENABLED:
 else:
     _log.info("REMNAWAVE_ENABLED=false (URL or TOKEN not set)")
 
+# ─── Aggregated Subscription (admin-only beta, feature-flagged) ────────
+# Объединённая подписка premium+bypass в одну URL с fake-VLESS для
+# истёкших секций. Полностью выключается через AGG_ENABLED=false —
+# роут /agg/{token} не монтируется, кнопка не появляется.
+AGG_ENABLED = env("AGG_ENABLED", default="false").lower() in ("1", "true", "yes", "on")
+# Base URL для генерируемой ссылки. Дефолт — PUBLIC_BASE_URL бота
+# (тот же хост, что и /health / /webhook). Если админ поднимет
+# отдельный nginx-хост типа sub.atlassecure.ru — пропишет его сюда.
+AGG_BASE_URL = env("AGG_BASE_URL", default="").rstrip("/")
+if AGG_ENABLED:
+    _log.info("AGG_ENABLED=true (aggregated subscription mounted at /agg/{token})")
+
 # Traffic limits per tariff (in bytes). Trial has NO bypass.
 TRAFFIC_LIMITS = {
     "basic": {

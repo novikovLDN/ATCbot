@@ -61,6 +61,16 @@ app.include_router(telegram_webhook.router)
 app.include_router(payment_webhook.router)
 app.include_router(deeplink_redirect.router)
 
+# Aggregated subscription (admin-only beta) — монтируется только при AGG_ENABLED=true.
+try:
+    import config as _cfg
+    if getattr(_cfg, "AGG_ENABLED", False):
+        from app.api import aggregator as _agg
+        app.include_router(_agg.router)
+        logger.info("AGG_ENABLED — mounted /agg/{token} + /agg/health")
+except Exception:
+    logger.exception("aggregator mount failed")
+
 # Subscription-URL fallback (samopis → Remnawave premium translation) —
 # mounted only when explicitly enabled to keep the production surface area small.
 try:
