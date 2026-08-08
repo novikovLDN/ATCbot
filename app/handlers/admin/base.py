@@ -214,14 +214,59 @@ async def cmd_agg(message: Message):
     )
     url = f"{base}/agg/{token}" if base else f"/agg/{token}"
 
-    text = (
-        "🧪 <b>Aggregated Subscription (beta)</b>\n\n"
-        f"<code>{url}</code>\n\n"
-        "Добавьте в Happ / v2rayN / Streisand как обычную subscription URL.\n"
-        "Если premium или bypass истекут — соответствующая секция заменится "
-        "на fake-VLESS с текстом «⚠️ … ended — pay @bot»."
+    # Happ crypt4 deep-link (Happ откроет одним касанием и подхватит
+    # subscription URL + все Happ theme headers с /agg endpoint'а).
+    happ_link = None
+    try:
+        from app.services import happ_crypto
+        happ_link = happ_crypto.format_for_user(url)
+    except Exception as e:
+        logger.warning("agg happ_crypto failed: %s", e)
+
+    text_lines = [
+        "🧪 <b>Aggregated Subscription (beta)</b>",
+        "",
+        "Raw URL (для v2rayN / Streisand / любых клиентов):",
+        f"<code>{url}</code>",
+    ]
+    if happ_link and happ_link != url:
+        text_lines += [
+            "",
+            "Happ deep-link (открывается одним касанием):",
+            f"<code>{happ_link}</code>",
+        ]
+    text_lines += [
+        "",
+        "Happ theme headers (Profile-Title / Support-URL / Web-Page-URL / "
+        "Announce) подшиваются в ответ endpoint'а — Happ Manager v4+ их "
+        "подхватит, остальные клиенты молча проигнорируют.",
+        "",
+        "Если premium или bypass истекут — соответствующая секция "
+        "заменится на fake-VLESS «⚠️ … ended — pay @bot».",
+    ]
+
+    keyboard = None
+    if happ_link and happ_link.startswith("happ://"):
+        # Telegram блокирует кастомные схемы в кнопках, поэтому оборачиваем
+        # через существующий /open/happ redirect — тот отдаёт HTML,
+        # который на клиенте переадресует в happ://
+        pub = (
+            _origin(getattr(config, "PUBLIC_BASE_URL", ""))
+            or _origin(getattr(config, "WEBHOOK_URL", ""))
+        )
+        if pub:
+            from urllib.parse import quote as _quote
+            open_url = f"{pub}/open/happ?url={_quote(url, safe='')}"
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="📲 Открыть в Happ", url=open_url),
+            ]])
+
+    await message.answer(
+        "\n".join(text_lines),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=keyboard,
     )
-    await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
 
 
 @admin_base_router.callback_query(F.data == "admin:reset_password")

@@ -25,6 +25,18 @@ MSG_PREMIUM_EXPIRED = "⚠️ Premium subscription ended — pay @atlas_suppbot"
 MSG_WHITELIST_EXPIRED = "⚠️ Whitelist traffic ended — buy in @atlas_suppbot"
 MSG_BOTH_EXPIRED = "⚠️ Both subscriptions ended — top up @atlas_suppbot"
 
+# Happ-специфичные поля темы (headers Support-URL / Web-Page-Url / Announce
+# понимает Happ Manager v4+). Остальные клиенты (v2rayN, Streisand) их
+# игнорируют — не ломают.
+HAPP_PROFILE_TITLE = "⭐ Atlas Combined"
+HAPP_SUPPORT_URL = "https://t.me/atlas_suppbot"
+HAPP_WEB_PAGE_URL = "https://t.me/atlassecure_bot"
+HAPP_ANNOUNCE_ACTIVE = "🛡 Atlas Secure — доступ работает. Спасибо, что с нами!"
+HAPP_ANNOUNCE_EXPIRED = (
+    "⚠️ Одна из ваших подписок истекла. "
+    "Продлите её в @atlassecure_bot, чтобы вернуть скорость."
+)
+
 _TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 
 
@@ -169,10 +181,13 @@ async def build_aggregated_response(
     body = "\n".join(lines)
     body_b64 = base64.b64encode(body.encode("utf-8")).decode("ascii")
 
-    profile_title = "⭐ Atlas Combined Subscription"
-    profile_title_b64 = base64.b64encode(profile_title.encode("utf-8")).decode("ascii")
+    profile_title_b64 = base64.b64encode(HAPP_PROFILE_TITLE.encode("utf-8")).decode("ascii")
 
     userinfo = build_userinfo(premium_user or {}, whitelist_user or {})
+
+    # Announce меняется по состоянию подписок: если что-то истекло —
+    # показываем warning с call-to-action.
+    announce = HAPP_ANNOUNCE_ACTIVE if (premium_active and whitelist_active) else HAPP_ANNOUNCE_EXPIRED
 
     return {
         "body_b64": body_b64,
@@ -180,4 +195,9 @@ async def build_aggregated_response(
         "userinfo": userinfo,
         "premium_active": premium_active,
         "whitelist_active": whitelist_active,
+        # Happ theme fields — эти заголовки читает Happ Manager v4+,
+        # другие клиенты их молча игнорируют.
+        "support_url": HAPP_SUPPORT_URL,
+        "web_page_url": HAPP_WEB_PAGE_URL,
+        "announce": announce,
     }

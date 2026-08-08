@@ -100,12 +100,17 @@ async def aggregated_subscription(
         result["premium_active"], result["whitelist_active"],
     )
 
-    return PlainTextResponse(
-        content=result["body_b64"],
-        headers={
-            "Content-Type": "text/plain; charset=utf-8",
-            "Profile-Update-Interval": "24",
-            "Profile-Title": f"base64:{result['profile_title_b64']}",
-            "Subscription-Userinfo": result["userinfo"],
-        },
-    )
+    headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Profile-Update-Interval": "24",
+        "Profile-Title": f"base64:{result['profile_title_b64']}",
+        "Subscription-Userinfo": result["userinfo"],
+        # Happ Manager v4+ theme headers (другие клиенты игнорируют).
+        "Support-URL": result["support_url"],
+        "Profile-Web-Page-Url": result["web_page_url"],
+        "Announce": result["announce"],
+        # Дублируем title в Content-Disposition — некоторые клиенты
+        # (Streisand, v2rayN) достают имя профиля именно оттуда.
+        "Content-Disposition": 'inline; filename="atlas-combined.txt"',
+    }
+    return PlainTextResponse(content=result["body_b64"], headers=headers)
