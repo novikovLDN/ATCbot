@@ -495,6 +495,101 @@ def _render_html(user_data: dict, sub_url: str) -> str:
     return html
 
 
+# ── Happ Advanced Params (пробуем без provider-id) ────────────────────
+# По документации HappDev/happ_su некоторые из этих полей помечены как
+# "require provider-id", но многие Happ-панели (Marzban/3x-ui/RemnaWave)
+# успешно отдают их без provider-id и Happ применяет.
+# Пробуем — если Happ проигнорирует, другие клиенты (v2rayN/Hiddify/
+# Streisand/Shadowrocket) их тоже проигнорируют, поломки не будет.
+
+# Atlas Dark Theme — фиолетовый акцент, чёрный фон.
+# Ключи JSON выбраны из известных Happ color-profile fields
+# (buttonColor + backgroundColor подтверждены докой, остальные из
+# reverse-engineering community-source и Marzban template'ов).
+_ATLAS_COLOR_PROFILE_JSON = (
+    '{'
+    '"buttonColor":"#7C3AEDFF",'
+    '"buttonTextColor":"#FFFFFFFF",'
+    '"backgroundColor":"#0B0B14FF",'
+    '"cellBackgroundColor":"#1A1A28FF",'
+    '"secondaryBackgroundColor":"#14141FFF",'
+    '"textColor":"#F1F1F5FF",'
+    '"secondaryTextColor":"#8B8BA3FF",'
+    '"accentColor":"#7C3AEDFF",'
+    '"tintColor":"#7C3AEDFF",'
+    '"borderColor":"#2A2A40FF",'
+    '"navigationBarColor":"#0B0B14FF",'
+    '"tabBarColor":"#14141FFF"'
+    '}'
+)
+
+
+def _happ_advanced_headers(base_url: str, token: str) -> dict:
+    """Собрать полный набор Happ headers: тема + промо-плашка +
+    auto-connect + pin + reminders. Часть требует provider-id, но
+    пробуем без — worst case Happ проигнорирует."""
+    # Все non-ASCII значения → base64:UTF-8 (иначе Starlette упадёт на
+    # UnicodeEncodeError → 500).
+    def b64(s: str) -> str:
+        return "base64:" + base64.b64encode(s.encode("utf-8")).decode("ascii")
+
+    promo_text = "🎁 Продли подписку со скидкой в @atlassecure_bot"
+    promo_btn = "Открыть бот"
+    announce = "🛡 Atlas Secure — доступ без блокировок"
+
+    return {
+        # === Тема Happ (iOS) — color-profile ===
+        # Ключевая фича. JSON или base64. Ставим base64 для страховки
+        # (в JSON есть кавычки/скобки — все latin-1 safe, но base64 надёжнее).
+        "color-profile": b64(_ATLAS_COLOR_PROFILE_JSON),
+
+        # === Промо-плашка внутри карточки подписки ===
+        # Цветной блок с текстом и кнопкой — sub-info-*.
+        "sub-info-color": "blue",  # red/blue/green
+        "sub-info-text": b64(promo_text),
+        "sub-info-button-text": b64(promo_btn),
+        "sub-info-button-link": "https://t.me/atlassecure_bot",
+
+        # === Announce — баннер сверху ===
+        "announce": b64(announce),
+
+        # === Управление подпиской ===
+        # Прибиваем Atlas наверх списка подписок.
+        "subscription-pin": "true",
+        # Уведомления за 3 дня до окончания — daily push.
+        "notification-subs-expire": "true",
+        # Кнопка "Renew" при подходе конца.
+        "sub-expire": "1",
+        "sub-expire-button-link": "https://t.me/atlassecure_bot?start=renew",
+
+        # === Auto-connect ===
+        # При запуске Happ автоматом коннектится к самому быстрому серверу.
+        "subscription-autoconnect": "true",
+        "subscription-autoconnect-type": "lowestdelay",
+        # Пингуем сервера при открытии — чтобы lowestdelay работал сразу.
+        "subscription-ping-onopen-enabled": "true",
+        # Пинг результат — численный, не иконкой.
+        "ping-result": "time",
+
+        # === UX ===
+        # Развернуть подписку сразу (не сворачивать).
+        "subscriptions-expand-now": "true",
+        # Сортировать серверы по пингу.
+        "subscriptions-sort-type": "ping",
+        # Update interval — час (не 24 как раньше).
+        "profile-update-interval": "1",
+        # Auto-refresh на старте приложения.
+        "subscription-auto-update-open-enable": "true",
+
+        # === Web Page + Support ===
+        "profile-web-page-url": f"{base_url}/happ-theme/{token}",
+        "support-url": "https://t.me/atlas_suppbot",
+
+        # === Profile Title (уже приходит от Remnawave, но перебиваем на брендированный) ===
+        "profile-title": b64("💎 Atlas Secure"),
+    }
+
+
 # ── Subscription proxy (для VPN клиентов) ──────────────────────────────
 
 async def _fetch_subscription_content(sub_url: str) -> tuple[Optional[str], dict]:
@@ -581,12 +676,17 @@ async def happ_theme(request: Request, token: str = Path(..., min_length=32, max
         body, headers = await _fetch_subscription_content(sub_url)
         if body is None:
             raise HTTPException(status_code=502, detail="subscription_fetch_failed")
-        # Пробрасываем оригинальные headers + добавляем свой profile-web-page-url,
-        # который откроет НАШУ HTML тему внутри Happ WebView.
         headers.setdefault("Content-Type", "text/plain; charset=utf-8")
+
+        # Наш полный набор Happ headers перезаписывает и дополняет
+        # оригинальные Remnawave-headers: color-profile (Atlas dark
+        # theme), sub-info-* (промо-плашка), autoconnect, pin, reminders,
+        # profile-web-page-url и всё остальное. Для Happ клиента — тема
+        # применится, промо-плашка появится. Для других клиентов
+        # (v2rayN, Streisand и т.д.) — незнакомые headers молча
+        # проигнорируются, subscription импортируется как обычно.
         base_url = str(request.base_url).rstrip("/")
-        headers["Profile-Web-Page-Url"] = f"{base_url}/happ-theme/{token}"
-        headers["Support-URL"] = "https://t.me/atlas_suppbot"
+        headers.update(_happ_advanced_headers(base_url, token))
         return PlainTextResponse(content=body, headers=headers)
 
     # Браузер — красивая HTML темa.
