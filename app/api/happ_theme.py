@@ -502,54 +502,53 @@ def _render_html(user_data: dict, sub_url: str) -> str:
 # Пробуем — если Happ проигнорирует, другие клиенты (v2rayN/Hiddify/
 # Streisand/Shadowrocket) их тоже проигнорируют, поломки не будет.
 
-# Atlas Dark Theme — фиолетовый акцент (#7C3AED), чёрный фон.
+# Atlas Dark Theme — фиолетовый акцент, чёрный фон.
 # ⚠️ color-profile — iOS only (Android игнорирует).
-# Ключи JSON — из официальной документации HappDev/happ_su
-# (dev-docs/app-management.md): полный набор полей theme-editor'а Happ.
-# Provider-id НЕ ТРЕБУЕТСЯ (документация вводит в заблуждение — поле
-# работает без него, что подтверждено community-панелями Marzban/3x-ui).
+# Ключи JSON — из официальной документации HappDev/happ_su.
 #
-# Все цвета — HEX без alpha (Happ парсит и с #RRGGBB и с #RRGGBBAA).
+# 🔑 ВАЖНО: цвета ТОЛЬКО в формате #RRGGBBAA (8 hex-символов с alpha).
+# Проверено на .happ theme файлах: значения типа "#8FFFFEFF", "#21003D67".
+# Без alpha (6 hex) Happ IGNORES color-profile целиком.
 _ATLAS_COLOR_PROFILE = {
     # Фон — градиент чёрный→тёмно-серый
-    "backgroundColors": ["#0B0B14", "#14141F"],
+    "backgroundColors": ["#0B0B14FF", "#14141FFF"],
     "backgroundGradientRotationAngle": 45,
     "backgroundGradientColorIntensity": 0.85,
     "backgroundImageType": "light",  # 'light' | 'system'
     # Декоративные градиент-эллипсы (accent)
-    "elipseColors": ["#7C3AED", "#4C1D95"],
+    "elipseColors": ["#7C3AEDFF", "#4C1D95FF"],
 
     # Строки серверов
-    "serverRowBackgroundColor": "#1A1A28",
-    "serverRowTitleTextColor": "#F1F1F5",
-    "serverRowSubTitleTextColor": "#8B8BA3",
-    "serverRowChevronColor": "#7C3AED",
-    "selectedServerRowColor": "#7C3AED",
+    "serverRowBackgroundColor": "#1A1A28FF",
+    "serverRowTitleTextColor": "#F1F1F5FF",
+    "serverRowSubTitleTextColor": "#8B8BA3FF",
+    "serverRowChevronColor": "#7C3AEDFF",
+    "selectedServerRowColor": "#7C3AEDFF",
 
     # Хедеры подписок
-    "subsHeaderColor": "#F1F1F5",
-    "subHeaderButtonColor": "#7C3AED",
+    "subsHeaderColor": "#F1F1F5FF",
+    "subHeaderButtonColor": "#7C3AEDFF",
 
     # Кнопка Power/Connect (главная)
-    "buttonColor": "#7C3AED",
-    "buttonTextColor": "#FFFFFF",
-    "buttonTimerColor": "#F1F1F5",
+    "buttonColor": "#7C3AEDFF",
+    "buttonTextColor": "#FFFFFFFF",
+    "buttonTimerColor": "#F1F1F5FF",
 
     # Инфо-блок подписки
-    "subscriptionInfoBackgroundColor": "#1A1A28",
-    "subscriptionInfoTextColor": "#F1F1F5",
-    "subscriptionTrafficBackgroundColor": "#14141F",
+    "subscriptionInfoBackgroundColor": "#1A1A28FF",
+    "subscriptionInfoTextColor": "#F1F1F5FF",
+    "subscriptionTrafficBackgroundColor": "#14141FFF",
 
     # Раскрытые разделы
-    "disclosureHeaderTextColor": "#F1F1F5",
-    "disclosureSubHeaderTextColor": "#8B8BA3",
+    "disclosureHeaderTextColor": "#F1F1F5FF",
+    "disclosureSubHeaderTextColor": "#8B8BA3FF",
 
     # Иконки
-    "profileWebPageIconColor": "#7C3AED",
-    "supportIconColor": "#7C3AED",
-    "topBarButtonsColor": "#F1F1F5",
-    "powerIconColor": "#7C3AED",
-    "additionalOptionsButtonColor": "#7C3AED",
+    "profileWebPageIconColor": "#7C3AEDFF",
+    "supportIconColor": "#7C3AEDFF",
+    "topBarButtonsColor": "#F1F1F5FF",
+    "powerIconColor": "#7C3AEDFF",
+    "additionalOptionsButtonColor": "#7C3AEDFF",
 }
 
 
@@ -625,6 +624,61 @@ def _happ_advanced_headers(base_url: str, token: str) -> dict:
         # === Profile Title (уже приходит от Remnawave, но перебиваем на брендированный) ===
         "profile-title": b64("💎 Atlas Secure"),
     }
+
+
+def _inject_theme_into_body(body: str, atlas_headers: dict) -> str:
+    """Инжектим Happ-параметры (`#key: value` строки) перед списком
+    vless://. Автоматически декодируем/re-encode base64-body Remnawave.
+
+    Happ поддерживает оба способа доставки color-profile: HTTP header
+    и `#color-profile:` в body. Часть клиентов реагирует только на body
+    — поэтому дублируем.
+    """
+    if not body or not body.strip():
+        return body
+
+    stripped = body.strip()
+    is_base64 = False
+    plain_body = stripped
+
+    # Определяем: base64 ли body? Если "vless://" в plain — нет.
+    # Иначе пробуем decode.
+    if "vless://" not in stripped and "ss://" not in stripped and "trojan://" not in stripped:
+        try:
+            decoded = base64.b64decode(stripped, validate=False).decode("utf-8", errors="ignore")
+            if any(p in decoded for p in ("vless://", "ss://", "trojan://", "vmess://")):
+                is_base64 = True
+                plain_body = decoded
+        except Exception:
+            # Ни plain, ни base64 — не трогаем.
+            return body
+
+    # Форматируем комментарии.
+    comment_lines = []
+    for key, value in atlas_headers.items():
+        if value is None or value == "":
+            continue
+        comment_lines.append(f"#{key}: {value}")
+
+    if not comment_lines:
+        return body
+
+    # Вставляем ПЕРЕД первой протокольной строкой.
+    lines = plain_body.splitlines()
+    insert_at = 0
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith(("vless://", "ss://", "trojan://", "vmess://", "hy2://", "hysteria2://", "socks://")):
+            insert_at = i
+            break
+
+    new_lines = lines[:insert_at] + comment_lines + lines[insert_at:]
+    new_plain = "\n".join(new_lines)
+
+    # Если исходный был base64 — re-encode. Иначе возвращаем plain.
+    if is_base64:
+        return base64.b64encode(new_plain.encode("utf-8")).decode("ascii")
+    return new_plain
 
 
 # ── Subscription proxy (для VPN клиентов) ──────────────────────────────
@@ -723,7 +777,19 @@ async def happ_theme(request: Request, token: str = Path(..., min_length=32, max
         # (v2rayN, Streisand и т.д.) — незнакомые headers молча
         # проигнорируются, subscription импортируется как обычно.
         base_url = str(request.base_url).rstrip("/")
-        headers.update(_happ_advanced_headers(base_url, token))
+        atlas_headers = _happ_advanced_headers(base_url, token)
+        headers.update(atlas_headers)
+
+        # ДВОЙНАЯ СТРАХОВКА: инжектим #color-profile в body тоже.
+        # По докам HappDev поддерживаются оба способа доставки.
+        # Если Happ не подхватит из header — возможно возьмёт из body.
+        # Инъекция происходит ТОЛЬКО в plaintext-subscription (когда
+        # body распознан как список vless:// строк, не base64).
+        try:
+            body = _inject_theme_into_body(body, atlas_headers)
+        except Exception as e:
+            logger.warning("agg body-inject failed: %s", e)
+
         return PlainTextResponse(content=body, headers=headers)
 
     # Браузер — красивая HTML темa.
