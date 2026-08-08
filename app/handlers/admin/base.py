@@ -136,6 +136,104 @@ async def cmd_wata_status(message: Message):
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
+@admin_base_router.message(Command("happ_theme"))
+@admin_only
+async def cmd_happ_theme(message: Message):
+    """Admin-only: Happ custom HTML theme для существующей подписки.
+
+    Marzban-style: URL /happ-theme/{token} по User-Agent отдаёт либо
+    красивую HTML-тёмную тему Atlas + deep-link кнопки на все клиенты
+    (Happ / Hiddify / v2rayN / V2RayNG / V2RayTun / Streisand / Incy /
+    Shadowrocket / FoxRay / SingBox / NekoRay / ClashMeta / ClashVerge),
+    либо raw subscription content (для VPN клиента).
+
+    Использует существующую Remnawave-подписку админа
+    (remnawave_premium_uuid из subscriptions). Никакой новой subscription
+    логики — только красивая витрина."""
+    if not getattr(config, "HAPP_THEME_ENABLED", False):
+        await message.answer(
+            "🚫 Happ theme отключён. Установите "
+            "<code>HAPP_THEME_ENABLED=true</code> в env и перезапустите.",
+            parse_mode="HTML",
+        )
+        return
+
+    telegram_id = message.from_user.id
+    subscription = await database.get_subscription(telegram_id)
+    if not subscription:
+        await message.answer(
+            "❌ У вас нет активной подписки. Оформите подписку и повторите.",
+            parse_mode="HTML",
+        )
+        return
+
+    premium_uuid = subscription.get("remnawave_premium_uuid")
+    if not premium_uuid:
+        await message.answer(
+            "❌ Не найден remnawave_premium_uuid в вашей подписке. "
+            "Дождитесь автопровизии или перезапустите /start.",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        import database.happ_theme as happ_theme_db
+        token = await happ_theme_db.get_or_create_token(
+            telegram_id=telegram_id,
+            remnawave_uuid=str(premium_uuid),
+        )
+    except Exception as e:
+        await message.answer(
+            f"❌ DB-ошибка при генерации токена: <code>{e}</code>\n\n"
+            "Возможно не проехала миграция 072_happ_theme_tokens.sql.",
+            parse_mode="HTML",
+        )
+        return
+    if not token:
+        await message.answer("❌ Не удалось сгенерировать токен (DB pool недоступен).")
+        return
+
+    # Собираем URL: origin из PUBLIC_BASE_URL / WEBHOOK_URL (без path).
+    from urllib.parse import urlparse, quote as _quote
+    def _origin(u: str) -> str:
+        if not u:
+            return ""
+        p = urlparse(u.strip())
+        if not p.scheme or not p.netloc:
+            return u.rstrip("/")
+        return f"{p.scheme}://{p.netloc}"
+
+    base = _origin(getattr(config, "PUBLIC_BASE_URL", "")) or _origin(getattr(config, "WEBHOOK_URL", ""))
+    theme_url = f"{base}/happ-theme/{token}" if base else f"/happ-theme/{token}"
+
+    text = (
+        "🎨 <b>Happ Custom Theme (admin beta)</b>\n\n"
+        f"<code>{theme_url}</code>\n\n"
+        "Как использовать:\n"
+        "• Открой ссылку в браузере — увидишь тёмную тему Atlas "
+        "с deep-link кнопками для всех VPN клиентов, счётчиками "
+        "трафика/подписки и QR-кодом.\n"
+        "• Тап «📲 Открыть в Happ» ниже — Happ импортирует URL как "
+        "subscription. Внутри Happ откроется наша WebView-страница "
+        "с той же темой (через <code>profile-web-page-url</code>).\n\n"
+        "VPN-клиенты (Happ / v2rayN / Hiddify) при обращении получают "
+        "raw subscription — существующая логика не тронута."
+    )
+
+    keyboard = None
+    if base:
+        open_url = f"{base}/open/happ?url={_quote(theme_url, safe='')}"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📲 Открыть в Happ", url=open_url),
+        ], [
+            InlineKeyboardButton(text="🌐 Открыть в браузере", url=theme_url),
+        ]])
+
+    await message.answer(
+        text, parse_mode="HTML", disable_web_page_preview=True, reply_markup=keyboard,
+    )
+
+
 @admin_base_router.callback_query(F.data == "admin:reset_password")
 @admin_only
 async def callback_reset_password(callback: CallbackQuery):

@@ -448,6 +448,15 @@ if REMNAWAVE_ENABLED:
 else:
     _log.info("REMNAWAVE_ENABLED=false (URL or TOKEN not set)")
 
+# ─── Happ Custom Theme (admin-only beta) ───────────────────────────────
+# Marzban-style /happ-theme/{token}: браузер → HTML тёмная тема Atlas
+# с deep-link кнопками, VPN клиент → проксирует subscription content
+# + добавляет profile-web-page-url headers (для WebView внутри Happ).
+# Токены создаются только через admin команду /happ_theme.
+HAPP_THEME_ENABLED = env("HAPP_THEME_ENABLED", default="true").lower() in ("1", "true", "yes", "on")
+if HAPP_THEME_ENABLED:
+    _log.info("HAPP_THEME_ENABLED=true (mounted at /happ-theme/{token})")
+
 # Traffic limits per tariff (in bytes). Trial has NO bypass.
 TRAFFIC_LIMITS = {
     "basic": {
