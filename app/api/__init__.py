@@ -61,16 +61,6 @@ app.include_router(telegram_webhook.router)
 app.include_router(payment_webhook.router)
 app.include_router(deeplink_redirect.router)
 
-# Happ Custom Theme (admin-only) — feature-flagged.
-try:
-    import config as _cfg
-    if getattr(_cfg, "HAPP_THEME_ENABLED", False):
-        from app.api import happ_theme as _happ_theme
-        app.include_router(_happ_theme.router)
-        logger.info("HAPP_THEME_ENABLED — mounted /happ-theme/{token}")
-except Exception:
-    logger.exception("happ_theme mount failed")
-
 # Subscription-URL fallback (samopis → Remnawave premium translation) —
 # mounted only when explicitly enabled to keep the production surface area small.
 try:
