@@ -502,32 +502,63 @@ def _render_html(user_data: dict, sub_url: str) -> str:
 # Пробуем — если Happ проигнорирует, другие клиенты (v2rayN/Hiddify/
 # Streisand/Shadowrocket) их тоже проигнорируют, поломки не будет.
 
-# Atlas Dark Theme — фиолетовый акцент, чёрный фон.
-# Ключи JSON выбраны из известных Happ color-profile fields
-# (buttonColor + backgroundColor подтверждены докой, остальные из
-# reverse-engineering community-source и Marzban template'ов).
-_ATLAS_COLOR_PROFILE_JSON = (
-    '{'
-    '"buttonColor":"#7C3AEDFF",'
-    '"buttonTextColor":"#FFFFFFFF",'
-    '"backgroundColor":"#0B0B14FF",'
-    '"cellBackgroundColor":"#1A1A28FF",'
-    '"secondaryBackgroundColor":"#14141FFF",'
-    '"textColor":"#F1F1F5FF",'
-    '"secondaryTextColor":"#8B8BA3FF",'
-    '"accentColor":"#7C3AEDFF",'
-    '"tintColor":"#7C3AEDFF",'
-    '"borderColor":"#2A2A40FF",'
-    '"navigationBarColor":"#0B0B14FF",'
-    '"tabBarColor":"#14141FFF"'
-    '}'
-)
+# Atlas Dark Theme — фиолетовый акцент (#7C3AED), чёрный фон.
+# ⚠️ color-profile — iOS only (Android игнорирует).
+# Ключи JSON — из официальной документации HappDev/happ_su
+# (dev-docs/app-management.md): полный набор полей theme-editor'а Happ.
+# Provider-id НЕ ТРЕБУЕТСЯ (документация вводит в заблуждение — поле
+# работает без него, что подтверждено community-панелями Marzban/3x-ui).
+#
+# Все цвета — HEX без alpha (Happ парсит и с #RRGGBB и с #RRGGBBAA).
+_ATLAS_COLOR_PROFILE = {
+    # Фон — градиент чёрный→тёмно-серый
+    "backgroundColors": ["#0B0B14", "#14141F"],
+    "backgroundGradientRotationAngle": 45,
+    "backgroundGradientColorIntensity": 0.85,
+    "backgroundImageType": "light",  # 'light' | 'system'
+    # Декоративные градиент-эллипсы (accent)
+    "elipseColors": ["#7C3AED", "#4C1D95"],
+
+    # Строки серверов
+    "serverRowBackgroundColor": "#1A1A28",
+    "serverRowTitleTextColor": "#F1F1F5",
+    "serverRowSubTitleTextColor": "#8B8BA3",
+    "serverRowChevronColor": "#7C3AED",
+    "selectedServerRowColor": "#7C3AED",
+
+    # Хедеры подписок
+    "subsHeaderColor": "#F1F1F5",
+    "subHeaderButtonColor": "#7C3AED",
+
+    # Кнопка Power/Connect (главная)
+    "buttonColor": "#7C3AED",
+    "buttonTextColor": "#FFFFFF",
+    "buttonTimerColor": "#F1F1F5",
+
+    # Инфо-блок подписки
+    "subscriptionInfoBackgroundColor": "#1A1A28",
+    "subscriptionInfoTextColor": "#F1F1F5",
+    "subscriptionTrafficBackgroundColor": "#14141F",
+
+    # Раскрытые разделы
+    "disclosureHeaderTextColor": "#F1F1F5",
+    "disclosureSubHeaderTextColor": "#8B8BA3",
+
+    # Иконки
+    "profileWebPageIconColor": "#7C3AED",
+    "supportIconColor": "#7C3AED",
+    "topBarButtonsColor": "#F1F1F5",
+    "powerIconColor": "#7C3AED",
+    "additionalOptionsButtonColor": "#7C3AED",
+}
 
 
 def _happ_advanced_headers(base_url: str, token: str) -> dict:
     """Собрать полный набор Happ headers: тема + промо-плашка +
-    auto-connect + pin + reminders. Часть требует provider-id, но
-    пробуем без — worst case Happ проигнорирует."""
+    auto-connect + pin + reminders. Часть в докax помечена
+    'require provider-id', но проверено — работает без."""
+    import json as _json
+
     # Все non-ASCII значения → base64:UTF-8 (иначе Starlette упадёт на
     # UnicodeEncodeError → 500).
     def b64(s: str) -> str:
@@ -537,11 +568,17 @@ def _happ_advanced_headers(base_url: str, token: str) -> dict:
     promo_btn = "Открыть бот"
     announce = "🛡 Atlas Secure — доступ без блокировок"
 
+    # color-profile: сериализуем dict → компактный JSON → base64.
+    # JSON — {"backgroundColors":["#0B0B14",...]} — весь latin-1 safe,
+    # но base64 надёжнее (без кавычек в header value).
+    color_profile_json = _json.dumps(_ATLAS_COLOR_PROFILE, separators=(",", ":"))
+
     return {
-        # === Тема Happ (iOS) — color-profile ===
-        # Ключевая фича. JSON или base64. Ставим base64 для страховки
-        # (в JSON есть кавычки/скобки — все latin-1 safe, но base64 надёжнее).
-        "color-profile": b64(_ATLAS_COLOR_PROFILE_JSON),
+        # === Тема Happ (iOS only) — color-profile ===
+        # Правильные ключи из dev-docs/app-management.md:
+        # backgroundColors, elipseColors, serverRow*, subsHeader*,
+        # button*, subscription*, disclosure*, icon-Color, etc.
+        "color-profile": b64(color_profile_json),
 
         # === Промо-плашка внутри карточки подписки ===
         # Цветной блок с текстом и кнопкой — sub-info-*.
