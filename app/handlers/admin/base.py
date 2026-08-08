@@ -253,6 +253,144 @@ async def cmd_happ_theme(message: Message):
     )
 
 
+@admin_base_router.message(Command("happ_native"))
+@admin_only
+async def cmd_happ_native(message: Message):
+    """Alternative: color-profile через URL fragment на РОДНОМ Remnawave
+    subscription URL (без нашего proxy). Fragment (#...) не отправляется
+    на сервер, только клиент видит и парсит — Remnawave поэтому не
+    ломается, но Happ подхватывает параметры при импорте.
+
+    Использует ту же самую URL, что бот отдаёт юзеру в экране «Подключиться»
+    (get_user_primary_subscription_url) — никакого посредника.
+    """
+    if not getattr(config, "HAPP_THEME_ENABLED", False):
+        await message.answer(
+            "🚫 Happ theme отключён.", parse_mode="HTML",
+        )
+        return
+
+    telegram_id = message.from_user.id
+    from app.services.user_subscription_links import get_user_primary_subscription_url
+    try:
+        sub_url = await get_user_primary_subscription_url(telegram_id)
+    except Exception as e:
+        await message.answer(
+            f"❌ Не удалось получить subscription URL: <code>{e}</code>",
+            parse_mode="HTML",
+        )
+        return
+    if not sub_url:
+        await message.answer("❌ subscription URL пустой.", parse_mode="HTML")
+        return
+
+    from app.api.happ_theme import _ATLAS_COLOR_PROFILE
+    from urllib.parse import quote as _quote
+    import json as _json
+    import base64 as _b64
+
+    provider_id = getattr(config, "HAPP_PROVIDER_ID", "") or ""
+
+    # Собираем fragment params: color-profile + provider-id + все ключевые
+    # Happ advanced-параметры разом. Все Unicode в base64, чтобы URL был
+    # безопасным для передачи.
+    color_profile_json = _json.dumps(_ATLAS_COLOR_PROFILE, separators=(",", ":"))
+    color_profile_b64 = _b64.b64encode(color_profile_json.encode()).decode()
+    announce_b64 = _b64.b64encode(
+        "🛡 Atlas Secure — доступ без блокировок".encode()
+    ).decode()
+    profile_title_b64 = _b64.b64encode("💎 Atlas Secure".encode()).decode()
+    sub_info_text_b64 = _b64.b64encode(
+        "🎁 Продли подписку со скидкой в @atlassecure_bot".encode()
+    ).decode()
+    sub_info_btn_b64 = _b64.b64encode("Открыть бот".encode()).decode()
+
+    params = {
+        "color-profile": f"base64:{color_profile_b64}",
+        "announce": f"base64:{announce_b64}",
+        "profile-title": f"base64:{profile_title_b64}",
+        "profile-update-interval": "1",
+        "sub-info-color": "blue",
+        "sub-info-text": f"base64:{sub_info_text_b64}",
+        "sub-info-button-text": f"base64:{sub_info_btn_b64}",
+        "sub-info-button-link": "https://t.me/atlassecure_bot",
+        "subscription-pin": "true",
+        "subscription-autoconnect": "true",
+        "subscription-autoconnect-type": "lowestdelay",
+        "notification-subs-expire": "true",
+        "sub-expire": "1",
+        "sub-expire-button-link": "https://t.me/atlassecure_bot?start=renew",
+        "support-url": "https://t.me/atlas_suppbot",
+    }
+    if provider_id:
+        params["providerid"] = provider_id
+
+    # URL-encode все значения
+    query_str = "&".join(f"{k}={_quote(v, safe='')}" for k, v in params.items())
+
+    # Формат fragment: `#?key=val&key=val`
+    # (согласно formatting patterns Happ: `#Title?param=value`)
+    url_with_fragment = f"{sub_url}#?{query_str}"
+
+    # Happ deeplink через существующий crypt4 wrapper.
+    happ_link = None
+    try:
+        from app.services import happ_crypto
+        happ_link = happ_crypto.format_for_user(url_with_fragment)
+    except Exception as e:
+        logger.warning("happ_native crypt4 failed: %s", e)
+
+    # Open in Happ через существующий /open/happ redirect (обходит
+    # Telegram-блок custom-схем в кнопках).
+    from urllib.parse import urlparse
+    def _origin(u: str) -> str:
+        if not u:
+            return ""
+        p = urlparse(u.strip())
+        if not p.scheme or not p.netloc:
+            return u.rstrip("/")
+        return f"{p.scheme}://{p.netloc}"
+
+    base = _origin(getattr(config, "PUBLIC_BASE_URL", "")) or _origin(getattr(config, "WEBHOOK_URL", ""))
+
+    text_lines = [
+        "🎨 <b>Happ Native (direct Remnawave URL + fragment)</b>",
+        "",
+        f"Исходный Remnawave URL:\n<code>{sub_url}</code>",
+        "",
+        f"URL с fragment-параметрами (color-profile + provider-id + всё):\n<code>{url_with_fragment[:300]}...</code>",
+        "",
+        f"Provider ID: <code>{provider_id or 'НЕ ЗАДАН'}</code>",
+    ]
+    if happ_link and happ_link.startswith("happ://"):
+        text_lines += ["", f"Happ crypt4 deep-link (готовый для копирования):\n<code>{happ_link[:200]}...</code>"]
+
+    text_lines += [
+        "",
+        "⚠️ <b>Порядок действий в Happ:</b>",
+        "1. Настройки → Подписки → долгий тап на Atlas → Удалить",
+        "2. Force-close Happ (свайп из App Switcher)",
+        "3. Открой заново → тап «📲 В Happ» ниже",
+        "4. Импортируется НАПРЯМУЮ с Remnawave + твой fragment "
+        "с темой. Наш proxy НЕ используется.",
+    ]
+
+    keyboard = None
+    if base:
+        # Open in Happ через redirect (Telegram блокирует happ:// напрямую)
+        # Используем URL_with_fragment — Happ импортит эту URL как subscription,
+        # видит fragment, применяет параметры.
+        open_url = f"{base}/open/happ?url={_quote(url_with_fragment, safe='')}"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📲 В Happ (native URL)", url=open_url),
+        ]])
+
+    await message.answer(
+        "\n".join(text_lines), parse_mode="HTML",
+        disable_web_page_preview=True, reply_markup=keyboard,
+    )
+
+
 @admin_base_router.callback_query(F.data == "admin:reset_password")
 @admin_only
 async def callback_reset_password(callback: CallbackQuery):
