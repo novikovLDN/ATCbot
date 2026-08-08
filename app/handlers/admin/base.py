@@ -205,28 +205,47 @@ async def cmd_happ_theme(message: Message):
 
     base = _origin(getattr(config, "PUBLIC_BASE_URL", "")) or _origin(getattr(config, "WEBHOOK_URL", ""))
     theme_url = f"{base}/happ-theme/{token}" if base else f"/happ-theme/{token}"
+    debug_url = f"{base}/happ-theme/{token}/debug" if base else f"/happ-theme/{token}/debug"
+
+    # Extra доставка color-profile через URL fragment.
+    # Некоторые версии Happ читают параметры из ?query или #fragment
+    # subscription URL. Строим второй вариант URL со всеми параметрами
+    # инжектированными в query — на случай если headers/body ignored.
+    from app.api.happ_theme import _happ_advanced_headers, _ATLAS_COLOR_PROFILE
+    import json as _json
+    import base64 as _b64
+    color_profile_json = _json.dumps(_ATLAS_COLOR_PROFILE, separators=(",", ":"))
+    color_profile_b64 = _b64.b64encode(color_profile_json.encode()).decode()
+    theme_url_with_fragment = (
+        f"{theme_url}#?color-profile=base64:{color_profile_b64}"
+    )
 
     text = (
         "🎨 <b>Happ Custom Theme (admin beta)</b>\n\n"
-        f"<code>{theme_url}</code>\n\n"
+        f"<b>URL подписки:</b>\n<code>{theme_url}</code>\n\n"
+        f"<b>URL с color-profile в fragment:</b>\n<code>{theme_url_with_fragment[:200]}...</code>\n\n"
+        f"<b>Debug (JSON dump всего что отдаётся):</b>\n<code>{debug_url}</code>\n\n"
         "Как использовать:\n"
-        "• Открой ссылку в браузере — увидишь тёмную тему Atlas "
-        "с deep-link кнопками для всех VPN клиентов, счётчиками "
-        "трафика/подписки и QR-кодом.\n"
-        "• Тап «📲 Открыть в Happ» ниже — Happ импортирует URL как "
-        "subscription. Внутри Happ откроется наша WebView-страница "
-        "с той же темой (через <code>profile-web-page-url</code>).\n\n"
-        "VPN-клиенты (Happ / v2rayN / Hiddify) при обращении получают "
-        "raw subscription — существующая логика не тронута."
+        "• «🌐 В браузере» → красивая тёмная HTML тема Atlas\n"
+        "• «📲 В Happ» → импорт подписки + попытка применить тему\n"
+        "• «🔍 Debug JSON» → в браузере, показывает все headers/body\n"
+        "  что доедает до Happ. Полезно для отладки почему тема "
+        "не применилась.\n\n"
+        "⚠️ Если тема не применилась — открой Debug URL, проверь что "
+        "<code>color_profile_present_in_body</code>=true и что в "
+        "<code>atlas_headers_added</code> есть <code>color-profile</code>. "
+        "Если да — проблема на стороне Happ (может нужен provider-id "
+        "с happ-proxy.com)."
     )
 
     keyboard = None
     if base:
         open_url = f"{base}/open/happ?url={_quote(theme_url, safe='')}"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="📲 Открыть в Happ", url=open_url),
+            InlineKeyboardButton(text="📲 В Happ", url=open_url),
+            InlineKeyboardButton(text="🌐 В браузере", url=theme_url),
         ], [
-            InlineKeyboardButton(text="🌐 Открыть в браузере", url=theme_url),
+            InlineKeyboardButton(text="🔍 Debug JSON", url=debug_url),
         ]])
 
     await message.answer(
