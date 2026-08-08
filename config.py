@@ -450,9 +450,13 @@ else:
 
 # ─── Aggregated Subscription (admin-only beta, feature-flagged) ────────
 # Объединённая подписка premium+bypass в одну URL с fake-VLESS для
-# истёкших секций. Полностью выключается через AGG_ENABLED=false —
-# роут /agg/{token} не монтируется, кнопка не появляется.
-AGG_ENABLED = env("AGG_ENABLED", default="false").lower() in ("1", "true", "yes", "on")
+# истёкших секций. По умолчанию ВКЛЮЧЕНО — команда /agg работает только
+# для админа (см. @admin_only guard в app/handlers/admin/base.py:cmd_agg),
+# поэтому обычные юзеры фичу не увидят. Токены — 128 бит энтропии
+# (secrets.token_hex(16)), угадать невозможно.
+# Полное выключение: AGG_ENABLED=false → роут не монтируется, /agg
+# возвращает «отключён».
+AGG_ENABLED = env("AGG_ENABLED", default="true").lower() in ("1", "true", "yes", "on")
 # Base URL для генерируемой ссылки. Дефолт — PUBLIC_BASE_URL бота
 # (тот же хост, что и /health / /webhook). Если админ поднимет
 # отдельный nginx-хост типа sub.atlassecure.ru — пропишет его сюда.
