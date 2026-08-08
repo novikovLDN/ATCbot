@@ -534,6 +534,23 @@ async def happ_theme(request: Request, token: str = Path(..., min_length=32, max
     if record is None:
         raise HTTPException(status_code=404, detail="not_found")
 
+    # Двойной барьер: даже если кто-то как-то создал строку с чужим
+    # telegram_id (через прямой INSERT в БД или SQL-инъекцию, что в
+    # текущем коде невозможно, но защищаемся defense-in-depth) —
+    # endpoint отдаёт только токены админа. Фича изолирована до
+    # public rollout.
+    try:
+        import config as _cfg
+        admin_id = int(getattr(_cfg, "ADMIN_TELEGRAM_ID", 0) or 0)
+    except Exception:
+        admin_id = 0
+    if admin_id == 0 or int(record["telegram_id"]) != admin_id:
+        logger.warning(
+            "HAPP_THEME_NON_ADMIN_TOKEN_ACCESS token=%s tg=%s admin=%s",
+            token[:8], record["telegram_id"], admin_id,
+        )
+        raise HTTPException(status_code=404, detail="not_found")
+
     remnawave_uuid = record["remnawave_uuid"]
     # Fetch user data + subscription URL из Remnawave панели.
     try:
