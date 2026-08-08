@@ -185,7 +185,7 @@ async def cmd_happ_theme(message: Message):
     except Exception as e:
         await message.answer(
             f"❌ DB-ошибка при генерации токена: <code>{e}</code>\n\n"
-            "Возможно не проехала миграция 072_happ_theme_tokens.sql.",
+            "Возможно не проехала миграция 073_happ_theme_tokens.sql.",
             parse_mode="HTML",
         )
         return
