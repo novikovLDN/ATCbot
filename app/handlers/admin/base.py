@@ -194,9 +194,24 @@ async def cmd_agg(message: Message):
         await message.answer("❌ Не удалось сгенерировать токен (DB pool недоступен).")
         return
 
-    base = (getattr(config, "AGG_BASE_URL", "") or "").rstrip("/") \
-        or (getattr(config, "PUBLIC_BASE_URL", "") or "").rstrip("/") \
-        or (getattr(config, "WEBHOOK_URL", "") or "").rstrip("/")
+    # Собираем origin (scheme://host[:port]) без path.
+    # AGG_BASE_URL и PUBLIC_BASE_URL — обычно уже origin.
+    # WEBHOOK_URL — полный URL типа "https://api.host/telegram/webhook";
+    # надо срезать path, иначе получится .../telegram/webhook/agg/{token} → 404.
+    from urllib.parse import urlparse
+    def _origin(u: str) -> str:
+        if not u:
+            return ""
+        p = urlparse(u.strip())
+        if not p.scheme or not p.netloc:
+            return u.rstrip("/")
+        return f"{p.scheme}://{p.netloc}"
+
+    base = (
+        _origin(getattr(config, "AGG_BASE_URL", ""))
+        or _origin(getattr(config, "PUBLIC_BASE_URL", ""))
+        or _origin(getattr(config, "WEBHOOK_URL", ""))
+    )
     url = f"{base}/agg/{token}" if base else f"/agg/{token}"
 
     text = (
