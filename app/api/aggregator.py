@@ -84,10 +84,17 @@ async def aggregated_subscription(
     if record is None:
         raise HTTPException(status_code=404, detail="not_found")
 
-    result = await build_aggregated_response(
-        premium_uuid=record["premium_uuid"],
-        whitelist_uuid=record["whitelist_uuid"],
-    )
+    try:
+        result = await build_aggregated_response(
+            premium_uuid=record["premium_uuid"],
+            whitelist_uuid=record["whitelist_uuid"],
+        )
+    except Exception as e:
+        logger.exception(
+            "AGG_BUILD_FAIL token=%s tg=%s err=%s",
+            combined_token[:8], record["telegram_id"], e,
+        )
+        raise HTTPException(status_code=502, detail=f"build_failed: {type(e).__name__}")
     if result is None:
         raise HTTPException(status_code=502, detail="panel_api_unavailable")
 
@@ -100,6 +107,10 @@ async def aggregated_subscription(
         result["premium_active"], result["whitelist_active"],
     )
 
+    # ВНИМАНИЕ про headers: HTTP по RFC 7230 разрешает только latin-1
+    # в значениях. Все Unicode-фрагменты передаём в base64:xxx-обёртке
+    # (Happ Manager v4+ декодирует). Иначе Starlette кинет
+    # UnicodeEncodeError и вернёт 500.
     headers = {
         "Content-Type": "text/plain; charset=utf-8",
         "Profile-Update-Interval": "24",
@@ -108,7 +119,7 @@ async def aggregated_subscription(
         # Happ Manager v4+ theme headers (другие клиенты игнорируют).
         "Support-URL": result["support_url"],
         "Profile-Web-Page-Url": result["web_page_url"],
-        "Announce": result["announce"],
+        "Announce": f"base64:{result['announce_b64']}",
         # Дублируем title в Content-Disposition — некоторые клиенты
         # (Streisand, v2rayN) достают имя профиля именно оттуда.
         "Content-Disposition": 'inline; filename="atlas-combined.txt"',

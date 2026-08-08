@@ -257,6 +257,11 @@ async def build_aggregated_response(
     # Announce меняется по состоянию подписок: если что-то истекло —
     # показываем warning с call-to-action.
     announce = HAPP_ANNOUNCE_ACTIVE if (premium_active and whitelist_active) else HAPP_ANNOUNCE_EXPIRED
+    # HTTP headers по RFC 7230 — latin-1 only. Кириллицу/emoji нельзя
+    # в raw-виде — Starlette/uvicorn падают при encode с UnicodeEncodeError
+    # → 500. Happ Manager принимает "base64:xxx" префикс (как у Profile-Title)
+    # и корректно декодирует UTF-8 обратно.
+    announce_b64 = base64.b64encode(announce.encode("utf-8")).decode("ascii")
 
     result = {
         "body_b64": body_b64,
@@ -266,9 +271,9 @@ async def build_aggregated_response(
         "whitelist_active": whitelist_active,
         # Happ theme fields — эти заголовки читает Happ Manager v4+,
         # другие клиенты их молча игнорируют.
-        "support_url": HAPP_SUPPORT_URL,
-        "web_page_url": HAPP_WEB_PAGE_URL,
-        "announce": announce,
+        "support_url": HAPP_SUPPORT_URL,          # ASCII URL
+        "web_page_url": HAPP_WEB_PAGE_URL,        # ASCII URL
+        "announce_b64": announce_b64,             # base64 UTF-8
     }
     _cache_put(premium_uuid, whitelist_uuid, result)
     return result
