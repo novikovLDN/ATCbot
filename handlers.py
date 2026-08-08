@@ -561,6 +561,9 @@ router = Router()
 
 logger = logging.getLogger(__name__)
 
+# Фото экрана выбора способа оплаты «💳 К оплате: N ₽» (2026-08).
+PAYMENT_METHOD_PHOTO_FILE_ID = "AgACAgQAAxkBAAF-krxqdr7EFkK7vBafs-7eLasnInLCjAACfQ1rG2iAuVPYVBCZHdhHgQEAAwIAA3kAAz0E"
+
 
 # Функция send_vpn_keys_alert удалена - больше не используется
 # VPN-ключи теперь создаются динамически через Xray API, лимита нет
@@ -1051,9 +1054,31 @@ async def show_payment_method_selection(
     )])
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    
+
+    # Экран выбора способа оплаты рендерится с новым фото — safe_edit_text
+    # умеет только менять caption/text, но не саму картинку. Удаляем
+    # предыдущее сообщение и отправляем новое photo+caption.
     try:
-        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        try:
+            await callback.bot.send_photo(
+                chat_id=callback.message.chat.id,
+                photo=PAYMENT_METHOD_PHOTO_FILE_ID,
+                caption=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+        except Exception:
+            # Fallback без фото — если file_id устарел на текущем боте.
+            await callback.bot.send_message(
+                chat_id=callback.message.chat.id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
         await callback.answer()
     except Exception as e:
         logger.exception("Error showing payment method selection: %s", e)

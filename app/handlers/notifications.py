@@ -18,7 +18,7 @@ from app.utils.referral_link import build_referral_link
 logger = logging.getLogger(__name__)
 
 _CASHBACK_PHOTO = {
-    "prod": "AgACAgQAAxkBAAFU1CRqGqoAAS1KI0850DLxvYHcz47qlDQAAsYPaxtaLNFQ8CwBGB-Q9mUBAAMCAAN5AAM7BA",
+    "prod": "AgACAgQAAxkBAAF-kohqdruVkW3npuKktIjFyZyaGH4j2AACeg1rG2iAuVNazl94iw9sDAEAAwIAA3kAAz0E",
     "stage": "AgACAgQAAxkBAAIfoGnenb15W2hobSqm_sQru9uQUjUjAAKnDGsbiHD4Ujk8OCW6NZ8hAQADAgADeQADOwQ",
 }
 
