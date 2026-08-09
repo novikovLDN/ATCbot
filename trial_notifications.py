@@ -25,6 +25,64 @@ from app.core.structured_logger import log_event
 
 logger = logging.getLogger(__name__)
 
+# Фото для уведомления «3 часа до отключения» (trial.reminder_3h).
+# Stage/prod различаются — file_id привязан к боту.
+_REMINDER_3H_PHOTO = {
+    "prod": "AgACAgQAAxkBAAF_FwdqeJDS1H8mmP976s4J_8Zvmo9xZQACrA9rG9xjyVOAZefu4qWD6gEAAwIAA3kAAz0E",
+    "stage": "",
+}
+
+
+async def _safe_send_photo_or_text(
+    bot: Bot,
+    telegram_id: int,
+    photo_id: str,
+    text: str,
+    reply_markup: InlineKeyboardMarkup = None,
+):
+    """Отправить фото с caption + fallback на text-only.
+
+    Если photo_id пустой или Telegram отказал (устаревший file_id и т.п.) —
+    fallback на safe_send_message (обычный текст). Возвращает Message или None
+    (при graceful-failure — совместимо с safe_send_message контрактом)."""
+    from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+    from app.utils.telegram_safe import convert_tg_emoji
+
+    if not photo_id:
+        return await safe_send_message(bot, telegram_id, text, reply_markup=reply_markup)
+
+    caption = convert_tg_emoji(text)
+    try:
+        return await bot.send_photo(
+            chat_id=telegram_id, photo=photo_id, caption=caption,
+            parse_mode="HTML", reply_markup=reply_markup,
+        )
+    except TelegramForbiddenError:
+        logger.warning(f"SAFE_SEND_PHOTO_FORBIDDEN user={telegram_id}")
+        try:
+            await database.mark_user_unreachable(telegram_id)
+        except Exception:
+            pass
+        return None
+    except TelegramBadRequest as e:
+        err = str(e).lower()
+        if "chat not found" in err:
+            logger.warning(f"SAFE_SEND_PHOTO_CHAT_NOT_FOUND user={telegram_id}")
+            try:
+                await database.mark_user_unreachable(telegram_id)
+            except Exception:
+                pass
+            return None
+        # Устаревший file_id или другая photo-специфичная ошибка → text fallback.
+        logger.warning(
+            "SAFE_SEND_PHOTO_FAIL_FALLBACK_TEXT user=%s err=%s", telegram_id, e,
+        )
+        return await safe_send_message(bot, telegram_id, text, reply_markup=reply_markup)
+    except Exception:
+        logger.exception(f"SAFE_SEND_PHOTO_UNKNOWN user={telegram_id}")
+        return None
+
+
 # Singleton guard: предотвращает повторный запуск scheduler
 _TRIAL_SCHEDULER_STARTED = False
 _TRIAL_SCHEDULER_LOCK = asyncio.Lock()
@@ -277,7 +335,10 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
             language = await resolve_user_language(telegram_id)
             text = custom or i18n.get_text(language, "trial.reminder_3h")
             keyboard = get_trial_discount_keyboard(language)
-            sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
+            photo_id = _REMINDER_3H_PHOTO.get("prod" if config.IS_PROD else "stage", "")
+            sent = await _safe_send_photo_or_text(
+                bot, telegram_id, photo_id, text, reply_markup=keyboard,
+            )
             if sent is not None:
                 await asyncio.sleep(0.05)
                 flag_query = _get_trial_flag_query("trial_notif_3h_sent")
