@@ -51,6 +51,9 @@ const BUTTON_OPTIONS = [
   // Для рассылок владельцам прокси (сегмент bought_proxy) —
   // ведёт на delivery-экран «🧩 Ваш Telegram-прокси готов».
   { key: "my_proxy", label: "🧩 Мой прокси" },
+  // Персональный подарок Combo Basic 1 мес со скидкой (% и часы
+  // — из полей discount_percent/discount_hours рассылки).
+  { key: "gift_combo", label: "🎁 Забрать подарок (Combo Basic 1м, нужен %)" },
   // Получатель таппает → бот открывает экран «Подари другу скидку 30%».
   // Внутри — кнопка share с его личной refd-ссылкой. Друг по ссылке
   // получает 30%/24ч (lifetime-once). Без extra discount-параметров —

@@ -317,6 +317,7 @@ def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
         ("🏆 Купить Комбо", "buy_combo"),
         ("🌐 MT Прокси", "proxy"),
         ("🧩 Мой прокси", "my_proxy"),
+        ("🎁 Забрать подарок (Combo Basic 1м)", "gift_combo"),
         ("🎁 Поделиться скидкой", "share_discount"),
     ]
     rows = []

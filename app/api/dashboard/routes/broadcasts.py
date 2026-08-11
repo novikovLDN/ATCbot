@@ -488,6 +488,7 @@ _BUTTON_TYPES = {
     "buy_combo",
     "share_discount",
     "my_proxy",
+    "gift_combo",
 }
 
 
@@ -894,6 +895,14 @@ def _build_reply_markup(
             rows.append([InlineKeyboardButton(
                 text="🎁 Поделиться скидкой",
                 callback_data="share_discount_open",
+            )])
+        elif btn == "gift_combo":
+            # Персональный подарок Combo Basic 1 мес со скидкой (% и часы
+            # из полей рассылки). Handler: callback_broadcast_gift_combo
+            # в admin/broadcast.py.
+            rows.append([InlineKeyboardButton(
+                text="🎁 Забрать подарок",
+                callback_data=f"broadcast_gift_combo:{broadcast_id}",
             )])
         elif btn == "my_proxy":
             # Для рассылок владельцам прокси (сегмент bought_proxy):
