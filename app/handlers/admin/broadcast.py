@@ -38,12 +38,12 @@ _PRESET_MAINTENANCE_TITLE = (
     "<b>Тех. работы на основных серверах</b>"
 )
 _PRESET_MAINTENANCE_TEXT = (
-    "До <b>25.05</b> просим временно использовать наши <b>Pro-сервера</b> "
-    "— они работают стабильно.\n\n"
-    "![🎁](tg://emoji?id=5384578448633129482) <b>Скидка 20% на Pro-трафик</b> "
+    "До <b>25.05</b> просим временно использовать наши <b>серверы обхода "
+    "белых списков</b> — они работают стабильно.\n\n"
+    "![🎁](tg://emoji?id=5384578448633129482) <b>Скидка 20% на ГБ обхода</b> "
     "— забрать по кнопке <b>«Купить трафик»</b> ниже.\n\n"
     "━━━━━━━━━━━━━━\n"
-    "![🔑](tg://emoji?id=5465443379917629504) <b>Ваш Pro-ключ</b>\n\n"
+    "![🔑](tg://emoji?id=5465443379917629504) <b>Ваш ключ обхода</b>\n\n"
     "<code>{bypass_key}</code>\n\n"
     "<i>Нажмите, чтобы скопировать.</i>\n"
     "━━━━━━━━━━━━━━\n\n"
@@ -55,7 +55,7 @@ _PRESET_MAINTENANCE_TEXT = (
     "![3️⃣](tg://emoji?id=5381879959335738545) Справа сверху нажмите "
     "<b>«+»</b> → <b>«Вставить из буфера»</b>\n"
     "![4️⃣](tg://emoji?id=5382054253403577563) Выберите сервера с пометкой "
-    "<b>Pro</b> и включите соединение"
+    "<b>LTE</b> и включите соединение"
     "</blockquote>\n\n"
     "По окончании работ всё вернётся автоматически — переключать обратно "
     "не нужно. Спасибо за понимание "
@@ -178,6 +178,13 @@ def _build_broadcast_reply_markup(
         elif btn == "promo_buy":
             label = f"🎁 Купить со скидкой {discount}%" if discount else "🎁 Купить со скидкой"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"broadcast_promo_buy:{broadcast_id}")])
+        elif btn == "gift_combo":
+            # Персональная скидка на Combo Basic 1 месяц. % и часы —
+            # из полей рассылки (broadcast_discount, broadcast_discount_hours).
+            rows.append([InlineKeyboardButton(
+                text="🎁 Забрать подарок",
+                callback_data=f"broadcast_gift_combo:{broadcast_id}",
+            )])
         elif btn == "promo_traffic":
             label = f"📊 Купить трафик −{discount}%" if discount else "📊 Купить трафик"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"broadcast_promo_traffic:{broadcast_id}")])
@@ -197,7 +204,7 @@ def _build_broadcast_reply_markup(
                 callback_data="broadcast_gift_1y_40",
             )])
         elif btn == "bypass":
-            rows.append([InlineKeyboardButton(text="🌐 Включить Pro", callback_data="broadcast_bypass")])
+            rows.append([InlineKeyboardButton(text="🌐 Включить обход", callback_data="broadcast_bypass")])
         elif btn == "channel":
             rows.append([InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/ATC_VPN")])
         elif btn == "support":
@@ -347,6 +354,113 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
 
     except Exception as e:
         logger.exception(f"Error applying broadcast promo discount: {e}")
+        await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
+
+
+# === gift_combo: персональный подарок Combo Basic 1 мес со скидкой ===
+# Кнопка «🎁 Забрать подарок» в рассылке. Скидка (% + часы жизни) —
+# из полей самой рассылки. Тариф зашит: Combo Basic 30 дней.
+_GIFT_COMBO_TARIFF = "combo_basic"
+_GIFT_COMBO_PERIOD_DAYS = 30
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("broadcast_gift_combo:"))
+async def callback_broadcast_gift_combo(callback: CallbackQuery, state: FSMContext):
+    """Пользователь нажал 'Забрать подарок' в рассылке — активируем
+    персональную скидку на Combo Basic 1 мес + отправляем экран выбора
+    способа оплаты с готовой ценой и custom-текстом."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    try:
+        broadcast_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка", show_alert=True)
+        return
+
+    telegram_id = callback.from_user.id
+
+    try:
+        # Тянем скидку из рассылки (% + часы жизни задал админ в wizard).
+        discount = await database.get_broadcast_discount(broadcast_id)
+        if not discount:
+            await callback.message.answer(
+                "❌ Скидка не найдена. Попробуй позже или напиши в поддержку.",
+                parse_mode="HTML",
+            )
+            return
+
+        discount_percent = int(discount.get("discount_percent") or 0)
+        discount_hours = int(discount.get("discount_hours") or 24)
+
+        # Читаем Combo Basic 30 дней: цена + GB бонус + базовый тариф.
+        combo_info = config.COMBO_TARIFFS.get(_GIFT_COMBO_TARIFF, {}).get(_GIFT_COMBO_PERIOD_DAYS, {})
+        base_price = combo_info.get("price") or 0
+        combo_gb = combo_info.get("gb") or 0
+        base_tariff = combo_info.get("base_tariff") or "basic"
+
+        if not base_price or base_tariff not in config.TARIFFS:
+            await callback.message.answer(
+                "❌ Тариф Combo Basic сейчас недоступен.", parse_mode="HTML",
+            )
+            return
+
+        # Применяем скидку глобально к юзеру (create_user_discount) —
+        # чтобы срабатывала в любом покупательском flow, не только здесь.
+        # Плюс явно посчитаем цену для этого экрана.
+        final_price_rubles = round(base_price * (100 - discount_percent) / 100)
+        final_price_kopecks = final_price_rubles * 100
+
+        from datetime import timedelta
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=discount_hours)
+        try:
+            await database.create_user_discount(
+                telegram_id=telegram_id,
+                discount_percent=discount_percent,
+                expires_at=expires_at,
+                created_by=config.ADMIN_TELEGRAM_ID,
+            )
+        except Exception as e:
+            logger.warning("BROADCAST_GIFT_COMBO discount_create failed user=%s: %s", telegram_id, e)
+
+        # FSM state — как в gift_1m: указываем что покупается Combo (базовый
+        # тариф + comboBypassGB) с уже посчитанной ценой.
+        from app.handlers.common.states import PurchaseState
+        await state.update_data(
+            tariff_type=base_tariff,
+            period_days=_GIFT_COMBO_PERIOD_DAYS,
+            final_price_kopecks=final_price_kopecks,
+            discount_percent=discount_percent,
+            combo_bypass_gb=combo_gb,
+        )
+        await state.set_state(PurchaseState.choose_payment_method)
+
+        # Custom-инфо для юзера ПЕРЕД экраном оплаты.
+        info_text = (
+            f"🎁 <b>Вы выбрали Combo Basic · {discount_percent}% скидки</b>\n\n"
+            f"Вам будут доступны безлимитные сервера на срок 1 месяц "
+            f"и также дополнительно <b>{combo_gb} ГБ</b> обхода белых списков!\n\n"
+            f"💎 Это спец-цена специально для тебя."
+        )
+        await callback.message.answer(info_text, parse_mode="HTML")
+
+        # Показываем экран выбора способа оплаты с уже посчитанной ценой.
+        from handlers import show_payment_method_selection
+        await show_payment_method_selection(
+            callback, base_tariff, _GIFT_COMBO_PERIOD_DAYS, final_price_kopecks,
+        )
+
+        logger.info(
+            "BROADCAST_GIFT_COMBO_ACTIVATED user=%s broadcast=%s disc=%s%% "
+            "hours=%s base_price=%s final=%s combo_gb=%s",
+            telegram_id, broadcast_id, discount_percent, discount_hours,
+            base_price, final_price_rubles, combo_gb,
+        )
+
+    except Exception as e:
+        logger.exception(f"Error activating gift_combo: {e}")
         await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
 
 
@@ -535,28 +649,28 @@ def _gift3m_info_text_and_keyboard() -> tuple[str, InlineKeyboardMarkup]:
 
         f"🌟 <b>Basic — {basic_disc} ₽</b>\n"
         "<blockquote>🚀 Канал до 25 Гбит/с — YouTube 4K без тормозов\n"
-        "🌐 10 ГБ полного доступа в подарок\n"
+        "🌐 10 ГБ обхода белых списков в подарок\n"
         "👨‍👩‍👧‍👦 До 10 устройств одновременно\n"
         "➕ Подключение в одно нажатие</blockquote>\n\n"
 
         f"⚡ <b>Plus — {plus_disc} ₽</b>\n"
         "<blockquote>⚡️ Канал до 75 Гбит/с — стримы и игры без лагов\n"
         "🔄 Резервные каналы — соединение работает всегда\n"
-        "🌐 10 ГБ полного доступа в подарок\n"
+        "🌐 10 ГБ обхода белых списков в подарок\n"
         "👨‍👩‍👧‍👦 До 14 устройств одновременно</blockquote>\n\n"
 
         f"🚀 <b>Combo Basic — {cbasic_disc} ₽</b>\n"
         "<blockquote>🌐 Безлимит на основных серверах · до 25 Гбит/с\n"
-        f"📊 <b>{combo_basic_gb} ГБ</b> Pro-трафика в пакете\n"
+        f"📊 <b>{combo_basic_gb} ГБ</b> обхода белых списков (LTE) в пакете\n"
         "👨‍👩‍👧‍👦 До 10 устройств одновременно\n"
-        "<i>Пакет ГБ не сгорает — тратится только на Pro-серверах</i></blockquote>\n\n"
+        "<i>Пакет ГБ не сгорает — тратится только на LTE-серверах</i></blockquote>\n\n"
 
         f"🚀 <b>Combo Plus — {cplus_disc} ₽</b>\n"
         "<blockquote>🌐 Безлимит на приоритетных серверах · до 75 Гбит/с\n"
         "🔄 Резервные каналы — всегда онлайн\n"
-        f"📊 <b>{combo_plus_gb} ГБ</b> Pro-трафика в пакете\n"
+        f"📊 <b>{combo_plus_gb} ГБ</b> обхода белых списков (LTE) в пакете\n"
         "👨‍👩‍👧‍👦 До 14 устройств одновременно\n"
-        "<i>Пакет ГБ не сгорает — тратится только на Pro-серверах</i></blockquote>"
+        "<i>Пакет ГБ не сгорает — тратится только на LTE-серверах</i></blockquote>"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -819,28 +933,28 @@ def _gift1y40_info_text_and_keyboard() -> tuple[str, InlineKeyboardMarkup]:
 
         f"🌟 <b>Basic — {basic_final} ₽</b>\n"
         "<blockquote>🚀 Канал до 25 Гбит/с — YouTube 4K без тормозов\n"
-        "🌐 10 ГБ полного доступа в подарок\n"
+        "🌐 10 ГБ обхода белых списков в подарок\n"
         "👨‍👩‍👧‍👦 До 10 устройств одновременно\n"
         "➕ Подключение в одно нажатие</blockquote>\n\n"
 
         f"⚡ <b>Plus — {plus_final} ₽</b>\n"
         "<blockquote>⚡️ Канал до 75 Гбит/с — стримы и игры без лагов\n"
         "🔄 Резервные каналы — соединение работает всегда\n"
-        "🌐 10 ГБ полного доступа в подарок\n"
+        "🌐 10 ГБ обхода белых списков в подарок\n"
         "👨‍👩‍👧‍👦 До 14 устройств одновременно</blockquote>\n\n"
 
         f"🚀 <b>Combo Basic — {cbasic_final} ₽</b>\n"
         "<blockquote>🌐 Безлимит на основных серверах · до 25 Гбит/с\n"
-        f"📊 <b>{combo_basic_gb} ГБ</b> Pro-трафика в пакете\n"
+        f"📊 <b>{combo_basic_gb} ГБ</b> обхода белых списков (LTE) в пакете\n"
         "👨‍👩‍👧‍👦 До 10 устройств одновременно\n"
-        "<i>Пакет ГБ не сгорает — тратится только на Pro-серверах</i></blockquote>\n\n"
+        "<i>Пакет ГБ не сгорает — тратится только на LTE-серверах</i></blockquote>\n\n"
 
         f"🚀 <b>Combo Plus — {cplus_final} ₽</b>\n"
         "<blockquote>🌐 Безлимит на приоритетных серверах · до 75 Гбит/с\n"
         "🔄 Резервные каналы — всегда онлайн\n"
-        f"📊 <b>{combo_plus_gb} ГБ</b> Pro-трафика в пакете\n"
+        f"📊 <b>{combo_plus_gb} ГБ</b> обхода белых списков (LTE) в пакете\n"
         "👨‍👩‍👧‍👦 До 14 устройств одновременно\n"
-        "<i>Пакет ГБ не сгорает — тратится только на Pro-серверах</i></blockquote>"
+        "<i>Пакет ГБ не сгорает — тратится только на LTE-серверах</i></blockquote>"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1797,7 +1911,7 @@ def _btn_label(btn_type: str) -> str:
         "promo_traffic": "📊 Купить трафик промо",
         "gift_3m": "🎁 Скидка 30% на 3 месяца",
         "gift_1y_40": "🎁 1 год со скидкой 40%",
-        "bypass": "🌐 Включить Pro",
+        "bypass": "🌐 Включить обход",
         "channel": "📢 Наш канал",
         "support": "💬 Поддержка",
         "referral": "👥 Реферальная программа",

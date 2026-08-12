@@ -237,7 +237,7 @@ async def segments_list():
          "Сейчас активна подписка Plus. Целевая для upsell на Combo или продление на 1 год.",
          "Апселл / особые"),
         ("combo_active", "Активные Combo",
-         "Сейчас активная подписка типа Combo (Basic/Plus). Целевая для апселла на большие Pro-паки / доп. устройств.",
+         "Сейчас активная подписка типа Combo (Basic/Plus). Целевая для апселла на большие GB-паки обхода / доп. устройств.",
          "Апселл / особые"),
         ("discount_active", "Активная персональная скидка",
          "У пользователя действует скидка в user_discounts (не broadcast). Напомнить: «у тебя действует скидка N% — воспользуйся».",
@@ -488,6 +488,7 @@ _BUTTON_TYPES = {
     "buy_combo",
     "share_discount",
     "my_proxy",
+    "gift_combo",
 }
 
 
@@ -849,7 +850,7 @@ def _build_reply_markup(
             )])
         elif btn == "bypass":
             rows.append([InlineKeyboardButton(
-                text="🌐 Включить Pro", callback_data="broadcast_bypass",
+                text="🌐 Включить обход", callback_data="broadcast_bypass",
             )])
         elif btn == "happ_ios":
             rows.append([InlineKeyboardButton(
@@ -894,6 +895,14 @@ def _build_reply_markup(
             rows.append([InlineKeyboardButton(
                 text="🎁 Поделиться скидкой",
                 callback_data="share_discount_open",
+            )])
+        elif btn == "gift_combo":
+            # Персональный подарок Combo Basic 1 мес со скидкой (% и часы
+            # из полей рассылки). Handler: callback_broadcast_gift_combo
+            # в admin/broadcast.py.
+            rows.append([InlineKeyboardButton(
+                text="🎁 Забрать подарок",
+                callback_data=f"broadcast_gift_combo:{broadcast_id}",
             )])
         elif btn == "my_proxy":
             # Для рассылок владельцам прокси (сегмент bought_proxy):

@@ -307,7 +307,7 @@ def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
         ("📊 Купить трафик промо", "promo_traffic"),
         ("🎁 Скидка 30% на 3 месяца", "gift_3m"),
         ("🎁 1 год со скидкой 40%", "gift_1y_40"),
-        ("🌐 Включить Pro", "bypass"),
+        ("🌐 Включить обход", "bypass"),
         ("📢 Наш канал", "channel"),
         ("💬 Поддержка", "support"),
         ("👥 Пригласить друга", "referral"),
@@ -317,6 +317,7 @@ def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
         ("🏆 Купить Комбо", "buy_combo"),
         ("🌐 MT Прокси", "proxy"),
         ("🧩 Мой прокси", "my_proxy"),
+        ("🎁 Забрать подарок (Combo Basic 1м)", "gift_combo"),
         ("🎁 Поделиться скидкой", "share_discount"),
     ]
     rows = []

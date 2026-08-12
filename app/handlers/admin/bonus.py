@@ -91,7 +91,7 @@ def _days_word(n: int) -> str:
 
 def _gift_text(t: str, amount: int) -> str:
     if t == "t":
-        gift = f"<b>+{amount} ГБ Pro-трафика</b>"
+        gift = f"<b>+{amount} ГБ обхода блокировок</b>"
     else:
         gift = f"<b>подписка на {amount} {_days_word(amount)}</b>"
     return (

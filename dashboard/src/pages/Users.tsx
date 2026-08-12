@@ -548,7 +548,7 @@ function TrafficDiscountCard({
     <div className="card p-4">
       <div className="flex items-center justify-between">
         <div className="text-xs uppercase tracking-wider text-fg-subtle">
-          Скидка на Pro-трафик
+          Скидка на GB (Обход)
         </div>
         {existing && (
           <button
@@ -755,7 +755,7 @@ function ExtendedProfileCard({ telegramId }: { telegramId: number }) {
         {reissues > 0 && <Row label="Перевыпусков ключа" value={fmtNum(reissues)} />}
       </div>
       <div className="mt-3 border-t border-border pt-3 space-y-1.5 text-sm">
-        <div className="text-[11px] uppercase tracking-wider text-fg-subtle">Pro · GB</div>
+        <div className="text-[11px] uppercase tracking-wider text-fg-subtle">Обход · GB</div>
         <Row label="GB куплено всего" value={fmtNum(gbTotal)} />
         <Row label="Покупок GB-паков" value={fmtNum(gbCount)} />
       </div>

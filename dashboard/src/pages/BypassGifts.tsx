@@ -106,7 +106,7 @@ export function BypassGifts() {
             <EmptyState
               icon={Gift}
               title="Ссылок ещё нет"
-              description="Создай первую — поделишься ею с пользователями, при переходе бот выдаст N ГБ Pro-трафика."
+              description="Создай первую — поделишься ею с пользователями, при переходе бот выдаст N ГБ обхода."
               action={
                 <button
                   type="button"
@@ -411,7 +411,7 @@ function CreateModal({
 
         <div className="space-y-3">
           <label className="block">
-            <div className="mb-1 text-xs text-fg-subtle">ГБ Pro-трафика</div>
+            <div className="mb-1 text-xs text-fg-subtle">ГБ обхода</div>
             <input
               className="input"
               type="number"
