@@ -647,6 +647,13 @@ async def callback_setup_step1(callback: CallbackQuery):
                 text="📲 Скачать Incy",
                 url=incy_url,
             )])
+        # V2rayTun для Android — Play Market
+        v2raytun_url = links.get("v2raytun")
+        if v2raytun_url:
+            buttons.append([InlineKeyboardButton(
+                text="📲 Скачать V2rayTun",
+                url=v2raytun_url,
+            )])
     elif platform == "windows":
         buttons.append([InlineKeyboardButton(
             text="📲 Скачать Happ",
@@ -750,35 +757,56 @@ async def callback_setup_step2(callback: CallbackQuery):
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
         show_incy = platform in ("ios", "android", "macos")
+        show_v2raytun = platform in ("ios", "android")
+
+        # NB: raw=1 → бот отдаёт «сырую» подписку без crypt4/crypt1.
+        # Клиент сам импортирует URL — RSA-обёртка не нужна пользователю.
+        encoded_sub = quote(sub_url, safe='')
 
         # Ряд 1: VPN-ключ (Happ + Incy)
         row_vpn = [InlineKeyboardButton(
             text="Happ VPN",
-            url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
+            url=f"{base_url}/open/happ?url={encoded_sub}&raw=1",
             style="primary",
         )]
         if show_incy:
             row_vpn.append(InlineKeyboardButton(
                 text="Incy VPN",
-                url=f"{base_url}/open/incy?url={quote(sub_url, safe='')}",
+                url=f"{base_url}/open/incy?url={encoded_sub}&raw=1",
                 style="success",
             ))
         buttons.append(row_vpn)
 
-        # Ряд 2: Обход (Happ + Incy) — только если есть bypass_url
+        # Ряд 2: V2rayTun (iOS/Android)
+        if show_v2raytun:
+            buttons.append([InlineKeyboardButton(
+                text="V2rayTun VPN",
+                url=f"{base_url}/open/v2raytun?url={encoded_sub}",
+                style="primary",
+            )])
+
+        # Ряд 3: Обход (Happ + Incy) — только если есть bypass_url
         if bypass_url:
+            encoded_bypass = quote(bypass_url, safe='')
             row_bypass = [InlineKeyboardButton(
                 text="Happ Обход",
-                url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
+                url=f"{base_url}/open/happ?url={encoded_bypass}&raw=1",
                 style="primary",
             )]
             if show_incy:
                 row_bypass.append(InlineKeyboardButton(
                     text="Incy Обход",
-                    url=f"{base_url}/open/incy?url={quote(bypass_url, safe='')}",
+                    url=f"{base_url}/open/incy?url={encoded_bypass}&raw=1",
                     style="success",
                 ))
             buttons.append(row_bypass)
+
+            if show_v2raytun:
+                buttons.append([InlineKeyboardButton(
+                    text="V2rayTun Обход",
+                    url=f"{base_url}/open/v2raytun?url={encoded_bypass}",
+                    style="primary",
+                )])
 
     # === Bottom buttons ===
     buttons.append([InlineKeyboardButton(
@@ -854,12 +882,19 @@ _IOS_HAPP_LINKS = {
 
 _INCY_IOS_URL = "https://apps.apple.com/ru/app/incy/id6756943388?l=en-GB"
 _INCY_ANDROID_URL = "https://play.google.com/store/apps/details?id=llc.itdev.incy&hl=en_IE"
+# V2rayTun Android: единственная поддерживаемая нами витрина.
+# App Store у V2rayTun недоступен в RU → на iOS показываем ТОЛЬКО
+# deep-link «Добавить в V2rayTun», без download-кнопки.
+_V2RAYTUN_ANDROID_URL = "https://play.google.com/store/apps/details?id=com.v2raytun.android"
 
 _DOWNLOAD_LINKS = {
     # 2026-06-08: V2RayTun снят со всех платформ, Hiddify тоже снят.
     # 2026-07-07: Incy добавлен для Android и macOS — раньше был
     # только iOS. macOS использует ту же App Store ссылку что и iOS
     # (Mac с Apple Silicon умеет ставить iOS-приложения из App Store).
+    # 2026-08-12: V2rayTun возвращён для Android (Play Store ссылка).
+    # На iOS нет download-кнопки — App Store недоступен, но deep-link
+    # «Добавить в V2rayTun» всё равно показываем в auto-setup ряду.
     "ios": {
         "happ": _IOS_HAPP_LINKS["ru"],
         "incy": _INCY_IOS_URL,
@@ -867,6 +902,7 @@ _DOWNLOAD_LINKS = {
     "android": {
         "happ": "https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
         "incy": _INCY_ANDROID_URL,
+        "v2raytun": _V2RAYTUN_ANDROID_URL,
     },
     "macos": {
         # macOS ставит iOS-приложение Incy через App Store — та же ссылка.
@@ -977,6 +1013,13 @@ async def callback_setup_platform(callback: CallbackQuery):
                 text="📲 Скачать Incy",
                 url=links["incy"],
             )])
+        # V2rayTun — только Android (в iOS нет download-кнопки, только
+        # deep-link кнопка в auto-setup ряду).
+        if "v2raytun" in links:
+            buttons.append([InlineKeyboardButton(
+                text="📲 Скачать V2rayTun",
+                url=links["v2raytun"],
+            )])
     else:
         # Windows: download buttons in pairs
         download_row = []
@@ -998,27 +1041,43 @@ async def callback_setup_platform(callback: CallbackQuery):
             parsed = urlparse(config.WEBHOOK_URL)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        # Incy на iOS показывается только если Node-сайдкар жив. Сразу
-        # пробрасываем флаг сюда, чтобы не плодить нерабочих кнопок.
+        # Incy на iOS/Android/macOS показывается только если Node-сайдкар
+        # жив.  V2rayTun — iOS и Android (десктопа у него нет).  Все
+        # deeplink'и идут в raw-режиме: raw=1 отдаёт клиенту сырую URL
+        # подписки без crypt4/crypt1 (v2raytun crypt-обёртки не имеет
+        # вовсе — параметр игнорируется).
         from app.services import incy_crypto
         ios_clients = ["happ"]
         if incy_crypto.is_available():
             ios_clients.append("incy")
+        ios_clients.append("v2raytun")
+
+        android_clients = ["happ"]
+        if incy_crypto.is_available():
+            android_clients.append("incy")
+        android_clients.append("v2raytun")
 
         _platform_clients = {
             "ios": ios_clients,
-            "android": ["happ"],
+            "android": android_clients,
             "macos": ["happ"],
             "windows": ["happ"],
         }
         _client_deeplink = {
             "happ": "happ",
             "incy": "incy",
+            "v2raytun": "v2raytun",
         }
         _client_names = {
             "happ": "Happ",
             "incy": "Incy",
+            "v2raytun": "V2rayTun",
         }
+        # Clients that skip the sealing layer (raw=1).  Everything the
+        # user-setup flow shows is now raw — sealed keys stayed only for
+        # broadcast presets.  V2rayTun has no seal at all, so raw=1 is a
+        # no-op but harmless.
+        _raw_clients = {"happ", "incy", "v2raytun"}
 
         # Decorative separator
         buttons.append([InlineKeyboardButton(
@@ -1027,17 +1086,20 @@ async def callback_setup_platform(callback: CallbackQuery):
         )])
 
         clients = _platform_clients.get(platform, [])
+        encoded_sub = quote(sub_url, safe='')
+        encoded_bypass = quote(bypass_url, safe='') if bypass_url else ""
         for client in clients:
             dl = _client_deeplink[client]
             name = _client_names[client]
+            raw_qs = "&raw=1" if client in _raw_clients else ""
             row = [InlineKeyboardButton(
                 text=f"\U0001f310 {name}",
-                url=f"{base_url}/open/{dl}?url={quote(sub_url, safe='')}",
+                url=f"{base_url}/open/{dl}?url={encoded_sub}{raw_qs}",
             )]
             if bypass_url:
                 row.append(InlineKeyboardButton(
                     text=f"\U0001f90d {name}",
-                    url=f"{base_url}/open/{dl}?url={quote(bypass_url, safe='')}",
+                    url=f"{base_url}/open/{dl}?url={encoded_bypass}{raw_qs}",
                 ))
             buttons.append(row)
 
@@ -1109,41 +1171,21 @@ async def callback_setup_manual(callback: CallbackQuery):
     connect_text = i18n_get_text(language, f"setup.connect_{platform}")
 
     # Build keys section.
-    # — Happ-ключи (sealed crypt4) для всех платформ;
-    # — Incy-ключи (crypt1) для iOS/Android/macOS. Windows не показываем:
-    #   Incy-клиента под Windows нет, incy://crypt1/... deep-link
-    #   там некому обрабатывать.
-    # Все ключи в свёрнутой цитате (blockquote expandable) — экран
-    # компактный по умолчанию, юзер раскрывает только нужный ключ.
-    from app.services import happ_crypto, incy_crypto
-
-    def _happ_key_block(label_key: str, raw_url: str) -> str:
-        happ_link = happ_crypto.format_for_user(raw_url)
+    # Raw подписочные URL — без crypt4/crypt1: универсально работает
+    # в Happ / Incy / V2rayTun и в любом Xray-совместимом клиенте.
+    # Ключи в свёрнутой цитате (blockquote expandable) — экран
+    # компактный по умолчанию, юзер раскрывает только нужный.
+    def _key_block(label_key: str, raw_url: str) -> str:
         return (
             "\n" + i18n_get_text(language, label_key) + "\n"
-            f"<blockquote expandable><code>{happ_link}</code></blockquote>"
-        )
-
-    async def _incy_key_block(label_key: str, raw_url: str) -> str:
-        incy_link = await incy_crypto.to_incy_link(raw_url)
-        # Если sidecar не вернул даже fallback — пропускаем блок.
-        if not incy_link:
-            return ""
-        return (
-            "\n" + i18n_get_text(language, label_key) + "\n"
-            f"<blockquote expandable><code>{incy_link}</code></blockquote>"
+            f"<blockquote expandable><code>{raw_url}</code></blockquote>"
         )
 
     keys_section = ""
     if sub_url:
-        keys_section += _happ_key_block("setup.key_vpn_label", sub_url)
+        keys_section += _key_block("setup.key_vpn_label", sub_url)
     if bypass_url:
-        keys_section += _happ_key_block("setup.key_bypass_label", bypass_url)
-    if platform in ("ios", "android", "macos"):
-        if sub_url:
-            keys_section += await _incy_key_block("setup.key_vpn_incy_label", sub_url)
-        if bypass_url:
-            keys_section += await _incy_key_block("setup.key_bypass_incy_label", bypass_url)
+        keys_section += _key_block("setup.key_bypass_label", bypass_url)
 
     if keys_section:
         text = f"{connect_text}\n{keys_section}"

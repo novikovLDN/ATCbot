@@ -298,18 +298,61 @@ LANG = {
     'get_key.download_v2raytun': "📲 Download V2RayTun",
     'get_key.instruction_text': "📖 <b>Connection Guide</b>\n\nTap the «📲 Set up device» button below and follow all setup steps.\n\nIf something goes wrong — you can always contact support for help.\n\n⸻\n\n👇 Tap the key to copy:",
     'get_key.no_subscription': "❌ You don't have an active subscription.",
-    'setup.connect_ios': "📱 <b>Connect on iOS</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n",
-    'setup.connect_android': "🤖 <b>Connect on Android</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n",
-    'setup.connect_macos': "🍎 <b>Connect on macOS</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n",
-    'setup.connect_windows': "🪟 <b>Connect on Windows</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open Happ and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen click the clipboard icon 🗒️\nThe key will be added automatically\nClick the big connect button ▶️",
+    # Universal manual-install instruction — one raw subscription URL
+    # works in any Xray-compatible client (Happ / Incy / V2rayTun /
+    # v2rayN / …).  Per-platform keys kept in place so the code path
+    # doesn't need to change if we want to split them again later.
+    'setup.connect_ios': (
+        "📋 <b>Manual setup</b>\n\n"
+        "1. Copy the subscription link below — tap it to copy to clipboard.\n"
+        "2. Open any VPN client from the list (Happ / Incy / V2rayTun / etc.).\n"
+        "3. Find <b>«Add subscription»</b> / <b>Import subscription</b>.\n"
+        "4. Paste the link from the clipboard.\n"
+        "5. The client will fetch servers automatically.\n\n"
+        "💡 <i>Tip:</i> if the link doesn't work — try the «Add to …» button "
+        "on the previous screen, it opens the client directly."
+    ),
+    'setup.connect_android': (
+        "📋 <b>Manual setup</b>\n\n"
+        "1. Copy the subscription link below — tap it to copy to clipboard.\n"
+        "2. Open any VPN client from the list (Happ / Incy / V2rayTun / etc.).\n"
+        "3. Find <b>«Add subscription»</b> / <b>Import subscription</b>.\n"
+        "4. Paste the link from the clipboard.\n"
+        "5. The client will fetch servers automatically.\n\n"
+        "💡 <i>Tip:</i> if the link doesn't work — try the «Add to …» button "
+        "on the previous screen, it opens the client directly."
+    ),
+    'setup.connect_macos': (
+        "📋 <b>Manual setup</b>\n\n"
+        "1. Copy the subscription link below — tap it to copy to clipboard.\n"
+        "2. Open any VPN client from the list (Happ / Incy / V2rayTun / etc.).\n"
+        "3. Find <b>«Add subscription»</b> / <b>Import subscription</b>.\n"
+        "4. Paste the link from the clipboard.\n"
+        "5. The client will fetch servers automatically.\n\n"
+        "💡 <i>Tip:</i> if the link doesn't work — try the «Add to …» button "
+        "on the previous screen, it opens the client directly."
+    ),
+    'setup.connect_windows': (
+        "📋 <b>Manual setup</b>\n\n"
+        "1. Copy the subscription link below — tap it to copy to clipboard.\n"
+        "2. Open any Xray-compatible VPN client (Happ, v2rayN, etc.).\n"
+        "3. Find <b>«Add subscription»</b> / <b>Import subscription</b>.\n"
+        "4. Paste the link from the clipboard.\n"
+        "5. The client will fetch servers automatically.\n\n"
+        "💡 <i>Tip:</i> if the link doesn't work — try the «Add to …» button "
+        "on the previous screen, it opens the client directly."
+    ),
     'setup.autosetup_ios': "📱 <b>Auto setup — iOS</b>\n\n⚡️ Tap the button below with the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.",
     'setup.autosetup_android': "🤖 <b>Auto setup — Android</b>\n\n⚡️ Tap the button below with the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.",
     'setup.autosetup_macos': "🍎 <b>Auto setup — macOS</b>\n\n⚡️ Tap the button below with the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.",
     'setup.autosetup_windows': "🪟 <b>Auto setup — Windows</b>\n\n⚡️ Tap the button below with the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.",
     'setup.manual_button': "📖 Manual setup",
     'setup.copy_key_label': "👇 Tap the key to copy:",
-    'setup.key_vpn_label': "🔑 <b>VPN key</b> (regular servers):",
-    'setup.key_bypass_label': "🔑 <b>Bypass key</b> (RU whitelists):",
+    # Single label — one raw URL per key, no Happ/Incy split.
+    'setup.key_vpn_label': "🔑 <b>Subscription link</b> (regular unlimited servers):",
+    'setup.key_bypass_label': "🔑 <b>Bypass subscription link</b> (RU whitelists):",
+    'setup.key_vpn_incy_label': "🔑 <b>Subscription link</b> (regular unlimited servers):",
+    'setup.key_bypass_incy_label': "🔑 <b>Bypass subscription link</b> (RU whitelists):",
     'setup.device_button': "📲 Set up device",
     'setup.done_button': "✅ Done",
     'setup.help_button': "❓ Need help",

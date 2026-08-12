@@ -11,9 +11,13 @@ blocks `happ://`), the page also shows the deep link as a monospaced
 block with a Copy button so the user can import it manually.
 
 Usage:
-    GET /open/{client}?url={subscription_url}
+    GET /open/{client}?url={subscription_url}[&raw=1]
 
-Supported clients: happ, incy
+Supported clients: happ, incy, v2raytun
+
+`raw=1` skips the sealing layer (crypt4 / crypt1) and returns the
+plain `<scheme>://add/<url>` deep-link.  V2rayTun has no crypto layer
+at all — it is always served raw as `v2raytun://import/<url>`.
 """
 
 import json
@@ -29,29 +33,62 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _SCHEMES = {
-    # Happ: server-side seals the URL via happ_crypto → happ://crypt4/<base64>.
+    # Happ: server-side seals the URL via happ_crypto → happ://crypt4/<base64>
+    #       (unless raw=1, then happ://add/<url>).
     # Incy: server-side awaits incy_crypto.to_incy_link (Node sidecar
     #       under the hood) → incy://crypt1/<payload>. If Node/package
     #       is unavailable at request time, falls back to a clean error
     #       page so the user understands "не получилось", not a 500.
+    #       raw=1 short-circuits the sidecar entirely.
+    # V2rayTun: no crypto layer — always plain v2raytun://import/<url>.
     "happ": "happ",
     "incy": "incy",
+    "v2raytun": "v2raytun",
 }
 
 _CLIENT_NAMES = {
     "happ": "Happ",
     "incy": "Incy",
+    "v2raytun": "V2rayTun",
 }
 
 
-async def _build_deep_link(client: str, raw_url: str) -> str | None:
+def _plain_deep_link(client: str, raw_url: str) -> str | None:
+    """Build the plain (un-sealed) client deep-link.
+
+    Path is `<scheme>://add/<url>` for happ/incy (both clients accept
+    the raw URL after `/add/`) and `<scheme>://import/<url>` for
+    V2rayTun (its documented import route).
+    """
+    if client == "happ":
+        return f"happ://add/{quote(raw_url, safe='/:?&=@%+')}"
+    if client == "incy":
+        return f"incy://add/{quote(raw_url, safe='/:?&=@%+')}"
+    if client == "v2raytun":
+        return f"v2raytun://import/{quote(raw_url, safe='')}"
+    return None
+
+
+async def _build_deep_link(client: str, raw_url: str, raw: bool = False) -> str | None:
     """Build the client-specific deep link for a subscription URL.
 
     Happ: pure-Python RSA-4096/PKCS#1v1.5 (happ_crypto), always works.
     Incy: AES-256-GCM via @incy/link-encoder npm package, behind a
           Node.js sidecar. Returns None if the sidecar/package is
           unavailable — caller renders a clean error page.
+    V2rayTun: no crypto layer — always plain scheme.
+
+    `raw=True` short-circuits the crypto step for happ/incy and just
+    returns the plain `<scheme>://add/<url>` link (Task: the user-setup
+    flow no longer needs sealed keys — the panel URL alone is enough).
     """
+    # V2rayTun is scheme-only.
+    if client == "v2raytun":
+        return _plain_deep_link("v2raytun", raw_url)
+
+    if raw:
+        return _plain_deep_link(client, raw_url)
+
     if client == "happ":
         try:
             from app.services import happ_crypto
@@ -62,8 +99,7 @@ async def _build_deep_link(client: str, raw_url: str) -> str | None:
             logger.exception(
                 "HAPP_CRYPT4_BUILD_FAIL — falling back to plain happ://add/"
             )
-            safe = quote(raw_url, safe='/:?&=@%+')
-            return f"happ://add/{safe}"
+            return _plain_deep_link("happ", raw_url)
     if client == "incy":
         try:
             from app.services import incy_crypto
@@ -224,12 +260,16 @@ def _render_page(client: str, deep_link: str) -> str:
 
 
 @router.get("/open/{client}")
-async def deeplink_redirect(client: str, url: str = Query(...)):
+async def deeplink_redirect(
+    client: str,
+    url: str = Query(...),
+    raw: int = Query(0, description="1 → skip crypto sealing, use plain <scheme>://add/<url>"),
+):
     """Redirect browser to VPN client deep link."""
     if client not in _SCHEMES:
         return HTMLResponse("<h3>Unknown client</h3>", status_code=400)
 
-    deep_link = await _build_deep_link(client, url)
+    deep_link = await _build_deep_link(client, url, raw=bool(raw))
     if not deep_link:
         # Currently only the Incy path can return None — happens when the
         # Node sidecar / @incy/link-encoder package isn't deployed yet.
