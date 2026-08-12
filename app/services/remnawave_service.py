@@ -385,6 +385,26 @@ async def add_bypass_traffic(
             # Stale UUID (user deleted in Remnawave) — drop and recreate
             await database.clear_remnawave_uuid(telegram_id)
 
+        # DB has no UUID but the panel may still hold an entity created earlier
+        # with username=str(telegram_id). Trying create_user directly would fail
+        # with A019 "User username already exists". Recover the existing entity
+        # by username first, cache its UUID, and top-up its trafficLimitBytes.
+        existing = await remnawave_api.find_user_by_username(str(telegram_id))
+        if existing:
+            api_uuid = existing.get("uuid")
+            if api_uuid:
+                await database.set_remnawave_uuid(telegram_id, api_uuid)
+                logger.info(
+                    "REMNAWAVE_BYPASS_RECOVERED: tg=%s uuid=%s (was orphaned in panel)",
+                    telegram_id, api_uuid[:8],
+                )
+                if await add_traffic(telegram_id, extra_bytes):
+                    return True
+                # add_traffic failed for a reason other than missing UUID —
+                # fall through to create_remnawave_user, which will surface
+                # the real error in logs.
+                await database.clear_remnawave_uuid(telegram_id)
+
         expire_at = subscription_end or (datetime.now(timezone.utc) + timedelta(days=3650))
         await create_remnawave_user(
             telegram_id,

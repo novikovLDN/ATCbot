@@ -484,35 +484,32 @@ async def _handle_traffic_pack_confirmation(
     pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
     if pack:
         traffic_bytes = pack["bytes"]
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            try:
-                from app.services.remnawave_service import add_traffic
-                rmn_success = await add_traffic(telegram_id, traffic_bytes)
-            except Exception as rmn_err:
-                logger.error(
-                    "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
-                    provider, telegram_id, traffic_gb, rmn_err,
+        # add_bypass_traffic handles all three cases:
+        #   1. DB uuid present         → panel add_traffic
+        #   2. DB uuid missing, panel  → recover by username, cache uuid, add_traffic
+        #      entity exists            (fixes A019 for users whose DB cache was
+        #                                cleared while the panel entity remained)
+        #   3. Neither exists          → create fresh entity
+        try:
+            from app.services.remnawave_service import add_bypass_traffic
+            from datetime import datetime, timezone, timedelta
+            far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+            rmn_success = await add_bypass_traffic(
+                telegram_id,
+                traffic_bytes,
+                subscription_type="basic",
+                subscription_end=far_future,
+            )
+            if rmn_success:
+                logger.info(
+                    "BYPASS_REMNAWAVE_TRAFFIC_ADDED provider=%s user=%s gb=%s",
+                    provider, telegram_id, traffic_gb,
                 )
-        if not rmn_success:
-            # No UUID or stale (404) — clear and create fresh
-            if rmn_uuid:
-                await database.clear_remnawave_uuid(telegram_id)
-            try:
-                from app.services import remnawave_service
-                from datetime import datetime, timezone, timedelta
-                far_future = datetime.now(timezone.utc) + timedelta(days=3650)
-                await remnawave_service.create_remnawave_user(
-                    telegram_id, "basic", far_future,
-                    traffic_limit_override=traffic_bytes,
-                )
-                rmn_success = True
-                logger.info("BYPASS_REMNAWAVE_USER_CREATED provider=%s user=%s gb=%s", provider, telegram_id, traffic_gb)
-            except Exception as rmn_err:
-                logger.error(
-                    "TRAFFIC_PACK_REMNAWAVE_CREATE_ERROR: provider=%s tg=%s gb=%s error=%s",
-                    provider, telegram_id, traffic_gb, rmn_err,
-                )
+        except Exception as rmn_err:
+            logger.error(
+                "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
+                provider, telegram_id, traffic_gb, rmn_err,
+            )
     else:
         logger.error(
             "TRAFFIC_PACK_INVALID_GB: provider=%s tg=%s gb=%s purchase=%s — pack not found in config",
