@@ -70,6 +70,10 @@ def _patch_db(monkeypatch, *, rows=None, vals=None,
             set_remnawave_bypass_cache=set_bypass_cache_mock,
             set_remnawave_premium_uuid_and_url=set_premium_uuid_and_url_mock,
             get_subscription_any=AsyncMock(return_value=get_subscription_any_value),
+            # Remnawave 3.x id getters — the modules under test call these
+            # before the panel fallback, so mocks must expose them.
+            get_remnawave_id=AsyncMock(return_value=None),
+            get_remnawave_premium_id=AsyncMock(return_value=None),
         )
     else:
         pool = _FakePool(rows=rows, vals=vals)
@@ -79,6 +83,8 @@ def _patch_db(monkeypatch, *, rows=None, vals=None,
             set_remnawave_bypass_cache=set_bypass_cache_mock,
             set_remnawave_premium_uuid_and_url=set_premium_uuid_and_url_mock,
             get_subscription_any=AsyncMock(return_value=get_subscription_any_value),
+            get_remnawave_id=AsyncMock(return_value=None),
+            get_remnawave_premium_id=AsyncMock(return_value=None),
         )
     monkeypatch.setitem(sys.modules, "database", db)
     return db
@@ -124,16 +130,18 @@ async def test_premium_url_falls_back_to_inactive_row(monkeypatch):
 @pytest.mark.asyncio
 async def test_premium_url_panel_fallback_with_backfill(monkeypatch):
     backfill = AsyncMock()
-    _patch_db(
+    db = _patch_db(
         monkeypatch,
         rows=[_Row(remnawave_premium_uuid="prem-uuid", remnawave_premium_sub_url=None)],
         set_premium_sub_url_mock=backfill,
     )
+    # 3.x: fallback resolves the numeric id (via cache getter) before hitting the panel.
+    db.get_remnawave_premium_id = AsyncMock(return_value=987654321)
     panel = AsyncMock(return_value={"subscriptionUrl": "https://rmnw/sub/from-panel"})
     with _patch_config(), patch("app.services.remnawave_api.get_user", panel):
         url = await user_subscription_links.get_user_premium_url(42)
     assert url == "https://rmnw/sub/from-panel"
-    panel.assert_awaited_once_with("prem-uuid")
+    panel.assert_awaited_once_with(987654321)
     backfill.assert_awaited_once_with(42, "https://rmnw/sub/from-panel")
 
 
@@ -160,16 +168,26 @@ async def test_bypass_url_returns_cache_hit(monkeypatch):
 @pytest.mark.asyncio
 async def test_bypass_url_panel_fallback_with_backfill(monkeypatch):
     set_cache_mock = AsyncMock()
-    _patch_db(
+    db = _patch_db(
         monkeypatch,
         rows=[_Row(remnawave_uuid="byp-uuid", remnawave_bypass_sub_url=None)],
         set_bypass_cache_mock=set_cache_mock,
     )
-    panel = AsyncMock(return_value={"subscriptionUrl": "https://rmnw/sub/byp-panel", "shortUuid": "by_s"})
+    # 3.x: fallback resolves the numeric id first.
+    db.get_remnawave_id = AsyncMock(return_value=123456789)
+    panel = AsyncMock(return_value={
+        "uuid": "byp-uuid",  # legacy panels still emit it; 3.x will drop it.
+        "subscriptionUrl": "https://rmnw/sub/byp-panel",
+        "shortUuid": "by_s",
+    })
     with _patch_config(), patch("app.services.remnawave_api.get_user", panel):
         url = await user_subscription_links.get_user_bypass_url(42)
     assert url == "https://rmnw/sub/byp-panel"
-    set_cache_mock.assert_awaited_once_with(42, "byp-uuid", "https://rmnw/sub/byp-panel", "by_s")
+    panel.assert_awaited_once_with(123456789)
+    # 3.x cache write now also carries panel_id keyword.
+    set_cache_mock.assert_awaited_once_with(
+        42, "byp-uuid", "https://rmnw/sub/byp-panel", "by_s", panel_id=123456789,
+    )
 
 
 @pytest.mark.asyncio
@@ -266,8 +284,13 @@ async def test_lazy_provision_creates_both_entities_for_trial(monkeypatch):
         out = await user_subscription_links._try_lazy_provision_entities(42)
 
     assert out == {"created_premium": True, "created_bypass": True}
-    persist_premium.assert_awaited_once_with(42, "prem-new", "https://rmnw/sub/prem", short_uuid="ps")
-    persist_bypass.assert_awaited_once_with(42, "byp-new", "https://rmnw/sub/byp", "bs")
+    # 3.x: persist helpers now receive panel_id alongside the legacy fields.
+    persist_premium.assert_awaited_once_with(
+        42, "prem-new", "https://rmnw/sub/prem", short_uuid="ps", panel_id=None,
+    )
+    persist_bypass.assert_awaited_once_with(
+        42, "byp-new", "https://rmnw/sub/byp", "bs", panel_id=None,
+    )
 
 
 @pytest.mark.asyncio
