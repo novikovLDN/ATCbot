@@ -36,7 +36,10 @@ async def get_remnawave_uuid(telegram_id: int) -> Optional[str]:
 
     Prefers the new numeric `remnawave_id` (returned as str for backward
     compatibility with call sites that used to log/format a UUID).  Falls
-    back to the legacy `remnawave_uuid` when the id cache is empty.
+    back to attempting a one-shot resolve (via short-uuid / stream), then
+    to the raw legacy `remnawave_uuid` — even though the latter is
+    unusable against a 3.x panel, callers that want to display an
+    identifier (e.g. admin UI) still get *something*.
     """
     if not _core.DB_READY:
         return None
@@ -53,6 +56,15 @@ async def get_remnawave_uuid(telegram_id: int) -> Optional[str]:
         return None
     if row["remnawave_id"] is not None:
         return str(row["remnawave_id"])
+    # id cache cold — try to warm it on the fly.  Best-effort: short
+    # timeout, silent on failure so we don't stall UI on panel flakes.
+    try:
+        from app.services.remnawave_id_resolver import get_remnawave_id_for
+        resolved = await get_remnawave_id_for(telegram_id, "bypass")
+        if resolved is not None:
+            return str(resolved)
+    except Exception as e:
+        logger.debug("REMNAWAVE_ID_LAZY_RESOLVE_FAIL: tg=%s %s", telegram_id, e)
     return row["remnawave_uuid"]
 
 
@@ -128,7 +140,8 @@ async def get_remnawave_premium_uuid(telegram_id: int) -> Optional[str]:
     """Return the panel identifier for the premium entity.
 
     Prefers the new numeric `remnawave_premium_id` (returned as str for
-    call-site compat) and falls back to legacy `remnawave_premium_uuid`.
+    call-site compat).  If cold, attempts a one-shot resolve via the
+    shared resolver.  Falls back to legacy `remnawave_premium_uuid`.
     """
     if not _core.DB_READY:
         return None
@@ -145,6 +158,13 @@ async def get_remnawave_premium_uuid(telegram_id: int) -> Optional[str]:
         return None
     if row["remnawave_premium_id"] is not None:
         return str(row["remnawave_premium_id"])
+    try:
+        from app.services.remnawave_id_resolver import get_remnawave_id_for
+        resolved = await get_remnawave_id_for(telegram_id, "premium")
+        if resolved is not None:
+            return str(resolved)
+    except Exception as e:
+        logger.debug("REMNAWAVE_PREMIUM_ID_LAZY_RESOLVE_FAIL: tg=%s %s", telegram_id, e)
     return row["remnawave_premium_uuid"]
 
 
