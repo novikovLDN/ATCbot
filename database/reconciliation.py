@@ -72,13 +72,26 @@ async def _fetch_panel_expires_at(
         return None
 
     payload = None
-    if remnawave_premium_uuid:
+    # Panel 3.x needs a numeric id; the legacy `remnawave_premium_uuid` is
+    # unusable on its own — resolve via the shared resolver (cache /
+    # short-uuid / stream fallback).
+    api_id: Optional[int] = None
+    try:
+        from app.services.remnawave_id_resolver import get_remnawave_id_for
+        import database as _db
+        api_id = await _db.get_remnawave_premium_id(telegram_id)
+        if api_id is None:
+            api_id = await get_remnawave_id_for(telegram_id, "premium")
+    except Exception as e:
+        logger.debug("reconciliation: id resolve failed for tg=%s: %s", telegram_id, e)
+
+    if api_id is not None:
         try:
-            payload = await remnawave_api.get_user(remnawave_premium_uuid)
+            payload = await remnawave_api.get_user(api_id)
         except Exception as e:
             logger.debug(
-                "reconciliation: get_user(uuid=%s) failed for tg=%s: %s",
-                remnawave_premium_uuid[:8], telegram_id, e,
+                "reconciliation: get_user(id=%s) failed for tg=%s: %s",
+                api_id, telegram_id, e,
             )
 
     if not payload:
@@ -238,11 +251,14 @@ async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]
         panel_expires_at = _parse_remnawave_dt(u.get("expireAt"))
         if not panel_expires_at or panel_expires_at <= cutoff:
             continue
+        # 3.x panels emit `id` (BigInt), not `uuid`.  Carry both so
+        # downstream can log the legacy value if present.
         over_from_panel.append({
             "telegram_id": tg_id,
             "panel_username": username,
             "panel_expires_at": panel_expires_at,
             "panel_uuid": u.get("uuid"),
+            "panel_id": u.get("id"),
             "panel_status": u.get("status"),
         })
 

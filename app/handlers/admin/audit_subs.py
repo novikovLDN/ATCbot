@@ -642,8 +642,13 @@ async def _fix_worker(admin_id: int, actionable: list):
                 tg, expected_username, actual_username,
             )
             return
+        # Remnawave 3.x: prefer the numeric id (uuid is None on 3.x
+        # entities).  Legacy uuid kept as fallback for stragglers.
+        panel_id = user.get("id")
         uuid = user.get("uuid")
-        if not uuid:
+        ref_for_api = panel_id if panel_id is not None else uuid
+        ref_display = str(panel_id) if panel_id is not None else (uuid or "")[:8]
+        if ref_for_api is None:
             state["fix_skipped"] += 1
             return
         fields = {"expireAt": _iso_z(rec["expected_end"]), "status": "ACTIVE"}
@@ -651,7 +656,7 @@ async def _fix_worker(admin_id: int, actionable: list):
             fields["externalSquadUuid"] = target_squad
         try:
             result = await asyncio.wait_for(
-                remnawave_api.update_user(uuid, **fields),
+                remnawave_api.update_user(ref_for_api, **fields),
                 timeout=_AUDIT_HTTP_TIMEOUT_S,
             )
         except Exception as e:
@@ -661,8 +666,8 @@ async def _fix_worker(admin_id: int, actionable: list):
         if result is not None:
             state["fix_ok"] += 1
             logger.info(
-                "AUDIT_FIX_PATCHED tg=%s uuid=%s to=%s",
-                tg, uuid[:8], rec["expected_end"].isoformat(),
+                "AUDIT_FIX_PATCHED tg=%s ref=%s to=%s",
+                tg, ref_display, rec["expected_end"].isoformat(),
             )
         else:
             state["fix_failed"] += 1

@@ -136,6 +136,69 @@ async def cmd_wata_status(message: Message):
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
+@admin_base_router.message(Command("platega_sub_status"))
+@admin_only
+async def cmd_platega_sub_status(message: Message):
+    """Диагностика видимости кнопки СБП-подписки Platega: подхватился
+    ли merchant_id/secret, совпадает ли admin_id, что вернёт
+    is_subscription_visible_to для текущего юзера."""
+    lines = ["🔧 <b>Platega subscription status</b>", ""]
+    try:
+        import platega_service
+    except Exception as e:
+        await message.answer(
+            f"❌ Импорт platega_service упал: <code>{e}</code>", parse_mode="HTML",
+        )
+        return
+
+    mid = platega_service.PLATEGA_MERCHANT_ID or ""
+    sec = platega_service.PLATEGA_SECRET or ""
+    lines.append(f"• MERCHANT_ID loaded: <b>{'YES' if mid else 'NO'}</b> (длина {len(mid)})")
+    lines.append(f"• SECRET loaded: <b>{'YES' if sec else 'NO'}</b> (длина {len(sec)})")
+    lines.append(f"• API URL: <code>{platega_service.PLATEGA_API_URL}</code>")
+    lines.append(f"• is_enabled(): <b>{platega_service.is_enabled()}</b>")
+    lines.append(
+        f"• PAYMENT_METHOD_SUBSCRIPTION = <code>{platega_service.PAYMENT_METHOD_SUBSCRIPTION}</code>"
+    )
+    lines.append("")
+
+    my_id = message.from_user.id if message.from_user else 0
+    admin_id = int(config.ADMIN_TELEGRAM_ID)
+    match = int(my_id) == admin_id
+    lines.append(f"• Ваш telegram_id: <code>{my_id}</code>")
+    lines.append(f"• ADMIN_TELEGRAM_ID: <code>{admin_id}</code>")
+    lines.append(f"• Совпадает: <b>{'YES' if match else 'NO'}</b>")
+    lines.append("")
+
+    visible = platega_service.is_subscription_visible_to(my_id)
+    lines.append(f"🎯 <b>is_subscription_visible_to(вы): {visible}</b>")
+    if not visible:
+        lines.append("")
+        lines.append("<i>Кнопка СБП-подписки будет скрыта. Причина:</i>")
+        if not platega_service.is_enabled():
+            lines.append("→ PLATEGA_MERCHANT_ID / PLATEGA_SECRET не заданы в env")
+        elif not match:
+            lines.append("→ ваш ID не совпадает с ADMIN_TELEGRAM_ID")
+
+    lines.append("")
+    lines.append("<i>Webhook endpoint:</i> <code>POST /webhooks/platega-subscription</code>")
+
+    # DB — активные подписки текущего юзера (диагностика).
+    try:
+        from database import platega_subscriptions as _psub_db
+        subs = await _psub_db.get_user_active_subscriptions(my_id)
+        lines.append(f"• Ваших Active/Pending подписок в БД: <b>{len(subs)}</b>")
+        for s in subs[:3]:
+            lines.append(
+                f"   — <code>{s['subscription_id']}</code> "
+                f"status={s['status']} charges_ok={s.get('charges_success', 0)}"
+            )
+    except Exception as e:
+        lines.append(f"• DB probe: <b>FAIL</b> — {type(e).__name__}: {str(e)[:80]}")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
 @admin_base_router.callback_query(F.data == "admin:reset_password")
 @admin_only
 async def callback_reset_password(callback: CallbackQuery):

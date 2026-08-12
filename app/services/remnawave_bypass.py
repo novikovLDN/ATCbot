@@ -93,9 +93,18 @@ class BypassCreateResult:
     status: int
     error: Optional[str]
     recovered: bool = False
+    # Remnawave 3.x numeric BigInt id — new authoritative identifier for
+    # /api/users/{id}.  `panel_uuid` is preserved for logs / legacy
+    # cross-reference but is None on newly-created 3.x entities.
+    panel_id: Optional[int] = None
 
 
 def _result_from_existing(user: dict, *, http_status: int) -> BypassCreateResult:
+    raw_id = user.get("id")
+    try:
+        panel_id = int(raw_id) if raw_id is not None else None
+    except (TypeError, ValueError):
+        panel_id = None
     return BypassCreateResult(
         ok=True,
         panel_uuid=user.get("uuid"),
@@ -104,6 +113,7 @@ def _result_from_existing(user: dict, *, http_status: int) -> BypassCreateResult
         status=http_status,
         error=None,
         recovered=True,
+        panel_id=panel_id,
     )
 
 
@@ -184,6 +194,11 @@ async def create_bypass_user_entity(
 
     if raw and raw.get("ok"):
         response = raw.get("response") or {}
+        raw_id = response.get("id")
+        try:
+            panel_id = int(raw_id) if raw_id is not None else None
+        except (TypeError, ValueError):
+            panel_id = None
         return BypassCreateResult(
             ok=True,
             panel_uuid=response.get("uuid"),
@@ -191,6 +206,7 @@ async def create_bypass_user_entity(
             short_uuid=response.get("shortUuid"),
             status=int(raw.get("status") or 0),
             error=None,
+            panel_id=panel_id,
         )
 
     # 409 from POST — race between preflight and POST.
@@ -227,14 +243,14 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     if not config.REMNAWAVE_ENABLED or extra_bytes <= 0:
         return False
     import database  # lazy
-    cache = await database.get_remnawave_bypass_cache(telegram_id)
-    rmn_uuid = cache.get("remnawave_uuid") if cache else None
-    if not rmn_uuid:
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-    if not rmn_uuid:
+    from app.services.remnawave_id_resolver import get_remnawave_id_for
+    api_id = await database.get_remnawave_id(telegram_id)
+    if api_id is None:
+        api_id = await get_remnawave_id_for(telegram_id, "bypass")
+    if api_id is None:
         return False
     try:
-        user = await remnawave_api.get_user(rmn_uuid)
+        user = await remnawave_api.get_user(api_id)
     except Exception as e:
         logger.error("REMNAWAVE_BYPASS_TOPUP_GET_FAIL: tg=%s %s", telegram_id, e)
         return False
@@ -244,7 +260,7 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     new_limit = current_limit + int(extra_bytes)
     try:
         result = await remnawave_api.update_user(
-            rmn_uuid,
+            api_id,
             trafficLimitBytes=new_limit,
             status="ACTIVE",
         )
@@ -254,8 +270,8 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     if result is None:
         return False
     logger.info(
-        "REMNAWAVE_BYPASS_TOPPED_UP: tg=%s uuid=%s +%d bytes (new=%d)",
-        telegram_id, rmn_uuid[:8], extra_bytes, new_limit,
+        "REMNAWAVE_BYPASS_TOPPED_UP: tg=%s id=%s +%d bytes (new=%d)",
+        telegram_id, api_id, extra_bytes, new_limit,
     )
     return True
 
@@ -267,11 +283,20 @@ async def delete_bypass_user(telegram_id: int) -> bool:
     if not config.REMNAWAVE_ENABLED:
         return False
     import database  # lazy
-    rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-    if not rmn_uuid:
+    from app.services.remnawave_id_resolver import get_remnawave_id_for
+    api_id = await database.get_remnawave_id(telegram_id)
+    if api_id is None:
+        api_id = await get_remnawave_id_for(telegram_id, "bypass")
+    if api_id is None:
+        # Nothing usable to delete — still clear DB below so the row
+        # doesn't keep pointing at a ghost.
+        try:
+            await database.clear_remnawave_uuid(telegram_id)
+        except Exception:
+            pass
         return False
     try:
-        await remnawave_api.delete_user(rmn_uuid)
+        await remnawave_api.delete_user(api_id)
     except Exception as e:
         logger.error("REMNAWAVE_BYPASS_DELETE_FAIL: tg=%s %s", telegram_id, e)
         return False

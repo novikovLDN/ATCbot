@@ -174,11 +174,14 @@ async def provision_subscription(
         premium_panel_uuid = result.panel_uuid
         premium_sub_url = result.subscription_url
         try:
+            # 3.x: persist the numeric id alongside the legacy fields so
+            # `/api/users/{id}` calls work without an extra resolve.
             await database.set_remnawave_premium_uuid_and_url(
                 telegram_id,
                 result.panel_uuid or "",
                 result.subscription_url,
                 short_uuid=result.short_uuid,
+                panel_id=result.panel_id,
             )
         except Exception as e:
             logger.error(
@@ -188,13 +191,20 @@ async def provision_subscription(
             raise
 
     if not premium_sub_url:
-        # Cache miss after a renewal — back-fill from panel one time.
+        # Cache miss after a renewal — back-fill from panel one time.  Resolve
+        # the 3.x numeric id via the shared resolver; the legacy uuid on its
+        # own can't be used for /api/users lookups on 3.x panels.
         try:
             from app.services import remnawave_api
-            entity = await remnawave_api.get_user(premium_panel_uuid or "")
-            premium_sub_url = (entity or {}).get("subscriptionUrl") or ""
-            if premium_sub_url:
-                await database.set_remnawave_premium_sub_url(telegram_id, premium_sub_url)
+            from app.services.remnawave_id_resolver import get_remnawave_id_for
+            api_id = await database.get_remnawave_premium_id(telegram_id)
+            if api_id is None:
+                api_id = await get_remnawave_id_for(telegram_id, "premium")
+            if api_id is not None:
+                entity = await remnawave_api.get_user(api_id)
+                premium_sub_url = (entity or {}).get("subscriptionUrl") or ""
+                if premium_sub_url:
+                    await database.set_remnawave_premium_sub_url(telegram_id, premium_sub_url)
         except Exception as e:
             logger.warning("PURCHASE_FLOW: premium url back-fill failed tg=%s %s", telegram_id, e)
 
@@ -229,11 +239,14 @@ async def provision_subscription(
             )
         bypass_sub_url = bresult.subscription_url
         try:
+            # 3.x: persist the numeric id in the cache so subsequent
+            # `/api/users/{id}` calls don't have to re-resolve.
             await database.set_remnawave_bypass_cache(
                 telegram_id,
                 bresult.panel_uuid,
                 bresult.subscription_url,
                 bresult.short_uuid,
+                panel_id=bresult.panel_id,
             )
         except Exception as e:
             logger.warning(

@@ -1,10 +1,23 @@
 """
 Database operations for Remnawave traffic integration.
 
-- remnawave_uuid CRUD on subscriptions table
+- remnawave_uuid / remnawave_id CRUD on subscriptions table
 - traffic notification flags on users table
 - traffic_purchases table
 - user_traffic_discounts table (promo discounts on traffic packs)
+
+Remnawave 3.x migration note:
+    The panel now identifies each user by BigInt `id` (not `uuid`).  New
+    columns `remnawave_id` / `remnawave_premium_id` hold the numeric ids;
+    the legacy UUID columns are preserved for historical cross-reference
+    and shortUuid-based fallback resolution.
+
+    Getters `get_remnawave_uuid()` / `get_remnawave_premium_uuid()` now
+    return the numeric id (as string) when the id column is populated —
+    that value passes cleanly through
+    `remnawave_api.normalize_user_id()` which the low-level helpers use.
+    Legacy UUID string is returned as a fallback only when the id cache
+    is empty and no better data exists.
 """
 import logging
 from datetime import datetime, timezone
@@ -16,19 +29,62 @@ from database.core import get_pool
 logger = logging.getLogger(__name__)
 
 
-# ── Remnawave UUID ─────────────────────────────────────────────────────
+# ── Remnawave UUID / numeric id ────────────────────────────────────────
 
 async def get_remnawave_uuid(telegram_id: int) -> Optional[str]:
+    """Return the panel identifier for the bypass entity.
+
+    Prefers the new numeric `remnawave_id` (returned as str for backward
+    compatibility with call sites that used to log/format a UUID).  Falls
+    back to attempting a one-shot resolve (via short-uuid / stream), then
+    to the raw legacy `remnawave_uuid` — even though the latter is
+    unusable against a 3.x panel, callers that want to display an
+    identifier (e.g. admin UI) still get *something*.
+    """
     if not _core.DB_READY:
         return None
     pool = await get_pool()
     if pool is None:
         return None
     async with pool.acquire() as conn:
-        return await conn.fetchval(
-            "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
+        row = await conn.fetchrow(
+            "SELECT remnawave_id, remnawave_uuid FROM subscriptions "
+            "WHERE telegram_id = $1 AND status = 'active'",
             telegram_id,
         )
+    if not row:
+        return None
+    if row["remnawave_id"] is not None:
+        return str(row["remnawave_id"])
+    # id cache cold — try to warm it on the fly.  Best-effort: short
+    # timeout, silent on failure so we don't stall UI on panel flakes.
+    try:
+        from app.services.remnawave_id_resolver import get_remnawave_id_for
+        resolved = await get_remnawave_id_for(telegram_id, "bypass")
+        if resolved is not None:
+            return str(resolved)
+    except Exception as e:
+        logger.debug("REMNAWAVE_ID_LAZY_RESOLVE_FAIL: tg=%s %s", telegram_id, e)
+    return row["remnawave_uuid"]
+
+
+async def get_remnawave_id(telegram_id: int) -> Optional[int]:
+    """Numeric id for the bypass entity, or None."""
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT remnawave_id FROM subscriptions "
+            "WHERE telegram_id = $1 AND status = 'active'",
+            telegram_id,
+        )
+    try:
+        return int(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 async def set_remnawave_uuid(telegram_id: int, uuid: str) -> None:
@@ -44,7 +100,27 @@ async def set_remnawave_uuid(telegram_id: int, uuid: str) -> None:
         )
 
 
+async def set_remnawave_id(telegram_id: int, panel_id: int) -> None:
+    """Persist the Remnawave 3.x numeric id for the bypass entity."""
+    if not _core.DB_READY or panel_id is None:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET remnawave_id = $1 "
+            "WHERE telegram_id = $2 AND status = 'active'",
+            int(panel_id), telegram_id,
+        )
+
+
 async def clear_remnawave_uuid(telegram_id: int) -> None:
+    """Clear the bypass panel identifiers (uuid + id) for a user.
+
+    Used when the panel entity is confirmed gone and we want the next
+    create-flow to allocate a fresh entity.
+    """
     if not _core.DB_READY:
         return
     pool = await get_pool()
@@ -52,7 +128,8 @@ async def clear_remnawave_uuid(telegram_id: int) -> None:
         return
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE subscriptions SET remnawave_uuid = NULL WHERE telegram_id = $1",
+            "UPDATE subscriptions SET remnawave_uuid = NULL, remnawave_id = NULL "
+            "WHERE telegram_id = $1",
             telegram_id,
         )
 
@@ -60,18 +137,54 @@ async def clear_remnawave_uuid(telegram_id: int) -> None:
 # ── Remnawave premium UUID (MainServer squad, migration 045) ──────────
 
 async def get_remnawave_premium_uuid(telegram_id: int) -> Optional[str]:
-    """Return the Remnawave UUID of the premium (MainServer) entity, if any."""
+    """Return the panel identifier for the premium entity.
+
+    Prefers the new numeric `remnawave_premium_id` (returned as str for
+    call-site compat).  If cold, attempts a one-shot resolve via the
+    shared resolver.  Falls back to legacy `remnawave_premium_uuid`.
+    """
     if not _core.DB_READY:
         return None
     pool = await get_pool()
     if pool is None:
         return None
     async with pool.acquire() as conn:
-        return await conn.fetchval(
-            "SELECT remnawave_premium_uuid FROM subscriptions "
+        row = await conn.fetchrow(
+            "SELECT remnawave_premium_id, remnawave_premium_uuid FROM subscriptions "
             "WHERE telegram_id = $1 AND status = 'active'",
             telegram_id,
         )
+    if not row:
+        return None
+    if row["remnawave_premium_id"] is not None:
+        return str(row["remnawave_premium_id"])
+    try:
+        from app.services.remnawave_id_resolver import get_remnawave_id_for
+        resolved = await get_remnawave_id_for(telegram_id, "premium")
+        if resolved is not None:
+            return str(resolved)
+    except Exception as e:
+        logger.debug("REMNAWAVE_PREMIUM_ID_LAZY_RESOLVE_FAIL: tg=%s %s", telegram_id, e)
+    return row["remnawave_premium_uuid"]
+
+
+async def get_remnawave_premium_id(telegram_id: int) -> Optional[int]:
+    """Numeric id for the premium entity, or None."""
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT remnawave_premium_id FROM subscriptions "
+            "WHERE telegram_id = $1 AND status = 'active'",
+            telegram_id,
+        )
+    try:
+        return int(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 async def set_remnawave_premium_uuid(
@@ -102,46 +215,76 @@ async def set_remnawave_premium_uuid(
             )
 
 
+async def set_remnawave_premium_id(telegram_id: int, panel_id: int) -> None:
+    """Persist the Remnawave 3.x numeric id for the premium entity."""
+    if not _core.DB_READY or panel_id is None:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET remnawave_premium_id = $1 "
+            "WHERE telegram_id = $2 AND status = 'active'",
+            int(panel_id), telegram_id,
+        )
+
+
 async def set_remnawave_premium_uuid_and_url(
     telegram_id: int,
     uuid: str,
     sub_url: Optional[str],
     *,
     short_uuid: Optional[str] = None,
+    panel_id: Optional[int] = None,
     mark_migrated: bool = True,
 ) -> None:
-    """Atomically persist (uuid, subscription_url, short_uuid) for the premium entity.
+    """Atomically persist (uuid, subscription_url, short_uuid, panel_id) for the
+    premium entity.
 
-    Used by the migration script so the fallback router never has to call
-    Remnawave just to learn the URL — single UPDATE keeps the columns in
-    sync.  Any of sub_url / short_uuid may be None when the panel didn't
-    return them; callers can patch sub_url later via
+    Used by the migration script and the go-forward purchase flow so the
+    fallback router never has to call Remnawave just to learn the URL —
+    single UPDATE keeps the columns in sync.  Any of sub_url /
+    short_uuid / panel_id may be None when the panel didn't return them;
+    callers can patch sub_url later via
     set_remnawave_premium_sub_url().
+
+    Remnawave 3.x note: `uuid` is now typically an empty string / None
+    (panel dropped the field).  `panel_id` should carry the new BigInt
+    identifier — that's what `/api/users/{id}` needs.
     """
     if not _core.DB_READY:
         return
     pool = await get_pool()
     if pool is None:
         return
+    panel_id_int: Optional[int] = None
+    if panel_id is not None:
+        try:
+            panel_id_int = int(panel_id)
+        except (TypeError, ValueError):
+            panel_id_int = None
     async with pool.acquire() as conn:
         if mark_migrated:
             await conn.execute(
                 "UPDATE subscriptions "
-                "SET remnawave_premium_uuid = $1, "
+                "SET remnawave_premium_uuid = COALESCE($1, remnawave_premium_uuid), "
                 "    remnawave_premium_sub_url = $2, "
                 "    remnawave_premium_short_uuid = $3, "
+                "    remnawave_premium_id = COALESCE($5, remnawave_premium_id), "
                 "    samopis_migrated_at = NOW() "
                 "WHERE telegram_id = $4 AND status = 'active'",
-                uuid, sub_url, short_uuid, telegram_id,
+                uuid or None, sub_url, short_uuid, telegram_id, panel_id_int,
             )
         else:
             await conn.execute(
                 "UPDATE subscriptions "
-                "SET remnawave_premium_uuid = $1, "
+                "SET remnawave_premium_uuid = COALESCE($1, remnawave_premium_uuid), "
                 "    remnawave_premium_sub_url = $2, "
-                "    remnawave_premium_short_uuid = $3 "
+                "    remnawave_premium_short_uuid = $3, "
+                "    remnawave_premium_id = COALESCE($5, remnawave_premium_id) "
                 "WHERE telegram_id = $4 AND status = 'active'",
-                uuid, sub_url, short_uuid, telegram_id,
+                uuid or None, sub_url, short_uuid, telegram_id, panel_id_int,
             )
 
 
@@ -150,27 +293,40 @@ async def set_remnawave_bypass_cache(
     uuid: Optional[str],
     sub_url: Optional[str],
     short_uuid: Optional[str],
+    *,
+    panel_id: Optional[int] = None,
 ) -> None:
-    """Persist (uuid, subscription_url, short_uuid) for the bypass entity.
+    """Persist (uuid, subscription_url, short_uuid, panel_id) for the bypass
+    entity.
 
     Symmetric helper to set_remnawave_premium_uuid_and_url — keeps the
-    three bypass columns (remnawave_uuid, remnawave_bypass_sub_url,
-    remnawave_bypass_short_uuid) in sync from a single UPDATE so the
-    UI never has to round-trip to the panel just to learn the URL.
+    bypass identity columns in sync from a single UPDATE so the UI never
+    has to round-trip to the panel just to learn the URL.
+
+    Remnawave 3.x note: `panel_id` (BigInt) is now the authoritative
+    identifier for `/api/users/{id}`.  `uuid` may be empty on new
+    entities created against 3.x.
     """
     if not _core.DB_READY:
         return
     pool = await get_pool()
     if pool is None:
         return
+    panel_id_int: Optional[int] = None
+    if panel_id is not None:
+        try:
+            panel_id_int = int(panel_id)
+        except (TypeError, ValueError):
+            panel_id_int = None
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE subscriptions "
             "SET remnawave_uuid = COALESCE($1, remnawave_uuid), "
             "    remnawave_bypass_sub_url = COALESCE($2, remnawave_bypass_sub_url), "
-            "    remnawave_bypass_short_uuid = COALESCE($3, remnawave_bypass_short_uuid) "
+            "    remnawave_bypass_short_uuid = COALESCE($3, remnawave_bypass_short_uuid), "
+            "    remnawave_id = COALESCE($5, remnawave_id) "
             "WHERE telegram_id = $4 AND status = 'active'",
-            uuid, sub_url, short_uuid, telegram_id,
+            uuid, sub_url, short_uuid, telegram_id, panel_id_int,
         )
 
 
@@ -210,6 +366,11 @@ async def set_remnawave_premium_sub_url(telegram_id: int, sub_url: str) -> None:
 
 
 async def clear_remnawave_premium_uuid(telegram_id: int) -> None:
+    """Clear both the legacy premium UUID and the new numeric id.
+
+    Kept as a single operation so the resolver can't accidentally serve a
+    stale id after the entity has been deleted from the panel.
+    """
     if not _core.DB_READY:
         return
     pool = await get_pool()
@@ -217,7 +378,8 @@ async def clear_remnawave_premium_uuid(telegram_id: int) -> None:
         return
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE subscriptions SET remnawave_premium_uuid = NULL "
+            "UPDATE subscriptions SET remnawave_premium_uuid = NULL, "
+            "    remnawave_premium_id = NULL "
             "WHERE telegram_id = $1",
             telegram_id,
         )
@@ -523,7 +685,12 @@ async def record_traffic_purchase(
 # ── Queries for traffic monitor worker ─────────────────────────────────
 
 async def get_active_remnawave_users() -> List[Dict[str, Any]]:
-    """Users with active subscription AND remnawave_uuid set."""
+    """Users with active subscription AND remnawave identifiers set.
+
+    Yields rows with both the legacy `remnawave_uuid` and the new numeric
+    `remnawave_id`; downstream code should prefer the numeric id for
+    panel calls.
+    """
     if not _core.DB_READY:
         return []
     pool = await get_pool()
@@ -531,11 +698,16 @@ async def get_active_remnawave_users() -> List[Dict[str, Any]]:
         return []
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT s.telegram_id, s.remnawave_uuid, s.subscription_type
+            """SELECT s.telegram_id, s.remnawave_uuid, s.remnawave_id,
+                      s.remnawave_bypass_short_uuid, s.subscription_type
                FROM subscriptions s
                WHERE s.status = 'active'
-                 AND s.remnawave_uuid IS NOT NULL
-                 AND s.remnawave_uuid != ''""",
+                 AND (
+                       (s.remnawave_id IS NOT NULL)
+                    OR (s.remnawave_uuid IS NOT NULL AND s.remnawave_uuid != '')
+                    OR (s.remnawave_bypass_short_uuid IS NOT NULL
+                        AND s.remnawave_bypass_short_uuid != '')
+                 )""",
         )
         return [dict(r) for r in rows]
 
