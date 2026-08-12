@@ -637,3 +637,119 @@ async def get_user_traffic(user_ref: UserRef) -> Optional[Dict[str, Any]]:
         "subscriptionUrl": sub_url,
         "happ_url": f"happ://add/{sub_url}" if sub_url else "",
     }
+
+
+# ── Bulk operations (Remnawave 3.x) ────────────────────────────────────
+#
+# Panel 3.x reworked bulk endpoints:
+#   * All accept `{"userIds": [int, ...]}` (was `uuids: [str, ...]` in 2.x)
+#   * Return HTTP 202 Accepted with an empty body — callers must not
+#     attempt .json() on the response.
+#
+# None of these helpers are currently called from the bot flow; they
+# exist so future admin tooling doesn't accidentally hand-craft the
+# old 2.x request shape.
+
+async def _bulk_action(path: str, user_ids: List[int], extra: Optional[Dict[str, Any]] = None) -> bool:
+    if not user_ids:
+        return True
+    body: Dict[str, Any] = {"userIds": [int(uid) for uid in user_ids]}
+    if extra:
+        body.update(extra)
+    result = await _request("POST", path, json=body)
+    return result is not None
+
+
+async def bulk_delete_users(user_ids: List[int]) -> bool:
+    """POST /api/users/bulk/delete — 202 Accepted on success."""
+    return await _bulk_action("/api/users/bulk/delete", user_ids)
+
+
+async def bulk_update_users(user_ids: List[int], fields: Dict[str, Any]) -> bool:
+    """POST /api/users/bulk/update — 202 Accepted on success."""
+    return await _bulk_action("/api/users/bulk/update", user_ids, extra={"fields": fields})
+
+
+async def bulk_reset_traffic(user_ids: List[int]) -> bool:
+    """POST /api/users/bulk/reset-traffic — 202 Accepted on success."""
+    return await _bulk_action("/api/users/bulk/reset-traffic", user_ids)
+
+
+async def bulk_revoke_subscription(user_ids: List[int]) -> bool:
+    """POST /api/users/bulk/revoke-subscription — 202 Accepted on success."""
+    return await _bulk_action("/api/users/bulk/revoke-subscription", user_ids)
+
+
+async def bulk_extend_expiration_date(
+    user_ids: List[int], new_expire_at: str,
+) -> bool:
+    """POST /api/users/bulk/extend-expiration-date — 202 Accepted on success."""
+    return await _bulk_action(
+        "/api/users/bulk/extend-expiration-date",
+        user_ids,
+        extra={"expireAt": new_expire_at},
+    )
+
+
+async def bulk_update_squads(user_ids: List[int], squad_uuids: List[str]) -> bool:
+    """POST /api/users/bulk/update-squads — 202 Accepted on success."""
+    return await _bulk_action(
+        "/api/users/bulk/update-squads",
+        user_ids,
+        extra={"activeInternalSquads": squad_uuids},
+    )
+
+
+# ── Connections (Remnawave 3.x replacement for ip-control) ─────────────
+#
+# 2.x had `/api/ip-control/fetch-ips/{uuid}` and
+# `/api/ip-control/drop-connections`.  3.x consolidated these under
+# `/api/connections/*` keyed on `userIds`:
+#
+#   POST /api/connections/by-user/{userId}  — list active connections
+#   POST /api/connections/drop              — body: {"dropBy": {"userIds": [...]}}
+#
+# Neither is currently used by the bot; helpers are provided so future
+# admin tooling doesn't fall into the 2.x shape.
+
+async def list_user_connections(user_ref: UserRef) -> Optional[list]:
+    """POST /api/connections/by-user/{user_id} — active connections for a user."""
+    user_id = normalize_user_id(user_ref)
+    if user_id is None:
+        return None
+    result = await _request("POST", f"/api/connections/by-user/{user_id}")
+    if result is None:
+        return None
+    if isinstance(result, list):
+        return result
+    return result.get("connections") if isinstance(result, dict) else None
+
+
+async def drop_user_connections(user_ids: List[int]) -> bool:
+    """POST /api/connections/drop — evict live sessions for the given ids."""
+    if not user_ids:
+        return True
+    body = {"dropBy": {"userIds": [int(uid) for uid in user_ids]}}
+    result = await _request("POST", "/api/connections/drop", json=body)
+    return result is not None
+
+
+# ── External Squads response-headers (3.x shape) ───────────────────────
+#
+# 2.x stored HTTP headers to inject/remove on `subscription.template`
+# in a single object `responseHeaders`.  3.x splits that into
+# `responseHeadersAdd` (dict) and `responseHeadersRemove` (list).  We
+# don't touch external squads from the bot today, but if a future tool
+# reads a panel entity or PATCHes one, use these accessor helpers so
+# the shape mismatch is caught in one place.
+
+def read_external_squad_response_headers(squad: Dict[str, Any]) -> Dict[str, Any]:
+    """Return normalized {'add': dict, 'remove': list} from a 3.x squad payload."""
+    if not isinstance(squad, dict):
+        return {"add": {}, "remove": []}
+    add = squad.get("responseHeadersAdd")
+    remove = squad.get("responseHeadersRemove")
+    return {
+        "add": dict(add) if isinstance(add, dict) else {},
+        "remove": list(remove) if isinstance(remove, list) else [],
+    }
