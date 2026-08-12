@@ -113,17 +113,19 @@ async def get_user_premium_url(telegram_id: int) -> Optional[str]:
         if cached:
             return _rewrite_sub_host(cached)
 
-        # Step 3: panel fallback.  We have the entity uuid but the URL
-        # column was never populated (e.g. row migrated before column 046
-        # existed, or written when status wasn't active).  One round-trip
-        # to fix it forever.
-        panel_uuid_raw = row["remnawave_premium_uuid"]
-        panel_uuid = panel_uuid_raw.strip() if panel_uuid_raw else ""
-        if not panel_uuid:
-            return None
+        # Step 3: panel fallback.  Resolve to a 3.x numeric id via the
+        # shared resolver — the legacy `remnawave_premium_uuid` alone
+        # can't be used against a 3.x panel.  One round-trip to fix it
+        # forever.
         try:
             from app.services import remnawave_api
-            entity = await remnawave_api.get_user(panel_uuid)
+            from app.services.remnawave_id_resolver import get_remnawave_id_for
+            api_id = await database.get_remnawave_premium_id(telegram_id)
+            if api_id is None:
+                api_id = await get_remnawave_id_for(telegram_id, "premium")
+            if api_id is None:
+                return None
+            entity = await remnawave_api.get_user(api_id)
         except Exception as e:
             logger.warning("USER_PREMIUM_PANEL_FALLBACK_FAIL: tg=%s %s", telegram_id, e)
             return None
@@ -203,6 +205,7 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
                             presult.panel_uuid or "",
                             presult.subscription_url,
                             short_uuid=presult.short_uuid,
+                            panel_id=presult.panel_id,
                         )
                         out["created_premium"] = True
                         logger.info(
@@ -247,6 +250,7 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
                             bresult.panel_uuid,
                             bresult.subscription_url,
                             bresult.short_uuid,
+                            panel_id=bresult.panel_id,
                         )
                         out["created_bypass"] = True
                         logger.info(
@@ -297,14 +301,17 @@ async def _bypass_url_from_cache(telegram_id: int) -> Optional[str]:
         cached = cached_raw.strip() if cached_raw else ""
         if cached:
             return _rewrite_sub_host(cached)
-        # Cache miss but uuid present — fetch from panel + back-fill.
-        rmn_uuid_raw = row["remnawave_uuid"]
-        rmn_uuid = rmn_uuid_raw.strip() if rmn_uuid_raw else ""
-        if not rmn_uuid:
-            return None
+        # Cache miss — resolve the 3.x numeric id (via cache / short-uuid
+        # / stream), fetch from panel, back-fill everything.
         try:
             from app.services import remnawave_api
-            entity = await remnawave_api.get_user(rmn_uuid)
+            from app.services.remnawave_id_resolver import get_remnawave_id_for
+            api_id = await database.get_remnawave_id(telegram_id)
+            if api_id is None:
+                api_id = await get_remnawave_id_for(telegram_id, "bypass")
+            if api_id is None:
+                return None
+            entity = await remnawave_api.get_user(api_id)
         except Exception as e:
             logger.warning("USER_BYPASS_PANEL_FALLBACK_FAIL: tg=%s %s", telegram_id, e)
             return None
@@ -313,7 +320,13 @@ async def _bypass_url_from_cache(telegram_id: int) -> Optional[str]:
             return None
         # Back-fill cache with the raw panel URL — rewrite only on return.
         try:
-            await database.set_remnawave_bypass_cache(telegram_id, rmn_uuid, url, (entity or {}).get("shortUuid"))
+            await database.set_remnawave_bypass_cache(
+                telegram_id,
+                (entity or {}).get("uuid"),
+                url,
+                (entity or {}).get("shortUuid"),
+                panel_id=api_id,
+            )
         except Exception as e:
             logger.warning("USER_BYPASS_BACKFILL_FAIL: tg=%s %s", telegram_id, e)
         return _rewrite_sub_host(url)
