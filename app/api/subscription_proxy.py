@@ -49,27 +49,17 @@ def _legacy_fallback_url(uuid_or_token: str) -> Optional[str]:
     return f"{base}/sub/{quote(uuid_or_token, safe='')}"
 
 
-async def _resolve_remnawave_url_for_tg(telegram_id: int) -> Optional[str]:
-    """Fetch the Remnawave premium subscriptionUrl for a Telegram user.
-
-    Panel 3.x needs the numeric BigInt `id`; we resolve it via the cache
-    or short-uuid / stream fallback.  Returns None on any failure.
-    """
+async def _resolve_remnawave_url(panel_uuid: str) -> Optional[str]:
+    """Fetch the Remnawave-issued subscription URL for an entity uuid."""
     try:
-        import database  # lazy
-        from app.services.remnawave_id_resolver import get_remnawave_id_for
-        api_id = await database.get_remnawave_premium_id(telegram_id)
-        if api_id is None:
-            api_id = await get_remnawave_id_for(telegram_id, "premium")
-        if api_id is None:
-            return None
-        user = await remnawave_api.get_user(api_id)
+        user = await remnawave_api.get_user(panel_uuid)
     except Exception as e:
-        logger.warning("SUB_PROXY_PANEL_LOOKUP_FAIL: tg=%s %s", telegram_id, e)
+        logger.warning("SUB_PROXY_PANEL_LOOKUP_FAIL: uuid=%s %s", panel_uuid[:8], e)
         return None
     if not user:
         return None
-    return (user.get("subscriptionUrl") or "") or None
+    url = user.get("subscriptionUrl") or ""
+    return url or None
 
 
 async def _redirect_target_for_subscription(sub: dict) -> Optional[str]:
@@ -77,20 +67,18 @@ async def _redirect_target_for_subscription(sub: dict) -> Optional[str]:
 
     Uses subscriptions.remnawave_premium_sub_url as the cache.  If the cache
     is empty (legacy rows migrated before column 046 existed), falls back
-    to a panel lookup and back-fills the column so the next request is
-    cache-hit.
+    to GET /api/users/{uuid} and back-fills the column so the next request
+    is cache-hit.
     """
     cached = (sub.get("remnawave_premium_sub_url") or "").strip()
     if cached:
         return cached
 
-    # We need the telegram_id for the resolver — the legacy uuid alone
-    # is useless against a 3.x panel.
-    tg = sub.get("telegram_id")
-    if not tg:
+    panel_uuid = sub.get("remnawave_premium_uuid")
+    if not panel_uuid:
         return None
 
-    target = await _resolve_remnawave_url_for_tg(int(tg))
+    target = await _resolve_remnawave_url(panel_uuid)
     if not target:
         return None
 
@@ -98,9 +86,11 @@ async def _redirect_target_for_subscription(sub: dict) -> Optional[str]:
     # request will re-fetch — not user-visible.
     try:
         import database  # lazy
-        await database.set_remnawave_premium_sub_url(int(tg), target)
+        tg = sub.get("telegram_id")
+        if tg:
+            await database.set_remnawave_premium_sub_url(int(tg), target)
     except Exception as e:
-        logger.warning("SUB_PROXY_BACKFILL_FAIL: tg=%s %s", tg, e)
+        logger.warning("SUB_PROXY_BACKFILL_FAIL: uuid=%s %s", panel_uuid[:8], e)
     return target
 
 

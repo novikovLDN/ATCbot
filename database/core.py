@@ -701,20 +701,6 @@ async def init_db() -> bool:
                 "CREATE INDEX IF NOT EXISTS idx_subscriptions_remnawave_premium_uuid "
                 "ON subscriptions(remnawave_premium_uuid) WHERE remnawave_premium_uuid IS NOT NULL"
             )
-            # Миграция 075: Remnawave 3.x — числовой id вместо uuid.
-            # Панель убрала колонку `uuid` из user-entity; для /api/users/{id}
-            # нам нужен BigInt. UUID-колонки оставляем для истории /
-            # by-short-uuid fallback.
-            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS remnawave_id BIGINT")
-            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS remnawave_premium_id BIGINT")
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_subscriptions_remnawave_id "
-                "ON subscriptions(remnawave_id) WHERE remnawave_id IS NOT NULL"
-            )
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_subscriptions_remnawave_premium_id "
-                "ON subscriptions(remnawave_premium_id) WHERE remnawave_premium_id IS NOT NULL"
-            )
         except Exception:
             pass
         

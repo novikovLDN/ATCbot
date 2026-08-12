@@ -1253,11 +1253,9 @@ async def reissue_vpn_key_atomic(
                 extra={"user": telegram_id, "new_uuid": new_uuid[:8] + "...", "phase": "phase1_complete"}
             )
 
-            # On Phase-2 failure we delete the freshly-created panel entity.
-            # 3.x: use the numeric `panel_id` if the panel returned one;
-            # fall back to the legacy uuid for panels stuck on 2.x.
-            cleanup_ref = reissue_result.panel_id or reissue_result.panel_uuid
-            cleanup_display = str(cleanup_ref or "?")
+            # On Phase-2 failure we delete the freshly-created panel entity
+            # (its panel UUID, not a samopis uuid).
+            uuid_to_cleanup_on_failure = reissue_result.panel_uuid
 
             try:
                 async with conn.transaction():
@@ -1277,14 +1275,12 @@ async def reissue_vpn_key_atomic(
                            SET uuid = $1, vpn_key = $2, subscription_type = $4,
                                remnawave_premium_uuid = $5,
                                remnawave_premium_sub_url = $6,
-                               remnawave_premium_short_uuid = $7,
-                               remnawave_premium_id = $8
+                               remnawave_premium_short_uuid = $7
                            WHERE telegram_id = $3""",
                         new_uuid, new_vpn_key, telegram_id, new_subscription_type,
                         reissue_result.panel_uuid,
                         reissue_result.subscription_url,
                         reissue_result.short_uuid,
-                        reissue_result.panel_id,
                     )
                     await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, now, expires_at, "manual_reissue")
                     old_key_preview = f"{old_vpn_key[:20]}..." if old_vpn_key and len(old_vpn_key) > 20 else (old_vpn_key or "N/A")
@@ -1296,15 +1292,15 @@ async def reissue_vpn_key_atomic(
                 # Phase 1 is now orphaned in Remnawave; delete it.
                 try:
                     from app.services import remnawave_api
-                    if cleanup_ref:
-                        await remnawave_api.delete_user(cleanup_ref)
+                    if uuid_to_cleanup_on_failure:
+                        await remnawave_api.delete_user(uuid_to_cleanup_on_failure)
                     logger.critical(
-                        f"ORPHAN_PREVENTED ref={cleanup_display} reason=reissue_phase2_failed "
+                        f"ORPHAN_PREVENTED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... reason=reissue_phase2_failed "
                         f"user={telegram_id} error={tx_err}"
                     )
                 except Exception as remove_err:
                     logger.critical(
-                        f"ORPHAN_PREVENTED_REMOVAL_FAILED ref={cleanup_display} "
+                        f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... "
                         f"reason={remove_err} user={telegram_id}"
                     )
                 logger.exception(f"Error in reissue_vpn_key_atomic for user {telegram_id}, transaction rolled back")

@@ -44,45 +44,6 @@ def _is_valid_full_uuid(s: Optional[str]) -> bool:
         return len(s) == 36 and s.count("-") == 4
 
 
-def _is_valid_panel_ref(s) -> bool:
-    """Accept either a numeric Remnawave 3.x id (str/int) or a legacy full UUID."""
-    if s is None:
-        return False
-    if isinstance(s, int):
-        return s > 0
-    try:
-        ss = str(s).strip()
-    except Exception:
-        return False
-    if not ss:
-        return False
-    if ss.isdigit():
-        return int(ss) > 0
-    return _is_valid_full_uuid(ss)
-
-
-async def _resolve_premium_id(telegram_id: int, stored_ref) -> Optional[int]:
-    """Return the numeric Remnawave 3.x id for the premium entity.
-
-    Prefers a numeric-string `stored_ref` (already the id), then falls
-    back to the shared resolver (short-uuid → stream).  On success the
-    id is cached back into subscriptions.remnawave_premium_id.
-    """
-    if stored_ref is not None:
-        try:
-            return int(str(stored_ref).strip())
-        except (TypeError, ValueError):
-            pass
-    try:
-        from app.services.remnawave_id_resolver import get_remnawave_id_for
-        return await get_remnawave_id_for(telegram_id, "premium")
-    except Exception as e:
-        logger.warning(
-            "REMNAWAVE_PREMIUM_ID_RESOLVE_FAIL: tg=%s %s", telegram_id, e,
-        )
-        return None
-
-
 def _iso_z(dt: datetime) -> str:
     """Return a Remnawave-compatible ISO-8601 timestamp (UTC, Z suffix)."""
     if dt.tzinfo is None:
@@ -116,17 +77,11 @@ DEFAULT_DESCRIPTION_MARKER = "Imported from samopis vpnapi"
 
 @dataclass(frozen=True)
 class PremiumCreateResult:
-    """Outcome of a single create_premium_user_entity() call.
-
-    Note (Remnawave 3.x): `panel_uuid` is preserved for backward
-    compatibility with downstream code that logged / stored it, but on
-    3.x the panel no longer emits a `uuid` field — expect this to be
-    None on newly-created entities.  Use `panel_id` for API calls.
-    """
+    """Outcome of a single create_premium_user_entity() call."""
 
     ok: bool
-    panel_uuid: Optional[str]    # legacy panel-internal uuid (None on 3.x).
-                                 # Preserved for logging + samopis fallback.
+    panel_uuid: Optional[str]    # panel-internal uuid (None on failure).
+                                 # Used for subsequent /api/users/{uuid} calls.
     forced_uuid_accepted: bool   # True if our `requested_uuid` ended up in
                                  # the panel's `vlessUuid` field.
     subscription_url: Optional[str]
@@ -139,8 +94,6 @@ class PremiumCreateResult:
     short_uuid: Optional[str] = None  # panel-assigned shortUuid (used to
                                        # rebuild subscription URLs if the
                                        # cached value goes stale).
-    panel_id: Optional[int] = None    # Remnawave 3.x numeric BigInt id —
-                                       # what /api/users/{id} needs.
 
 
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
@@ -169,11 +122,6 @@ def _is_our_entity(user: dict, telegram_id: int) -> bool:
 
 def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResult:
     """Build a `recovered=True` PremiumCreateResult from an already-existing entity."""
-    raw_id = user.get("id")
-    try:
-        panel_id = int(raw_id) if raw_id is not None else None
-    except (TypeError, ValueError):
-        panel_id = None
     return PremiumCreateResult(
         ok=True,
         panel_uuid=user.get("uuid"),
@@ -183,12 +131,11 @@ def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResul
         error=None,
         recovered=True,
         short_uuid=user.get("shortUuid"),
-        panel_id=panel_id,
     )
 
 
 async def _ensure_premium_entity_state(
-    panel_ref,
+    panel_uuid: Optional[str],
     existing: dict,
     expire_at: datetime,
 ) -> bool:
@@ -209,7 +156,7 @@ async def _ensure_premium_entity_state(
     requires manual repair (re-trigger sync or admin PATCH).  Never
     raises — the adoption itself still succeeds.
     """
-    if not panel_ref:
+    if not panel_uuid:
         return False
     update_fields: dict = {
         "expireAt": _iso_z(expire_at),
@@ -221,26 +168,26 @@ async def _ensure_premium_entity_state(
     if target_squad:
         update_fields["externalSquadUuid"] = target_squad
     try:
-        result = await remnawave_api.update_user(panel_ref, **update_fields)
+        result = await remnawave_api.update_user(panel_uuid, **update_fields)
         if result is not None:
             logger.info(
-                "REMNAWAVE_PREMIUM_ADOPTED_PATCHED: ref=%s expire=%s ext_squad=%s",
-                panel_ref, update_fields["expireAt"],
+                "REMNAWAVE_PREMIUM_ADOPTED_PATCHED: uuid=%s expire=%s ext_squad=%s",
+                panel_uuid[:8], update_fields["expireAt"],
                 (target_squad or "")[:8] or "—",
             )
             return True
         logger.critical(
-            "REMNAWAVE_PREMIUM_ADOPTED_PATCH_FAIL: ref=%s expire=%s — "
+            "REMNAWAVE_PREMIUM_ADOPTED_PATCH_FAIL: uuid=%s expire=%s — "
             "entity adopted but expireAt NOT extended; user paid but "
             "panel state is stale, requires manual repair",
-            panel_ref, update_fields["expireAt"],
+            panel_uuid[:8], update_fields["expireAt"],
         )
         return False
     except Exception as e:
         logger.critical(
-            "REMNAWAVE_PREMIUM_ADOPTED_PATCH_ERROR: ref=%s err=%s — "
+            "REMNAWAVE_PREMIUM_ADOPTED_PATCH_ERROR: uuid=%s err=%s — "
             "entity adopted but expireAt NOT extended",
-            panel_ref, e,
+            panel_uuid[:8], e,
         )
         return False
 
@@ -317,16 +264,11 @@ async def create_premium_user_entity(
     if existing:
         if _is_our_entity(existing, telegram_id):
             logger.info(
-                "REMNAWAVE_PREMIUM_RECOVERED_PREFLIGHT: tg=%s username=%s id=%s",
-                telegram_id, username, existing.get("id"),
+                "REMNAWAVE_PREMIUM_RECOVERED_PREFLIGHT: tg=%s username=%s uuid=%s",
+                telegram_id, username, (existing.get("uuid") or "")[:8],
             )
             result = _result_from_existing(existing, http_status=200)
-            # Pass the 3.x numeric id when available; fall back to the
-            # legacy uuid so we still work on stragglers.
-            await _ensure_premium_entity_state(
-                result.panel_id if result.panel_id is not None else result.panel_uuid,
-                existing, expire_at,
-            )
+            await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at)
             return result
         logger.warning(
             "REMNAWAVE_PREMIUM_USERNAME_TAKEN_UNRELATED: tg=%s username=%s existing_tg=%s",
@@ -349,18 +291,13 @@ async def create_premium_user_entity(
     if raw and raw.get("ok"):
         response = raw.get("response") or {}
         panel_uuid = response.get("uuid")
-        raw_id = response.get("id")
-        try:
-            panel_id = int(raw_id) if raw_id is not None else None
-        except (TypeError, ValueError):
-            panel_id = None
         # Acceptance is decided by `vlessUuid` — `uuid` is always panel-assigned.
         accepted_vless = response.get("vlessUuid")
         accepted = bool(force_uuid) and (accepted_vless == requested_uuid)
         if external_squad_uuid:
             logger.info(
-                "REMNAWAVE_PREMIUM_CREATED_WITH_EXT_SQUAD: tg=%s id=%s squad=%s",
-                telegram_id, panel_id, external_squad_uuid[:8],
+                "REMNAWAVE_PREMIUM_CREATED_WITH_EXT_SQUAD: tg=%s uuid=%s squad=%s",
+                telegram_id, (panel_uuid or "")[:8], external_squad_uuid[:8],
             )
         return PremiumCreateResult(
             ok=True,
@@ -371,7 +308,6 @@ async def create_premium_user_entity(
             error=None,
             recovered=False,
             short_uuid=response.get("shortUuid"),
-            panel_id=panel_id,
         )
 
     first_status = int((raw or {}).get("status") or 0)
@@ -389,14 +325,11 @@ async def create_premium_user_entity(
             existing = None
         if existing and _is_our_entity(existing, telegram_id):
             logger.info(
-                "REMNAWAVE_PREMIUM_RECOVERED_POST409: tg=%s id=%s",
-                telegram_id, existing.get("id"),
+                "REMNAWAVE_PREMIUM_RECOVERED_POST409: tg=%s uuid=%s",
+                telegram_id, (existing.get("uuid") or "")[:8],
             )
             result = _result_from_existing(existing, http_status=409)
-            await _ensure_premium_entity_state(
-                result.panel_id if result.panel_id is not None else result.panel_uuid,
-                existing, expire_at,
-            )
+            await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at)
             return result
         # 409 not from a username race we own — fall through to the
         # forced-UUID retry below (might be uuid conflict).
@@ -413,11 +346,6 @@ async def create_premium_user_entity(
         raw2 = await remnawave_api.create_user(uuid=None, **body_kwargs)
         if raw2 and raw2.get("ok"):
             response = raw2.get("response") or {}
-            raw_id2 = response.get("id")
-            try:
-                panel_id2 = int(raw_id2) if raw_id2 is not None else None
-            except (TypeError, ValueError):
-                panel_id2 = None
             return PremiumCreateResult(
                 ok=True,
                 panel_uuid=response.get("uuid"),
@@ -427,7 +355,6 @@ async def create_premium_user_entity(
                 error=None,
                 recovered=False,
                 short_uuid=response.get("shortUuid"),
-                panel_id=panel_id2,
             )
         raw = raw2
 
@@ -463,14 +390,8 @@ async def renew_premium_user(telegram_id: int, new_expire_at: datetime) -> bool:
         return False
     import database  # lazy — keeps unit tests asyncpg-free
     try:
-        rmn_ref = await database.get_remnawave_premium_uuid(telegram_id)
-        if not _is_valid_panel_ref(rmn_ref):
-            return False
-        api_id = await _resolve_premium_id(telegram_id, rmn_ref)
-        if api_id is None:
-            logger.warning(
-                "REMNAWAVE_PREMIUM_RENEW_NO_ID: tg=%s stored=%s", telegram_id, rmn_ref,
-            )
+        rmn_uuid = await database.get_remnawave_premium_uuid(telegram_id)
+        if not _is_valid_full_uuid(rmn_uuid):
             return False
         update_fields = {
             "expireAt": _iso_z(new_expire_at),
@@ -485,32 +406,32 @@ async def renew_premium_user(telegram_id: int, new_expire_at: datetime) -> bool:
         MAX_ATTEMPTS = 3
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
-                result = await remnawave_api.update_user(api_id, **update_fields)
+                result = await remnawave_api.update_user(rmn_uuid, **update_fields)
             except Exception as e:
                 logger.warning(
-                    "REMNAWAVE_PREMIUM_RENEW_EXCEPTION: tg=%s id=%s attempt=%d/%d %s: %s",
-                    telegram_id, api_id, attempt, MAX_ATTEMPTS,
+                    "REMNAWAVE_PREMIUM_RENEW_EXCEPTION: tg=%s uuid=%s attempt=%d/%d %s: %s",
+                    telegram_id, rmn_uuid[:8], attempt, MAX_ATTEMPTS,
                     type(e).__name__, e,
                 )
                 result = None
             if result is not None:
                 logger.info(
-                    "REMNAWAVE_PREMIUM_RENEWED: tg=%s id=%s new_expire=%s ext_squad=%s attempt=%d",
-                    telegram_id, api_id, _iso_z(new_expire_at),
+                    "REMNAWAVE_PREMIUM_RENEWED: tg=%s uuid=%s new_expire=%s ext_squad=%s attempt=%d",
+                    telegram_id, rmn_uuid[:8], _iso_z(new_expire_at),
                     (external_squad_uuid or "")[:8] or "—", attempt,
                 )
                 return True
             logger.warning(
-                "REMNAWAVE_PREMIUM_RENEW_FAILED_ATTEMPT: tg=%s id=%s attempt=%d/%d",
-                telegram_id, api_id, attempt, MAX_ATTEMPTS,
+                "REMNAWAVE_PREMIUM_RENEW_FAILED_ATTEMPT: tg=%s uuid=%s attempt=%d/%d",
+                telegram_id, rmn_uuid[:8], attempt, MAX_ATTEMPTS,
             )
             if attempt < MAX_ATTEMPTS:
                 await asyncio.sleep(float(attempt))  # 1s, then 2s
         logger.critical(
-            "REMNAWAVE_PREMIUM_RENEW_EXHAUSTED: tg=%s id=%s new_expire=%s — "
+            "REMNAWAVE_PREMIUM_RENEW_EXHAUSTED: tg=%s uuid=%s new_expire=%s — "
             "%d attempts failed; falling back to adopt-and-patch via "
             "create_premium_user_entity",
-            telegram_id, api_id, _iso_z(new_expire_at), MAX_ATTEMPTS,
+            telegram_id, rmn_uuid[:8], _iso_z(new_expire_at), MAX_ATTEMPTS,
         )
         return False
     except Exception as e:
@@ -526,15 +447,12 @@ async def disable_premium_user(telegram_id: int) -> bool:
         return False
     import database  # lazy — keeps unit tests asyncpg-free
     try:
-        rmn_ref = await database.get_remnawave_premium_uuid(telegram_id)
-        if not _is_valid_panel_ref(rmn_ref):
+        rmn_uuid = await database.get_remnawave_premium_uuid(telegram_id)
+        if not _is_valid_full_uuid(rmn_uuid):
             return False
-        api_id = await _resolve_premium_id(telegram_id, rmn_ref)
-        if api_id is None:
-            return False
-        result = await remnawave_api.update_user(api_id, status="DISABLED")
+        result = await remnawave_api.update_user(rmn_uuid, status="DISABLED")
         if result is not None:
-            logger.info("REMNAWAVE_PREMIUM_DISABLED: tg=%s id=%s", telegram_id, api_id)
+            logger.info("REMNAWAVE_PREMIUM_DISABLED: tg=%s uuid=%s", telegram_id, rmn_uuid[:8])
             return True
         return False
     except Exception as e:
@@ -569,28 +487,20 @@ async def reissue_premium_user_entity(
 
     import database  # lazy — keeps unit tests asyncpg-free
 
-    old_panel_ref = await database.get_remnawave_premium_uuid(telegram_id)
-    old_api_id: Optional[int] = None
-    if _is_valid_panel_ref(old_panel_ref):
-        old_api_id = await _resolve_premium_id(telegram_id, old_panel_ref)
-    if old_api_id is not None:
+    old_panel_uuid = await database.get_remnawave_premium_uuid(telegram_id)
+    if _is_valid_full_uuid(old_panel_uuid):
         try:
-            deleted = await remnawave_api.delete_user(old_api_id)
+            deleted = await remnawave_api.delete_user(old_panel_uuid)
             logger.info(
-                "REMNAWAVE_PREMIUM_REISSUE_DELETE: tg=%s old_id=%s result=%s",
-                telegram_id, old_api_id,
+                "REMNAWAVE_PREMIUM_REISSUE_DELETE: tg=%s old_uuid=%s result=%s",
+                telegram_id, old_panel_uuid[:8],
                 "ok" if deleted is not None else "not_found_or_failed",
             )
         except Exception as e:
             logger.warning(
-                "REMNAWAVE_PREMIUM_REISSUE_DELETE_ERROR: tg=%s id=%s %s",
-                telegram_id, old_api_id, e,
+                "REMNAWAVE_PREMIUM_REISSUE_DELETE_ERROR: tg=%s uuid=%s %s",
+                telegram_id, old_panel_uuid[:8], e,
             )
-        # Cache is now stale — invalidate so the new create's id lands cleanly.
-        try:
-            await database.clear_remnawave_premium_uuid(telegram_id)
-        except Exception:
-            pass
 
     result = await create_premium_user_entity(
         telegram_id,
@@ -621,14 +531,11 @@ async def get_premium_subscription_url(telegram_id: int) -> Optional[str]:
     if not config.REMNAWAVE_ENABLED:
         return None
     import database  # lazy
-    rmn_ref = await database.get_remnawave_premium_uuid(telegram_id)
-    if not _is_valid_panel_ref(rmn_ref):
-        return None
-    api_id = await _resolve_premium_id(telegram_id, rmn_ref)
-    if api_id is None:
+    rmn_uuid = await database.get_remnawave_premium_uuid(telegram_id)
+    if not _is_valid_full_uuid(rmn_uuid):
         return None
     try:
-        user = await remnawave_api.get_user(api_id)
+        user = await remnawave_api.get_user(rmn_uuid)
         if not user:
             return None
         return user.get("subscriptionUrl") or None
