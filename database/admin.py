@@ -4372,6 +4372,10 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
 
     pool = await get_pool()
     uuid_to_remove = None
+    rmn_bypass_uuid = None
+    rmn_bypass_id = None
+    rmn_premium_uuid = None
+    rmn_premium_id = None
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -4382,12 +4386,21 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
             if not user_row:
                 return False
 
-            # Получаем UUID из подписки для удаления из Xray
+            # Получаем UUID/ID из подписки ДО удаления строки — иначе
+            # Remnawave-delete не найдёт что удалять в панели.
             sub_row = await conn.fetchrow(
-                "SELECT uuid FROM subscriptions WHERE telegram_id = $1", telegram_id
+                "SELECT uuid, remnawave_uuid, remnawave_id, "
+                "       remnawave_premium_uuid, remnawave_premium_id "
+                "FROM subscriptions WHERE telegram_id = $1",
+                telegram_id,
             )
-            if sub_row and sub_row.get("uuid"):
-                uuid_to_remove = sub_row["uuid"]
+            if sub_row:
+                if sub_row.get("uuid"):
+                    uuid_to_remove = sub_row["uuid"]
+                rmn_bypass_uuid = sub_row.get("remnawave_uuid")
+                rmn_bypass_id = sub_row.get("remnawave_id")
+                rmn_premium_uuid = sub_row.get("remnawave_premium_uuid")
+                rmn_premium_id = sub_row.get("remnawave_premium_id")
 
             # Удаляем все связанные данные (порядок важен для FK constraints)
             await conn.execute("DELETE FROM promo_usage_logs WHERE telegram_id = $1", telegram_id)
@@ -4420,10 +4433,24 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
         except Exception as e:
             logger.error(f"ADMIN_DELETE_UUID_REMOVAL_FAILED uuid={uuid_to_remove[:8]}... error={e}")
 
-    # Delete Remnawave user (fire-and-forget)
+    # Delete BOTH Remnawave entities (bypass + premium) — блокирующий
+    # await с явными uuid/id из строки subscriptions, которую мы
+    # прочитали ДО удаления. Иначе delete_remnawave_user_bg (fire-forget)
+    # не найдёт что удалять (строка subscriptions уже удалена выше)
+    # и entity в панели останутся навсегда.
     try:
-        from app.services.remnawave_service import delete_remnawave_user_bg
-        delete_remnawave_user_bg(telegram_id)
+        from app.services.remnawave_service import delete_remnawave_user_full
+        rmn_result = await delete_remnawave_user_full(
+            telegram_id,
+            bypass_uuid=rmn_bypass_uuid,
+            bypass_id=rmn_bypass_id,
+            premium_uuid=rmn_premium_uuid,
+            premium_id=rmn_premium_id,
+        )
+        logger.info(
+            "REMNAWAVE_ADMIN_DELETE tg=%s bypass=%s premium=%s",
+            telegram_id, rmn_result.get("bypass"), rmn_result.get("premium"),
+        )
     except Exception as rmn_err:
         logger.warning("REMNAWAVE_ADMIN_DELETE_FAIL: tg=%s %s", telegram_id, rmn_err)
 

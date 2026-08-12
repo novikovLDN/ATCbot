@@ -410,7 +410,9 @@ def disable_remnawave_user_bg(telegram_id: int) -> None:
 # ── Delete ─────────────────────────────────────────────────────────────
 
 async def delete_remnawave_user(telegram_id: int) -> None:
-    """Delete Remnawave user and clear DB reference."""
+    """Delete Remnawave user (bypass entity only, kept for bwd-compat).
+    Для полного удаления обеих entity (bypass + premium) используй
+    delete_remnawave_user_full()."""
     if not config.REMNAWAVE_ENABLED:
         return
     try:
@@ -434,6 +436,75 @@ async def delete_remnawave_user(telegram_id: int) -> None:
 
 def delete_remnawave_user_bg(telegram_id: int) -> None:
     _fire_and_forget(delete_remnawave_user(telegram_id))
+
+
+async def delete_remnawave_user_full(
+    telegram_id: int,
+    *,
+    bypass_uuid: Optional[str] = None,
+    bypass_id: Optional[int] = None,
+    premium_uuid: Optional[str] = None,
+    premium_id: Optional[int] = None,
+) -> dict:
+    """Удаляет ОБЕ entity юзера (bypass + premium) в Remnawave панели.
+
+    Принимает опциональные uuid/id как аргументы — чтобы работать даже
+    когда строка subscriptions уже удалена из БД (dashboard delete flow).
+    Если параметры не переданы, читает из БД.
+
+    Возвращает dict с результатами: {"bypass": bool, "premium": bool}
+    """
+    result = {"bypass": False, "premium": False}
+    if not config.REMNAWAVE_ENABLED:
+        return result
+
+    # === Bypass entity ===
+    try:
+        if bypass_id is None and bypass_uuid is None:
+            bypass_uuid = await database.get_remnawave_uuid(telegram_id)
+        if bypass_id is None and bypass_uuid:
+            user_data = await _get_user_with_recovery(telegram_id, bypass_uuid)
+            bypass_id = _panel_api_id(user_data, bypass_uuid) if user_data else None
+            if bypass_id is None:
+                bypass_id = await _resolve_bypass_id(telegram_id)
+        if bypass_id is not None:
+            await remnawave_api.delete_user(int(bypass_id))
+            result["bypass"] = True
+            logger.info("REMNAWAVE_DELETED_BYPASS: tg=%s id=%s", telegram_id, bypass_id)
+    except Exception as e:
+        logger.error(
+            "REMNAWAVE_DELETE_BYPASS_ERROR: tg=%s %s: %s",
+            telegram_id, type(e).__name__, e,
+        )
+
+    # === Premium entity ===
+    try:
+        if premium_id is None and premium_uuid is None:
+            # Попробуем через resolver (тянет из panel по short_uuid или stream).
+            try:
+                from app.services.remnawave_id_resolver import get_remnawave_id_for
+                premium_id = await get_remnawave_id_for(telegram_id, kind="premium")
+            except Exception as e:
+                logger.debug("resolver premium failed tg=%s: %s", telegram_id, e)
+        if premium_id is None and premium_uuid:
+            # Панель-lookup по short_uuid → id
+            try:
+                entity = await remnawave_api.get_user_by_short_uuid(str(premium_uuid))
+                if entity:
+                    premium_id = entity.get("id")
+            except Exception as e:
+                logger.debug("premium by-short-uuid failed tg=%s: %s", telegram_id, e)
+        if premium_id is not None:
+            await remnawave_api.delete_user(int(premium_id))
+            result["premium"] = True
+            logger.info("REMNAWAVE_DELETED_PREMIUM: tg=%s id=%s", telegram_id, premium_id)
+    except Exception as e:
+        logger.error(
+            "REMNAWAVE_DELETE_PREMIUM_ERROR: tg=%s %s: %s",
+            telegram_id, type(e).__name__, e,
+        )
+
+    return result
 
 
 # ── Add traffic (purchased pack) ──────────────────────────────────────
