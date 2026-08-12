@@ -293,8 +293,8 @@ const BYPASS_GB_VALUES = [5, 10, 15, 20, 25, 30, 50, 100] as const;
 const REWARD_LABELS: Record<RewardType, string> = {
   subscription_days: "Выдача подписки",
   tariff_discount: "Скидка на тарифы",
-  bypass_discount: "Скидка на Pro-трафик",
-  bypass_gb: "Выдача Pro-трафика",
+  bypass_discount: "Скидка на ГБ обхода",
+  bypass_gb: "Выдача ГБ обхода",
 };
 
 function PromoLinks() {
@@ -421,7 +421,7 @@ function PromoLinks() {
             {rewardType === "subscription_days"
               ? "Срок подписки"
               : rewardType === "bypass_gb"
-              ? "Pro-гигабайты"
+              ? "Гигабайты обхода"
               : "Процент скидки"}
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -571,7 +571,7 @@ function PromoLinks() {
               } else if (rType === "bypass_discount") {
                 rewardLabel = `−${rVal}% на ГБ${rHours ? " · " + rHours + "ч" : ""}`;
               } else if (rType === "bypass_gb") {
-                rewardLabel = `+${rVal} ГБ Pro`;
+                rewardLabel = `+${rVal} ГБ обхода`;
               }
 
               return (

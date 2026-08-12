@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # tier slug → (UI name, database getter name)
 _TIERS: dict[str, Tuple[str, str]] = {
     "basic":   ("Основные сервера",       "get_remnawave_uuid"),
-    "premium": ("Pro-доступ",             "get_remnawave_premium_uuid"),
+    "premium": ("Обход белых списков",    "get_remnawave_premium_uuid"),
 }
 
 
