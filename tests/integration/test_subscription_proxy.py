@@ -61,20 +61,14 @@ def test_legacy_sub_uses_cached_sub_url_without_calling_panel():
 
 
 def test_legacy_sub_backfills_cache_on_miss():
-    """Legacy row without cached sub_url → router resolves the 3.x numeric id,
-    calls panel + back-fills the sub URL."""
+    """Legacy row without cached sub_url → router calls panel + back-fills."""
     backfill_mock = AsyncMock()
     panel_mock = AsyncMock(return_value={"subscriptionUrl": PANEL_SUB_URL})
-    # 3.x: resolver first checks DB.get_remnawave_premium_id, then falls back
-    # to the panel resolver.  We stub the DB id getter to return the numeric
-    # id directly — no need to exercise the resolver's HTTP path.
     with patch.object(subscription_proxy, "remnawave_api") as api_mock, \
          patch("database.get_subscription_by_premium_uuid",
                new=AsyncMock(return_value=_migrated_row(sub_url=None))), \
          patch("database.get_subscription_by_samopis_uuid",
                new=AsyncMock(return_value=None)), \
-         patch("database.get_remnawave_premium_id",
-               new=AsyncMock(return_value=987654321), create=True), \
          patch("database.set_remnawave_premium_sub_url", new=backfill_mock):
         api_mock.get_user = panel_mock
         client = TestClient(_app())
@@ -82,7 +76,7 @@ def test_legacy_sub_backfills_cache_on_miss():
 
     assert resp.status_code == 302
     assert resp.headers["location"] == PANEL_SUB_URL
-    panel_mock.assert_called_once_with(987654321)
+    panel_mock.assert_called_once()
     backfill_mock.assert_awaited_once_with(42, PANEL_SUB_URL)
 
 

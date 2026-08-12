@@ -208,11 +208,7 @@ async def test_add_bypass_traffic_accumulates(monkeypatch):
     import sys
     from types import SimpleNamespace
 
-    # Remnawave 3.x: add_bypass_traffic resolves via `get_remnawave_id`
-    # (numeric BigInt) first — the legacy uuid columns are no longer
-    # sufficient for /api/users/{id}.
     fake_db = SimpleNamespace(
-        get_remnawave_id=AsyncMock(return_value=987654321),
         get_remnawave_bypass_cache=AsyncMock(return_value={"remnawave_uuid": PANEL_UUID}),
         get_remnawave_uuid=AsyncMock(return_value=PANEL_UUID),
     )
@@ -228,8 +224,6 @@ async def test_add_bypass_traffic_accumulates(monkeypatch):
 
     assert result is True
     update_mock.assert_awaited_once()
-    # First positional arg is the panel identifier (3.x: numeric id).
-    assert update_mock.call_args.args[0] == 987654321
     # New limit = 5 GB + 10 GB = 15 GB
     new_limit = update_mock.call_args.kwargs["trafficLimitBytes"]
     assert new_limit == 15 * 1024**3
@@ -243,15 +237,11 @@ async def test_add_bypass_traffic_returns_false_when_no_existing_entity(monkeypa
     from types import SimpleNamespace
 
     fake_db = SimpleNamespace(
-        get_remnawave_id=AsyncMock(return_value=None),
         get_remnawave_bypass_cache=AsyncMock(return_value=None),
         get_remnawave_uuid=AsyncMock(return_value=None),
     )
     monkeypatch.setitem(sys.modules, "database", fake_db)
 
-    # Also stub the resolver so we don't blow up on missing DB.get_pool
-    from app.services import remnawave_id_resolver
-    with patch.object(remnawave_bypass, "config", _cfg()), \
-         patch.object(remnawave_id_resolver, "get_remnawave_id_for", AsyncMock(return_value=None)):
+    with patch.object(remnawave_bypass, "config", _cfg()):
         result = await remnawave_bypass.add_bypass_traffic(42, extra_bytes=10 * 1024**3)
     assert result is False

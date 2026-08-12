@@ -20,11 +20,6 @@ from app.services import remnawave_premium
 
 SAMPLE_UUID = "11111111-2222-3333-4444-555555555555"
 PANEL_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-# Remnawave 3.x numeric id — what `/api/users/{id}` needs after migration 075.
-PANEL_ID = 987654321
-# What DB `get_remnawave_premium_uuid` now returns for a 3.x-provisioned user:
-# the numeric id as a string (see database.traffic.get_remnawave_premium_uuid).
-PANEL_ID_STR = str(PANEL_ID)
 
 
 # ── build_premium_username ─────────────────────────────────────────────
@@ -667,8 +662,7 @@ async def test_renew_premium_user_includes_external_squad_uuid_when_set():
     db_mock = type("DB", (), {})()
 
     async def fake_get_uuid(tg):
-        # 3.x: getter returns the numeric id as a string.
-        return PANEL_ID_STR
+        return PANEL_UUID
     db_mock.get_remnawave_premium_uuid = fake_get_uuid
 
     with patch.object(remnawave_premium, "config", cfg), \
@@ -679,10 +673,9 @@ async def test_renew_premium_user_includes_external_squad_uuid_when_set():
         )
     assert ok is True
     update_mock.assert_awaited_once()
-    sent_ref = update_mock.call_args.args[0]
+    sent_uuid = update_mock.call_args.args[0]
     sent_fields = update_mock.call_args.kwargs
-    # 3.x: caller passes the numeric BigInt id, not a UUID.
-    assert sent_ref == PANEL_ID
+    assert sent_uuid == PANEL_UUID
     assert sent_fields["expireAt"].endswith("Z")
     assert sent_fields["status"] == "ACTIVE"
     assert sent_fields["externalSquadUuid"] == EXT_SQUAD_UUID
@@ -696,8 +689,7 @@ async def test_renew_premium_user_omits_external_squad_uuid_when_unset():
     db_mock = type("DB", (), {})()
 
     async def fake_get_uuid(tg):
-        # 3.x: getter returns the numeric id as a string.
-        return PANEL_ID_STR
+        return PANEL_UUID
     db_mock.get_remnawave_premium_uuid = fake_get_uuid
 
     with patch.object(remnawave_premium, "config", cfg), \
@@ -721,8 +713,7 @@ async def test_renew_premium_user_succeeds_on_second_attempt():
     db_mock = type("DB", (), {})()
 
     async def fake_get_uuid(tg):
-        # 3.x: getter returns the numeric id as a string.
-        return PANEL_ID_STR
+        return PANEL_UUID
     db_mock.get_remnawave_premium_uuid = fake_get_uuid
 
     with patch.object(remnawave_premium, "config", cfg), \
@@ -748,8 +739,7 @@ async def test_renew_premium_user_retries_3_times_then_gives_up():
     db_mock = type("DB", (), {})()
 
     async def fake_get_uuid(tg):
-        # 3.x: getter returns the numeric id as a string.
-        return PANEL_ID_STR
+        return PANEL_UUID
     db_mock.get_remnawave_premium_uuid = fake_get_uuid
 
     with patch.object(remnawave_premium, "config", cfg), \
@@ -777,8 +767,7 @@ async def test_renew_premium_user_retries_on_exception_too():
     db_mock = type("DB", (), {})()
 
     async def fake_get_uuid(tg):
-        # 3.x: getter returns the numeric id as a string.
-        return PANEL_ID_STR
+        return PANEL_UUID
     db_mock.get_remnawave_premium_uuid = fake_get_uuid
 
     with patch.object(remnawave_premium, "config", cfg), \

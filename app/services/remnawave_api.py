@@ -1,28 +1,18 @@
 """
 Low-level HTTP client for Remnawave Panel API.
 
-**Panel version:** Remnawave 3.x.
-
-Breaking change vs 2.x: the panel identifies a user by a numeric `id`
-(BigInt), not by `uuid`.  The `uuid` field is REMOVED from the user
-response object; only `id`, `shortUuid`, `username` remain.
-
-All endpoints that used to be `/api/users/{uuid}/...` are now
-`/api/users/{user_id}/...`.  Bulk endpoints now expect `userIds: [int, ...]`
-instead of `uuids: [str, ...]`.
-
-To keep the transition small, the low-level helpers in this module now
-accept EITHER a numeric id (int or numeric str) OR a legacy UUID
-string.  A UUID string is logged as a deprecation warning and returned
-as None — callers must resolve the numeric id via
-`app.services.remnawave_id_resolver.get_remnawave_id_for(tg, kind)`
-before calling into the API.
-
 All methods return parsed JSON dict on success, None on failure.
 Errors are logged but never raised — callers must check for None.
+
+Verified endpoints on this panel instance:
+- POST   /api/users                       — create user (201)
+- GET    /api/users/{uuid}                — get by full UUID (400 if invalid)
+- POST   /api/users/update                — update user fields (uuid in body)
+- DELETE /api/users/{uuid}                — delete user
+- POST   /api/users/{uuid}/reset-traffic  — reset traffic counter
 """
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Optional, Dict, Any
 
 import httpx
 import config
@@ -31,90 +21,12 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 
-# Type alias — everywhere we accept "panel identifier for one user".
-UserRef = Union[int, str, None]
-
 
 def _headers() -> dict:
     return {
         "Authorization": f"Bearer {config.REMNAWAVE_API_TOKEN}",
         "Content-Type": "application/json",
     }
-
-
-def _looks_like_uuid(s: str) -> bool:
-    return len(s) == 36 and s.count("-") == 4
-
-
-def normalize_user_id(user_ref: UserRef) -> Optional[int]:
-    """Normalize a caller-supplied identifier to Remnawave 3.x numeric id.
-
-    Accepts:
-      - int → returned as-is (must be positive).
-      - str of digits ('12345') → int().
-      - str that looks like a full UUID → logs a deprecation warning and
-        returns None.  Remnawave 3.x cannot resolve full UUIDs anymore.
-      - None / anything else → None.
-    """
-    if user_ref is None:
-        return None
-    if isinstance(user_ref, int):
-        return user_ref if user_ref > 0 else None
-    if isinstance(user_ref, bool):  # bool is subclass of int in Python
-        return None
-    try:
-        s = str(user_ref).strip()
-    except Exception:
-        return None
-    if not s:
-        return None
-    try:
-        return int(s)
-    except ValueError:
-        pass
-    if _looks_like_uuid(s):
-        logger.warning(
-            "REMNAWAVE_LEGACY_UUID_PASSED: user_ref=%s... — Remnawave 3.x "
-            "requires numeric id; resolve via remnawave_id_resolver first.",
-            s[:8],
-        )
-        return None
-    logger.warning("REMNAWAVE_INVALID_USER_REF: %r", s)
-    return None
-
-
-def _log_typed_error(
-    method: str, path: str, status: int, body: Any,
-) -> None:
-    """Best-effort structured logging of Remnawave 3.x typed errors.
-
-    Panel 3.x returns 400s in shape `{"errors": [{path, code, message}, ...]}`
-    and 404s in shape `{"errorCode": "A005", "message": "..."}`.  This helper
-    surfaces those bits in the log so we don't have to eyeball the raw body.
-    """
-    if not isinstance(body, dict):
-        return
-    try:
-        if status == 400 and isinstance(body.get("errors"), list):
-            summaries = []
-            for err in body["errors"][:5]:
-                if isinstance(err, dict):
-                    summaries.append(
-                        f"{err.get('path','?')}:{err.get('code','?')} {err.get('message','')}"
-                    )
-            if summaries:
-                logger.warning(
-                    "REMNAWAVE_400_VALIDATION: %s %s errors=%s",
-                    method, path, " | ".join(summaries),
-                )
-        elif status in (404, 409) and body.get("errorCode"):
-            logger.warning(
-                "REMNAWAVE_%s_TYPED: %s %s code=%s msg=%s",
-                status, method, path,
-                body.get("errorCode"), body.get("message", ""),
-            )
-    except Exception:
-        pass
 
 
 async def _request(
@@ -129,35 +41,18 @@ async def _request(
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.request(method, url, headers=_headers(), **kwargs)
 
-        # DELETE endpoints return 204 with empty body — treat as success.
-        if resp.status_code == 204:
-            return {"success": True}
-
         if resp.status_code == 404:
             if not quiet:
                 logger.warning("REMNAWAVE_404: %s %s body=%s", method, path, resp.text[:500])
-            try:
-                _log_typed_error(method, path, 404, resp.json())
-            except Exception:
-                pass
             return None
 
         if resp.status_code >= 400:
-            body_text = resp.text[:500]
             if not quiet:
                 logger.error(
                     "REMNAWAVE_HTTP_%s: %s %s body=%s",
-                    resp.status_code, method, path, body_text,
+                    resp.status_code, method, path, resp.text[:500],
                 )
-            try:
-                _log_typed_error(method, path, resp.status_code, resp.json())
-            except Exception:
-                pass
             return None
-
-        # 202 (Accepted) — bulk endpoints return no body.
-        if resp.status_code == 202 or not resp.content:
-            return {"success": True}
 
         data = resp.json()
         # Remnawave wraps successful responses in {"response": {...}}
@@ -194,10 +89,6 @@ async def _request_raw(
         logger.error("REMNAWAVE_ERROR: %s %s %s: %s", method, path, type(e).__name__, e)
         return {"ok": False, "status": 0, "body": None, "response": None, "error": str(e)}
 
-    # 204 → success without body
-    if resp.status_code == 204:
-        return {"ok": True, "status": 204, "body": None, "response": {"success": True}}
-
     try:
         body: Any = resp.json()
     except Exception:
@@ -211,7 +102,6 @@ async def _request_raw(
             "REMNAWAVE_HTTP_%s: %s %s body=%s",
             resp.status_code, method, path, str(body)[:500],
         )
-        _log_typed_error(method, path, resp.status_code, body)
     return {"ok": ok, "status": resp.status_code, "body": body, "response": unwrapped}
 
 
@@ -234,12 +124,33 @@ async def create_user(
 ) -> Optional[Dict[str, Any]]:
     """POST /api/users — create a new Remnawave user.
 
-    Panel 3.x response contains numeric `id` (BigInt), `shortUuid`,
-    `subscriptionUrl`, `vlessUuid` — no `uuid` field.  Callers must
-    persist `id` (the new column `remnawave_id[_premium]`) and can
-    still use `shortUuid` for by-short-uuid fallback resolution.
-
-    Extra keyword args are unchanged from 2.x.
+    Extra keyword args (added for the samopis→premium migration):
+      uuid                 — VLESS UUID to force.  On Remnawave v2.7+ the
+                             panel separates entity into `uuid` (panel-internal,
+                             always panel-assigned) and `vlessUuid` (used in
+                             VLESS connection strings).  When this param is
+                             supplied the value is sent in the `vlessUuid`
+                             field so legacy samopis links keep working on the
+                             new inbounds.  Callers MUST read
+                             result['vlessUuid'] to learn whether the panel
+                             honoured the request and result['uuid'] for the
+                             internal identifier used by subsequent API calls.
+      squad_uuid           — override config.REMNAWAVE_SQUAD_UUID (e.g. the
+                             "MainServer" squad for the premium tier).  Pass
+                             "" to skip the default-squad assignment entirely.
+      description          — passed through to Remnawave (e.g. "Imported from
+                             samopis vpnapi").
+      telegram_id          — passed through as `telegramId` for panel-side
+                             cross-reference.
+      traffic_limit_strategy — Remnawave reset strategy (default NO_RESET).
+      external_squad_uuid  — Task 6: when set, sent as `externalSquadUuid`
+                             so Remnawave overrides the subscription
+                             Template (used for the premium "Unlimited"
+                             template with SDK/SMTP/mining blocklists).
+                             None → field omitted (default for bypass).
+      raw_response         — when True the caller wants the HTTP status code
+                             alongside the body to disambiguate 409/400
+                             responses (used by the migration script).
     """
     body: Dict[str, Any] = {
         "username": username,
@@ -251,9 +162,9 @@ async def create_user(
         "deviceLimit": device_limit,
     }
     if uuid:
-        # Remnawave 3.x still accepts `vlessUuid` on create for legacy VLESS
-        # ключ compatibility (samopis migration).  Panel-side `id` is always
-        # panel-assigned.
+        # Remnawave v2.7+ moved the connection UUID to `vlessUuid` —
+        # `uuid` is panel-assigned and cannot be overridden.  See module
+        # docstring on find_user_by_username.
         body["vlessUuid"] = uuid
     if description:
         body["description"] = description
@@ -276,123 +187,92 @@ async def create_user(
 
     result = await _request("POST", "/api/users", json=body)
     if result:
-        panel_id = result.get("id")
         logger.info(
-            "REMNAWAVE_CREATE: success for %s id=%s response keys=%s squad_in_response=%s",
-            username, panel_id, list(result.keys()),
+            "REMNAWAVE_CREATE: success for %s, response keys=%s squad_in_response=%s",
+            username, list(result.keys()),
             result.get("activeInternalSquads"),
         )
 
-        # Belt-and-suspenders squad assignment (retried via numeric id).
-        if effective_squad and panel_id:
-            squad_result = result.get("activeInternalSquads") or []
-            if not squad_result:
-                logger.warning(
-                    "REMNAWAVE_SQUAD_NOT_IN_RESPONSE: user_id=%s, trying assign_user_to_squad",
-                    panel_id,
-                )
-                await assign_user_to_squad(panel_id, effective_squad)
-        elif not effective_squad:
+        # Also try dedicated squad endpoint (belt-and-suspenders)
+        if effective_squad:
+            user_uuid = result.get("uuid")
+            if user_uuid:
+                squad_result = result.get("activeInternalSquads") or []
+                if not squad_result:
+                    logger.warning(
+                        "REMNAWAVE_SQUAD_NOT_IN_RESPONSE: user=%s, trying assign_user_to_squad",
+                        user_uuid[:8],
+                    )
+                    await assign_user_to_squad(user_uuid, effective_squad)
+        else:
             logger.warning("REMNAWAVE_SQUAD_UUID not set — skipping squad assignment")
     else:
         logger.warning("REMNAWAVE_CREATE: failed for %s", username)
     return result
 
 
-async def assign_user_to_squad(user_ref: UserRef, squad_uuid: str) -> bool:
-    """Try multiple approaches to assign a user to an internal squad."""
-    user_id = normalize_user_id(user_ref)
-    if user_id is None:
-        return False
-
+async def assign_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
+    """Try multiple approaches to assign user to a squad."""
     logger.info(
-        "REMNAWAVE_SQUAD_ASSIGN_START: user_id=%s squad=%s",
-        user_id, squad_uuid[:8],
+        "REMNAWAVE_SQUAD_ASSIGN_START: user=%s squad=%s",
+        user_uuid[:8], squad_uuid[:8],
     )
 
-    # Approach 1: POST /api/squads/add-users-to-squad — 3.x uses userIds.
+    # Approach 1: POST /api/squads/add-users-to-squad (Remnawave standard)
     result = await _request(
         "POST", "/api/squads/add-users-to-squad",
         quiet=True,
-        json={"squadUuid": squad_uuid, "userIds": [user_id]},
+        json={"squadUuid": squad_uuid, "userUuids": [user_uuid]},
     )
     if result is not None:
-        logger.info("REMNAWAVE_SQUAD_ASSIGN: via add-users-to-squad user_id=%s", user_id)
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via /api/squads/add-users-to-squad user=%s", user_uuid[:8])
         return True
 
-    # Approach 2: PATCH user with activeInternalSquads.
-    body = {"activeInternalSquads": [squad_uuid]}
+    # Approach 2: POST /api/squads/{squad_uuid}/users
+    result = await _request(
+        "POST", f"/api/squads/{squad_uuid}/users",
+        quiet=True,
+        json={"userUuid": user_uuid},
+    )
+    if result is not None:
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via /api/squads/.../users user=%s", user_uuid[:8])
+        return True
+
+    # Approach 3: POST /api/squads/{squad_uuid}/users with array body
+    result = await _request(
+        "POST", f"/api/squads/{squad_uuid}/users",
+        quiet=True,
+        json={"userUuids": [user_uuid]},
+    )
+    if result is not None:
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via /api/squads/.../users array user=%s", user_uuid[:8])
+        return True
+
+    # Approach 4: PUT user update with activeInternalSquads
+    body = {"uuid": user_uuid, "activeInternalSquads": [squad_uuid]}
     for method in ("PATCH", "POST", "PUT"):
-        for path in (f"/api/users/{user_id}", "/api/users", "/api/users/update"):
-            payload = dict(body)
-            if path in ("/api/users", "/api/users/update"):
-                payload["userId"] = user_id
-            r = await _request(method, path, quiet=True, json=payload)
+        for path in ("/api/users", "/api/users/update"):
+            r = await _request(method, path, quiet=True, json=body)
             if r is not None:
                 # Verify squad was actually set
-                check = await get_user(user_id)
+                check = await get_user(user_uuid)
                 if check and check.get("activeInternalSquads"):
                     logger.info(
-                        "REMNAWAVE_SQUAD_ASSIGN: via %s %s user_id=%s",
-                        method, path, user_id,
+                        "REMNAWAVE_SQUAD_ASSIGN: via %s %s user=%s",
+                        method, path, user_uuid[:8],
                     )
                     return True
 
     logger.error(
-        "REMNAWAVE_SQUAD_ASSIGN_FAILED: all approaches failed user_id=%s squad=%s",
-        user_id, squad_uuid[:8],
+        "REMNAWAVE_SQUAD_ASSIGN_FAILED: all approaches failed user=%s squad=%s",
+        user_uuid[:8], squad_uuid[:8],
     )
     return False
 
 
-async def get_user(user_ref: UserRef) -> Optional[Dict[str, Any]]:
-    """GET /api/users/{user_id} — Remnawave 3.x numeric id lookup.
-
-    Accepts int, numeric str, or (deprecated) legacy UUID string.  UUID
-    strings return None with a warning — resolve the id first via
-    `remnawave_id_resolver.get_remnawave_id_for(tg, kind)`.
-    """
-    user_id = normalize_user_id(user_ref)
-    if user_id is None:
-        return None
-    return await _request("GET", f"/api/users/{user_id}")
-
-
-async def get_user_by_short_uuid(short_uuid: str) -> Optional[Dict[str, Any]]:
-    """GET /api/users/by-short-uuid/{shortUuid} — resolve entity by its
-    shortUuid (still stable across the 2.x → 3.x jump).  Returns None on
-    404 / any HTTP error.
-    """
-    if not short_uuid:
-        return None
-    from urllib.parse import quote
-    path = f"/api/users/by-short-uuid/{quote(short_uuid, safe='')}"
-    return await _request("GET", path, quiet=True)
-
-
-async def get_users_stream_by_telegram_id(
-    telegram_id: int, size: int = 10,
-) -> Optional[List[Dict[str, Any]]]:
-    """GET /api/users/stream?telegramId=X&size=N — 3.x replacement for
-    the removed `/api/users/by-telegram-id/{id}` route.  Returns the list
-    of matching user entities (may be empty) or None on failure.
-    """
-    if telegram_id is None:
-        return None
-    path = f"/api/users/stream?telegramId={int(telegram_id)}&size={int(size)}"
-    result = await _request("GET", path, quiet=True)
-    if result is None:
-        return None
-    if isinstance(result, list):
-        return result
-    if isinstance(result, dict):
-        users = result.get("users")
-        if isinstance(users, list):
-            return users
-        # Some panel builds still nest under "data"
-        if isinstance(result.get("data"), list):
-            return result["data"]
-    return []
+async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
+    """GET /api/users/{uuid} — get user by full UUID."""
+    return await _request("GET", f"/api/users/{uuid}")
 
 
 async def get_all_users(page_size: int = 1000, progress_cb=None) -> Optional[list]:
@@ -463,139 +343,110 @@ async def get_all_users(page_size: int = 1000, progress_cb=None) -> Optional[lis
 
 _update_method: Optional[tuple] = None  # cached working (method, path_template)
 
-
-async def update_user(user_ref: UserRef, **fields) -> Optional[Dict[str, Any]]:
-    """Update user fields on Remnawave 3.x.
-
-    3.x accepts PATCH /api/users/{user_id} with the changed fields.  We
-    still auto-discover between the id-in-path (`{user_id}`) and the
-    id-in-body (`/api/users/update`, `/api/users`) shapes for panel
-    minor-version drift.
-    """
+async def update_user(uuid: str, **fields) -> Optional[Dict[str, Any]]:
+    """Update user fields. Auto-discovers the correct endpoint on first call."""
     global _update_method
-    user_id = normalize_user_id(user_ref)
-    if user_id is None:
-        return None
-
-    body_with_id = {"userId": user_id, **fields}  # 3.x body key = userId (int)
-    body_plain = dict(fields)
+    body = {"uuid": uuid, **fields}
 
     # Use cached method if already discovered
     if _update_method:
         method, path_tpl = _update_method
-        path = path_tpl.replace("{user_id}", str(user_id))
-        payload = body_with_id if "user_id" not in path_tpl else body_plain
-        return await _request(method, path, json=payload)
+        path = path_tpl.format(uuid=uuid)
+        return await _request(method, path, json=body)
 
-    # Probe all known Remnawave 3.x panel endpoint variants
+    # Probe all known Remnawave panel endpoint variants
     _variants = [
-        ("PATCH", "/api/users/{user_id}", False),
-        ("POST",  "/api/users/{user_id}", False),
-        ("PATCH", "/api/users",           True),
-        ("POST",  "/api/users/update",    True),
-        ("PUT",   "/api/users",           True),
+        ("PUT", "/api/users/{uuid}"),
+        ("POST", "/api/users/{uuid}"),
+        ("PATCH", "/api/users"),
+        ("POST", "/api/users/update"),
+        ("PUT", "/api/users"),
     ]
-    for method, path_tpl, needs_id_in_body in _variants:
-        path = path_tpl.replace("{user_id}", str(user_id))
-        payload = body_with_id if needs_id_in_body else body_plain
-        result = await _request(method, path, quiet=True, json=payload)
+    for method, path_tpl in _variants:
+        path = path_tpl.format(uuid=uuid)
+        result = await _request(method, path, quiet=True, json=body)
         if result is not None:
             _update_method = (method, path_tpl)
-            logger.info(
-                "REMNAWAVE_UPDATE_DISCOVERED: %s %s works, caching",
-                method, path_tpl,
-            )
+            logger.info("REMNAWAVE_UPDATE_DISCOVERED: %s %s works, caching", method, path_tpl)
             return result
 
     logger.error(
-        "REMNAWAVE_UPDATE_FAIL: no endpoint worked for user_id=%s fields=%s. "
-        "Tried: %s", user_id, list(fields.keys()),
-        [(m, p) for m, p, _ in _variants],
+        "REMNAWAVE_UPDATE_FAIL: no endpoint worked for uuid=%s fields=%s. "
+        "Tried: %s", uuid[:8], list(fields.keys()),
+        [(m, p) for m, p in _variants],
     )
     return None
 
 
-async def reset_user_traffic(user_ref: UserRef) -> Optional[Dict[str, Any]]:
-    """POST /api/users/{user_id}/actions/reset-traffic (3.x path)."""
-    user_id = normalize_user_id(user_ref)
-    if user_id is None:
-        return None
-    # 3.x moved traffic actions under /actions/*; keep the flat path as
-    # fallback for panels stuck on late-2.x.
-    for path in (
-        f"/api/users/{user_id}/actions/reset-traffic",
-        f"/api/users/{user_id}/reset-traffic",
-    ):
-        result = await _request("POST", path, quiet=True)
-        if result is not None:
-            return result
-    logger.error("REMNAWAVE_RESET_TRAFFIC_FAIL: user_id=%s", user_id)
-    return None
+async def reset_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
+    """POST /api/users/{uuid}/reset-traffic"""
+    return await _request("POST", f"/api/users/{uuid}/reset-traffic")
 
 
 # ── HWID devices ───────────────────────────────────────────────────────
 #
-# Panel 3.x routes (same shape as 2.x but the {userId} placeholder is now
-# the numeric BigInt, not a UUID):
-#   GET  /api/hwid/devices/{userId}            — list devices for user
-#   POST /api/hwid/devices/delete              — body: {userId, hwid}
-#   POST /api/hwid/devices/delete-all          — body: {userId}
+# Per-device tracking lives in the optional HWID module on Remnawave
+# (Subscription → Settings → HWID Device Limit). When enabled, the panel
+# records each client that adds the subscription (via `x-hwid` header)
+# and lets admins/end users revoke a specific device.
+#
+# Routes (Remnawave backend-contract v2.8, compatible with v2.7+ panels):
+#   GET  /api/hwid/devices/{userUuid}          — list devices for user
+#   POST /api/hwid/devices/delete              — body: {userUuid, hwid}
+#   POST /api/hwid/devices/delete-all          — body: {userUuid}
 #
 # Device DTO fields: hwid, userId, platform, osVersion, deviceModel,
 # userAgent, requestIp, createdAt, updatedAt. All optional except hwid.
 
-async def get_user_hwid_devices(user_ref: UserRef) -> Optional[list]:
+async def get_user_hwid_devices(user_uuid: str) -> Optional[list]:
     """Return list of HWID device dicts for a user, or None on failure."""
-    user_id = normalize_user_id(user_ref)
-    if user_id is None:
-        return None
-    result = await _request("GET", f"/api/hwid/devices/{user_id}")
+    result = await _request("GET", f"/api/hwid/devices/{user_uuid}")
     if result is None:
         return None
     return result.get("devices") or []
 
 
-async def delete_user_hwid_device(user_ref: UserRef, hwid: str) -> bool:
+async def delete_user_hwid_device(user_uuid: str, hwid: str) -> bool:
     """Revoke a single device by hwid. Returns True on success."""
-    user_id = normalize_user_id(user_ref)
-    if user_id is None:
-        return False
     result = await _request(
         "POST", "/api/hwid/devices/delete",
-        json={"userId": user_id, "hwid": hwid},
+        json={"userUuid": user_uuid, "hwid": hwid},
     )
     return result is not None
 
 
-async def delete_all_user_hwid_devices(user_ref: UserRef) -> bool:
+async def delete_all_user_hwid_devices(user_uuid: str) -> bool:
     """Revoke every device for a user. Returns True on success."""
-    user_id = normalize_user_id(user_ref)
-    if user_id is None:
-        return False
     result = await _request(
         "POST", "/api/hwid/devices/delete-all",
-        json={"userId": user_id},
+        json={"userUuid": user_uuid},
     )
     return result is not None
 
 
-async def delete_user(user_ref: UserRef) -> Optional[Dict[str, Any]]:
-    """DELETE /api/users/{user_id} — panel returns 204 on success (handled
-    upstream in _request, mapped to {"success": True})."""
-    user_id = normalize_user_id(user_ref)
-    if user_id is None:
-        return None
-    return await _request("DELETE", f"/api/users/{user_id}")
+async def delete_user(uuid: str) -> Optional[Dict[str, Any]]:
+    """DELETE /api/users/{uuid}"""
+    return await _request("DELETE", f"/api/users/{uuid}")
 
 
-# ── Username search ────────────────────────────────────────────────────
+# ── Username search (preflight for the samopis migration) ──────────────
+#
+# Remnawave v2.7.4 (this deployment) exposes a dedicated endpoint:
+#   GET /api/users/by-username/{username}
+#     → 200 + user entity   (username taken)
+#     → 404 + errorCode A063 ("User with specified params not found")
+# No pagination / list-fallback is needed.  If the dedicated endpoint
+# ever disappears in a future panel version the migration script will
+# fail loudly via the "unexpected_http_status" code path and we'll
+# know to add a fallback again.
+
 
 async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     """Return the user entity whose `username` matches, or None if free.
 
-    Panel 3.x preserves `GET /api/users/by-username/{username}`.  Returns
-    None on any non-200/404 status so callers can decide whether to
-    retry — the raw HTTP status is logged at WARN level for diagnostics.
+    Confirmed working on Remnawave v2.7.4.  Returns None on any
+    non-200/404 status so that callers can decide whether to retry — the
+    raw HTTP status is logged at WARN level for diagnostics.
     """
     if not username:
         return None
@@ -620,9 +471,9 @@ async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
 
 # ── Convenience ───────────────────────────────────────────────────────
 
-async def get_user_traffic(user_ref: UserRef) -> Optional[Dict[str, Any]]:
+async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
     """Return traffic info including subscriptionUrl and happ_url, or None."""
-    user = await get_user(user_ref)
+    user = await get_user(uuid)
     if not user:
         return None
     # Traffic data may be nested in userTraffic or at top level
@@ -639,117 +490,3 @@ async def get_user_traffic(user_ref: UserRef) -> Optional[Dict[str, Any]]:
     }
 
 
-# ── Bulk operations (Remnawave 3.x) ────────────────────────────────────
-#
-# Panel 3.x reworked bulk endpoints:
-#   * All accept `{"userIds": [int, ...]}` (was `uuids: [str, ...]` in 2.x)
-#   * Return HTTP 202 Accepted with an empty body — callers must not
-#     attempt .json() on the response.
-#
-# None of these helpers are currently called from the bot flow; they
-# exist so future admin tooling doesn't accidentally hand-craft the
-# old 2.x request shape.
-
-async def _bulk_action(path: str, user_ids: List[int], extra: Optional[Dict[str, Any]] = None) -> bool:
-    if not user_ids:
-        return True
-    body: Dict[str, Any] = {"userIds": [int(uid) for uid in user_ids]}
-    if extra:
-        body.update(extra)
-    result = await _request("POST", path, json=body)
-    return result is not None
-
-
-async def bulk_delete_users(user_ids: List[int]) -> bool:
-    """POST /api/users/bulk/delete — 202 Accepted on success."""
-    return await _bulk_action("/api/users/bulk/delete", user_ids)
-
-
-async def bulk_update_users(user_ids: List[int], fields: Dict[str, Any]) -> bool:
-    """POST /api/users/bulk/update — 202 Accepted on success."""
-    return await _bulk_action("/api/users/bulk/update", user_ids, extra={"fields": fields})
-
-
-async def bulk_reset_traffic(user_ids: List[int]) -> bool:
-    """POST /api/users/bulk/reset-traffic — 202 Accepted on success."""
-    return await _bulk_action("/api/users/bulk/reset-traffic", user_ids)
-
-
-async def bulk_revoke_subscription(user_ids: List[int]) -> bool:
-    """POST /api/users/bulk/revoke-subscription — 202 Accepted on success."""
-    return await _bulk_action("/api/users/bulk/revoke-subscription", user_ids)
-
-
-async def bulk_extend_expiration_date(
-    user_ids: List[int], new_expire_at: str,
-) -> bool:
-    """POST /api/users/bulk/extend-expiration-date — 202 Accepted on success."""
-    return await _bulk_action(
-        "/api/users/bulk/extend-expiration-date",
-        user_ids,
-        extra={"expireAt": new_expire_at},
-    )
-
-
-async def bulk_update_squads(user_ids: List[int], squad_uuids: List[str]) -> bool:
-    """POST /api/users/bulk/update-squads — 202 Accepted on success."""
-    return await _bulk_action(
-        "/api/users/bulk/update-squads",
-        user_ids,
-        extra={"activeInternalSquads": squad_uuids},
-    )
-
-
-# ── Connections (Remnawave 3.x replacement for ip-control) ─────────────
-#
-# 2.x had `/api/ip-control/fetch-ips/{uuid}` and
-# `/api/ip-control/drop-connections`.  3.x consolidated these under
-# `/api/connections/*` keyed on `userIds`:
-#
-#   POST /api/connections/by-user/{userId}  — list active connections
-#   POST /api/connections/drop              — body: {"dropBy": {"userIds": [...]}}
-#
-# Neither is currently used by the bot; helpers are provided so future
-# admin tooling doesn't fall into the 2.x shape.
-
-async def list_user_connections(user_ref: UserRef) -> Optional[list]:
-    """POST /api/connections/by-user/{user_id} — active connections for a user."""
-    user_id = normalize_user_id(user_ref)
-    if user_id is None:
-        return None
-    result = await _request("POST", f"/api/connections/by-user/{user_id}")
-    if result is None:
-        return None
-    if isinstance(result, list):
-        return result
-    return result.get("connections") if isinstance(result, dict) else None
-
-
-async def drop_user_connections(user_ids: List[int]) -> bool:
-    """POST /api/connections/drop — evict live sessions for the given ids."""
-    if not user_ids:
-        return True
-    body = {"dropBy": {"userIds": [int(uid) for uid in user_ids]}}
-    result = await _request("POST", "/api/connections/drop", json=body)
-    return result is not None
-
-
-# ── External Squads response-headers (3.x shape) ───────────────────────
-#
-# 2.x stored HTTP headers to inject/remove on `subscription.template`
-# in a single object `responseHeaders`.  3.x splits that into
-# `responseHeadersAdd` (dict) and `responseHeadersRemove` (list).  We
-# don't touch external squads from the bot today, but if a future tool
-# reads a panel entity or PATCHes one, use these accessor helpers so
-# the shape mismatch is caught in one place.
-
-def read_external_squad_response_headers(squad: Dict[str, Any]) -> Dict[str, Any]:
-    """Return normalized {'add': dict, 'remove': list} from a 3.x squad payload."""
-    if not isinstance(squad, dict):
-        return {"add": {}, "remove": []}
-    add = squad.get("responseHeadersAdd")
-    remove = squad.get("responseHeadersRemove")
-    return {
-        "add": dict(add) if isinstance(add, dict) else {},
-        "remove": list(remove) if isinstance(remove, list) else [],
-    }

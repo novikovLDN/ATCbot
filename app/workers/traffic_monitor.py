@@ -32,20 +32,9 @@ def _format_bytes(b: int) -> str:
 async def _check_user_traffic(bot: Bot, telegram_id: int, rmn_uuid: str) -> None:
     """Check traffic thresholds and send one-shot notifications."""
     try:
-        # Remnawave 3.x: resolve the numeric id from telegram_id.  For
-        # entities where the id column is already cached this is a fast
-        # DB read; otherwise the resolver hits the panel once and caches
-        # for subsequent 5-min cycles.
-        from app.services.remnawave_id_resolver import get_remnawave_id_for
-        api_id = await database.get_remnawave_id(telegram_id)
-        if api_id is None:
-            api_id = await get_remnawave_id_for(telegram_id, "bypass")
-        if api_id is None:
-            logger.debug("TRAFFIC_CHECK_NO_ID: tg=%s stored=%s", telegram_id, rmn_uuid)
-            return
-        traffic = await remnawave_api.get_user_traffic(api_id)
+        traffic = await remnawave_api.get_user_traffic(rmn_uuid)
         if not traffic:
-            logger.warning("TRAFFIC_CHECK_NO_DATA: tg=%s id=%s", telegram_id, api_id)
+            logger.warning("TRAFFIC_CHECK_NO_DATA: tg=%s uuid=%s", telegram_id, rmn_uuid[:8] if rmn_uuid else "N/A")
             return
 
         used = traffic["usedTrafficBytes"]

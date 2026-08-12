@@ -410,44 +410,30 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
 
     async def _fix_one(p: dict) -> bool:
         async with sem:
-            # 3.x prefer the numeric id from the panel scan; fall back
-            # to the legacy uuid where available (unusable on 3.x — will
-            # trigger a warn+None from the API layer).
-            uuid = p.get("panel_uuid")
-            panel_id_val = p.get("panel_id")
+            uuid = p["panel_uuid"]
             tg = p["telegram_id"]
             expected_username = f"tg_{tg}_premium"
-            if panel_id_val is None:
-                # Try the shared resolver — turns short-uuid / stream
-                # matches into a usable 3.x id and caches back to DB.
-                try:
-                    from app.services.remnawave_id_resolver import get_remnawave_id_for
-                    panel_id_val = await get_remnawave_id_for(tg, "premium")
-                except Exception:
-                    panel_id_val = None
-            ref_for_api = panel_id_val if panel_id_val is not None else uuid
-            ref_display = str(panel_id_val) if panel_id_val is not None else (uuid or "")[:8]
 
             try:
                 # SAFETY CHECK 1: GET (wrapped in wait_for so a stuck
                 # call drops the slot instead of holding it forever).
                 try:
                     user = await asyncio.wait_for(
-                        remnawave_api.get_user(ref_for_api),
+                        remnawave_api.get_user(uuid),
                         timeout=_FIX_HTTP_TIMEOUT_S,
                     )
                 except asyncio.TimeoutError:
                     progress["failed"] += 1
                     logger.warning(
                         "PREMIUM_RECOVERY_TIMEOUT_GET tg=%s uuid=%s after %ds",
-                        tg, ref_display, _FIX_HTTP_TIMEOUT_S,
+                        tg, uuid[:8], _FIX_HTTP_TIMEOUT_S,
                     )
                     return False
                 except Exception as e:
                     progress["failed"] += 1
                     logger.warning(
                         "PREMIUM_RECOVERY: GET tg=%s uuid=%s %s: %s",
-                        tg, ref_display, type(e).__name__, e,
+                        tg, uuid[:8], type(e).__name__, e,
                     )
                     return False
 
@@ -455,7 +441,7 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
                     progress["gone"] += 1
                     logger.info(
                         "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (not found on panel)",
-                        tg, ref_display,
+                        tg, uuid[:8],
                     )
                     return True
 
@@ -466,7 +452,7 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
                     logger.warning(
                         "PREMIUM_RECOVERY_SKIP_WRONG_USERNAME tg=%s uuid=%s "
                         "expected=%s got=%r — entity not patched",
-                        tg, ref_display, expected_username, actual_username,
+                        tg, uuid[:8], expected_username, actual_username,
                     )
                     return False
 
@@ -488,35 +474,33 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
                             logger.info(
                                 "PREMIUM_RECOVERY_SKIP_NOT_AFFECTED tg=%s uuid=%s "
                                 "expireAt=%s — already within sane range",
-                                tg, ref_display, existing_expire_str,
+                                tg, uuid[:8], existing_expire_str,
                             )
                             return False
                 except Exception:
                     pass
 
-                # All clear — PATCH (also wrapped).  Panel identifier
-                # comes from the same scan tuple — we always PATCH the
-                # same id/uuid we GET'd above.
+                # All clear — PATCH (also wrapped).
                 fields = {"expireAt": _iso_z(p["real_end"]), "status": "ACTIVE"}
                 if external_squad:
                     fields["externalSquadUuid"] = external_squad
                 try:
                     result = await asyncio.wait_for(
-                        remnawave_api.update_user(ref_for_api, **fields),
+                        remnawave_api.update_user(uuid, **fields),
                         timeout=_FIX_HTTP_TIMEOUT_S,
                     )
                 except asyncio.TimeoutError:
                     progress["failed"] += 1
                     logger.warning(
                         "PREMIUM_RECOVERY_TIMEOUT_PATCH tg=%s uuid=%s after %ds",
-                        tg, ref_display, _FIX_HTTP_TIMEOUT_S,
+                        tg, uuid[:8], _FIX_HTTP_TIMEOUT_S,
                     )
                     return False
                 except Exception as e:
                     progress["failed"] += 1
                     logger.warning(
                         "PREMIUM_RECOVERY: PATCH tg=%s uuid=%s %s: %s",
-                        tg, ref_display, type(e).__name__, e,
+                        tg, uuid[:8], type(e).__name__, e,
                     )
                     return False
 
@@ -524,7 +508,7 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
                     progress["ok"] += 1
                     logger.info(
                         "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s username=%s to=%s source=%s",
-                        tg, ref_display, actual_username,
+                        tg, uuid[:8], actual_username,
                         p["real_end"].isoformat(), p["source"],
                     )
                     return True
@@ -532,7 +516,7 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
                     progress["failed"] += 1
                     logger.warning(
                         "PREMIUM_RECOVERY_FAIL tg=%s uuid=%s username=%s (PATCH rejected)",
-                        tg, ref_display, actual_username,
+                        tg, uuid[:8], actual_username,
                     )
                     return False
             finally:
