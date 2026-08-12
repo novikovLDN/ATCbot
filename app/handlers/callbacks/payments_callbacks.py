@@ -1647,6 +1647,131 @@ async def callback_pay_lava(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
 
 
+@payments_router.callback_query(F.data == "pay:sbp_sub")
+async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMContext):
+    """Оплата рекуррентной СБП-подпиской через Platega (paymentMethod=6).
+
+    MVP: admin-only + только период 30 дней (interval=3 месяц).
+    Итог: юзеру приходит ссылка redirect (окно 30 мин) на привязку
+    счёта в банке. После подтверждения Platega начинает слать
+    callback'и списаний на /webhooks/platega-subscription — их
+    ловит platega_service.process_subscription_webhook_data.
+    """
+    telegram_id = callback.from_user.id
+    import platega_service
+    if not platega_service.is_subscription_visible_to(telegram_id):
+        await callback.answer("СБП-подписка пока в закрытой бете", show_alert=True)
+        return
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(
+            rate_limit_message or i18n_get_text(language, "common.rate_limit_message"),
+            show_alert=True,
+        )
+        return
+    language = await resolve_user_language(telegram_id)
+
+    current_state = await state.get_state()
+    if current_state != PurchaseState.choose_payment_method:
+        await callback.answer(
+            i18n_get_text(language, "errors.session_expired"), show_alert=True,
+        )
+        await state.set_state(None)
+        return
+
+    fsm_data = await state.get_data()
+    tariff_type = fsm_data.get("tariff_type")
+    period_days = fsm_data.get("period_days")
+    final_price_kopecks = fsm_data.get("final_price_kopecks")
+
+    if not (tariff_type and period_days and final_price_kopecks):
+        await callback.answer(
+            i18n_get_text(language, "errors.session_expired"), show_alert=True,
+        )
+        await state.set_state(None)
+        return
+
+    # MVP: поддерживаем ТОЛЬКО период=30 дней. Иначе — редиректим на разовую оплату.
+    if int(period_days) != 30:
+        await callback.answer(
+            "СБП-подписка сейчас доступна только для месячного тарифа (30 дней). "
+            "Выберите обычную СБП-оплату.",
+            show_alert=True,
+        )
+        return
+
+    interval = platega_service.SUBSCRIPTION_INTERVAL_MONTH  # 3
+
+    try:
+        final_price_rubles = final_price_kopecks / 100.0
+        if config.is_biz_tariff(tariff_type):
+            tariff_name = "Business"
+        elif tariff_type == "basic":
+            tariff_name = "Basic"
+        elif tariff_type == "plus":
+            tariff_name = "Plus"
+        else:
+            tariff_name = tariff_type
+
+        description = f"Atlas Secure VPN — подписка {tariff_name} (30 дн., авто-продление)"
+
+        hook_base = (getattr(config, "PUBLIC_BASE_URL", "") or "").rstrip("/")
+        return_url = f"{hook_base}/payment/success" if hook_base else None
+        failed_url = f"{hook_base}/payment/fail" if hook_base else None
+
+        sub_result = await platega_service.create_subscription(
+            amount_rubles=final_price_rubles,
+            interval=interval,
+            description=description,
+            telegram_id=telegram_id,
+            tariff_type=tariff_type,
+            period_days=int(period_days),
+            return_url=return_url,
+            failed_url=failed_url,
+        )
+
+        subscription_id = sub_result["subscription_id"]
+        redirect_url = sub_result["redirect_url"]
+
+        logger.info(
+            "platega_subscription_created_from_ui: user=%s sub_id=%s price=%.2f",
+            telegram_id, subscription_id, final_price_rubles,
+        )
+
+        text = (
+            f"🔄 <b>СБП-подписка (авто-продление)</b>\n\n"
+            f"Сумма: <b>{final_price_rubles:.2f} ₽</b> / 30 дней\n"
+            f"Тариф: <b>{tariff_name}</b>\n\n"
+            f"Нажмите кнопку ниже — откроется окно привязки счёта в вашем банке.\n"
+            f"<b>Окно активно 30 минут.</b> После подтверждения списания "
+            f"будут проходить автоматически каждый месяц.\n\n"
+            f"<i>Отменить подписку можно, написав в поддержку.</i>"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"🔗 Открыть форму привязки ({final_price_rubles:.0f} ₽)",
+                url=redirect_url,
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="menu_buy_vpn",
+            )],
+        ])
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+        await state.set_state(None)
+        await state.clear()
+
+    except Exception as e:
+        logger.exception(f"Error creating Platega subscription: {e}")
+        await callback.answer(
+            i18n_get_text(language, "errors.payment_create"), show_alert=True,
+        )
+        await state.set_state(None)
+
+
 @payments_router.callback_query(F.data == "pay:wata")
 async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
     """Оплата подписки через Wata (admin-only beta).
