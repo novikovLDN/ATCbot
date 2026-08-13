@@ -147,12 +147,17 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             except Exception as e:
                 logger.warning(f"Error checking trial availability for user {telegram_id}: {e}")
 
+        # Первичный юзер (без подписки И без истории) — красные (danger)
+        # акценты, чтобы кнопки выделялись максимально на первом экране.
+        # Для юзеров с историей (была подписка / есть остаток ГБ) — зелёные.
+        primary_cta_style = "danger" if not has_bypass_history else "success"
+
         if trial_available:
             buttons.append([InlineKeyboardButton(
                 text=i18n_get_text(language, "main.btn_trial_free", "Попробовать бесплатно — 3 дня"),
                 callback_data="activate_trial",
                 icon_custom_emoji_id=CE["gift"],
-                style="success",
+                style=primary_cta_style,
             )])
 
         # Спецпредложение для истекших
@@ -165,7 +170,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                     text=i18n_get_text(language, "main.btn_renew_discount_15", "Продлить со скидкой 15% | ⏳ {remaining}", remaining=remaining),
                     callback_data="special_offer_buy",
                     icon_custom_emoji_id=CE["renew"],
-                    style="success",
+                    style=primary_cta_style,
                 )])
                 offer_shown = True
         except Exception as e:
@@ -176,7 +181,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             text=i18n_get_text(language, "main.btn_buy_vpn", "Купить VPN"),
             callback_data="menu_buy_vpn",
             icon_custom_emoji_id=CE["buy"],
-            style="success",
+            style=primary_cta_style,
         )])
 
         # «Только обход блокировок» — только для юзеров без истории
@@ -184,7 +189,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             buttons.append([InlineKeyboardButton(
                 text=i18n_get_text(language, "main.btn_bypass_only", "🌐 Только обход блокировок"),
                 callback_data="buy_bypass_only",
-                style="success",
+                style=primary_cta_style,
             )])
 
     # === Общие ряды — только для юзеров с подпиской или историей ===
