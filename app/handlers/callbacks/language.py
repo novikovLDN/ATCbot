@@ -30,30 +30,47 @@ START_LANG_PHOTO_FILE_ID = "AgACAgQAAxkBAAF-HCtqdNZHr6Mc4RuRslZA_PBJFPwThQACgw5r
 
 @language_router.callback_query(F.data == "change_language")
 async def callback_change_language(callback: CallbackQuery):
-    """Изменить язык"""
+    """Изменить язык — фото-экран, как /start язык-picker (ru/en).
+
+    Кнопки уводят в существующий `lang_*` flow (без активации триала),
+    в отличие от `start_lang_*`, который используется только при /start.
+    """
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    # Экран выбора языка (канонический вид)
-    text = i18n_get_text(language, "lang.select")
-    # Если текущее сообщение — фото (главный экран без подписки), удаляем и отправляем новое
-    if callback.message.photo:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.bot.send_message(
-            callback.message.chat.id,
-            text,
-            reply_markup=get_language_keyboard(language),
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    title = i18n_get_text(language, "start_lang.title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "lang.button_ru"),
+                callback_data="lang_ru",
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "lang.button_en"),
+                callback_data="lang_en",
+            ),
+        ],
+    ])
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    try:
+        await callback.bot.send_photo(
+            chat_id=callback.message.chat.id,
+            photo=START_LANG_PHOTO_FILE_ID,
+            caption=title,
+            reply_markup=keyboard,
             parse_mode="HTML",
         )
-    else:
-        await safe_edit_text(
-            callback.message,
-            text,
-            reply_markup=get_language_keyboard(language),
-            bot=callback.bot
+    except Exception:
+        await callback.bot.send_message(
+            chat_id=callback.message.chat.id,
+            text=title,
+            reply_markup=keyboard,
+            parse_mode="HTML",
         )
     await callback.answer()
 
