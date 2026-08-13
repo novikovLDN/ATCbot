@@ -37,17 +37,19 @@ logger = logging.getLogger(__name__)
 # `_send_screen_photo` falls back to a plain text message on ANY
 # send_photo failure (stale id / wrong bot / caption too long), so a
 # bad file_id never breaks a screen — it just degrades to text.
-PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU06RqGqSy7ZznGSzMqpWqKob_ly-ByQACYA9rGxA30FBNWYvPRln8OgEAAwIAA3kAAzsE"
+PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAF_0eZqfhvhiUZBdALxqV1bT5M-U0GPGgAC6BFrG3NR8VOGYtduypInugEAAwIAA3cAAz0E"
 
 SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU07dqGqVLNGYWl3jMGShmNxuNUgvkpAACGw5rG4Qv2VBVBIqM5lqnCgEAAwIAA3kAAzsE"
 
 CONTACTS_PHOTO_FILE_ID = "AgACAgQAAxkBAAFaMrhqIIn_mXiy0317JBGMgFkHl6d9DQACvhZrG8kkCVH3VeBvZR6bxAEAAwIAA3kAAzsE"
 
-SHOP_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU08RqGqWH5bytFQj3dTputnGpYJzHEAACHA5rG4Qv2VAe5eXMo4mvpAEAAwIAA3kAAzsE"
+SHOP_PHOTO_FILE_ID = "AgACAgQAAxkBAAF_0glqfh1UN3qWxjF1pBnx0kSISew9xAAC6hFrG3NR8VNECE_tmcgrxwEAAwIAA3cAAz0E"
 
 GIFT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU08dqGqW7fM71f6jxAAHg0TqaIRev3jAAAh0OaxuEL9lQeDYgAjezwKoBAAMCAAN5AAM7BA"
 
 GAMES_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU09FqGqX9Jn5MUCs5Umhem0uAzq_wNwACHg5rG4Qv2VCtTQ2_vzbH5gEAAwIAA3kAAzsE"
+
+MY_SUBSCRIPTION_PHOTO_FILE_ID = "AgACAgQAAxkBAAF_0btqfhnsntISOSSa4HeiUMBkOoaLeQAC2RFrG3NR8VP0xTJDQxtIZgEAAwIAA3cAAz0E"
 
 # Telegram caps photo captions at 1024 chars (vs 4096 for plain text).
 # The profile screen with the bypass-traffic section + keys can exceed
@@ -860,7 +862,19 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
     )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
-    await safe_edit_text(msg, text, reply_markup=keyboard, parse_mode="HTML", bot=bot)
+    # Фото-экран: удаляем текущее сообщение и шлём photo+caption через
+    # _send_screen_photo (fallback на text при устаревшем file_id или
+    # caption > 1024).
+    chat_id = msg.chat.id if hasattr(msg, "chat") else telegram_id
+    if isinstance(event, CallbackQuery):
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+    await _send_screen_photo(
+        bot, chat_id, MY_SUBSCRIPTION_PHOTO_FILE_ID, text,
+        reply_markup=keyboard, parse_mode="HTML",
+    )
 
 
 async def _open_legal_screen(event: Union[Message, CallbackQuery], bot: Bot):
