@@ -636,6 +636,11 @@ async def _open_buy_screen(
             callback_data="buy_combo"
         )],
         [InlineKeyboardButton(
+            text="Купить Telegram MT Прокси",
+            callback_data="proxy_menu",
+            style="success",
+        )],
+        [InlineKeyboardButton(
             text="🎟 У меня промокод",
             callback_data="enter_promo"
         )],
