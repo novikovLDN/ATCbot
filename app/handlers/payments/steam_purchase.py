@@ -447,24 +447,6 @@ async def _create_pending_purchase(telegram_id: int, login: str, amount: int, pr
 
 # ── Payment: Balance ──────────────────────────────────────────────────
 
-@steam_purchase_router.callback_query(
-    F.data == "steam:pay:balance",
-    StateFilter(SteamPurchaseState.choose_payment_method),
-)
-async def callback_steam_pay_balance(callback: CallbackQuery, state: FSMContext):
-    # Balance payment is disabled by policy for Steam top-ups.  The UI no
-    # longer surfaces this button, but the route stays here as a guard
-    # against hand-crafted callback_data.
-    try:
-        await callback.answer(
-            "Оплата с баланса для пополнения Steam недоступна. "
-            "Выберите карту или СБП.",
-            show_alert=True,
-        )
-    except Exception:
-        pass
-
-
 # ── Payment: Card via Telegram Payments (YooKassa) ────────────────────
 
 @steam_purchase_router.callback_query(

@@ -79,34 +79,6 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "back_to_main")
-async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
-    """Возврат в главное меню с экрана выдачи ключа"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    await state.clear()
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    text = await _get_main_text(telegram_id, language)
-    keyboard = await get_main_menu_keyboard(language, telegram_id)
-
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await callback.bot.send_photo(
-        chat_id=callback.message.chat.id,
-        photo=_MAIN_PHOTO_ID,
-        caption=text,
-        parse_mode="HTML",
-        reply_markup=keyboard,
-    )
-
-
 async def _get_main_text(telegram_id: int, language: str) -> str:
     """Определяет текст главного экрана: обычный, бизнес, bypass-only или без подписки.
 
@@ -273,28 +245,6 @@ async def callback_about(callback: CallbackQuery):
     await _open_about_screen(callback, callback.bot)
 
 
-@router.callback_query(F.data == "menu_service_status")
-async def callback_service_status(callback: CallbackQuery):
-    """Статус сервиса"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    text = i18n_get_text(language, "main.service_status_text", "service_status_text")
-
-    incident = await database.get_incident_settings()
-    if incident["is_active"]:
-        incident_text = incident.get("incident_text") or i18n_get_text(language, "main.incident_banner", "incident_banner")
-        warning = i18n_get_text(language, "main.incident_status_warning", incident_text=incident_text)
-        text = text + warning
-
-    await safe_edit_text(callback.message, text, reply_markup=get_service_status_keyboard(language), bot=callback.bot)
-
-
 @router.callback_query(F.data == "about_privacy")
 async def callback_privacy(callback: CallbackQuery):
     """Политика конфиденциальности"""
@@ -423,44 +373,6 @@ async def callback_instruction(callback: CallbackQuery):
 
 
 
-@router.callback_query(F.data == "go_profile", StateFilter(default_state))
-@router.callback_query(F.data == "go_profile")
-async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
-    """Переход в профиль с экрана выдачи ключа - работает независимо от FSM состояния"""
-    telegram_id = callback.from_user.id
-    
-    # Немедленная обратная связь пользователю
-    await callback.answer()
-    
-    # Очищаем FSM состояние, если пользователь был в каком-то процессе
-    try:
-        current_state = await state.get_state()
-        if current_state is not None:
-            await state.clear()
-            logger.debug(f"Cleared FSM state for user {telegram_id}, was: {current_state}")
-    except Exception as e:
-        logger.debug(f"FSM state clear failed (may be already clear): {e}")
-    
-    try:
-        logger.info(f"Opening profile via go_profile for user {telegram_id}")
-        
-        language = await resolve_user_language(telegram_id)
-        
-        await show_profile(callback, language)
-        
-        logger.info(f"Profile opened successfully via go_profile for user {telegram_id}")
-    except Exception as e:
-        logger.exception(f"Error opening profile via go_profile for user {telegram_id}: {e}")
-        # Пытаемся отправить сообщение об ошибке
-        try:
-            user = await database.get_user(telegram_id)
-            language = await resolve_user_language(callback.from_user.id)
-            error_text = i18n_get_text(language, "errors.profile_load")
-            await callback.message.answer(error_text, parse_mode="HTML")
-        except Exception as e2:
-            logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
-
-
 @router.callback_query(F.data.in_({"copy_key_menu", "copy_key", "copy_key_plus", "copy_vpn_key"}))
 async def callback_connect_instead_of_copy(callback: CallbackQuery):
     """Ключи больше не отправляются в боте; показываем кнопку «Подключиться» (Mini App)."""
@@ -477,56 +389,6 @@ async def callback_connect_instead_of_copy(callback: CallbackQuery):
         parse_mode="HTML",
         reply_markup=get_connect_keyboard(language),
     )
-
-
-@router.callback_query(F.data == "get_sub_key")
-async def callback_get_sub_key(callback: CallbackQuery):
-    """Отправить ключ подписки с инструкцией по подключению."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
-        return
-
-    telegram_id = callback.from_user.id
-    subscription = await database.get_subscription(telegram_id)
-    if not subscription:
-        language = await resolve_user_language(telegram_id)
-        await callback.message.answer(
-            i18n_get_text(language, "get_key.no_subscription", "❌ У вас нет активной подписки."),
-            parse_mode="HTML",
-        )
-        return
-
-    language = await resolve_user_language(telegram_id)
-    from app.services.user_subscription_links import get_user_primary_subscription_url
-    sub_url = await get_user_primary_subscription_url(telegram_id)
-
-    text = i18n_get_text(language, "get_key.instruction_text",
-        "📖 <b>Инструкция по подключению</b>\n\n"
-        "<b>Happ</b> — откройте приложение → внизу нажмите на буфер обмена 🗒️ → ключ добавится автоматически\n\n"
-        "⸻\n\n"
-        "👇 Скопируйте ключ одним нажатием:")
-
-    full_text = f"{text}\n\n<code>{sub_url}</code>"
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.device_button"),
-            callback_data="setup_device",
-            style="primary",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
-            icon_custom_emoji_id=CE["back"],
-            style="primary",
-        )],
-    ])
-
-    await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
 
 
 # ── Connect instruction ──────────────────────────────────────────
@@ -1102,19 +964,6 @@ async def callback_setup_platform(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
-
-
-@router.callback_query(F.data.startswith("setup_key:"))
-async def callback_setup_key(callback: CallbackQuery):
-    """Legacy redirect — перенаправляем на объединённый экран."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-    platform = callback.data.split(":")[1]
-    # Rewrite callback data and redirect
-    callback.data = f"setup_platform:{platform}"
-    await callback_setup_platform(callback)
 
 
 @router.callback_query(F.data.startswith("setup_manual:"))
@@ -1702,104 +1551,6 @@ async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
 
     from handlers import show_payment_method_selection
     await show_payment_method_selection(callback, base_tariff, period_days, price_kopecks)
-
-
-@router.callback_query(F.data.startswith("combo_pay_balance:"))
-async def callback_combo_pay_balance(callback: CallbackQuery):
-    """Оплата комбо с баланса: активация подписки + начисление трафика обхода."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    parts = callback.data.split(":")
-    if len(parts) != 3:
-        return
-    combo_type = parts[1]
-    try:
-        period_days = int(parts[2])
-    except (ValueError, IndexError):
-        return
-
-    if combo_type not in config.COMBO_TARIFFS:
-        return
-    info = config.COMBO_TARIFFS[combo_type].get(period_days)
-    if not info:
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    price = info["price"]
-    gb = info["gb"]
-    base_tariff = info["base_tariff"]
-
-    balance = await database.get_user_balance(telegram_id)
-    if balance < price:
-        text = i18n_get_text(language, "traffic.insufficient_balance")
-        buttons = [[InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"combo_period:{combo_type}:{period_days}",
-            icon_custom_emoji_id=CE["back"],
-            style="primary",
-        )]]
-        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
-        return
-
-    # 1. Create pending purchase with base tariff
-    from app.services.subscriptions import service as subscription_service
-    price_kopecks = price * 100
-    try:
-        purchase_id = await subscription_service.create_subscription_purchase(
-            telegram_id=telegram_id,
-            tariff=base_tariff,
-            period_days=period_days,
-            price_kopecks=price_kopecks,
-            is_combo=True,
-        )
-    except Exception as e:
-        logger.error(f"Combo purchase creation failed: {e}")
-        text = "❌ Ошибка создания покупки. Попробуйте позже."
-        buttons = [[InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_combo", icon_custom_emoji_id=CE["back"], style="primary")]]
-        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
-        return
-
-    # 2. Deduct balance
-    await database.decrease_balance(telegram_id, price, source="combo_purchase", description=f"Combo {base_tariff} {period_days}d + {gb}GB bypass")
-
-    # 3. Finalize purchase (activates subscription, creates VPN key, etc.)
-    try:
-        result = await subscription_service.finalize_purchase(
-            purchase_id=purchase_id,
-            payment_provider="balance",
-            amount_rubles=float(price),
-        )
-        if not result.get("success"):
-            logger.error(f"Combo finalize failed: {result}")
-    except Exception as e:
-        logger.error(f"Combo finalize error: {e}")
-
-    # 4. Add bypass traffic
-    from app.services import remnawave_service
-    traffic_bytes = gb * 1024**3
-    try:
-        rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
-        if not rmn_success:
-            logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_FAIL user={telegram_id} gb={gb}")
-    except Exception as traffic_err:
-        logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_ERROR user={telegram_id}: {traffic_err}")
-
-    # 5. Record traffic purchase + mark as combo
-    await database.record_traffic_purchase(telegram_id, gb, 0)
-    await database.set_combo_flag(telegram_id, True)
-
-    months = period_days // 30
-    text = i18n_get_text(language, "combo.purchase_success",
-                         tariff=base_tariff.capitalize(), months=months, gb=gb)
-    buttons = [
-        [InlineKeyboardButton(text="📲 Подключиться", callback_data="connect_instruction", style="primary")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
-    ]
-    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
 
 
 # ── Mini Shop ────────────────────────────────────────────────────

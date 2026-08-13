@@ -1,6 +1,6 @@
 """
 Subscription-related callback handlers: toggle_auto_renew, activate_trial,
-menu_profile, menu_vip_access, renewal_pay, subscription_history.
+menu_profile, renewal_pay.
 """
 import asyncio
 import logging
@@ -377,34 +377,6 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
 
 
-@subscription_router.callback_query(F.data == "menu_vip_access")
-async def callback_vip_access(callback: CallbackQuery):
-    """Обработчик кнопки 'VIP-доступ'"""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    is_vip = await database.is_vip_user(telegram_id)
-
-    text = i18n_get_text(language, "main.vip_access_text", "vip_access_text")
-
-    if is_vip:
-        text += "\n\n" + i18n_get_text(language, "main.vip_status_active")
-
-    from app.handlers.common.emoji import CE
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.contact_manager_button"),
-            url="https://t.me/atlas_suppbot"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_profile",
-            icon_custom_emoji_id=CE["back"],
-            style="primary",
-        )]
-    ])
-
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
     await callback.answer()
 
 
@@ -485,51 +457,3 @@ async def callback_renewal_pay(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
-@subscription_router.callback_query(F.data == "subscription_history")
-async def callback_subscription_history(callback: CallbackQuery):
-    """История подписок"""
-    await callback.answer()
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    history = await database.get_subscription_history(telegram_id, limit=5)
-
-    if not history:
-        text = i18n_get_text(language, "subscription.history_empty", "subscription_history_empty")
-        await callback.message.answer(text, parse_mode="HTML")
-        return
-
-    text = i18n_get_text(language, "subscription.history", "subscription_history") + "\n\n"
-
-    action_type_map = {
-        "purchase": i18n_get_text(language, "subscription.history_action_purchase", "subscription_history_action_purchase"),
-        "renewal": i18n_get_text(language, "subscription.history_action_renewal", "subscription_history_action_renewal"),
-        "reissue": i18n_get_text(language, "subscription.history_action_reissue", "subscription_history_action_reissue"),
-        "manual_reissue": i18n_get_text(language, "subscription.history_action_manual_reissue", "subscription_history_action_manual_reissue"),
-    }
-
-    for record in history:
-        start_date = record["start_date"]
-        if isinstance(start_date, str):
-            start_date = datetime.fromisoformat(start_date)
-        start_str = start_date.strftime("%d.%m.%Y")
-
-        end_date = record["end_date"]
-        if isinstance(end_date, str):
-            end_date = datetime.fromisoformat(end_date)
-        end_str = end_date.strftime("%d.%m.%Y")
-
-        action_type = record["action_type"]
-        action_text = action_type_map.get(action_type, action_type)
-
-        text += f"• {start_str} — {action_text}\n"
-
-        if action_type in ["purchase", "reissue", "manual_reissue"]:
-            key_label = i18n_get_text(language, "subscription.history_key_label")
-            text += f"  {key_label} {record['vpn_key']}\n"
-
-        expires_label = i18n_get_text(language, "subscription.history_expires")
-        text += f"  {expires_label} {end_str}\n\n"
-
-    await callback.message.answer(text, reply_markup=get_back_keyboard(language), parse_mode="HTML")

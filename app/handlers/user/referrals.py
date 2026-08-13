@@ -37,34 +37,6 @@ async def callback_referral(callback: CallbackQuery):
     await _open_referral_screen(callback, callback.bot)
 
 
-@user_router.callback_query(F.data == "share_referral_link")
-@user_router.callback_query(F.data == "copy_referral_link")
-async def callback_copy_referral_link(callback: CallbackQuery):
-    """Поделиться реферальной ссылкой - отправляет ссылку отдельным сообщением"""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(callback.from_user.id)
-    
-    try:
-        # Получаем username бота для реферальной ссылки
-        bot_info = await callback.bot.get_me()
-        referral_link = await build_referral_link(telegram_id, bot_info.username)
-        
-        # Отправляем ссылку отдельным сообщением для копирования (одно нажатие в Telegram)
-        await callback.message.answer(
-            f"<code>{referral_link}</code>",
-            parse_mode="HTML"
-        )
-        
-        # Показываем toast уведомление
-        await callback.answer(i18n_get_text(language, "referral.link_copied"), show_alert=False)
-        
-        logger.info(f"Referral link sent to user: {telegram_id}")
-        
-    except Exception as e:
-        logger.exception(f"Error in share_referral_link handler: user={telegram_id}: {e}")
-        await callback.answer(i18n_get_text(language, "errors.profile_load"), show_alert=True)
-
-
 @user_router.callback_query(F.data == "referral_stats")
 async def callback_referral_stats(callback: CallbackQuery):
     """Экран «Подробнее» — расширенный презентационный текст. Delete + answer to support navigation from photo (loyalty screen)."""
