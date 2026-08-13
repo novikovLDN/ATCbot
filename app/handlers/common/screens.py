@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # `_send_screen_photo` falls back to a plain text message on ANY
 # send_photo failure (stale id / wrong bot / caption too long), so a
 # bad file_id never breaks a screen — it just degrades to text.
-PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU06RqGqSy7ZznGSzMqpWqKob_ly-ByQACYA9rGxA30FBNWYvPRln8OgEAAwIAA3kAAzsE"
+PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAF_0eZqfhvhiUZBdALxqV1bT5M-U0GPGgAC6BFrG3NR8VOGYtduypInugEAAwIAA3cAAz0E"
 
 SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU07dqGqVLNGYWl3jMGShmNxuNUgvkpAACGw5rG4Qv2VBVBIqM5lqnCgEAAwIAA3kAAzsE"
 
