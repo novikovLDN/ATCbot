@@ -30,6 +30,31 @@ def _strip_lead_emoji(s: str) -> str:
 MINI_APP_URL = config.env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app")
 
 
+# ── Premium custom emoji IDs (Bot API 9.4) ─────────────────────────────
+# Собраны единым словарём, чтобы не повторять литералы в 5 местах и
+# централизованно обновлять при ребрендинге.
+CE = {
+    "buy":          "6030561664758191905",   # 🛒 Купить (VPN / подписку)
+    "renew":        "6030517456659814017",   # 🔄 Продлить
+    "traffic":      "6019336759140165949",   # 📡 Докупить ГБ / трафик
+    "my_sub":       "6021344879689341042",   # ⛓️ Моя подписка
+    "invite":       "6021678620123077295",   # 👤 Пригласить друзей
+    "profile":      "6024039683904772353",   # 👤 Мой профиль
+    "shop":         "6030664675253820292",   # 🛒 Магазин
+    "games":        "6023852878597200124",   # 🎮 Игры
+    "help":         "6021798595739523148",   # 🆘 Помощь
+    "gift":         "6023826881160157558",   # 🎁 Триал
+    "connect":      "5807928135139728476",   # 🌐 Подключить VPN
+    "proxy":        "6019289243916968110",   # 🛜 MT Прокси
+    "back":         "6021510515103111203",   # 👈 Назад
+    "devices":      "6019098624678435283",   # 💻 Мои устройства
+    "wallet":       "6030443364178992166",   # 👛 Пополнить баланс
+    "language":     "6030768072296502910",   # 💬 Сменить язык
+    "legal":        "6021344660646009373",   # 🧑 Правила
+    "promo":        "6021594546138257831",   # 🏷 Промокод
+}
+
+
 def get_connect_button():
     """Одна кнопка WebApp «Подключиться» (Mini App)."""
     return InlineKeyboardMarkup(inline_keyboard=[[
@@ -111,18 +136,22 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
 
     if has_active_sub:
         # === Активная подписка ===
-        # Row 1: Продлить VPN (green success)
+        # Row 1: Продлить VPN (🔄) / Купить VPN (🛒 — для bypass-only)
+        if is_bypass_only:
+            buy_text, buy_icon = "Купить VPN", CE["buy"]
+        else:
+            buy_text, buy_icon = "Продлить VPN", CE["renew"]
         buttons.append([InlineKeyboardButton(
-            text="Продлить VPN" if not is_bypass_only else "Купить VPN",
+            text=buy_text,
             callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            icon_custom_emoji_id=buy_icon,
             style="success",
         )])
-        # Row 2: Докупить ГБ обхода (green success)
+        # Row 2: Докупить ГБ обхода (📡)
         buttons.append([InlineKeyboardButton(
             text="Докупить ГБ обхода",
             callback_data="buy_traffic",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            icon_custom_emoji_id=CE["traffic"],
             style="success",
         )])
     else:
@@ -136,8 +165,9 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
 
         if trial_available:
             buttons.append([InlineKeyboardButton(
-                text="🎁 Попробовать бесплатно — 3 дня",
+                text="Попробовать бесплатно — 3 дня",
                 callback_data="activate_trial",
+                icon_custom_emoji_id=CE["gift"],
                 style="success",
             )])
 
@@ -150,23 +180,22 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                 buttons.append([InlineKeyboardButton(
                     text=f"Продлить со скидкой 15% | ⏳ {remaining}",
                     callback_data="special_offer_buy",
-                    icon_custom_emoji_id="5199785165735367039",  # ⚡️
+                    icon_custom_emoji_id=CE["renew"],
                     style="success",
                 )])
                 offer_shown = True
         except Exception as e:
             logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
 
-        # Row 1: Купить VPN (green)
+        # Row 1: Купить VPN (🛒)
         buttons.append([InlineKeyboardButton(
             text="Купить VPN",
             callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            icon_custom_emoji_id=CE["buy"],
             style="success",
         )])
 
         # «Только обход блокировок» — только для юзеров без истории
-        # (первый вход, никогда не покупал ни подписку, ни ГБ).
         if not has_bypass_history:
             buttons.append([InlineKeyboardButton(
                 text="🌐 Только обход блокировок",
@@ -176,52 +205,52 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
 
     # === Общие ряды (одинаковые для активной и неактивной подписок) ===
 
-    # Row: Моя подписка — виден если есть подписка или остаток ГБ
+    # Row: Моя подписка (⛓️) — виден если есть подписка или остаток ГБ
     if show_my_sub:
         buttons.append([InlineKeyboardButton(
             text="Моя подписка",
             callback_data="menu_my_subscription",
-            icon_custom_emoji_id="5330115548900501467",  # 💠
+            icon_custom_emoji_id=CE["my_sub"],
             style="primary",
         )])
 
-    # Row: Пригласить друзей (переименован из «Заработать с нами»)
+    # Row: Пригласить друзей (👤)
     buttons.append([InlineKeyboardButton(
         text="Пригласить друзей",
         callback_data="menu_referral",
-        icon_custom_emoji_id="5449601904147440135",  # 👑
+        icon_custom_emoji_id=CE["invite"],
         style="primary",
     )])
 
-    # Row: Мой профиль | Магазин
+    # Row: Мой профиль (👤) | Магазин (🛒)
     buttons.append([
         InlineKeyboardButton(
             text="Мой профиль",
             callback_data="menu_profile",
-            icon_custom_emoji_id="6019503133288304110",  # 🧑‍💻
+            icon_custom_emoji_id=CE["profile"],
             style="primary",
         ),
         InlineKeyboardButton(
             text="Магазин",
             callback_data="mini_shop",
-            icon_custom_emoji_id="5323510761077636002",  # 🛍
+            icon_custom_emoji_id=CE["shop"],
             style="primary",
         ),
     ])
 
-    # Row: Игры (одна широкая кнопка)
+    # Row: Игры (🎮)
     buttons.append([InlineKeyboardButton(
         text="Игры",
         callback_data="games_menu",
-        icon_custom_emoji_id="5262932983261699334",  # 🎮
+        icon_custom_emoji_id=CE["games"],
         style="primary",
     )])
 
-    # Row: Помощь (отдельным рядом)
+    # Row: Помощь (🆘)
     buttons.append([InlineKeyboardButton(
         text="Помощь",
         callback_data="menu_help",
-        icon_custom_emoji_id="5188540541922480562",  # ❓
+        icon_custom_emoji_id=CE["help"],
         style="primary",
     )])
 
@@ -323,59 +352,63 @@ def get_profile_keyboard(
     """Личный кабинет: покупки — зелёные (success), навигация — синие (primary)."""
     buttons = []
 
-    # Row 1: Купить / Продлить VPN (green success)
-    buy_text = (
-        "Продлить VPN"
-        if has_active_subscription and not is_bypass_only
-        else "Купить VPN"
-    )
+    # Row 1: Продлить VPN (🔄) / Купить VPN (🛒)
+    if has_active_subscription and not is_bypass_only:
+        buy_text, buy_icon = "Продлить VPN", CE["renew"]
+    else:
+        buy_text, buy_icon = "Купить VPN", CE["buy"]
     buttons.append([InlineKeyboardButton(
         text=buy_text,
         callback_data="menu_buy_vpn",
-        icon_custom_emoji_id="5199785165735367039",  # ⚡️
+        icon_custom_emoji_id=buy_icon,
         style="success",
     )])
 
-    # Row 2: Докупить ГБ обхода (green success)
+    # Row 2: Докупить ГБ обхода (📡)
     buttons.append([InlineKeyboardButton(
         text="Докупить ГБ обхода",
         callback_data="buy_traffic",
-        icon_custom_emoji_id="5199785165735367039",  # ⚡️
+        icon_custom_emoji_id=CE["traffic"],
         style="success",
     )])
 
-    # Row 3: Мои устройства (primary blue)
+    # Row 3: Мои устройства (💻)
     buttons.append([InlineKeyboardButton(
-        text="🖥 Мои устройства",
+        text="Мои устройства",
         callback_data="user:devices",
+        icon_custom_emoji_id=CE["devices"],
         style="primary",
     )])
 
-    # Row 4: Пополнить баланс (primary blue)
+    # Row 4: Пополнить баланс (👛)
     buttons.append([InlineKeyboardButton(
-        text="💳 Пополнить баланс",
+        text="Пополнить баланс",
         callback_data="topup_balance",
+        icon_custom_emoji_id=CE["wallet"],
         style="primary",
     )])
 
-    # Row 5: Сменить язык (primary blue)
+    # Row 5: Сменить язык (💬)
     buttons.append([InlineKeyboardButton(
-        text="🗣 Сменить язык / Change language",
+        text="Сменить язык / Change language",
         callback_data="change_language",
+        icon_custom_emoji_id=CE["language"],
         style="primary",
     )])
 
-    # Row 6: Правила (primary blue)
+    # Row 6: Правила (🧑)
     buttons.append([InlineKeyboardButton(
-        text="📰 Правила",
+        text="Правила",
         callback_data="menu_legal",
+        icon_custom_emoji_id=CE["legal"],
         style="primary",
     )])
 
-    # Row 7: Назад
+    # Row 7: Назад (👈)
     buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back", "← Назад"),
+        text=i18n_get_text(language, "common.back", "Назад"),
         callback_data="menu_main",
+        icon_custom_emoji_id=CE["back"],
         style="primary",
     )])
 

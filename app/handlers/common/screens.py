@@ -570,6 +570,8 @@ async def _open_buy_screen(
     с экраном тарифов, а не вместо неё. По умолчанию False — стандартная
     in-place навигация (edit или delete-and-resend).
     """
+    from app.handlers.common.keyboards import CE
+
     if isinstance(event, CallbackQuery):
         try:
             await event.answer()
@@ -579,7 +581,7 @@ async def _open_buy_screen(
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
-    
+
     await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
     await database.cancel_pending_purchases(telegram_id, "new_purchase_started")
     await state.set_state(PurchaseState.choose_tariff)
@@ -638,11 +640,13 @@ async def _open_buy_screen(
         [InlineKeyboardButton(
             text="Купить Telegram MT Прокси",
             callback_data="proxy_menu",
+            icon_custom_emoji_id=CE["proxy"],
             style="success",
         )],
         [InlineKeyboardButton(
-            text="🎟 У меня промокод",
-            callback_data="enter_promo"
+            text="У меня промокод",
+            callback_data="enter_promo",
+            icon_custom_emoji_id=CE["promo"],
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
@@ -770,31 +774,43 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
     except Exception as e:
         logger.warning(f"my_subscription: proxy check failed for {telegram_id}: {e}")
 
+    from app.handlers.common.keyboards import CE
+
     kb_rows = []
     if has_active_subscription and not is_bypass_only:
         kb_rows.append([InlineKeyboardButton(
             text="Подключить VPN",
             callback_data="connect_instruction",
+            icon_custom_emoji_id=CE["connect"],
             style="primary",
         )])
+    # Продлить подписку (🔄) / Купить VPN (🛒)
+    if has_active_subscription and not is_bypass_only:
+        renew_text, renew_icon = "Продлить подписку", CE["renew"]
+    else:
+        renew_text, renew_icon = "Купить VPN", CE["buy"]
     kb_rows.append([InlineKeyboardButton(
-        text=("Продлить подписку" if has_active_subscription and not is_bypass_only else "Купить VPN"),
+        text=renew_text,
         callback_data="menu_buy_vpn",
+        icon_custom_emoji_id=renew_icon,
         style="success",
     )])
     kb_rows.append([InlineKeyboardButton(
         text="Пополнить ГБ Обхода",
         callback_data="buy_traffic",
+        icon_custom_emoji_id=CE["traffic"],
         style="success",
     )])
     kb_rows.append([InlineKeyboardButton(
         text=("Мой прокси" if has_proxy else "Telegram MT Прокси"),
         callback_data="proxy_menu",
+        icon_custom_emoji_id=CE["proxy"],
         style="primary",
     )])
     kb_rows.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back", "← Назад"),
+        text=i18n_get_text(language, "common.back", "Назад"),
         callback_data="menu_main",
+        icon_custom_emoji_id=CE["back"],
         style="primary",
     )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=kb_rows)
@@ -814,6 +830,8 @@ async def _open_legal_screen(event: Union[Message, CallbackQuery], bot: Bot):
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
 
+    from app.handlers.common.keyboards import CE
+
     text = "📰 <b>Правовые документы</b>\n\nВыберите документ для ознакомления:"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
@@ -825,8 +843,9 @@ async def _open_legal_screen(event: Union[Message, CallbackQuery], bot: Bot):
             url="https://telegra.ph/Politika-konfidencialnosti-08-06-86",
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back", "← Назад"),
+            text=i18n_get_text(language, "common.back", "Назад"),
             callback_data="menu_profile",
+            icon_custom_emoji_id=CE["back"],
             style="primary",
         )],
     ])
