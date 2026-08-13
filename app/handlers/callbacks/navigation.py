@@ -511,14 +511,17 @@ async def callback_setup_step1(callback: CallbackQuery):
             buttons.append([InlineKeyboardButton(
                 text="📲 Скачать Incy",
                 url=incy_url,
+                style="primary",
             )])
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "setup.install_happ_ru"),
             url=_IOS_HAPP_LINKS["ru"],
+            style="primary",
         )])
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "setup.install_happ_global"),
             url=_IOS_HAPP_LINKS["global"],
+            style="primary",
         )])
     elif platform == "android":
         links = _DOWNLOAD_LINKS.get("android", {})
@@ -526,6 +529,7 @@ async def callback_setup_step1(callback: CallbackQuery):
             buttons.append([InlineKeyboardButton(
                 text="📲 Установить Happ",
                 url=links["happ"],
+                style="primary",
             )])
         # Incy для Android — Play Market ссылка
         incy_url = links.get("incy")
@@ -533,17 +537,18 @@ async def callback_setup_step1(callback: CallbackQuery):
             buttons.append([InlineKeyboardButton(
                 text="📲 Скачать Incy",
                 url=incy_url,
+                style="primary",
             )])
     elif platform == "windows":
         buttons.append([InlineKeyboardButton(
             text="📲 Скачать Happ",
             url="https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
+            style="primary",
         )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.next_step"),
         callback_data=f"setup_step2:{platform}",
-        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),

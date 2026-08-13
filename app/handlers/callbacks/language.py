@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 import config as _cfg
 MAIN_PHOTO_FILE_ID = (
-    "AgACAgQAAxkBAAFU05tqGqRjuvf8dvqvfbY2oFk6alXedwACXg9rGxA30FCAHo8JfpwoZwEAAwIAA3kAAzsE"
+    "AgACAgQAAxkBAAF_xmlqfao80Yz-rdiEyVKfdz5s49Qd7gACLhFrG3NR8VO3FeagisF3hQEAAwIAA3kAAz0E"
     if _cfg.IS_PROD else
     "AgACAgQAAxkBAAIhcWoZ_p3HPwnRbry9fgbsOMMREvaVAAJeD2sbEDfQUDIWtf_E5Dx0AQADAgADeQADOwQ"
 )

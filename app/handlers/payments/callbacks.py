@@ -28,6 +28,7 @@ from app.handlers.common.keyboards import (
     get_connect_keyboard,
 )
 from app.handlers.common.states import PromoCodeInput, PurchaseState
+from app.handlers.common.emoji import CE
 from app.core.structured_logger import log_event
 from app.handlers.notifications import send_referral_cashback_notification
 
@@ -194,7 +195,15 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
     language = await resolve_user_language(telegram_id)
 
     new_tariff = callback.data.split(":")[1]
+    logger.info(
+        "SWITCH_TARIFF_CLICK: tg=%s tariff=%s state=%s",
+        telegram_id, new_tariff, await state.get_state(),
+    )
     if new_tariff not in _TARIFF_META:
+        logger.warning(
+            "SWITCH_TARIFF_UNKNOWN_META: tg=%s tariff=%s known=%s",
+            telegram_id, new_tariff, list(_TARIFF_META.keys()),
+        )
         return
 
     meta = _TARIFF_META[new_tariff]
