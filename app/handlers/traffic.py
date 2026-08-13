@@ -619,7 +619,7 @@ async def callback_buy_traffic(callback: CallbackQuery):
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data="traffic_info",
+        callback_data="menu_main",
         icon_custom_emoji_id=CE["back"],
         style="primary",
     )])
