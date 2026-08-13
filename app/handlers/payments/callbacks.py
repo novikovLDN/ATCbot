@@ -100,23 +100,31 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     else:
         renew_cb = f"tariff:{current_key}"
 
+    from app.handlers.common.keyboards import CE
     buttons = [
         [InlineKeyboardButton(
-            text=f"🔄 Продлить {meta['name']}",
+            text=f"Продлить {meta['name']}",
             callback_data=renew_cb,
+            icon_custom_emoji_id=CE["renew"],
+            style="success",
         )],
         [InlineKeyboardButton(
-            text="📦 Сменить тарифный план",
+            text="Сменить тарифный план",
             callback_data="switch_tariff_menu",
+            icon_custom_emoji_id=CE["my_sub"],
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="Купить ГБ обхода",
             callback_data="buy_traffic",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            icon_custom_emoji_id=CE["traffic"],
+            style="success",
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_profile",
+            text=i18n_get_text(language, "common.back", "Назад"),
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ]
 
@@ -149,6 +157,7 @@ async def callback_switch_tariff_menu(callback: CallbackQuery, state: FSMContext
         "Доступные тарифы:"
     )
 
+    from app.handlers.common.keyboards import CE
     buttons = []
     for key, meta in _TARIFF_META.items():
         if key == current_key:
@@ -156,11 +165,14 @@ async def callback_switch_tariff_menu(callback: CallbackQuery, state: FSMContext
         buttons.append([InlineKeyboardButton(
             text=f"{meta['icon']} {meta['name']}",
             callback_data=f"switch_tariff:{key}",
+            style="success",
         )])
 
     buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
+        text=i18n_get_text(language, "common.back", "Назад"),
         callback_data="menu_buy_vpn",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
