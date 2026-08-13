@@ -52,6 +52,7 @@ def get_connect_keyboard(language: str = "ru"):
         [InlineKeyboardButton(
             text="⚡️ Подключиться",
             callback_data="connect_instruction",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="💬 Нужна помощь",
@@ -64,8 +65,8 @@ def get_language_keyboard(language: str = "ru"):
     """Клавиатура выбора языка — только ru + en."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ru"), callback_data="lang_ru"),
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_en"), callback_data="lang_en"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ru"), callback_data="lang_ru", style="primary"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_en"), callback_data="lang_en", style="primary"),
         ],
     ])
     return keyboard
@@ -243,15 +244,18 @@ def _get_biz_main_menu_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_my_business"),
-            callback_data="biz_profile"
+            callback_data="biz_profile",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_control_panel"),
-            callback_data="biz_control_panel"
+            callback_data="biz_control_panel",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_ecosystem"),
-            callback_data="biz_ecosystem"
+            callback_data="biz_ecosystem",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_personal_manager"),
@@ -259,7 +263,8 @@ def _get_biz_main_menu_keyboard(language: str) -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.settings", "main.settings"),
-            callback_data="menu_settings"
+            callback_data="menu_settings",
+            style="primary",
         )],
     ])
 
@@ -269,11 +274,15 @@ def get_biz_profile_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_renew_config"),
-            callback_data="menu_buy_vpn"
+            callback_data="menu_buy_vpn",
+            icon_custom_emoji_id=CE["renew"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_topup"),
-            callback_data="topup_balance"
+            callback_data="topup_balance",
+            icon_custom_emoji_id=CE["wallet"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_connect"),
@@ -281,7 +290,9 @@ def get_biz_profile_keyboard(language: str) -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -291,11 +302,13 @@ def get_biz_control_panel_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_copy_login"),
-            callback_data="biz_copy_login"
+            callback_data="biz_copy_login",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_copy_password"),
-            callback_data="biz_copy_password"
+            callback_data="biz_copy_password",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_personal_manager"),
@@ -303,7 +316,9 @@ def get_biz_control_panel_keyboard(language: str) -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -313,7 +328,9 @@ def get_back_keyboard(language: str):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )]
     ])
 
@@ -407,16 +424,19 @@ def get_profile_keyboard_old(language: str):
         [
             InlineKeyboardButton(
                 text=i18n_get_text(language, "main.profile"),
-                callback_data="menu_profile"
+                callback_data="menu_profile",
+                style="primary",
             ),
             InlineKeyboardButton(
                 text=i18n_get_text(language, "main.instruction"),
-                callback_data="connect_instruction"
+                callback_data="connect_instruction",
+                style="primary",
             ),
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "profile.copy_key"),
-            callback_data="copy_key"
+            callback_data="copy_key",
+            style="primary",
         )]
     ])
 
@@ -440,6 +460,7 @@ def get_payment_success_keyboard(
         [InlineKeyboardButton(
             text=i18n_get_text(language, "trial.activated_btn_connect"),
             callback_data="connect_instruction",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "trial.activated_btn_support"),
@@ -458,15 +479,19 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
 
     for tariff_key in config.TARIFFS.keys():
         base_text = i18n_get_text(language, "buy.tariff_button_" + str(tariff_key), f"tariff_button_{tariff_key}")
-        buttons.append([InlineKeyboardButton(text=base_text, callback_data=f"tariff_type:{tariff_key}")])
+        buttons.append([InlineKeyboardButton(text=base_text, callback_data=f"tariff_type:{tariff_key}", style="primary")])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "buy.enter_promo"),
-        callback_data="enter_promo"
+        callback_data="enter_promo",
+        icon_custom_emoji_id=CE["promo"],
+        style="success",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data="menu_main"
+        callback_data="menu_main",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -479,7 +504,8 @@ def get_about_keyboard(language: str):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.privacy_policy", "privacy_policy"),
-            callback_data="about_privacy"
+            callback_data="about_privacy",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.our_channel"),
@@ -487,7 +513,9 @@ def get_about_keyboard(language: str):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -497,7 +525,9 @@ def get_service_status_keyboard(language: str):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
@@ -524,7 +554,9 @@ def get_instruction_keyboard(
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -560,9 +592,9 @@ def get_admin_back_keyboard(language: str = "ru"):
 def get_reissue_notification_keyboard(language: str = "ru"):
     """Клавиатура для уведомления о перевыпуске VPN-ключа"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.go_to_instruction"), callback_data="menu_instruction")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.copy_key"), callback_data="copy_vpn_key")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.my_profile"), callback_data="menu_profile")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.go_to_instruction"), callback_data="menu_instruction", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.copy_key"), callback_data="copy_vpn_key", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.my_profile"), callback_data="menu_profile", icon_custom_emoji_id=CE["profile"], style="primary")],
     ])
 
 
@@ -572,7 +604,9 @@ def _get_promo_error_keyboard(language: str) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="promo_back"
+                callback_data="promo_back",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )
         ]
     ])

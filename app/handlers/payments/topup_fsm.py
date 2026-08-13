@@ -13,6 +13,7 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_message
 from app.handlers.common.states import TopUpStates
+from app.handlers.common.emoji import CE
 
 payments_router = Router()
 logger = logging.getLogger(__name__)
@@ -63,7 +64,9 @@ async def process_topup_amount(message: Message, state: FSMContext):
             back_kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "common.back"),
-                    callback_data="topup_balance"
+                    callback_data="topup_balance",
+                    icon_custom_emoji_id=CE["back"],
+                    style="primary",
                 )]
             ])
             await message.answer(error_text, reply_markup=back_kb, parse_mode="HTML")
@@ -96,18 +99,22 @@ async def process_topup_amount(message: Message, state: FSMContext):
     buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.pay_with_card"),
-            callback_data=f"topup_card:{amount}"
+            callback_data=f"topup_card:{amount}",
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "payment.stars"),
-            callback_data=f"topup_stars:{amount}"
+            callback_data=f"topup_stars:{amount}",
+            style="primary",
         )],
     ]
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.lava"),
-            callback_data=f"topup_lava:{amount}"
+            callback_data=f"topup_lava:{amount}",
+            style="primary",
         )])
     # Wata — admin-only на этапе тестирования
     try:
@@ -115,13 +122,16 @@ async def process_topup_amount(message: Message, state: FSMContext):
         if wata_service.is_visible_to(telegram_id):
             buttons.append([InlineKeyboardButton(
                 text="💳 Wata (тест)",
-                callback_data=f"topup_wata:{amount}"
+                callback_data=f"topup_wata:{amount}",
+                style="primary",
             )])
     except Exception:
         pass
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data="topup_balance"
+        callback_data="topup_balance",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
