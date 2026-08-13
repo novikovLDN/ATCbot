@@ -65,7 +65,17 @@ async def cmd_start(message: Message, state: FSMContext):
     # Single DB fetch — extract language directly (avoid duplicate get_user call)
     user = await database.get_user(telegram_id)
     is_new_user = user is None
-    start_language = (user.get("language") or "ru") if user else "ru"
+
+    # AUTO-DETECT LANGUAGE (2026-08):
+    # Атлас поддерживает ru/en. Для нового юзера берём язык клиента Telegram
+    # (message.from_user.language_code, ISO 639-1). Если это 'ru' — сохраняем
+    # ru, иначе en. Существующий юзер использует ранее сохранённый.
+    tg_lang = (getattr(message.from_user, "language_code", None) or "").lower()
+    detected_language = "ru" if tg_lang.startswith("ru") else "en"
+    if user:
+        start_language = (user.get("language") or detected_language)
+    else:
+        start_language = detected_language
 
     # STAGE GATE: новые пользователи в stage сначала выбирают «пользователь /
     # разработчик». Пользователь — редирект на prod-бот по реф-ссылке, разработчик —
@@ -444,33 +454,24 @@ async def cmd_start(message: Message, state: FSMContext):
                 }
             )
     
-    # 2026-08: /start показывает язык-picker (ru/en). После выбора языка
-    # callback start_lang_* активирует триал (если eligible) и показывает
-    # экран согласия с 2 кнопками (Подключиться + Пользовательское соглашение).
-    from app.handlers.callbacks.language import START_LANG_PHOTO_FILE_ID
+    # 2026-08: язык автоопределяется из message.from_user.language_code для
+    # новых юзеров, для существующих берём ранее сохранённый. Picker больше
+    # не показываем — юзер меняет язык через Профиль → Сменить язык.
+    from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID
+    from app.handlers.callbacks.navigation import _get_main_text
     language = await resolve_user_language(telegram_id)
-    title = i18n_get_text(language, "start_lang.title")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ru"),
-                                 callback_data="start_lang_ru",
-                                 style="primary"),
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_en"),
-                                 callback_data="start_lang_en",
-                                 style="primary"),
-        ],
-    ])
+    text = await _get_main_text(telegram_id, language)
+    keyboard = await get_main_menu_keyboard(language, telegram_id)
     try:
         await message.bot.send_photo(
             chat_id=telegram_id,
-            photo=START_LANG_PHOTO_FILE_ID,
-            caption=title,
+            photo=MAIN_PHOTO_FILE_ID,
+            caption=text,
             reply_markup=keyboard,
             parse_mode="HTML",
         )
     except Exception:
-        # Fallback без фото если photo_file_id устарел на текущем боте
-        await message.answer(title, reply_markup=keyboard, parse_mode="HTML")
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 _SHARE_DISCOUNT_PERCENT = 30
