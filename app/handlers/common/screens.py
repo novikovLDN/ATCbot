@@ -759,6 +759,12 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
         f"💎 {bypass_line}"
     )
 
+    has_proxy = False
+    try:
+        has_proxy = await database.has_purchased_proxy(telegram_id)
+    except Exception as e:
+        logger.warning(f"my_subscription: proxy check failed for {telegram_id}: {e}")
+
     kb_rows = []
     if has_active_subscription and not is_bypass_only:
         kb_rows.append([InlineKeyboardButton(
@@ -775,6 +781,11 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
         text="Пополнить ГБ Обхода",
         callback_data="buy_traffic",
         style="success",
+    )])
+    kb_rows.append([InlineKeyboardButton(
+        text=("Мой прокси" if has_proxy else "Telegram MT Прокси"),
+        callback_data="proxy_menu",
+        style="primary",
     )])
     kb_rows.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back", "← Назад"),
