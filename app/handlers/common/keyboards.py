@@ -30,29 +30,10 @@ def _strip_lead_emoji(s: str) -> str:
 MINI_APP_URL = config.env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app")
 
 
-# ── Premium custom emoji IDs (Bot API 9.4) ─────────────────────────────
-# Собраны единым словарём, чтобы не повторять литералы в 5 местах и
-# централизованно обновлять при ребрендинге.
-CE = {
-    "buy":          "6030561664758191905",   # 🛒 Купить (VPN / подписку)
-    "renew":        "6030517456659814017",   # 🔄 Продлить
-    "traffic":      "6019336759140165949",   # 📡 Докупить ГБ / трафик
-    "my_sub":       "6021344879689341042",   # ⛓️ Моя подписка
-    "invite":       "6021678620123077295",   # 👤 Пригласить друзей
-    "profile":      "6024039683904772353",   # 👤 Мой профиль
-    "shop":         "6030664675253820292",   # 🛒 Магазин
-    "games":        "6023852878597200124",   # 🎮 Игры
-    "help":         "6021798595739523148",   # 🆘 Помощь
-    "gift":         "6023826881160157558",   # 🎁 Триал
-    "connect":      "5807928135139728476",   # 🌐 Подключить VPN
-    "proxy":        "6019289243916968110",   # 🛜 MT Прокси
-    "back":         "6021510515103111203",   # 👈 Назад
-    "devices":      "6019098624678435283",   # 💻 Мои устройства
-    "wallet":       "6030443364178992166",   # 👛 Пополнить баланс
-    "language":     "6030768072296502910",   # 💬 Сменить язык
-    "legal":        "6021344660646009373",   # 🧑 Правила
-    "promo":        "6021594546138257831",   # 🏷 Промокод
-}
+# Premium custom emoji IDs — moved to app.handlers.common.emoji so any
+# handler can import CE without pulling in keyboards.py (which depends on
+# database). Re-exported here for backwards compatibility.
+from app.handlers.common.emoji import CE  # noqa: E402,F401
 
 
 def get_connect_button():
