@@ -800,7 +800,7 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
             text="Подключить VPN",
             callback_data="connect_instruction",
             icon_custom_emoji_id=CE["connect"],
-            style="primary",
+            style="danger",
         )])
     # Продлить подписку (🔄) / Купить VPN (🛒)
     if has_active_subscription and not is_bypass_only:
