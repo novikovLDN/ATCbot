@@ -187,56 +187,60 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                 style="success",
             )])
 
-    # === Общие ряды (одинаковые для активной и неактивной подписок) ===
+    # === Общие ряды — только для юзеров с подпиской или историей ===
+    # Первичный юзер (никогда не покупал и без активной подписки) видит
+    # только офферы «Попробовать бесплатно / Купить VPN / Только обход» —
+    # без Профиль/Магазин/Игры/Помощь. Как только он что-то купит или
+    # активирует триал, появятся все ряды.
+    if has_active_sub or has_bypass_history:
+        # Row: Моя подписка (⛓️)
+        if show_my_sub:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "main.btn_my_subscription", "Моя подписка"),
+                callback_data="menu_my_subscription",
+                icon_custom_emoji_id=CE["my_sub"],
+                style="primary",
+            )])
 
-    # Row: Моя подписка (⛓️) — виден если есть подписка или остаток ГБ
-    if show_my_sub:
+        # Row: Пригласить друзей (👤)
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.btn_my_subscription", "Моя подписка"),
-            callback_data="menu_my_subscription",
-            icon_custom_emoji_id=CE["my_sub"],
+            text=i18n_get_text(language, "main.btn_invite_friends", "Пригласить друзей"),
+            callback_data="menu_referral",
+            icon_custom_emoji_id=CE["invite"],
             style="primary",
         )])
 
-    # Row: Пригласить друзей (👤)
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.btn_invite_friends", "Пригласить друзей"),
-        callback_data="menu_referral",
-        icon_custom_emoji_id=CE["invite"],
-        style="primary",
-    )])
+        # Row: Мой профиль (👤) | Магазин (🛒)
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.btn_my_profile", "Мой профиль"),
+                callback_data="menu_profile",
+                icon_custom_emoji_id=CE["profile"],
+                style="primary",
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.btn_shop", "Магазин"),
+                callback_data="mini_shop",
+                icon_custom_emoji_id=CE["shop"],
+                style="primary",
+            ),
+        ])
 
-    # Row: Мой профиль (👤) | Магазин (🛒)
-    buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.btn_my_profile", "Мой профиль"),
-            callback_data="menu_profile",
-            icon_custom_emoji_id=CE["profile"],
+        # Row: Игры (🎮)
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "main.btn_games", "Игры"),
+            callback_data="games_menu",
+            icon_custom_emoji_id=CE["games"],
             style="primary",
-        ),
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.btn_shop", "Магазин"),
-            callback_data="mini_shop",
-            icon_custom_emoji_id=CE["shop"],
+        )])
+
+        # Row: Помощь (🆘)
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "main.btn_help", "Помощь"),
+            callback_data="menu_help",
+            icon_custom_emoji_id=CE["help"],
             style="primary",
-        ),
-    ])
-
-    # Row: Игры (🎮)
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.btn_games", "Игры"),
-        callback_data="games_menu",
-        icon_custom_emoji_id=CE["games"],
-        style="primary",
-    )])
-
-    # Row: Помощь (🆘)
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.btn_help", "Помощь"),
-        callback_data="menu_help",
-        icon_custom_emoji_id=CE["help"],
-        style="primary",
-    )])
+        )])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
