@@ -109,15 +109,14 @@ async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
 async def _get_main_text(telegram_id: int, language: str) -> str:
     """Определяет текст главного экрана: обычный, бизнес, bypass-only или без подписки.
 
-    В конец каждого варианта добавляется main.legal_footer с ссылками на
-    политику конфиденциальности и пользовательское соглашение.
+    Legal footer больше не приклеивается — ссылки на политику и соглашение
+    живут в отдельном экране «Правила» (Мой профиль → Правила).
     """
-    footer = i18n_get_text(language, "main.legal_footer")
     try:
         sub = await database.get_subscription(telegram_id)
         sub_type = (sub.get("subscription_type") or "basic").strip().lower() if sub else None
         if sub and sub_type and config.is_biz_tariff(sub_type):
-            return i18n_get_text(language, "biz.main_screen") + footer
+            return i18n_get_text(language, "biz.main_screen")
         if not sub:
             # Check if user ever had a subscription (expired vs new)
             user = await database.get_user(telegram_id)
@@ -126,14 +125,14 @@ async def _get_main_text(telegram_id: int, language: str) -> str:
                 text = i18n_get_text(language, "main.welcome_expired")
             else:
                 text = i18n_get_text(language, "main.welcome_no_sub")
-            return (await format_text_with_incident(text, language)) + footer
+            return await format_text_with_incident(text, language)
         if sub and sub.get("is_bypass_only"):
             text = i18n_get_text(language, "main.welcome_bypass")
-            return (await format_text_with_incident(text, language)) + footer
+            return await format_text_with_incident(text, language)
     except Exception:
         pass
     text = i18n_get_text(language, "main.welcome")
-    return (await format_text_with_incident(text, language)) + footer
+    return await format_text_with_incident(text, language)
 
 
 @router.callback_query(F.data == "menu_ecosystem")
