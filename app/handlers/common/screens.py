@@ -674,13 +674,11 @@ async def _open_buy_screen(
             text=i18n_get_text(language, "shop.mt_proxy_button", "Купить Telegram MT Прокси"),
             callback_data="proxy_menu",
             icon_custom_emoji_id=CE["proxy"],
-            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "buy.have_promo_button", "У меня промокод"),
             callback_data="enter_promo",
             icon_custom_emoji_id=CE["promo"],
-            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
