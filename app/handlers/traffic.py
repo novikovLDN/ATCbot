@@ -78,7 +78,7 @@ async def callback_buy_bypass_only(callback: CallbackQuery):
         buttons.append(row)
 
     buttons.append([InlineKeyboardButton(
-        text="📦 Больше объёма →",
+        text="Больше объёма →",
         callback_data="buy_bypass_extended",
         icon_custom_emoji_id=CE["traffic"],
         style="success",
@@ -612,7 +612,7 @@ async def callback_buy_traffic(callback: CallbackQuery):
         buttons.append(row)
 
     buttons.append([InlineKeyboardButton(
-        text="📦 Больше объёма →",
+        text="Больше объёма →",
         callback_data="buy_traffic_extended",
         icon_custom_emoji_id=CE["traffic"],
         style="success",
