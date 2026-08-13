@@ -78,7 +78,7 @@ async def callback_buy_bypass_only(callback: CallbackQuery):
         buttons.append(row)
 
     buttons.append([InlineKeyboardButton(
-        text="Больше объёма →",
+        text=i18n_get_text(language, "traffic.btn_more_volume", "Больше объёма →"),
         callback_data="buy_bypass_extended",
         icon_custom_emoji_id=CE["traffic"],
         style="success",
@@ -97,7 +97,7 @@ async def callback_buy_bypass_only(callback: CallbackQuery):
     if trial_available:
         text += i18n_get_text(language, "bypass.buy_title_trial")
     if discount_pct > 0:
-        text += f"\n\n🎁 Промо-скидка {discount_pct}% активна!"
+        text += i18n_get_text(language, "traffic.promo_active_line", "\n\n🎁 Промо-скидка {discount_pct}% активна!", discount_pct=discount_pct)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     # Main screen may be a photo — delete and send new message
@@ -151,7 +151,7 @@ async def callback_buy_bypass_extended(callback: CallbackQuery):
 
     text = i18n_get_text(language, "traffic.buy_title_extended")
     if discount_pct > 0:
-        text += f"\n\n🎁 Промо-скидка {discount_pct}% активна!"
+        text += i18n_get_text(language, "traffic.promo_active_line", "\n\n🎁 Промо-скидка {discount_pct}% активна!", discount_pct=discount_pct)
     await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
 
 
@@ -311,7 +311,7 @@ async def callback_traffic_info(callback: CallbackQuery):
             )
             text = i18n_get_text(language, "traffic.bypass_provisioning")
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Обновить", callback_data="traffic_refresh", style="primary")],
+                [InlineKeyboardButton(text=i18n_get_text(language, "traffic.refresh_btn", "🔄 Обновить"), callback_data="traffic_refresh", style="primary")],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "common.back"),
                     callback_data="menu_main",
@@ -460,7 +460,7 @@ async def show_traffic_info_message(message):
             )
             text = i18n_get_text(language, "traffic.bypass_provisioning")
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Обновить", callback_data="traffic_refresh", style="primary")],
+                [InlineKeyboardButton(text=i18n_get_text(language, "traffic.refresh_btn", "🔄 Обновить"), callback_data="traffic_refresh", style="primary")],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "common.back"),
                     callback_data="menu_main",
@@ -626,7 +626,7 @@ async def callback_buy_traffic(callback: CallbackQuery):
 
     text = i18n_get_text(language, "traffic.buy_title")
     if discount_pct > 0:
-        text += f"\n\n🎁 Промо-скидка {discount_pct}% активна!"
+        text += i18n_get_text(language, "traffic.promo_active_line", "\n\n🎁 Промо-скидка {discount_pct}% активна!", discount_pct=discount_pct)
     await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
 
 
@@ -674,7 +674,7 @@ async def callback_buy_traffic_extended(callback: CallbackQuery):
 
     text = i18n_get_text(language, "traffic.buy_title_extended")
     if discount_pct > 0:
-        text += f"\n\n🎁 Промо-скидка {discount_pct}% активна!"
+        text += i18n_get_text(language, "traffic.promo_active_line", "\n\n🎁 Промо-скидка {discount_pct}% активна!", discount_pct=discount_pct)
     await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
 
 

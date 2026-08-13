@@ -142,8 +142,9 @@ async def cmd_start(message: Message, state: FSMContext):
                             await sync_referrals(telegram_id)
                             logger.info("SITE_LINK_FULL_SYNC user=%s", telegram_id)
 
+                            _lang = await resolve_user_language(telegram_id)
                             await message.answer(
-                                "✅ Сайт QoDev успешно привязан.\nТеперь синхронизация работает! ⚡️",
+                                i18n_get_text(_lang, "start.site_linked_success", "✅ Сайт QoDev успешно привязан.\nТеперь синхронизация работает! ⚡️"),
                                 parse_mode="HTML",
                             )
                         else:
@@ -287,11 +288,11 @@ async def cmd_start(message: Message, state: FSMContext):
                         tariff_name = "Basic" if tariff == "basic" else "Plus"
                         months = period_days // 30
                         if months == 1:
-                            period_text = "1 месяц"
+                            period_text = i18n_get_text(language, "buy.period_text_1", "1 месяц")
                         elif months in (2, 3, 4):
-                            period_text = f"{months} месяца"
+                            period_text = i18n_get_text(language, "buy.period_text_2_4", "{months} месяца", months=months)
                         else:
-                            period_text = f"{months} месяцев"
+                            period_text = i18n_get_text(language, "buy.period_text_5_plus", "{months} месяцев", months=months)
 
                         if is_new_user:
                             # Новый пользователь: приветствие + активация
@@ -632,22 +633,24 @@ async def _show_stage_gate(message: Message) -> None:
     «Разработчик» button creates the user record locally and continues to
     the normal flow (see callback_stage_gate_dev).
     """
+    language = "ru"
+    try:
+        language = await resolve_user_language(message.from_user.id)
+    except Exception:
+        pass
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="👤 Пользователь",
+            text=i18n_get_text(language, "stage.role_user_btn", "👤 Пользователь"),
             url="https://t.me/atlassecure_bot?start=ref_RC26QG",
         )],
         [InlineKeyboardButton(
-            text="💻 Разработчик",
+            text=i18n_get_text(language, "stage.role_dev_btn", "💻 Разработчик"),
             callback_data="stage_gate:dev",
             style="primary",
         )],
     ])
-    text = (
-        "Привет 👋\n\n"
-        "Ты разработчик Atlas Secure или пользователь?\n"
-        "Выбери вариант ниже 👇"
-    )
+    text = i18n_get_text(language, "stage.user_role_prompt",
+        "Привет 👋\n\nТы разработчик Atlas Secure или пользователь?\nВыбери вариант ниже 👇")
     await message.answer(text, reply_markup=keyboard)
 
 
@@ -761,8 +764,8 @@ async def _handle_promo_link_start(
 
     if not link:
         await _reply(
-            "⚠️ <b>Ссылка не найдена</b>\n\nВозможно, она удалена или "
-            "адрес введён неправильно.",
+            i18n_get_text(language, "promo_link.not_found",
+                "⚠️ <b>Ссылка не найдена</b>\n\nВозможно, она удалена или адрес введён неправильно."),
         )
         return True
 
@@ -773,20 +776,22 @@ async def _handle_promo_link_start(
         )
     except Exception as e:
         logger.exception("PROMO_LINK_REDEEM_FAIL slug=%s err=%s", slug[:16], e)
-        await _reply("⚠️ <b>Не получилось активировать ссылку</b>\n\nПопробуй ещё раз чуть позже.")
+        await _reply(i18n_get_text(language, "promo_link.activation_failed",
+            "⚠️ <b>Не получилось активировать ссылку</b>\n\nПопробуй ещё раз чуть позже."))
         return True
 
     if not result.get("ok"):
         reason = result.get("reason", "unknown")
-        errors = {
-            "inactive": "🚫 <b>Ссылка выключена</b>\n\nАдмин её деактивировал.",
-            "expired": "⏳ <b>Срок действия ссылки истёк</b>",
-            "exhausted": "🚫 <b>Ссылка полностью использована</b>\n\nЛимит активаций исчерпан.",
-            "already_redeemed_by_user": "ℹ️ <b>Ты уже использовал эту ссылку</b>\n\nОдна активация на пользователя.",
-            "not_found": "⚠️ <b>Ссылка не найдена</b>",
-            "db_not_ready": "⚠️ <b>Сервис перезапускается</b>\n\nПопробуй через минуту.",
+        error_keys = {
+            "inactive": ("promo_link.error_inactive", "🚫 <b>Ссылка выключена</b>\n\nАдмин её деактивировал."),
+            "expired": ("promo_link.error_expired", "⏳ <b>Срок действия ссылки истёк</b>"),
+            "exhausted": ("promo_link.error_exhausted", "🚫 <b>Ссылка полностью использована</b>\n\nЛимит активаций исчерпан."),
+            "already_redeemed_by_user": ("promo_link.error_already_redeemed_by_user", "ℹ️ <b>Ты уже использовал эту ссылку</b>\n\nОдна активация на пользователя."),
+            "not_found": ("promo_link.error_not_found", "⚠️ <b>Ссылка не найдена</b>"),
+            "db_not_ready": ("promo_link.error_db_not_ready", "⚠️ <b>Сервис перезапускается</b>\n\nПопробуй через минуту."),
         }
-        await _reply(errors.get(reason, "⚠️ <b>Активация не прошла</b>"))
+        err_key, err_default = error_keys.get(reason, ("promo_link.error_generic", "⚠️ <b>Активация не прошла</b>"))
+        await _reply(i18n_get_text(language, err_key, err_default))
         return True
 
     # Всё ок — награда зарезервирована, применяем её.
@@ -819,9 +824,8 @@ async def _handle_promo_link_start(
                 slug[:16], telegram_id, e,
             )
         await _reply(
-            "⚠️ <b>Награда пока не применилась</b>\n\n"
-            "Попробуй ещё раз через минуту или напиши в поддержку — "
-            "мы всё выдадим.",
+            i18n_get_text(language, "promo_link.reward_not_applied",
+                "⚠️ <b>Награда пока не применилась</b>\n\nПопробуй ещё раз через минуту или напиши в поддержку — мы всё выдадим."),
         )
         return True
 
@@ -858,7 +862,8 @@ async def _handle_promo_link_start(
                 await get_main_menu_keyboard(language, telegram_id)
             )
             await _reply(
-                "Открой «Купить подписку» — скидка применится автоматически.",
+                i18n_get_text(language, "promo_link.fallback_success_hint",
+                    "Открой «Купить подписку» — скидка применится автоматически."),
                 keyboard=fallback_kb,
             )
         return True
@@ -867,7 +872,7 @@ async def _handle_promo_link_start(
     keyboard = (
         await get_main_menu_keyboard(language, telegram_id)
     )
-    header = "🎉 <b>Награда активирована!</b>\n\n"
+    header = i18n_get_text(language, "promo_link.header_activated", "🎉 <b>Награда активирована!</b>\n\n")
     await _reply(header + applied_text, keyboard=keyboard)
     return True
 
@@ -884,6 +889,8 @@ async def _apply_promo_reward(
     create_user_discount, create_user_traffic_discount, add_bypass_traffic.
     """
     from datetime import datetime, timedelta, timezone
+
+    language = await resolve_user_language(telegram_id)
 
     if reward_type == "subscription_days":
         days = int(reward_value)
@@ -907,10 +914,10 @@ async def _apply_promo_reward(
             return False, ""
         end = res.get("subscription_end")
         end_str = end.strftime("%d.%m.%Y") if end else "—"
-        return True, (
-            f"📦 <b>Подписка</b> · {tariff.capitalize()}\n"
-            f"⏳ <b>{days} дн.</b>\n"
-            f"📅 До: <b>{end_str}</b>"
+        return True, i18n_get_text(
+            language, "promo_link.reward_subscription",
+            "📦 <b>Подписка</b> · {tariff}\n⏳ <b>{days} дн.</b>\n📅 До: <b>{end}</b>",
+            tariff=tariff.capitalize(), days=days, end=end_str,
         )
 
     if reward_type == "tariff_discount":
@@ -934,11 +941,10 @@ async def _apply_promo_reward(
             return False, ""
         if not ok:
             return False, ""
-        return True, (
-            "🎁 <b>Твой подарок активирован</b>\n\n"
-            f"<blockquote>— Скидка <b>{reward_value}%</b> на любой тариф\n"
-            f"— Действует ещё <b>{hours} часов</b></blockquote>\n\n"
-            "Выбери подходящий тариф ниже ↓"
+        return True, i18n_get_text(
+            language, "promo_link.reward_discount_subscription",
+            "🎁 <b>Твой подарок активирован</b>\n\n<blockquote>— Скидка <b>{percent}%</b> на любой тариф\n— Действует ещё <b>{hours} часов</b></blockquote>\n\nВыбери подходящий тариф ниже ↓",
+            percent=reward_value, hours=hours,
         )
 
     if reward_type == "bypass_discount":
@@ -954,11 +960,10 @@ async def _apply_promo_reward(
         except Exception as e:
             logger.exception("PROMO_APPLY_BYPASS_DISC_FAIL: %s", e)
             return False, ""
-        return True, (
-            "🎁 <b>Твой подарок активирован</b>\n\n"
-            f"<blockquote>— Скидка <b>{reward_value}%</b> на пакеты ГБ обхода\n"
-            f"— Действует ещё <b>{hours} часов</b></blockquote>\n\n"
-            "Выбери подходящий тариф ниже ↓"
+        return True, i18n_get_text(
+            language, "promo_link.reward_discount_traffic",
+            "🎁 <b>Твой подарок активирован</b>\n\n<blockquote>— Скидка <b>{percent}%</b> на пакеты ГБ обхода\n— Действует ещё <b>{hours} часов</b></blockquote>\n\nВыбери подходящий тариф ниже ↓",
+            percent=reward_value, hours=hours,
         )
 
     if reward_type == "bypass_gb":
@@ -984,9 +989,10 @@ async def _apply_promo_reward(
             return False, ""
         if not granted:
             return False, ""
-        return True, (
-            f"📊 <b>+{gb} ГБ</b> обхода начислено\n\n"
-            "Пакет ГБ не сгорает — тратится только при работе на LTE-серверах."
+        return True, i18n_get_text(
+            language, "promo_link.reward_bypass_gb",
+            "📊 <b>+{gb} ГБ</b> обхода начислено\n\nПакет ГБ не сгорает — тратится только при работе на LTE-серверах.",
+            gb=gb,
         )
 
     return False, ""
