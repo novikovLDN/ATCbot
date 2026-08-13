@@ -28,6 +28,7 @@ from app.handlers.common.keyboards import (
     get_connect_keyboard,
 )
 from app.handlers.common.states import PromoCodeInput, PurchaseState
+from app.handlers.common.emoji import CE
 from app.core.structured_logger import log_event
 from app.handlers.notifications import send_referral_cashback_notification
 
