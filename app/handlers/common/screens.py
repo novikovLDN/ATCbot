@@ -49,6 +49,8 @@ GIFT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU08dqGqW7fM71f6jxAAHg0TqaIRev3jAAAh0OaxuEL9
 
 GAMES_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU09FqGqX9Jn5MUCs5Umhem0uAzq_wNwACHg5rG4Qv2VCtTQ2_vzbH5gEAAwIAA3kAAzsE"
 
+MY_SUBSCRIPTION_PHOTO_FILE_ID = "AgACAgQAAxkBAAF_0btqfhnsntISOSSa4HeiUMBkOoaLeQAC2RFrG3NR8VP0xTJDQxtIZgEAAwIAA3cAAz0E"
+
 # Telegram caps photo captions at 1024 chars (vs 4096 for plain text).
 # The profile screen with the bypass-traffic section + keys can exceed
 # that, so when the caption is too long we send a plain text message
@@ -860,7 +862,19 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
     )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
-    await safe_edit_text(msg, text, reply_markup=keyboard, parse_mode="HTML", bot=bot)
+    # Фото-экран: удаляем текущее сообщение и шлём photo+caption через
+    # _send_screen_photo (fallback на text при устаревшем file_id или
+    # caption > 1024).
+    chat_id = msg.chat.id if hasattr(msg, "chat") else telegram_id
+    if isinstance(event, CallbackQuery):
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+    await _send_screen_photo(
+        bot, chat_id, MY_SUBSCRIPTION_PHOTO_FILE_ID, text,
+        reply_markup=keyboard, parse_mode="HTML",
+    )
 
 
 async def _open_legal_screen(event: Union[Message, CallbackQuery], bot: Bot):
