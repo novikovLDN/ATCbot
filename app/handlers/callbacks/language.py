@@ -45,10 +45,12 @@ async def callback_change_language(callback: CallbackQuery):
             InlineKeyboardButton(
                 text=i18n_get_text(language, "lang.button_ru"),
                 callback_data="lang_ru",
+                style="primary",
             ),
             InlineKeyboardButton(
                 text=i18n_get_text(language, "lang.button_en"),
                 callback_data="lang_en",
+                style="primary",
             ),
         ],
     ])

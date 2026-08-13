@@ -140,12 +140,13 @@ async def _open_help_screen(event: Union[Message, CallbackQuery], bot: Bot):
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
     text = i18n_get_text(language, "help.menu_title")
+    from app.handlers.common.emoji import CE
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📖 Ответы на частые вопросы", callback_data="faq")],
-        [InlineKeyboardButton(text="📲 Инструкции по сервису", callback_data="connect_instruction")],
-        [InlineKeyboardButton(text="📞 Контакты", callback_data="help_contacts")],
+        [InlineKeyboardButton(text="📖 Ответы на частые вопросы", callback_data="faq", style="primary")],
+        [InlineKeyboardButton(text="📲 Инструкции по сервису", callback_data="connect_instruction", style="primary")],
+        [InlineKeyboardButton(text="📞 Контакты", callback_data="help_contacts", style="primary")],
         [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/atlas_suppbot")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     await _send_screen_photo(
         bot, chat_id, SUPPORT_PHOTO_FILE_ID, text,
@@ -277,6 +278,7 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
             f"<blockquote expandable><code>{referral_link}</code></blockquote>"
         )
 
+        from app.handlers.common.emoji import CE
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "referral.share_button"),
@@ -287,15 +289,19 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
                 InlineKeyboardButton(
                     text=i18n_get_text(language, "referral.stats_button"),
                     callback_data="referral_stats",
+                    style="primary",
                 ),
                 InlineKeyboardButton(
                     text=i18n_get_text(language, "referral.how_it_works"),
                     callback_data="referral_how_it_works",
+                    style="primary",
                 ),
             ],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         
@@ -624,18 +630,27 @@ async def _open_buy_screen(
     else:
         plus_btn_key = "buy.select_plus_new"
 
+    # Определим стили для basic/plus в зависимости от контекста (renew → success + renew)
+    basic_is_renew = current_tariff == "basic"
+    plus_is_renew = current_tariff == "plus"
+    basic_extra = {"icon_custom_emoji_id": CE["renew"], "style": "success"} if basic_is_renew else {"style": "primary"}
+    plus_extra = {"icon_custom_emoji_id": CE["renew"], "style": "success"} if plus_is_renew else {"style": "primary"}
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, basic_btn_key),
-            callback_data="tariff:basic"
+            callback_data="tariff:basic",
+            **basic_extra,
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, plus_btn_key),
-            callback_data="tariff:plus"
+            callback_data="tariff:plus",
+            **plus_extra,
         )],
         [InlineKeyboardButton(
             text="🚀 Комбо (VPN + обход)",
-            callback_data="buy_combo"
+            callback_data="buy_combo",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="Купить Telegram MT Прокси",
@@ -647,10 +662,13 @@ async def _open_buy_screen(
             text="У меня промокод",
             callback_data="enter_promo",
             icon_custom_emoji_id=CE["promo"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     

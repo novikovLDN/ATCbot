@@ -39,6 +39,7 @@ import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.states import SteamPurchaseState
+from app.handlers.common.emoji import CE
 from app.core.rate_limit import check_rate_limit
 
 steam_purchase_router = Router()
@@ -97,10 +98,13 @@ def _get_disclaimer_keyboard(language: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(
             text=i18n_get_text(language, "shop.steam_disclaimer_ack_btn"),
             callback_data="steam:ack",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="mini_shop",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -121,6 +125,7 @@ def _get_amount_keyboard(page: int, language: str) -> InlineKeyboardMarkup:
         row.append(InlineKeyboardButton(
             text=f"{amount} ₽",
             callback_data=f"steam:amt:{amount}",
+            style="primary",
         ))
         if len(row) == 6:
             rows.append(row)
@@ -131,17 +136,20 @@ def _get_amount_keyboard(page: int, language: str) -> InlineKeyboardMarkup:
     # Carousel navigation
     nav_row: list = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"steam:page:{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"steam:page:{page - 1}", style="primary"))
     nav_row.append(InlineKeyboardButton(
         text=f"{page + 1}/{total_pages}", callback_data="noop",
+        style="primary",
     ))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"steam:page:{page + 1}"))
+        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"steam:page:{page + 1}", style="primary"))
     rows.append(nav_row)
 
     rows.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="steam:disclaimer",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -151,6 +159,8 @@ def _get_login_keyboard(language: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="steam:back_to_amount",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -168,6 +178,7 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
         buttons.append([InlineKeyboardButton(
             text="💳 Банковская карта",
             callback_data="steam:pay:card",
+            style="primary",
         )])
 
     # Lava
@@ -177,6 +188,7 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
             buttons.append([InlineKeyboardButton(
                 text="💳 Карта (Lava)",
                 callback_data="steam:pay:lava",
+                style="primary",
             )])
     except Exception:
         pass
@@ -188,6 +200,7 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
             buttons.append([InlineKeyboardButton(
                 text="💳 Wata (тест)",
                 callback_data="steam:pay:wata",
+                style="primary",
             )])
     except Exception:
         pass
@@ -198,6 +211,7 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
         buttons.append([InlineKeyboardButton(
             text=f"📱 СБП ({sbp_price} ₽)",
             callback_data="steam:pay:sbp",
+            style="primary",
         )])
 
     # CryptoBot
@@ -207,6 +221,7 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
             buttons.append([InlineKeyboardButton(
                 text="🪙 Крипто (CryptoBot)",
                 callback_data="steam:pay:crypto",
+                style="primary",
             )])
     except Exception:
         pass
@@ -214,6 +229,8 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="steam:back_to_amount",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -430,24 +447,6 @@ async def _create_pending_purchase(telegram_id: int, login: str, amount: int, pr
 
 # ── Payment: Balance ──────────────────────────────────────────────────
 
-@steam_purchase_router.callback_query(
-    F.data == "steam:pay:balance",
-    StateFilter(SteamPurchaseState.choose_payment_method),
-)
-async def callback_steam_pay_balance(callback: CallbackQuery, state: FSMContext):
-    # Balance payment is disabled by policy for Steam top-ups.  The UI no
-    # longer surfaces this button, but the route stays here as a guard
-    # against hand-crafted callback_data.
-    try:
-        await callback.answer(
-            "Оплата с баланса для пополнения Steam недоступна. "
-            "Выберите карту или СБП.",
-            show_alert=True,
-        )
-    except Exception:
-        pass
-
-
 # ── Payment: Card via Telegram Payments (YooKassa) ────────────────────
 
 @steam_purchase_router.callback_query(
@@ -538,7 +537,7 @@ async def callback_steam_pay_lava(callback: CallbackQuery, state: FSMContext):
             return
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💳 Оплатить", url=pay_url)],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.bot.send_message(
             telegram_id, i18n_get_text(language, "payment.invoice_timeout"),
@@ -580,7 +579,7 @@ async def callback_steam_pay_wata(callback: CallbackQuery, state: FSMContext):
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {price} ₽", url=invoice["payment_url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.bot.send_message(
             telegram_id, f"💳 Wata (тест) · Steam {login} · {amount} ₽",
@@ -634,7 +633,7 @@ async def callback_steam_pay_sbp(callback: CallbackQuery, state: FSMContext):
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📱 Оплатить через СБП", url=pay_url)],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         await callback.bot.send_message(
             telegram_id, i18n_get_text(language, "payment.invoice_timeout"),
@@ -686,7 +685,7 @@ async def callback_steam_pay_crypto(callback: CallbackQuery, state: FSMContext):
             return
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🪙 Оплатить", url=pay_url)],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.bot.send_message(
             telegram_id, i18n_get_text(language, "payment.invoice_timeout"),
@@ -737,6 +736,8 @@ async def send_steam_success(
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     try:

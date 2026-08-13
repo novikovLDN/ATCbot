@@ -17,6 +17,7 @@ from app.utils.referral_middleware import process_referral_on_first_interaction
 from app.handlers.common.guards import ensure_db_ready_message
 from app.handlers.common.keyboards import get_main_menu_keyboard
 from app.handlers.common.utils import safe_resolve_username
+from app.handlers.common.emoji import CE
 
 user_router = Router()
 logger = logging.getLogger(__name__)
@@ -209,6 +210,8 @@ async def cmd_start(message: Message, state: FSMContext):
                                 [InlineKeyboardButton(
                                     text=i18n_get_text(language, "bypass_gift.connect_btn"),
                                     callback_data="bgift_setup",
+                                    icon_custom_emoji_id=CE["connect"],
+                                    style="primary",
                                 )],
                             ])
                             logger.info(
@@ -449,9 +452,11 @@ async def cmd_start(message: Message, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ru"),
-                                 callback_data="start_lang_ru"),
+                                 callback_data="start_lang_ru",
+                                 style="primary"),
             InlineKeyboardButton(text=i18n_get_text(language, "lang.button_en"),
-                                 callback_data="start_lang_en"),
+                                 callback_data="start_lang_en",
+                                 style="primary"),
         ],
     ])
     try:
@@ -635,6 +640,7 @@ async def _show_stage_gate(message: Message) -> None:
         [InlineKeyboardButton(
             text="💻 Разработчик",
             callback_data="stage_gate:dev",
+            style="primary",
         )],
     ])
     text = (

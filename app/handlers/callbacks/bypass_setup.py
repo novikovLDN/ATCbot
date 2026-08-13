@@ -26,6 +26,7 @@ from app.services import happ_crypto, incy_crypto
 from app.services.language_service import resolve_user_language
 from app.services.user_subscription_links import get_user_bypass_url
 from app.handlers.common.utils import safe_edit_text
+from app.handlers.common.emoji import CE
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,8 @@ async def callback_bypass_setup_open(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
@@ -88,10 +91,13 @@ async def callback_bypass_setup_open(callback: CallbackQuery):
         [InlineKeyboardButton(
             text=i18n_get_text(language, "bypass_setup.manual_btn"),
             callback_data="bypass_setup_manual",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
@@ -126,6 +132,8 @@ async def callback_broadcast_bypass(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
@@ -174,6 +182,7 @@ async def callback_broadcast_bypass(callback: CallbackQuery):
         [InlineKeyboardButton(
             text="✅ Готово",
             callback_data="setup_done",  # тот же handler что в ручной установке (🎉 → главный экран)
+            style="primary",
         )],
     ])
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
@@ -204,6 +213,8 @@ async def callback_bypass_setup_manual(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="bypass_setup_open",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
@@ -241,6 +252,8 @@ async def callback_bypass_setup_manual(callback: CallbackQuery):
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="bypass_setup_open",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")

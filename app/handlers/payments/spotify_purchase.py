@@ -42,6 +42,7 @@ from aiogram.types import (
 import config
 import database
 from app.handlers.common.states import SpotifyPurchaseState
+from app.handlers.common.emoji import CE
 
 spotify_purchase_router = Router()
 logger = logging.getLogger(__name__)
@@ -181,8 +182,8 @@ async def cb_start(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Продолжить", callback_data="spotify:info")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop")],
+        [InlineKeyboardButton(text="✅ Продолжить", callback_data="spotify:info", style="primary")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     try:
         await callback.message.delete()
@@ -201,8 +202,8 @@ async def cb_info(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎧 Выбрать тариф", callback_data="spotify:plans")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="spotify:start")],
+        [InlineKeyboardButton(text="🎧 Выбрать тариф", callback_data="spotify:plans", style="primary")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="spotify:start", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     try:
         await callback.message.edit_text(_TXT_INFO, reply_markup=kb, parse_mode="HTML")
@@ -222,9 +223,9 @@ async def cb_plans(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=_PLANS["ind"]["label"], callback_data="spotify:plan:ind")],
-        [InlineKeyboardButton(text=_PLANS["duo"]["label"], callback_data="spotify:plan:duo")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="spotify:info")],
+        [InlineKeyboardButton(text=_PLANS["ind"]["label"], callback_data="spotify:plan:ind", style="primary")],
+        [InlineKeyboardButton(text=_PLANS["duo"]["label"], callback_data="spotify:plan:duo", style="primary")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="spotify:info", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     text = (
         f"{_TXT_PLAN_TITLE}\n\n"
@@ -259,13 +260,14 @@ async def cb_choose_plan(callback: CallbackQuery, state: FSMContext):
         row.append(InlineKeyboardButton(
             text=f"{_duration_label(months)} — {price}₽",
             callback_data=f"spotify:dur:{plan}:{months}",
+            style="primary",
         ))
         if len(row) == 2:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="spotify:plans")])
+    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="spotify:plans", icon_custom_emoji_id=CE["back"], style="primary")])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
     text = (
@@ -310,6 +312,7 @@ async def cb_choose_duration(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="🔙 Изменить тариф", callback_data=f"spotify:plan:{plan}",
+            icon_custom_emoji_id=CE["back"], style="primary",
         )],
     ])
     try:
@@ -347,10 +350,12 @@ async def msg_email(message: Message, state: FSMContext):
         [InlineKeyboardButton(
             text="✅ Всё верно, дальше",
             callback_data="spotify:email:ok",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="✏️ Изменить email",
             callback_data="spotify:email:edit",
+            style="primary",
         )],
     ])
     await message.answer(
@@ -424,10 +429,12 @@ async def msg_password(message: Message, state: FSMContext):
         [InlineKeyboardButton(
             text="✅ Всё верно, к оплате",
             callback_data="spotify:pass:ok",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="✏️ Изменить пароль",
             callback_data="spotify:pass:edit",
+            style="primary",
         )],
     ])
     await message.answer(
@@ -491,18 +498,23 @@ async def cb_pass_ok(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(
             text="💳 К способам оплаты",
             callback_data="spotify:pay",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="✏️ Изменить пароль",
             callback_data="spotify:pass:edit",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="✏️ Изменить email",
             callback_data="spotify:email:edit",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="🔙 Начать заново",
             callback_data="spotify:start",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -531,14 +543,17 @@ async def cb_payment_methods(callback: CallbackQuery, state: FSMContext):
         rows.append([InlineKeyboardButton(
             text="💳 Банковская карта",
             callback_data=f"spotify_pay:card:{plan}:{months}",
+            style="primary",
         )])
     rows.append([InlineKeyboardButton(
         text="📱 СБП 3%",
         callback_data=f"spotify_pay:lava:{plan}:{months}",
+        style="primary",
     )])
     rows.append([InlineKeyboardButton(
         text="📱 СБП",
         callback_data=f"spotify_pay:sbp:{plan}:{months}",
+        style="primary",
     )])
     # Wata — admin-only beta
     try:
@@ -547,12 +562,15 @@ async def cb_payment_methods(callback: CallbackQuery, state: FSMContext):
             rows.append([InlineKeyboardButton(
                 text="💳 Wata (тест)",
                 callback_data=f"spotify_pay:wata:{plan}:{months}",
+                style="primary",
             )])
     except Exception:
         pass
     rows.append([InlineKeyboardButton(
         text="🔙 К заказу",
         callback_data="spotify:pass:ok",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -682,7 +700,12 @@ async def cb_pay_lava(callback: CallbackQuery, state: FSMContext):
             pass
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💳 Оплатить", url=invoice_data["payment_url"])],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop")],
+            [InlineKeyboardButton(
+                text="🔙 Назад",
+                callback_data="mini_shop",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
         ])
         await callback.message.answer(
             f"💳 Счёт создан: <b>{price}₽</b>\n\nОплатите по кнопке ниже.",
@@ -729,7 +752,12 @@ async def cb_pay_wata(callback: CallbackQuery, state: FSMContext):
             pass
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=invoice["payment_url"])],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop")],
+            [InlineKeyboardButton(
+                text="🔙 Назад",
+                callback_data="mini_shop",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
         ])
         await callback.message.answer(
             f"💳 <b>Wata (тест)</b> · {label}\nК оплате: <b>{price}₽</b>",
@@ -781,7 +809,12 @@ async def cb_pay_sbp(callback: CallbackQuery, state: FSMContext):
                 text=f"📱 Оплатить {sbp_price_rubles:.0f}₽",
                 url=tx["redirect_url"],
             )],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop")],
+            [InlineKeyboardButton(
+                text="🔙 Назад",
+                callback_data="mini_shop",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
         ])
         await callback.message.answer(
             f"📱 <b>СБП</b>\nК оплате: <b>{sbp_price_rubles:.0f}₽</b> "
@@ -833,7 +866,12 @@ async def send_spotify_success(
     )
     user_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 Поддержка", url=SUPPORT_URL)],
-        [InlineKeyboardButton(text="🔙 В магазин", callback_data="mini_shop")],
+        [InlineKeyboardButton(
+            text="🔙 В магазин",
+            callback_data="mini_shop",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
+        )],
     ])
     try:
         await bot.send_message(

@@ -72,10 +72,6 @@ class AdminTrafficEdit(StatesGroup):
     waiting_for_confirm = State()
 
 
-class CorporateAccessRequest(StatesGroup):
-    waiting_for_confirmation = State()
-
-
 class PromoCodeInput(StatesGroup):
     waiting_for_promo = State()
 

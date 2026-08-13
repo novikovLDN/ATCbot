@@ -31,6 +31,7 @@ from app.handlers.common.keyboards import (
     get_service_status_keyboard,
     get_connect_keyboard,
 )
+from app.handlers.common.emoji import CE
 router = Router()
 logger = logging.getLogger(__name__)
 
@@ -69,34 +70,6 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     keyboard = await get_main_menu_keyboard(language, callback.from_user.id)
 
     # Всегда отправляем фото с текстом на главном экране
-    await callback.bot.send_photo(
-        chat_id=callback.message.chat.id,
-        photo=_MAIN_PHOTO_ID,
-        caption=text,
-        parse_mode="HTML",
-        reply_markup=keyboard,
-    )
-
-
-@router.callback_query(F.data == "back_to_main")
-async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
-    """Возврат в главное меню с экрана выдачи ключа"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    await state.clear()
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    text = await _get_main_text(telegram_id, language)
-    keyboard = await get_main_menu_keyboard(language, telegram_id)
-
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
     await callback.bot.send_photo(
         chat_id=callback.message.chat.id,
         photo=_MAIN_PHOTO_ID,
@@ -148,9 +121,9 @@ async def callback_ecosystem(callback: CallbackQuery):
     text = i18n_get_text(language, "main.ecosystem_text", "main.ecosystem_text")
     full_text = f"{title}\n\n{text}"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "main.about"), callback_data="menu_about")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "main.about"), callback_data="menu_about", style="primary")],
         [InlineKeyboardButton(text="✍️ Трекер Only", url="https://t.me/ItsOnlyWbot")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
 
@@ -178,7 +151,7 @@ async def callback_biz_ecosystem(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "biz.ecosystem_text")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
 
@@ -243,13 +216,14 @@ async def callback_settings(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     title = i18n_get_text(language, "main.settings_title", "⚙️ Настройки")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗣 Изменить язык", callback_data="change_language")],
-        [InlineKeyboardButton(text="🔐 Политика конфиденциальности", callback_data="about_privacy")],
+        [InlineKeyboardButton(text="🗣 Изменить язык", callback_data="change_language", icon_custom_emoji_id=CE["language"], style="primary")],
+        [InlineKeyboardButton(text="🔐 Политика конфиденциальности", callback_data="about_privacy", style="primary")],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.ecosystem", "⚪️ Наша экосистема"),
-            callback_data="menu_ecosystem"
+            callback_data="menu_ecosystem",
+            style="primary",
         )],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
     if has_photo:
@@ -269,28 +243,6 @@ async def callback_about(callback: CallbackQuery):
     """О сервисе. Entry from ecosystem."""
     from app.handlers.common.screens import _open_about_screen
     await _open_about_screen(callback, callback.bot)
-
-
-@router.callback_query(F.data == "menu_service_status")
-async def callback_service_status(callback: CallbackQuery):
-    """Статус сервиса"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    text = i18n_get_text(language, "main.service_status_text", "service_status_text")
-
-    incident = await database.get_incident_settings()
-    if incident["is_active"]:
-        incident_text = incident.get("incident_text") or i18n_get_text(language, "main.incident_banner", "incident_banner")
-        warning = i18n_get_text(language, "main.incident_status_warning", incident_text=incident_text)
-        text = text + warning
-
-    await safe_edit_text(callback.message, text, reply_markup=get_service_status_keyboard(language), bot=callback.bot)
 
 
 @router.callback_query(F.data == "about_privacy")
@@ -421,44 +373,6 @@ async def callback_instruction(callback: CallbackQuery):
 
 
 
-@router.callback_query(F.data == "go_profile", StateFilter(default_state))
-@router.callback_query(F.data == "go_profile")
-async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
-    """Переход в профиль с экрана выдачи ключа - работает независимо от FSM состояния"""
-    telegram_id = callback.from_user.id
-    
-    # Немедленная обратная связь пользователю
-    await callback.answer()
-    
-    # Очищаем FSM состояние, если пользователь был в каком-то процессе
-    try:
-        current_state = await state.get_state()
-        if current_state is not None:
-            await state.clear()
-            logger.debug(f"Cleared FSM state for user {telegram_id}, was: {current_state}")
-    except Exception as e:
-        logger.debug(f"FSM state clear failed (may be already clear): {e}")
-    
-    try:
-        logger.info(f"Opening profile via go_profile for user {telegram_id}")
-        
-        language = await resolve_user_language(telegram_id)
-        
-        await show_profile(callback, language)
-        
-        logger.info(f"Profile opened successfully via go_profile for user {telegram_id}")
-    except Exception as e:
-        logger.exception(f"Error opening profile via go_profile for user {telegram_id}: {e}")
-        # Пытаемся отправить сообщение об ошибке
-        try:
-            user = await database.get_user(telegram_id)
-            language = await resolve_user_language(callback.from_user.id)
-            error_text = i18n_get_text(language, "errors.profile_load")
-            await callback.message.answer(error_text, parse_mode="HTML")
-        except Exception as e2:
-            logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
-
-
 @router.callback_query(F.data.in_({"copy_key_menu", "copy_key", "copy_key_plus", "copy_vpn_key"}))
 async def callback_connect_instead_of_copy(callback: CallbackQuery):
     """Ключи больше не отправляются в боте; показываем кнопку «Подключиться» (Mini App)."""
@@ -475,53 +389,6 @@ async def callback_connect_instead_of_copy(callback: CallbackQuery):
         parse_mode="HTML",
         reply_markup=get_connect_keyboard(language),
     )
-
-
-@router.callback_query(F.data == "get_sub_key")
-async def callback_get_sub_key(callback: CallbackQuery):
-    """Отправить ключ подписки с инструкцией по подключению."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
-        return
-
-    telegram_id = callback.from_user.id
-    subscription = await database.get_subscription(telegram_id)
-    if not subscription:
-        language = await resolve_user_language(telegram_id)
-        await callback.message.answer(
-            i18n_get_text(language, "get_key.no_subscription", "❌ У вас нет активной подписки."),
-            parse_mode="HTML",
-        )
-        return
-
-    language = await resolve_user_language(telegram_id)
-    from app.services.user_subscription_links import get_user_primary_subscription_url
-    sub_url = await get_user_primary_subscription_url(telegram_id)
-
-    text = i18n_get_text(language, "get_key.instruction_text",
-        "📖 <b>Инструкция по подключению</b>\n\n"
-        "<b>Happ</b> — откройте приложение → внизу нажмите на буфер обмена 🗒️ → ключ добавится автоматически\n\n"
-        "⸻\n\n"
-        "👇 Скопируйте ключ одним нажатием:")
-
-    full_text = f"{text}\n\n<code>{sub_url}</code>"
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.device_button"),
-            callback_data="setup_device",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
-        )],
-    ])
-
-    await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
 
 
 # ── Connect instruction ──────────────────────────────────────────
@@ -581,16 +448,18 @@ async def callback_connect_instruction(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
-            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios", style="primary"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android", style="primary"),
         ],
         [
-            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
-            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos", style="primary"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows", style="primary"),
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -674,10 +543,13 @@ async def callback_setup_step1(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.next_step"),
         callback_data=f"setup_step2:{platform}",
+        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="connect_instruction",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -816,6 +688,8 @@ async def callback_setup_step2(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data=f"setup_step1:{platform}",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -921,16 +795,18 @@ async def callback_setup_device(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
-            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios", style="primary"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android", style="primary"),
         ],
         [
-            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
-            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos", style="primary"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows", style="primary"),
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -1042,6 +918,7 @@ async def callback_setup_platform(callback: CallbackQuery):
         buttons.append([InlineKeyboardButton(
             text="Установка ключа в одно нажатие 👇",
             callback_data="noop",
+            style="primary",
         )])
 
         clients = _platform_clients.get(platform, [])
@@ -1064,37 +941,29 @@ async def callback_setup_platform(callback: CallbackQuery):
         InlineKeyboardButton(
             text=i18n_get_text(language, "setup.manual_button"),
             callback_data=f"setup_manual:{platform}",
+            style="primary",
         ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "setup.qr_button"),
             callback_data=f"setup_qr:{platform}",
+            style="primary",
         ),
     ])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.done_button"),
         callback_data="setup_done",
+        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="connect_instruction",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
-
-
-@router.callback_query(F.data.startswith("setup_key:"))
-async def callback_setup_key(callback: CallbackQuery):
-    """Legacy redirect — перенаправляем на объединённый экран."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-    platform = callback.data.split(":")[1]
-    # Rewrite callback data and redirect
-    callback.data = f"setup_platform:{platform}"
-    await callback_setup_platform(callback)
 
 
 @router.callback_query(F.data.startswith("setup_manual:"))
@@ -1172,10 +1041,13 @@ async def callback_setup_manual(callback: CallbackQuery):
         [InlineKeyboardButton(
             text=i18n_get_text(language, "setup.done_button"),
             callback_data="setup_done",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data=f"setup_step2:{platform}",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ]
 
@@ -1250,6 +1122,8 @@ async def callback_setup_qr(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data=f"setup_platform:{platform}",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )]])
         await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
         return
@@ -1271,16 +1145,20 @@ async def callback_setup_qr(callback: CallbackQuery):
         [InlineKeyboardButton(
             text="🌐 " + i18n_get_text(language, "setup.qr_standard_btn"),
             callback_data=f"setup_qr_standard:{platform}",
+            style="primary",
         )],
     ]
     if has_bypass:
         buttons.append([InlineKeyboardButton(
             text="🤍 " + i18n_get_text(language, "setup.qr_bypass_btn"),
             callback_data=f"setup_qr_bypass:{platform}",
+            style="primary",
         )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data=f"setup_platform:{platform}",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1335,6 +1213,8 @@ async def _show_qr_app_choice(callback: CallbackQuery, platform: str, kind: str,
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data=f"setup_qr:{platform}",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1378,6 +1258,8 @@ async def callback_setup_qr_app(callback: CallbackQuery):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data=f"setup_qr_standard:{platform}",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]])
             await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
             return
@@ -1398,6 +1280,8 @@ async def callback_setup_qr_app(callback: CallbackQuery):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data=f"setup_qr_bypass:{platform}",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]])
             await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
             return
@@ -1472,10 +1356,13 @@ async def _send_qr_screen(
         [InlineKeyboardButton(
             text=i18n_get_text(language, "setup.done_button"),
             callback_data="setup_done",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data=back_cb,
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1514,14 +1401,18 @@ async def callback_buy_combo(callback: CallbackQuery):
         [InlineKeyboardButton(
             text=i18n_get_text(language, "combo.select_basic"),
             callback_data="combo_tariff:combo_basic",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "combo.select_plus"),
             callback_data="combo_tariff:combo_plus",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_buy_vpn",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1589,11 +1480,14 @@ async def callback_combo_tariff(callback: CallbackQuery, state: FSMContext):
         buttons.append([InlineKeyboardButton(
             text=btn_text,
             callback_data=f"combo_period:{combo_type}:{period_days}",
+            style="primary",
         )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="buy_combo",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1657,102 +1551,6 @@ async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
 
     from handlers import show_payment_method_selection
     await show_payment_method_selection(callback, base_tariff, period_days, price_kopecks)
-
-
-@router.callback_query(F.data.startswith("combo_pay_balance:"))
-async def callback_combo_pay_balance(callback: CallbackQuery):
-    """Оплата комбо с баланса: активация подписки + начисление трафика обхода."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    parts = callback.data.split(":")
-    if len(parts) != 3:
-        return
-    combo_type = parts[1]
-    try:
-        period_days = int(parts[2])
-    except (ValueError, IndexError):
-        return
-
-    if combo_type not in config.COMBO_TARIFFS:
-        return
-    info = config.COMBO_TARIFFS[combo_type].get(period_days)
-    if not info:
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    price = info["price"]
-    gb = info["gb"]
-    base_tariff = info["base_tariff"]
-
-    balance = await database.get_user_balance(telegram_id)
-    if balance < price:
-        text = i18n_get_text(language, "traffic.insufficient_balance")
-        buttons = [[InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"combo_period:{combo_type}:{period_days}",
-        )]]
-        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
-        return
-
-    # 1. Create pending purchase with base tariff
-    from app.services.subscriptions import service as subscription_service
-    price_kopecks = price * 100
-    try:
-        purchase_id = await subscription_service.create_subscription_purchase(
-            telegram_id=telegram_id,
-            tariff=base_tariff,
-            period_days=period_days,
-            price_kopecks=price_kopecks,
-            is_combo=True,
-        )
-    except Exception as e:
-        logger.error(f"Combo purchase creation failed: {e}")
-        text = "❌ Ошибка создания покупки. Попробуйте позже."
-        buttons = [[InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_combo")]]
-        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
-        return
-
-    # 2. Deduct balance
-    await database.decrease_balance(telegram_id, price, source="combo_purchase", description=f"Combo {base_tariff} {period_days}d + {gb}GB bypass")
-
-    # 3. Finalize purchase (activates subscription, creates VPN key, etc.)
-    try:
-        result = await subscription_service.finalize_purchase(
-            purchase_id=purchase_id,
-            payment_provider="balance",
-            amount_rubles=float(price),
-        )
-        if not result.get("success"):
-            logger.error(f"Combo finalize failed: {result}")
-    except Exception as e:
-        logger.error(f"Combo finalize error: {e}")
-
-    # 4. Add bypass traffic
-    from app.services import remnawave_service
-    traffic_bytes = gb * 1024**3
-    try:
-        rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
-        if not rmn_success:
-            logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_FAIL user={telegram_id} gb={gb}")
-    except Exception as traffic_err:
-        logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_ERROR user={telegram_id}: {traffic_err}")
-
-    # 5. Record traffic purchase + mark as combo
-    await database.record_traffic_purchase(telegram_id, gb, 0)
-    await database.set_combo_flag(telegram_id, True)
-
-    months = period_days // 30
-    text = i18n_get_text(language, "combo.purchase_success",
-                         tariff=base_tariff.capitalize(), months=months, gb=gb)
-    buttons = [
-        [InlineKeyboardButton(text="📲 Подключиться", callback_data="connect_instruction")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
-    ]
-    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
 
 
 # ── Mini Shop ────────────────────────────────────────────────────
@@ -1820,13 +1618,13 @@ async def callback_mini_shop(callback: CallbackQuery):
     # обвязка i18n оставлены на месте — вернуть кнопку = раскомментировать
     # строку ниже.
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚡️ Telegram Premium", callback_data="premium_buy")],
+        [InlineKeyboardButton(text="⚡️ Telegram Premium", callback_data="premium_buy", style="primary")],
         # [InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="stars_buy")],
-        [InlineKeyboardButton(text="🍎 Пополнить Apple ID", callback_data="apple_region")],
-        [InlineKeyboardButton(text="🎮 Пополнить Steam", callback_data="steam:disclaimer")],
-        [InlineKeyboardButton(text="🎧 Spotify Premium", callback_data="spotify:start")],
-        [InlineKeyboardButton(text="🧠 Claude Pro/Max (скоро)", callback_data="claude_coming_soon")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+        [InlineKeyboardButton(text="🍎 Пополнить Apple ID", callback_data="apple_region", style="primary")],
+        [InlineKeyboardButton(text="🎮 Пополнить Steam", callback_data="steam:disclaimer", style="primary")],
+        [InlineKeyboardButton(text="🎧 Spotify Premium", callback_data="spotify:start", style="primary")],
+        [InlineKeyboardButton(text="🧠 Claude Pro/Max (скоро)", callback_data="claude_coming_soon", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
 
     # Delete the previous message (be it text or photo) and send a fresh
@@ -1868,7 +1666,7 @@ async def callback_help_contacts(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "help.contacts_title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_help")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_help", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     try:
         await callback.message.delete()
@@ -1890,10 +1688,10 @@ async def callback_faq(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "help.faq_title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, f"help.faq_q{n}"), callback_data=f"faq:{n}")]
+        [InlineKeyboardButton(text=i18n_get_text(language, f"help.faq_q{n}"), callback_data=f"faq:{n}", style="primary")]
         for n in range(1, 10)
     ] + [
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_help")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_help", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
@@ -1915,7 +1713,7 @@ async def callback_faq_answer(callback: CallbackQuery):
     text = i18n_get_text(language, f"help.faq_a{n}")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/atlas_suppbot")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="faq")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="faq", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
@@ -1930,11 +1728,11 @@ async def callback_apple_region(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "shop.apple_title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🇺🇸 USA", callback_data="apple_amount:usa")],
-        [InlineKeyboardButton(text="🇹🇷 Turkey", callback_data="apple_amount:turkey")],
-        [InlineKeyboardButton(text="🇷🇺 Russia", callback_data="apple_amount:russia")],
-        [InlineKeyboardButton(text="🇮🇳 India", callback_data="apple_amount:india")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+        [InlineKeyboardButton(text="🇺🇸 USA", callback_data="apple_amount:usa", style="primary")],
+        [InlineKeyboardButton(text="🇹🇷 Turkey", callback_data="apple_amount:turkey", style="primary")],
+        [InlineKeyboardButton(text="🇷🇺 Russia", callback_data="apple_amount:russia", style="primary")],
+        [InlineKeyboardButton(text="🇮🇳 India", callback_data="apple_amount:india", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
@@ -1960,6 +1758,7 @@ async def callback_apple_amount(callback: CallbackQuery):
         row.append(InlineKeyboardButton(
             text=f"{_apple_nominal_label(region, nom)} — {price_rub}₽",
             callback_data=f"apple_confirm:{region}:{nom}",
+            style="primary",
         ))
         if len(row) == 2:
             buttons.append(row)
@@ -1968,6 +1767,7 @@ async def callback_apple_amount(callback: CallbackQuery):
         buttons.append(row)
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"), callback_data="apple_region",
+        icon_custom_emoji_id=CE["back"], style="primary",
     )])
 
     await safe_edit_text(
@@ -1998,9 +1798,9 @@ async def callback_apple_confirm(callback: CallbackQuery):
                          region=region_label, nominal=nominal_str, price=price_rub)
 
     buttons = [
-        [InlineKeyboardButton(text="💳 Банковская карта", callback_data=f"apple_pay_card:{region}:{nominal}")],
-        [InlineKeyboardButton(text="📱 СБП 3%", callback_data=f"apple_pay_lava:{region}:{nominal}")],
-        [InlineKeyboardButton(text="📱 СБП", callback_data=f"apple_pay_sbp:{region}:{nominal}")],
+        [InlineKeyboardButton(text="💳 Банковская карта", callback_data=f"apple_pay_card:{region}:{nominal}", style="primary")],
+        [InlineKeyboardButton(text="📱 СБП 3%", callback_data=f"apple_pay_lava:{region}:{nominal}", style="primary")],
+        [InlineKeyboardButton(text="📱 СБП", callback_data=f"apple_pay_sbp:{region}:{nominal}", style="primary")],
     ]
     # Wata — admin-only beta
     try:
@@ -2008,11 +1808,13 @@ async def callback_apple_confirm(callback: CallbackQuery):
         if wata_service.is_visible_to(telegram_id):
             buttons.append([InlineKeyboardButton(
                 text="💳 Wata (тест)", callback_data=f"apple_pay_wata:{region}:{nominal}",
+                style="primary",
             )])
     except Exception:
         pass
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"), callback_data=f"apple_amount:{region}",
+        icon_custom_emoji_id=CE["back"], style="primary",
     )])
 
     await safe_edit_text(
@@ -2072,7 +1874,7 @@ async def callback_apple_pay_lava(callback: CallbackQuery):
     text = i18n_get_text(language, "payment.lava_waiting", amount=price_rub)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button"), url=payment_url)],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
 
     lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
@@ -2133,7 +1935,7 @@ async def callback_apple_pay_wata(callback: CallbackQuery):
     text = f"💳 <b>Оплата через Wata (тест)</b>\n\nApple ID {region_label} · {nominal_label}\nК оплате: <b>{price_rub:.2f} ₽</b>"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💳 Оплатить {price_rub:.0f} ₽", url=invoice["payment_url"])],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
@@ -2162,7 +1964,7 @@ async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/atlas_suppbot")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="menu_main")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     try:
         await bot.send_message(telegram_id, text, reply_markup=kb, parse_mode="HTML")
@@ -2312,7 +2114,7 @@ async def callback_apple_pay_sbp(callback: CallbackQuery):
                 text=i18n_get_text(language, "payment.sbp_pay_button"),
                 url=redirect_url,
             )],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 

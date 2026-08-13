@@ -33,6 +33,7 @@ from app.handlers.common.keyboards import (
 )
 from app.handlers.common.screens import show_profile
 from app.handlers.common.states import TopUpStates, WithdrawStates, PurchaseState
+from app.handlers.common.emoji import CE
 
 payments_router = Router()
 logger = logging.getLogger(__name__)
@@ -72,23 +73,32 @@ async def callback_topup_balance(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="250 ₽",
-            callback_data="topup_amount:250"
+            callback_data="topup_amount:250",
+            icon_custom_emoji_id=CE["wallet"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text="750 ₽",
-            callback_data="topup_amount:750"
+            callback_data="topup_amount:750",
+            icon_custom_emoji_id=CE["wallet"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text="999 ₽",
-            callback_data="topup_amount:999"
+            callback_data="topup_amount:999",
+            icon_custom_emoji_id=CE["wallet"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.topup_custom_amount"),
-            callback_data="topup_custom"
+            callback_data="topup_custom",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_profile"
+            callback_data="menu_profile",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     
@@ -128,22 +138,27 @@ async def callback_topup_amount(callback: CallbackQuery):
     buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.pay_with_card"),
-            callback_data=f"topup_card:{amount}"
+            callback_data=f"topup_card:{amount}",
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "payment.sbp"),
-            callback_data=f"topup_sbp:{amount}"
+            callback_data=f"topup_sbp:{amount}",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "payment.stars"),
-            callback_data=f"topup_stars:{amount}"
+            callback_data=f"topup_stars:{amount}",
+            style="primary",
         )],
     ]
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.lava"),
-            callback_data=f"topup_lava:{amount}"
+            callback_data=f"topup_lava:{amount}",
+            style="primary",
         )])
     # Wata — admin-only beta
     try:
@@ -151,13 +166,16 @@ async def callback_topup_amount(callback: CallbackQuery):
         if wata_service.is_visible_to(telegram_id):
             buttons.append([InlineKeyboardButton(
                 text="💳 Wata (тест)",
-                callback_data=f"topup_wata:{amount}"
+                callback_data=f"topup_wata:{amount}",
+                style="primary",
             )])
     except Exception:
         pass
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data="topup_balance"
+        callback_data="topup_balance",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -252,7 +270,7 @@ async def callback_withdraw_confirm_amount(callback: CallbackQuery, state: FSMCo
     await state.set_state(WithdrawStates.withdraw_requisites)
     text = i18n_get_text(language, "withdraw.requisites_prompt")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_back_to_amount")]
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_back_to_amount", icon_custom_emoji_id=CE["back"], style="primary")]
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
     await callback.answer()
@@ -587,7 +605,9 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             pending_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.profile"),
-                    callback_data="menu_profile"
+                    callback_data="menu_profile",
+                    icon_custom_emoji_id=CE["profile"],
+                    style="primary",
                 )],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.support"),
@@ -1211,7 +1231,9 @@ async def _start_platega_payment(
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn"
+                callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -1363,7 +1385,9 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn"
+                callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -1496,7 +1520,9 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn"
+                callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -1629,7 +1655,9 @@ async def callback_pay_lava(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn"
+                callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -1757,6 +1785,8 @@ async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMConte
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
@@ -1851,7 +1881,7 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
         text = f"💳 <b>Оплата через Wata (тест)</b>\n\nСумма: {final_price_rubles:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты (карта / СБП / T-Pay)."
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {final_price_rubles:.0f} ₽", url=invoice["payment_url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
@@ -1935,7 +1965,9 @@ async def callback_topup_sbp(callback: CallbackQuery):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="topup_balance"
+                callback_data="topup_balance",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -2016,7 +2048,9 @@ async def callback_topup_lava(callback: CallbackQuery):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="topup_balance"
+                callback_data="topup_balance",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -2084,7 +2118,7 @@ async def callback_topup_wata(callback: CallbackQuery):
         text = f"💳 <b>Оплата через Wata (тест)</b>\n\nСумма: {amount} ₽\n\nНажмите кнопку ниже — откроется форма оплаты."
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {amount} ₽", url=invoice["payment_url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="topup_balance")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="topup_balance", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
@@ -2139,134 +2173,6 @@ async def callback_topup_card(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error sending invoice for balance topup: {e}")
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-
-
-@payments_router.callback_query(F.data.startswith("pay_tariff_card:"))
-async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
-    """
-    Оплата тарифа картой (когда баланса не хватает)
-    
-    DEPRECATED: Эта функция больше не должна вызываться напрямую.
-    Invoice создается автоматически в process_tariff_purchase_selection.
-    
-    Оставлена для обратной совместимости со старыми кнопками.
-    """
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    
-    # КРИТИЧНО: Получаем данные из FSM state (единственный источник правды)
-    fsm_data = await state.get_data()
-    purchase_id = fsm_data.get("purchase_id")
-    tariff_type = fsm_data.get("tariff_type")
-    period_days = fsm_data.get("period_days")
-    
-    # Если данных нет в FSM - пытаемся извлечь из callback_data (fallback)
-    if not purchase_id or not tariff_type or not period_days:
-        try:
-            callback_data_parts = callback.data.split(":")
-            if len(callback_data_parts) >= 4:
-                tariff_type = callback_data_parts[1]
-                period_days = int(callback_data_parts[2])
-                purchase_id = callback_data_parts[3]
-        except (IndexError, ValueError) as e:
-            logger.error(f"Invalid pay_tariff_card callback_data: {callback.data}, error={e}")
-            error_text = i18n_get_text(language, "errors.session_expired")
-            await callback.answer(error_text, show_alert=True)
-            return
-    
-    if not purchase_id or not tariff_type or not period_days:
-        error_text = i18n_get_text(language, "errors.session_expired")
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Missing purchase data in FSM: user={telegram_id}, purchase_id={purchase_id}, tariff={tariff_type}, period={period_days}")
-        return
-    
-    # КРИТИЧНО: Получаем pending_purchase (единственный источник правды о цене)
-    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
-    
-    if not pending_purchase:
-        # Purchase отсутствует - сессия устарела
-        error_text = i18n_get_text(language, "errors.session_expired")
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Purchase not found in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}")
-        return
-    
-    # КРИТИЧНО: Проверяем соответствие тарифа и периода
-    if pending_purchase["tariff"] != tariff_type or pending_purchase["period_days"] != period_days:
-        # Несоответствие - сессия устарела
-        logger.error(
-            f"Purchase mismatch in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}, "
-            f"stored_tariff={pending_purchase['tariff']}, stored_period={pending_purchase['period_days']}, "
-            f"expected_tariff={tariff_type}, expected_period={period_days}"
-        )
-        error_text = i18n_get_text(language, "errors.session_expired")
-        await callback.answer(error_text, show_alert=True)
-        return
-    
-    # КРИТИЧНО: Purchase валиден - используем его цену для invoice
-    logger.info(f"Using existing purchase in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}")
-    
-    # Проверяем наличие provider_token
-    if not config.TG_PROVIDER_TOKEN:
-        await callback.answer(i18n_get_text(language, "errors.payments_unavailable"), show_alert=True)
-        return
-
-    # Используем данные из pending purchase (а не из FSM)
-    amount_rubles = pending_purchase["price_kopecks"] / 100.0
-    final_price_kopecks = pending_purchase["price_kopecks"]
-    
-    # КРИТИЧНО: Валидация минимальной суммы платежа (64 RUB = 6400 kopecks)
-    MIN_PAYMENT_AMOUNT_KOPECKS = 6400
-    if final_price_kopecks < MIN_PAYMENT_AMOUNT_KOPECKS:
-        # Отменяем pending purchase с невалидной ценой
-        await database.cancel_pending_purchases(telegram_id, "min_amount_validation_failed")
-
-        error_text = i18n_get_text(language, "errors.payment_min_amount")
-        logger.warning(
-            f"payment_blocked_min_amount: user={telegram_id}, purchase_id={purchase_id}, "
-            f"tariff={tariff_type}, period_days={period_days}, "
-            f"final_price_kopecks={final_price_kopecks}, min_required={MIN_PAYMENT_AMOUNT_KOPECKS}"
-        )
-        await callback.answer(error_text, show_alert=True)
-        return
-    
-    # Используем purchase_id в payload
-    payload = f"purchase:{purchase_id}"
-    
-    # Формируем описание тарифа
-    months = period_days // 30
-    if config.is_biz_tariff(tariff_type):
-        tariff_name = "Business"
-    elif tariff_type == "basic":
-        tariff_name = "Basic"
-    else:
-        tariff_name = "Plus"
-    description = i18n_get_text(language, "buy.invoice_description", tariff_name=tariff_name, months=months)
-
-    # Формируем prices (цена в копейках)
-    prices = [LabeledPrice(label=i18n_get_text(language, "buy.invoice_label"), amount=final_price_kopecks)]
-
-    logger.info(
-        f"invoice_created: user={telegram_id}, purchase_id={purchase_id}, "
-        f"tariff={tariff_type}, period_days={period_days}, "
-        f"final_price_kopecks={final_price_kopecks}, amount_rubles={amount_rubles:.2f}"
-    )
-    
-    try:
-        invoice_msg = await callback.bot.send_invoice(
-            chat_id=telegram_id,
-            title="Atlas Secure VPN",
-            description=description,
-            payload=payload,
-            provider_token=config.TG_PROVIDER_TOKEN,
-            currency="RUB",
-            prices=prices
-        )
-        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
-        await callback.answer()
-    except Exception as e:
-        logger.exception(f"Error sending invoice: {e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
