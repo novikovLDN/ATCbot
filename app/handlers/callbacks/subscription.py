@@ -282,7 +282,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str, sub_url=html_escape(sub_url))
         try:
             if _degradation_notice:
-                success_text += "\n\n⏳ Возможны небольшие задержки"
+                success_text += i18n_get_text(language, "trial.degradation_notice", "\n\n⏳ Возможны небольшие задержки")
         except NameError:
             pass
 
@@ -427,12 +427,12 @@ async def callback_renewal_pay(callback: CallbackQuery):
     period_days = 30
     months = period_days // 30
     if months == 1:
-        period_text = "1 месяц"
+        period_text = i18n_get_text(language, "buy.period_text_1", "1 месяц")
     elif months in [2, 3, 4]:
-        period_text = f"{months} месяца"
+        period_text = i18n_get_text(language, "buy.period_text_2_4", "{months} месяца", months=months)
     else:
-        period_text = f"{months} месяцев"
-    description = f"Atlas Secure VPN продление подписки на {period_text}"
+        period_text = i18n_get_text(language, "buy.period_text_5_plus", "{months} месяцев", months=months)
+    description = i18n_get_text(language, "buy.renewal_invoice_description", "Atlas Secure VPN продление подписки на {period_text}", period_text=period_text)
 
     language = await resolve_user_language(telegram_id)
     prices = [LabeledPrice(label=i18n_get_text(language, "payment.label"), amount=amount * 100)]

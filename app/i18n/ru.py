@@ -1184,4 +1184,177 @@ LANG = {
         "Подождите минуту и нажмите «Назад → Дальше» ещё раз. "
         "Если ошибка повторится, напишите в поддержку."
     ),
+
+    # === Batch 2: hardcoded strings extracted from handlers ===
+
+    # common buttons / toasts
+    'common.support_short': "💬 Поддержка",
+    'common.help_button': "💬 Помощь",
+    'common.back_arrow': "🔙 Назад",
+
+    # main menu / settings
+    'main.settings_change_language_btn': "🗣 Изменить язык",
+    'main.settings_privacy_btn': "🔐 Политика конфиденциальности",
+    'main.tracker_only_btn': "✍️ Трекер Only",
+
+    # main menu — main buttons (keyboards.py)
+    'main.btn_connect': "🚀 Подключиться",
+    'main.btn_connect_short': "⚡️ Подключиться",
+    'main.btn_need_help': "💬 Нужна помощь",
+    'main.btn_buy_vpn': "Купить VPN",
+    'main.btn_renew_vpn': "Продлить VPN",
+    'main.btn_buy_gb': "Докупить ГБ обхода",
+    'main.btn_trial_free': "Попробовать бесплатно — 3 дня",
+    'main.btn_renew_discount_15': "Продлить со скидкой 15% | ⏳ {remaining}",
+    'main.btn_bypass_only': "🌐 Только обход блокировок",
+    'main.btn_my_subscription': "Моя подписка",
+    'main.btn_invite_friends': "Пригласить друзей",
+    'main.btn_my_profile': "Мой профиль",
+    'main.btn_shop': "Магазин",
+    'main.btn_games': "Игры",
+    'main.btn_help': "Помощь",
+    'main.btn_devices': "Мои устройства",
+    'main.btn_topup_balance': "Пополнить баланс",
+    'main.btn_change_language_full': "Сменить язык / Change language",
+    'main.btn_legal': "Правила",
+
+    # shop buttons
+    'shop.premium_button': "⚡️ Telegram Premium",
+    'shop.apple_id_button': "🍎 Пополнить Apple ID",
+    'shop.steam_top_up_button': "🎮 Пополнить Steam",
+    'shop.spotify_button': "🎧 Spotify Premium",
+    'shop.claude_coming_soon_button': "🧠 Claude Pro/Max (скоро)",
+    'shop.mt_proxy_button': "Купить Telegram MT Прокси",
+
+    # setup buttons (auto-install)
+    'setup.install_incy_btn': "📲 Скачать Incy",
+    'setup.install_happ_btn': "📲 Установить Happ",
+    'setup.download_happ_btn': "📲 Скачать Happ",
+    'setup.happ_vpn_label': "Happ VPN",
+    'setup.incy_vpn_label': "Incy VPN",
+    'setup.happ_bypass_label': "Happ Обход",
+    'setup.incy_bypass_label': "Incy Обход",
+    'setup.key_hint_press': "Установка ключа в одно нажатие 👇",
+
+    # biz control panel toasts
+    'biz.copy_link_alert': "Скопируйте ссылку выше",
+    'biz.no_key_alert': "Ключ не найден",
+    'biz.link_ready_suffix': "\n\n🔗 Ваша ссылка подключения готова.",
+
+    # errors — payment / general
+    'errors.card_payment_unavailable': "Оплата картой временно недоступна",
+    'errors.sbp_unavailable_toast': "СБП временно недоступен",
+    'errors.min_card_amount': "Сумма ниже минимальной для оплаты картой (64₽)",
+    'errors.payment_creation': "Ошибка создания платежа",
+    'errors.sbp_creation': "Ошибка создания платежа СБП",
+    'errors.special_offer_expired': "⏰ Срок спецпредложения истёк. Вы можете приобрести подписку по обычной цене.",
+
+    # main — 15% auto-discount notification
+    'main.discount_applied_choose_tariff': "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:",
+
+    # combo flow
+    'combo.promo_period_prompt': "\n\n🎁 Промокод: скидка {discount_pct}%\nВыберите период:",
+    'combo.choose_period_prompt': "\n\nВыберите период:",
+
+    # traffic / bypass buttons
+    'traffic.btn_more_volume': "Больше объёма →",
+    'traffic.promo_active_line': "\n\n🎁 Промо-скидка {discount_pct}% активна!",
+    'traffic.refresh_btn': "🔄 Обновить",
+    'traffic.gb_price_label': "{gb} ГБ — {price} ₽",
+
+    # buy screen
+    'buy.combo_button': "🚀 Комбо (VPN + обход)",
+    'buy.have_promo_button': "У меня промокод",
+    'buy.select_tariff_new': '<tg-emoji emoji-id="5427168083074628963">💎</tg-emoji> <b>Выберите тариф</b>\n\n{tariffs}\n\n<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPN + обход в одном пакете\n<blockquote>Трафик обхода включён · от 329 ₽/мес</blockquote>',
+    'buy.select_tariff_bypass_active': "🌐 <b>У вас активен обход блокировок</b>\n\nДля основной подписки выберите тариф:\n\n{tariffs}\n\n<tg-emoji emoji-id=\"5445284980978621387\">🚀</tg-emoji> <b>Комбо</b> — VPN + обход в одном пакете\n<blockquote>Трафик обхода включён · от 329 ₽/мес</blockquote>",
+
+    # profile screen (personal cabinet)
+    'profile.info_active_until': "📆 Подписка: активна до {date}",
+    'profile.info_tariff': "⭐️ Тариф: {tariff}",
+    'profile.info_inactive': "📆 Подписка: не активна",
+    'profile.info_tariff_none': "⭐️ Тариф: —",
+    'profile.info_bypass_none': "💎 Трафик обхода: —",
+    'profile.info_bypass_left': "💎 Трафик обхода: {remaining} из {limit}",
+    'profile.info_auto_renew_on': "🔁 Автопродление: включено",
+    'profile.info_auto_renew_none': "🔁 Автопродление: —",
+    'profile.info_balance': "💰 Баланс: {balance} ₽",
+    'profile.info_invited_friends': "👥 Приглашено друзей: {count}",
+
+    # my subscription screen
+    'main.my_sub_title': "<b>Информация о подписке</b>",
+    'main.my_sub_active_until': "Активна до: {date}",
+    'main.my_sub_active_until_none': "Активна до: —",
+    'main.my_sub_bypass_none': "Трафик обхода: —",
+    'main.my_sub_bypass_left': "Трафик обхода: {remaining} из {limit}",
+    'main.my_sub_btn_connect': "Подключить VPN",
+    'main.my_sub_btn_renew': "Продлить подписку",
+    'main.my_sub_btn_buy_vpn': "Купить VPN",
+    'main.my_sub_btn_topup_gb': "Пополнить ГБ Обхода",
+    'main.my_sub_btn_my_proxy': "Мой прокси",
+    'main.my_sub_btn_mt_proxy': "Telegram MT Прокси",
+
+    # legal
+    'main.legal_title': "📰 <b>Правовые документы</b>\n\nВыберите документ для ознакомления:",
+    'main.legal_terms_btn': "Пользовательское соглашение",
+    'main.legal_privacy_btn': "Политика конфиденциальности",
+
+    # help / faq screen buttons
+    'help.faq_button': "📖 Ответы на частые вопросы",
+    'help.instructions_button': "📲 Инструкции по сервису",
+    'help.contacts_button': "📞 Контакты",
+
+    # referral screen
+    'referral.hero_beginner': "Ты на первой ступени. Делись ссылкой → друг покупает подписку → ты получаешь <b>кэшбэк</b> на баланс.\n\n",
+    'referral.hero_top': "Это вершина. <b>Зафиксировано бессрочно.</b> Тебя меньше 1%.\n\n",
+    'referral.status_block': "🏆 Уровень: <b>{status}</b> · {percent}%\n💵 <b>{percent}%</b> кэшбэка с каждой покупки\n💰 Заработано: <b>{amount} ₽</b>",
+    'referral.progress_to_next': "📈 До <b>{next_name}</b> ({next_pct}%) — <b>{remaining}</b> купивших.\nУровень только растёт и не падает.",
+    'referral.your_link_hint': "🔗 <b>Твоя ссылка</b> <i>(нажми — скопируется)</i>\n",
+    'referral.header': "🎖 <b>Круг Амбассадоров</b>\n<i>От проводника до амбассадора</i>\n\n",
+
+    # Invoice descriptions & minor payment strings
+    'buy.renewal_invoice_description': "Atlas Secure VPN продление подписки на {period_text}",
+    'buy.period_text_1': "1 месяц",
+    'buy.period_text_2_4': "{months} месяца",
+    'buy.period_text_5_plus': "{months} месяцев",
+    'trial.degradation_notice': "\n\n⏳ Возможны небольшие задержки",
+
+    # Plus→Basic downgrade confirmation
+    'buy.downgrade_confirm_text': "⚠️ Вы переходите с Plus на Basic.\n\nКлюч будет ротирован с выделенного сервера на базовый.\n\nПодтвердить переход?",
+    'buy.downgrade_confirm_yes': "⚡️ Да, перейти на Basic",
+    'buy.downgrade_confirm_no': "❌ Отмена",
+
+    # Payments: withdraw admin notification & alerts (user-facing part only)
+    'withdraw.admin_new_request': "💸 Новая заявка на вывод #{wid}\n\n👤 Пользователь: @{username} (ID: {telegram_id})\n📊 Баланс: {balance:.2f} ₽\n💰 Сумма: {amount:.2f} ₽\n📶 Подписка: {sub_text}\n🏦 Реквизиты: {requisites}",
+    'withdraw.admin_btn_approve': "✅ Подтвердить",
+    'withdraw.admin_btn_reject': "❌ Отклонить",
+    'withdraw.request_note': "Обратитесь в техподдержку для создания заявки на вывод средств.",
+
+    # global discount notice
+    'buy.global_discount_default_reason': "Спец-цены",
+    'buy.global_discount_notice': "\n\n🎁 <b>Скидка −{pct}%</b> · {reason}",
+    'buy.global_discount_notice_dated': "\n\n🎁 <b>Скидка −{pct}%</b> · {reason} · до {date}",
+
+    # start.py — site link + promo/gift link errors
+    'start.site_linked_success': "✅ Сайт QoDev успешно привязан.\nТеперь синхронизация работает! ⚡️",
+    'promo_link.not_found': "⚠️ <b>Ссылка не найдена</b>\n\nВозможно, она удалена или адрес введён неправильно.",
+    'promo_link.activation_failed': "⚠️ <b>Не получилось активировать ссылку</b>\n\nПопробуй ещё раз чуть позже.",
+    'promo_link.error_inactive': "🚫 <b>Ссылка выключена</b>\n\nАдмин её деактивировал.",
+    'promo_link.error_expired': "⏳ <b>Срок действия ссылки истёк</b>",
+    'promo_link.error_exhausted': "🚫 <b>Ссылка полностью использована</b>\n\nЛимит активаций исчерпан.",
+    'promo_link.error_already_redeemed_by_user': "ℹ️ <b>Ты уже использовал эту ссылку</b>\n\nОдна активация на пользователя.",
+    'promo_link.error_not_found': "⚠️ <b>Ссылка не найдена</b>",
+    'promo_link.error_db_not_ready': "⚠️ <b>Сервис перезапускается</b>\n\nПопробуй через минуту.",
+    'promo_link.error_generic': "⚠️ <b>Активация не прошла</b>",
+    'promo_link.reward_not_applied': "⚠️ <b>Награда пока не применилась</b>\n\nПопробуй ещё раз через минуту или напиши в поддержку — мы всё выдадим.",
+    'promo_link.header_activated': "🎉 <b>Награда активирована!</b>\n\n",
+    'promo_link.reward_subscription': "📦 <b>Подписка</b> · {tariff}\n⏳ <b>{days} дн.</b>\n📅 До: <b>{end}</b>",
+    'promo_link.reward_discount_subscription': "🎁 <b>Твой подарок активирован</b>\n\n<blockquote>— Скидка <b>{percent}%</b> на любой тариф\n— Действует ещё <b>{hours} часов</b></blockquote>\n\nВыбери подходящий тариф ниже ↓",
+    'promo_link.reward_discount_traffic': "🎁 <b>Твой подарок активирован</b>\n\n<blockquote>— Скидка <b>{percent}%</b> на пакеты ГБ обхода\n— Действует ещё <b>{hours} часов</b></blockquote>\n\nВыбери подходящий тариф ниже ↓",
+    'promo_link.reward_bypass_gb': "📊 <b>+{gb} ГБ</b> обхода начислено\n\nПакет ГБ не сгорает — тратится только при работе на LTE-серверах.",
+    'promo_link.fallback_success_hint': "Открой «Купить подписку» — скидка применится автоматически.",
+
+    # stage-only user picker
+    'stage.user_role_prompt': "Привет 👋\n\nТы разработчик Atlas Secure или пользователь?\nВыбери вариант ниже 👇",
+    'stage.role_user_btn': "👤 Пользователь",
+    'stage.role_dev_btn': "💻 Разработчик",
 }

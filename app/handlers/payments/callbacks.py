@@ -592,15 +592,27 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
                 except Exception:
                     pass
             if _active:
-                _reason = _gd.get("discount_reason") or "Спец-цены"
-                _notice = f"\n\n🎁 <b>Скидка −{_pct}%</b> · {_reason}"
+                _reason = _gd.get("discount_reason") or i18n_get_text(language, "buy.global_discount_default_reason", "Спец-цены")
+                _until_str = ""
                 if _until_iso:
                     try:
                         from datetime import datetime as _dt
                         _until_dt2 = _dt.fromisoformat(_until_iso.replace("Z", "+00:00"))
-                        _notice += f" · до {_until_dt2.strftime('%d.%m')}"
+                        _until_str = _until_dt2.strftime('%d.%m')
                     except Exception:
                         pass
+                if _until_str:
+                    _notice = i18n_get_text(
+                        language, "buy.global_discount_notice_dated",
+                        "\n\n🎁 <b>Скидка −{pct}%</b> · {reason} · до {date}",
+                        pct=_pct, reason=_reason, date=_until_str,
+                    )
+                else:
+                    _notice = i18n_get_text(
+                        language, "buy.global_discount_notice",
+                        "\n\n🎁 <b>Скидка −{pct}%</b> · {reason}",
+                        pct=_pct, reason=_reason,
+                    )
                 text = (text or "") + _notice
     except Exception as _e:
         logger.warning("global-discount notice render failed: %s", _e)
@@ -748,14 +760,13 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
                 final_price_kopecks=price_info["final_price_kopecks"],
                 discount_percent=price_info["discount_percent"]
             )
-            downgrade_text = (
-                "⚠️ Вы переходите с Plus на Basic.\n\n"
-                "Ключ будет ротирован с выделенного сервера на базовый.\n\n"
-                "Подтвердить переход?"
+            downgrade_text = i18n_get_text(
+                language, "buy.downgrade_confirm_text",
+                "⚠️ Вы переходите с Plus на Basic.\n\nКлюч будет ротирован с выделенного сервера на базовый.\n\nПодтвердить переход?",
             )
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⚡️ Да, перейти на Basic", callback_data="downgrade_confirm_basic", style="primary")],
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="tariff:basic", style="primary")]
+                [InlineKeyboardButton(text=i18n_get_text(language, "buy.downgrade_confirm_yes", "⚡️ Да, перейти на Basic"), callback_data="downgrade_confirm_basic", style="primary")],
+                [InlineKeyboardButton(text=i18n_get_text(language, "buy.downgrade_confirm_no", "❌ Отмена"), callback_data="tariff:basic", style="primary")]
             ])
             await safe_edit_text(callback.message, downgrade_text, reply_markup=keyboard)
             return

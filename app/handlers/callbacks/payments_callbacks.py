@@ -257,8 +257,9 @@ async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
 @payments_router.callback_query(F.data == "withdraw_start")
 async def callback_withdraw_start(callback: CallbackQuery, state: FSMContext):
     """Вывод средств — заглушка, направляем в поддержку"""
+    language = await resolve_user_language(callback.from_user.id)
     await callback.answer(
-        "Обратитесь в техподдержку для создания заявки на вывод средств.",
+        i18n_get_text(language, "withdraw.request_note", "Обратитесь в техподдержку для создания заявки на вывод средств."),
         show_alert=True,
     )
 
