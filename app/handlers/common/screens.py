@@ -434,101 +434,88 @@ async def show_profile(message_or_query, language: str):
         is_combo = subscription.get("is_combo", False) if subscription else False
         is_bypass_only = subscription.get("is_bypass_only", False) if subscription else False
 
-        # Блок «Подписка» — собираем строки, потом оборачиваем в blockquote
-        sub_lines = []
-        if has_active_subscription and expires_at:
+        # Собираем инфо-строки (одна колонка, без blockquote)
+        info_lines = []
+        if has_active_subscription and expires_at and not is_bypass_only:
             date_str = format_date_ru(expires_at)
-            if is_bypass_only:
-                sub_lines.append(i18n_get_text(language, "profile.subscription_inactive"))
-                sub_lines.append(i18n_get_text(language, "profile.tariff_none"))
+            info_lines.append(f"📆 Подписка: активна до {date_str}")
+            if config.is_biz_tariff(sub_type):
+                tariff_label = "Business"
+            elif sub_type == "plus":
+                tariff_label = "Комбо Plus" if is_combo else "Plus"
+            elif is_trial:
+                tariff_label = "Trial"
             else:
-                sub_lines.append(i18n_get_text(language, "profile.subscription_active", date=date_str))
-                if config.is_biz_tariff(sub_type):
-                    tariff_label = "Business"
-                elif sub_type == "plus":
-                    tariff_label = "Комбо Plus" if is_combo else "Plus"
-                elif is_trial:
-                    tariff_label = "Trial"
-                else:
-                    tariff_label = "Комбо Basic" if is_combo else "Basic"
-                sub_lines.append(i18n_get_text(language, "profile.tariff", tariff=tariff_label))
-                if auto_renew:
-                    renewal_window = timedelta(hours=6)
-                    next_renewal = expires_at - renewal_window
-                    sub_lines.append(i18n_get_text(language, "profile.auto_renew_on", date=format_date_ru(next_renewal)))
-                else:
-                    sub_lines.append(i18n_get_text(language, "profile.auto_renew_off"))
+                tariff_label = "Комбо Basic" if is_combo else "Basic"
+            info_lines.append(f"⭐️ Тариф: {tariff_label}")
         else:
-            sub_lines.append(i18n_get_text(language, "profile.subscription_inactive"))
-            sub_lines.append(i18n_get_text(language, "profile.tariff_none"))
-            sub_lines.append(i18n_get_text(language, "profile.auto_renew_none"))
+            info_lines.append("📆 Подписка: не активна")
+            info_lines.append("⭐️ Тариф: —")
 
-        text += "<blockquote>" + "\n".join(sub_lines) + "</blockquote>\n\n"
+        # Трафик обхода — сразу в инфо-блок (цифрой, без прогресс-бара)
+        bypass_line = "💎 Трафик обхода: —"
+        if config.REMNAWAVE_ENABLED:
+            try:
+                rmn_uuid_check = await database.get_remnawave_uuid(telegram_id)
+                if rmn_uuid_check:
+                    from app.services import remnawave_api
+                    traffic = await remnawave_api.get_user_traffic(rmn_uuid_check)
+                    if traffic:
+                        used = traffic["usedTrafficBytes"]
+                        limit_bytes = traffic["trafficLimitBytes"]
+                        remaining = max(0, limit_bytes - used)
 
-        # Блок «Баланс»
-        text += "<blockquote>" + i18n_get_text(language, "profile.balance", amount=balance_str) + "</blockquote>"
+                        def _fmt(b):
+                            if b >= 1024**3:
+                                return f"{b / 1024**3:.1f} ГБ"
+                            if b >= 1024**2:
+                                return f"{b / 1024**2:.0f} МБ"
+                            return f"{b / 1024:.0f} КБ"
 
-        # --- Traffic section: show if Remnawave enabled and user has remnawave_uuid ---
-        # Traffic must be visible regardless of main subscription status (bypass GB always work)
+                        bypass_line = f"💎 Трафик обхода: {_fmt(remaining)} из {_fmt(limit_bytes)}"
+            except Exception as e:
+                logger.warning(f"profile: bypass traffic fetch failed for {telegram_id}: {e}")
+        info_lines.append(bypass_line)
+
+        # Автопродление
+        if has_active_subscription and not is_bypass_only:
+            info_lines.append("")  # пустая строка перед служебными полями
+            info_lines.append("🔁 Автопродление: включено" if auto_renew else "🔁 Автопродление: —")
+        else:
+            info_lines.append("")
+            info_lines.append("🔁 Автопродление: —")
+
+        info_lines.append(f"💰 Баланс: {balance_str} ₽")
+
+        # Приглашено друзей — счётчик по реф-ссылке
+        try:
+            ref_stats = await database.get_referral_stats(telegram_id)
+            invited_count = ref_stats.get("total_referred", 0) if ref_stats else 0
+        except Exception as e:
+            logger.warning(f"profile: referral count fetch failed for {telegram_id}: {e}")
+            invited_count = 0
+        info_lines.append("")
+        info_lines.append(f"👥 Приглашено друзей: {invited_count}")
+
+        # Bypass entity auto-provision (fire-and-forget) —
+        # трафик уже показан выше цифрами, здесь только гарантируем,
+        # что у пользователя вообще есть entity в Remnawave.
         show_traffic = False
         if config.REMNAWAVE_ENABLED:
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if rmn_uuid:
+            rmn_uuid_prov = await database.get_remnawave_uuid(telegram_id)
+            if rmn_uuid_prov:
                 show_traffic = True
-            elif has_active_subscription and sub_type in ("basic", "plus", "trial"):
-                show_traffic = True  # will auto-provision below
-                rmn_uuid = None
-        if show_traffic:
-            from app.services import remnawave_api, remnawave_service
-            if rmn_uuid:
-                remnawave_service._fire_and_forget(
-                    remnawave_service.ensure_squad(telegram_id)
-                )
-                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-                if traffic:
-                    used = traffic["usedTrafficBytes"]
-                    limit_bytes = traffic["trafficLimitBytes"]
-                    pct = int(used / limit_bytes * 100) if limit_bytes > 0 else 0
-
-                    def _fmt(b):
-                        if b >= 1024**3:
-                            return f"{b / 1024**3:.1f} ГБ"
-                        if b >= 1024**2:
-                            return f"{b / 1024**2:.0f} МБ"
-                        return f"{b / 1024:.0f} КБ"
-
-                    def _bar(u, l, length=10):
-                        if l <= 0:
-                            return "🤍" * length
-                        ratio = min(u / l, 1.0)
-                        filled = int(ratio * length)
-                        return "🤍" * filled + "🩶" * (length - filled)
-
-                    # Ключи обхода (Happ + Incy) на этом экране намеренно
-                    # не показываются — они доступны на экране подключения
-                    # (callback_setup_step2 / callback_setup_manual). На
-                    # профиле остаётся только traffic-block с прогресс-баром,
-                    # чтобы экран не разрастался.
-
-                    traffic_block = (
-                        f"<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n"
-                        f"<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {_fmt(used)} / {_fmt(limit_bytes)}\n"
-                        f"{_bar(used, limit_bytes)} {pct}%"
-                    )
-                    text += f"\n\n<blockquote>{traffic_block}</blockquote>"
-
-                    if is_trial:
-                        text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
-            elif expires_at:
-                # Auto-provision (fire-and-forget)
+                from app.services import remnawave_service as _rmn_svc
+                _rmn_svc._fire_and_forget(_rmn_svc.ensure_squad(telegram_id))
+            elif has_active_subscription and expires_at and sub_type in ("basic", "plus", "trial"):
+                from app.services import remnawave_service as _rmn_svc
                 override = 5 * 1024**3 if is_trial else 10 * 1024**3
-                remnawave_service._fire_and_forget(
-                    remnawave_service.create_remnawave_user(
+                _rmn_svc._fire_and_forget(
+                    _rmn_svc.create_remnawave_user(
                         telegram_id, sub_type, expires_at,
                         traffic_limit_override=override,
                     )
                 )
-                text += "\n\n<blockquote><tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n⏳ Настраиваем… Зайдите через несколько секунд.</blockquote>"
 
         keyboard = get_profile_keyboard(
             language, has_active_subscription, auto_renew,
@@ -583,6 +570,8 @@ async def _open_buy_screen(
     с экраном тарифов, а не вместо неё. По умолчанию False — стандартная
     in-place навигация (edit или delete-and-resend).
     """
+    from app.handlers.common.keyboards import CE
+
     if isinstance(event, CallbackQuery):
         try:
             await event.answer()
@@ -592,7 +581,7 @@ async def _open_buy_screen(
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
-    
+
     await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
     await database.cancel_pending_purchases(telegram_id, "new_purchase_started")
     await state.set_state(PurchaseState.choose_tariff)
@@ -649,12 +638,15 @@ async def _open_buy_screen(
             callback_data="buy_combo"
         )],
         [InlineKeyboardButton(
-            text="🎁 Подарить VPN",
-            callback_data="gift_subscription"
+            text="Купить Telegram MT Прокси",
+            callback_data="proxy_menu",
+            icon_custom_emoji_id=CE["proxy"],
+            style="success",
         )],
         [InlineKeyboardButton(
-            text="🎟 У меня промокод",
-            callback_data="enter_promo"
+            text="У меня промокод",
+            callback_data="enter_promo",
+            icon_custom_emoji_id=CE["promo"],
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
@@ -704,3 +696,157 @@ async def show_tariffs_main_screen(
     """
     bot = event.bot if isinstance(event, CallbackQuery) else event.bot
     await _open_buy_screen(event, bot, state, force_new_message=force_new_message)
+
+
+async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot: Bot):
+    """«Моя подписка» — info-экран с тарифом, датой активности и остатком ГБ обхода.
+
+    Кнопки: Подключить VPN, Продлить подписку, Пополнить ГБ Обхода, Назад.
+    """
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.answer()
+        except Exception:
+            pass
+
+    msg = event.message if isinstance(event, CallbackQuery) else event
+    telegram_id = event.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    subscription = await database.get_subscription_any(telegram_id)
+    subscription_status = get_subscription_status(subscription)
+    has_active_subscription = subscription_status.is_active
+    expires_at = subscription_status.expires_at
+    sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
+    is_bypass_only = bool(subscription and subscription.get("is_bypass_only"))
+    is_combo = bool(subscription and subscription.get("is_combo"))
+    is_trial = sub_type == "trial"
+
+    # Тариф
+    if has_active_subscription and not is_bypass_only:
+        if config.is_biz_tariff(sub_type):
+            tariff_label = "Business"
+        elif sub_type == "plus":
+            tariff_label = "Комбо Plus" if is_combo else "Plus"
+        elif is_trial:
+            tariff_label = "Trial"
+        else:
+            tariff_label = "Комбо Basic" if is_combo else "Basic"
+        active_line = f"Активна до: {format_date_ru(expires_at)}"
+    else:
+        tariff_label = "—"
+        active_line = "Активна до: —"
+
+    # Трафик обхода (остаток / лимит)
+    bypass_line = "Трафик обхода: —"
+    if config.REMNAWAVE_ENABLED:
+        try:
+            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+            if rmn_uuid:
+                from app.services import remnawave_api
+                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+                if traffic:
+                    used = int(traffic.get("usedTrafficBytes") or 0)
+                    limit_bytes = int(traffic.get("trafficLimitBytes") or 0)
+                    remaining = max(0, limit_bytes - used)
+
+                    def _fmt(b):
+                        if b >= 1024**3:
+                            return f"{b / 1024**3:.1f} ГБ"
+                        if b >= 1024**2:
+                            return f"{b / 1024**2:.0f} МБ"
+                        return f"{b / 1024:.0f} КБ"
+
+                    bypass_line = f"Трафик обхода: {_fmt(remaining)} из {_fmt(limit_bytes)}"
+        except Exception as e:
+            logger.warning(f"my_subscription: bypass traffic fetch failed for {telegram_id}: {e}")
+
+    text = (
+        "<b>Информация о подписке</b>\n\n"
+        f"⭐️ Тариф: {tariff_label}\n"
+        f"📆 {active_line}\n"
+        f"💎 {bypass_line}"
+    )
+
+    has_proxy = False
+    try:
+        has_proxy = await database.has_purchased_proxy(telegram_id)
+    except Exception as e:
+        logger.warning(f"my_subscription: proxy check failed for {telegram_id}: {e}")
+
+    from app.handlers.common.keyboards import CE
+
+    kb_rows = []
+    if has_active_subscription and not is_bypass_only:
+        kb_rows.append([InlineKeyboardButton(
+            text="Подключить VPN",
+            callback_data="connect_instruction",
+            icon_custom_emoji_id=CE["connect"],
+            style="primary",
+        )])
+    # Продлить подписку (🔄) / Купить VPN (🛒)
+    if has_active_subscription and not is_bypass_only:
+        renew_text, renew_icon = "Продлить подписку", CE["renew"]
+    else:
+        renew_text, renew_icon = "Купить VPN", CE["buy"]
+    kb_rows.append([InlineKeyboardButton(
+        text=renew_text,
+        callback_data="menu_buy_vpn",
+        icon_custom_emoji_id=renew_icon,
+        style="success",
+    )])
+    kb_rows.append([InlineKeyboardButton(
+        text="Пополнить ГБ Обхода",
+        callback_data="buy_traffic",
+        icon_custom_emoji_id=CE["traffic"],
+        style="success",
+    )])
+    kb_rows.append([InlineKeyboardButton(
+        text=("Мой прокси" if has_proxy else "Telegram MT Прокси"),
+        callback_data="proxy_menu",
+        icon_custom_emoji_id=CE["proxy"],
+        style="primary",
+    )])
+    kb_rows.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back", "Назад"),
+        callback_data="menu_main",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
+    )])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+    await safe_edit_text(msg, text, reply_markup=keyboard, parse_mode="HTML", bot=bot)
+
+
+async def _open_legal_screen(event: Union[Message, CallbackQuery], bot: Bot):
+    """«Правила» — выбор правового документа (соглашение / политика конфиденциальности)."""
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.answer()
+        except Exception:
+            pass
+
+    msg = event.message if isinstance(event, CallbackQuery) else event
+    telegram_id = event.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    from app.handlers.common.keyboards import CE
+
+    text = "📰 <b>Правовые документы</b>\n\nВыберите документ для ознакомления:"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="Пользовательское соглашение",
+            url="https://telegra.ph/Polzovatelskoe-soglashenie-08-06-50",
+        )],
+        [InlineKeyboardButton(
+            text="Политика конфиденциальности",
+            url="https://telegra.ph/Politika-konfidencialnosti-08-06-86",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back", "Назад"),
+            callback_data="menu_profile",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
+        )],
+    ])
+    await safe_edit_text(msg, text, reply_markup=keyboard, parse_mode="HTML", bot=bot)

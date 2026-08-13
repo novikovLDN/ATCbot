@@ -19,7 +19,12 @@ from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID as _MAIN_PHOTO_ID
 from app.handlers.common.utils import format_text_with_incident, safe_edit_text
-from app.handlers.common.screens import show_profile, _open_help_screen
+from app.handlers.common.screens import (
+    show_profile,
+    _open_help_screen,
+    _open_my_subscription_screen,
+    _open_legal_screen,
+)
 from app.handlers.common.keyboards import (
     get_main_menu_keyboard,
     get_about_keyboard,
@@ -104,15 +109,14 @@ async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
 async def _get_main_text(telegram_id: int, language: str) -> str:
     """Определяет текст главного экрана: обычный, бизнес, bypass-only или без подписки.
 
-    В конец каждого варианта добавляется main.legal_footer с ссылками на
-    политику конфиденциальности и пользовательское соглашение.
+    Legal footer больше не приклеивается — ссылки на политику и соглашение
+    живут в отдельном экране «Правила» (Мой профиль → Правила).
     """
-    footer = i18n_get_text(language, "main.legal_footer")
     try:
         sub = await database.get_subscription(telegram_id)
         sub_type = (sub.get("subscription_type") or "basic").strip().lower() if sub else None
         if sub and sub_type and config.is_biz_tariff(sub_type):
-            return i18n_get_text(language, "biz.main_screen") + footer
+            return i18n_get_text(language, "biz.main_screen")
         if not sub:
             # Check if user ever had a subscription (expired vs new)
             user = await database.get_user(telegram_id)
@@ -121,14 +125,14 @@ async def _get_main_text(telegram_id: int, language: str) -> str:
                 text = i18n_get_text(language, "main.welcome_expired")
             else:
                 text = i18n_get_text(language, "main.welcome_no_sub")
-            return (await format_text_with_incident(text, language)) + footer
+            return await format_text_with_incident(text, language)
         if sub and sub.get("is_bypass_only"):
             text = i18n_get_text(language, "main.welcome_bypass")
-            return (await format_text_with_incident(text, language)) + footer
+            return await format_text_with_incident(text, language)
     except Exception:
         pass
     text = i18n_get_text(language, "main.welcome")
-    return (await format_text_with_incident(text, language)) + footer
+    return await format_text_with_incident(text, language)
 
 
 @router.callback_query(F.data == "menu_ecosystem")
@@ -302,6 +306,20 @@ async def callback_privacy(callback: CallbackQuery):
 
     text = i18n_get_text(language, "main.privacy_policy_text", "privacy_policy_text")
     await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=callback.bot)
+
+
+@router.callback_query(F.data == "menu_my_subscription")
+async def callback_my_subscription(callback: CallbackQuery):
+    """Экран «Моя подписка» — краткое инфо + быстрые действия."""
+    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
+        return
+    await _open_my_subscription_screen(callback, callback.bot)
+
+
+@router.callback_query(F.data == "menu_legal")
+async def callback_legal(callback: CallbackQuery):
+    """Экран «Правила» — выбор правового документа."""
+    await _open_legal_screen(callback, callback.bot)
 
 
 @router.callback_query(F.data == "special_offer_buy")
