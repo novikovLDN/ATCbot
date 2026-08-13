@@ -95,163 +95,135 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     if is_biz_user:
         return _get_biz_main_menu_keyboard(language)
 
-    has_proxy = False
-    if telegram_id and database.DB_READY:
+    # У пользователя есть Remnawave bypass entity (остаток ГБ) — тогда
+    # даже без активной подписки показываем экран «Моя подписка», чтобы
+    # он мог посмотреть остаток трафика и продлить.
+    has_bypass_history = False
+    if telegram_id and database.DB_READY and config.REMNAWAVE_ENABLED:
         try:
-            has_proxy = await database.has_purchased_proxy(telegram_id)
+            has_bypass_history = bool(await database.get_remnawave_uuid(telegram_id))
         except Exception as e:
-            logger.warning(f"Error checking proxy ownership for main menu: {e}")
+            logger.warning(f"Error checking bypass history for main menu: {e}")
 
-    proxy_button = InlineKeyboardButton(
-        text=("Мой прокси" if has_proxy else "Telegram MT Прокси"),
-        callback_data="proxy_menu",
-        icon_custom_emoji_id="5233479338791281256",  # ⭐️
-    )
+    show_my_sub = has_active_sub or has_bypass_history
 
     buttons = []
 
-    # === ПЕРВАЯ КНОПКА: 3 состояния ===
     if has_active_sub:
-        # Состояние 2: Активная подписка → "Подключиться" (ведёт на экран инструкции)
-        #
-        # Bot API 9.4: ставим тестовое сочетание — premium custom emoji
-        # слева (EMOJI["sub"] = 5330115548900501467) + style="primary"
-        # (синий заливочный фон). Префикс «📲 » из текста снят, чтобы
-        # на клиентах с поддержкой API 9.4 не оказалось два эмодзи
-        # подряд. На старых клиентах кнопка выглядит как раньше, просто
-        # без обычного префикса — лучше пустое место, чем плейсхолдер.
+        # === Активная подписка ===
+        # Row 1: Продлить VPN (green success)
         buttons.append([InlineKeyboardButton(
-            text="Подключиться",
-            callback_data="connect_instruction",
-            icon_custom_emoji_id="5330115548900501467",
-            style="primary",
+            text="Продлить VPN" if not is_bypass_only else "Купить VPN",
+            callback_data="menu_buy_vpn",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            style="success",
         )])
-    elif telegram_id and database.DB_READY:
-        # Проверяем trial
+        # Row 2: Докупить ГБ обхода (green success)
+        buttons.append([InlineKeyboardButton(
+            text="Докупить ГБ обхода",
+            callback_data="buy_traffic",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            style="success",
+        )])
+    else:
+        # === Без активной подписки ===
         trial_available = False
-        try:
-            trial_available = await trial_service.is_trial_available(telegram_id)
-        except Exception as e:
-            logger.warning(f"Error checking trial availability for user {telegram_id}: {e}")
+        if telegram_id and database.DB_READY:
+            try:
+                trial_available = await trial_service.is_trial_available(telegram_id)
+            except Exception as e:
+                logger.warning(f"Error checking trial availability for user {telegram_id}: {e}")
 
         if trial_available:
-            # Состояние 1: Новый пользователь → "Попробовать бесплатно"
             buttons.append([InlineKeyboardButton(
                 text="🎁 Попробовать бесплатно — 3 дня",
-                callback_data="activate_trial"
+                callback_data="activate_trial",
+                style="success",
             )])
 
-        # Кнопки покупки для пользователей без подписки
-        # Проверяем спецпредложение для истекших подписок
+        # Спецпредложение для истекших
         offer_shown = False
         try:
-            special_offer = await database.get_special_offer_info(telegram_id)
+            special_offer = await database.get_special_offer_info(telegram_id) if telegram_id else None
             if special_offer:
                 remaining = special_offer["remaining_text"]
                 buttons.append([InlineKeyboardButton(
                     text=f"Продлить со скидкой 15% | ⏳ {remaining}",
                     callback_data="special_offer_buy",
                     icon_custom_emoji_id="5199785165735367039",  # ⚡️
+                    style="success",
                 )])
                 offer_shown = True
         except Exception as e:
             logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
 
-        if not offer_shown and not trial_available:
-            # Нет триала и нет спецпредложения — обычные кнопки
-            pass
-
+        # Row 1: Купить VPN (green)
         buttons.append([InlineKeyboardButton(
-            text="Купить подписку",
+            text="Купить VPN",
             callback_data="menu_buy_vpn",
             icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            style="success",
         )])
+
+        # «Только обход блокировок» — только для юзеров без истории
+        # (первый вход, никогда не покупал ни подписку, ни ГБ).
+        if not has_bypass_history:
+            buttons.append([InlineKeyboardButton(
+                text="🌐 Только обход блокировок",
+                callback_data="buy_bypass_only",
+                style="success",
+            )])
+
+    # === Общие ряды (одинаковые для активной и неактивной подписок) ===
+
+    # Row: Моя подписка — виден если есть подписка или остаток ГБ
+    if show_my_sub:
         buttons.append([InlineKeyboardButton(
-            text="🌐 Только обход блокировок",
-            callback_data="buy_bypass_only"
+            text="Моя подписка",
+            callback_data="menu_my_subscription",
+            icon_custom_emoji_id="5330115548900501467",  # 💠
+            style="primary",
         )])
-        buttons.append([proxy_button])
 
-    # Traffic button removed — traffic info is now in profile screen
+    # Row: Пригласить друзей (переименован из «Заработать с нами»)
+    buttons.append([InlineKeyboardButton(
+        text="Пригласить друзей",
+        callback_data="menu_referral",
+        icon_custom_emoji_id="5449601904147440135",  # 👑
+        style="primary",
+    )])
 
-    if has_active_sub:
-        # === Кнопки для пользователей С подпиской ===
-        buttons.append([InlineKeyboardButton(
-            text=_strip_lead_emoji(i18n_get_text(language, "main.profile")),
+    # Row: Мой профиль | Магазин
+    buttons.append([
+        InlineKeyboardButton(
+            text="Мой профиль",
             callback_data="menu_profile",
             icon_custom_emoji_id="6019503133288304110",  # 🧑‍💻
-        )])
-        if is_bypass_only:
-            # Bypass-only: кнопки докупить трафик и купить подписку
-            buttons.append([
-                InlineKeyboardButton(
-                    text="Купить ГБ обхода",
-                    callback_data="buy_traffic",
-                    icon_custom_emoji_id="5199785165735367039",  # ⚡️
-                ),
-                InlineKeyboardButton(
-                    text="Купить VPN",
-                    callback_data="menu_buy_vpn",
-                    icon_custom_emoji_id="5199785165735367039",  # ⚡️
-                ),
-            ])
-        else:
-            buttons.append([
-                InlineKeyboardButton(
-                    text="Продлить подписку",
-                    callback_data="menu_buy_vpn",
-                    icon_custom_emoji_id="5199785165735367039",  # ⚡️
-                ),
-                InlineKeyboardButton(
-                    text="Подарить",
-                    callback_data="gift_subscription",
-                    icon_custom_emoji_id="5193085063998224234",  # 🎁
-                ),
-            ])
-        buttons.append([
-            InlineKeyboardButton(
-                text="Игровой клуб",
-                callback_data="games_menu",
-                icon_custom_emoji_id="5262932983261699334",  # 🎮
-            ),
-            InlineKeyboardButton(
-                text="Магазин",
-                callback_data="mini_shop",
-                icon_custom_emoji_id="5323510761077636002",  # 🛍
-            ),
-        ])
-        buttons.append([InlineKeyboardButton(
-            text="Заработать с нами",
-            callback_data="menu_referral",
-            icon_custom_emoji_id="5449601904147440135",  # 👑 premium (bag-of-money подойдёт лучше, но оставлю пока crown)
-        )])
-        buttons.append([proxy_button])
-        buttons.append([
-            InlineKeyboardButton(
-                text="Настройки",
-                callback_data="menu_settings",
-                icon_custom_emoji_id="5350396951407895212",  # ⚙️
-            ),
-            InlineKeyboardButton(
-                text="Помощь",
-                callback_data="menu_help",
-                icon_custom_emoji_id="5188540541922480562",  # ❓
-            ),
-        ])
-    else:
-        # === Кнопки для пользователей БЕЗ подписки ===
-        buttons.append([
-            InlineKeyboardButton(
-                text="Магазин",
-                callback_data="mini_shop",
-                icon_custom_emoji_id="5323510761077636002",  # 🛍
-            ),
-            InlineKeyboardButton(
-                text="Помощь",
-                callback_data="menu_help",
-                icon_custom_emoji_id="5188540541922480562",  # ❓
-            ),
-        ])
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            text="Магазин",
+            callback_data="mini_shop",
+            icon_custom_emoji_id="5323510761077636002",  # 🛍
+            style="primary",
+        ),
+    ])
+
+    # Row: Игры (одна широкая кнопка)
+    buttons.append([InlineKeyboardButton(
+        text="Игры",
+        callback_data="games_menu",
+        icon_custom_emoji_id="5262932983261699334",  # 🎮
+        style="primary",
+    )])
+
+    # Row: Помощь (отдельным рядом)
+    buttons.append([InlineKeyboardButton(
+        text="Помощь",
+        callback_data="menu_help",
+        icon_custom_emoji_id="5188540541922480562",  # ❓
+        style="primary",
+    )])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -348,95 +320,64 @@ def get_profile_keyboard(
     is_combo: bool = False,
     is_bypass_only: bool = False,
 ):
-    """Личный кабинет: основные CTA — success-зелёные, «Мои устройства» — danger-красная."""
+    """Личный кабинет: покупки — зелёные (success), навигация — синие (primary)."""
     buttons = []
 
-    if is_bypass_only and has_active_subscription:
-        # Bypass-only: купить ГБ + купить подписку (не продлить)
-        buttons.append([InlineKeyboardButton(
-            text="Купить ГБ трафика",
-            callback_data="buy_traffic",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️ premium
-            style="success",
-        )])
-        buttons.append([InlineKeyboardButton(
-            text="Купить подписку VPN",
-            callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
-            style="success",
-        )])
-    elif is_combo and has_active_subscription:
-        # Комбо-подписка: трафик и продление основной
-        buttons.append([InlineKeyboardButton(
-            text="Купить ГБ трафика",
-            callback_data="buy_traffic",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
-            style="success",
-        )])
-        buttons.append([InlineKeyboardButton(
-            text="Продлить основную подписку",
-            callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
-            style="success",
-        )])
-    else:
-        # Row 1: [Купить ГБ] [Продлить/Купить подписку] — основные CTA, success
-        row1 = []
-        if show_traffic and not is_trial:
-            row1.append(InlineKeyboardButton(
-                text="Купить ГБ",
-                callback_data="buy_traffic",
-                icon_custom_emoji_id="5199785165735367039",  # ⚡️
-                style="success",
-            ))
-        buy_text = _strip_lead_emoji(
-            i18n_get_text(language, "main.buy_renew")
-            if has_active_subscription
-            else i18n_get_text(language, "main.buy_new")
-        )
-        row1.append(InlineKeyboardButton(
-            text=buy_text,
-            callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
-            style="success",
-        ))
-        buttons.append(row1)
+    # Row 1: Купить / Продлить VPN (green success)
+    buy_text = (
+        "Продлить VPN"
+        if has_active_subscription and not is_bypass_only
+        else "Купить VPN"
+    )
+    buttons.append([InlineKeyboardButton(
+        text=buy_text,
+        callback_data="menu_buy_vpn",
+        icon_custom_emoji_id="5199785165735367039",  # ⚡️
+        style="success",
+    )])
 
-    # Row 2: Мои устройства — full width, danger-красная
+    # Row 2: Докупить ГБ обхода (green success)
+    buttons.append([InlineKeyboardButton(
+        text="Докупить ГБ обхода",
+        callback_data="buy_traffic",
+        icon_custom_emoji_id="5199785165735367039",  # ⚡️
+        style="success",
+    )])
+
+    # Row 3: Мои устройства (primary blue)
     buttons.append([InlineKeyboardButton(
         text="🖥 Мои устройства",
         callback_data="user:devices",
-        style="danger",
+        style="primary",
     )])
 
-    # Row 3: Пополнить + Веб-клиент
-    buttons.append([
-        InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"),
-        InlineKeyboardButton(text="🌐 Веб-клиент", url="https://qodev.dev"),
-    ])
+    # Row 4: Пополнить баланс (primary blue)
+    buttons.append([InlineKeyboardButton(
+        text="💳 Пополнить баланс",
+        callback_data="topup_balance",
+        style="primary",
+    )])
 
-    # Row 4: Язык + Подарки
-    buttons.append([
-        InlineKeyboardButton(text="🗣 Язык", callback_data="change_language"),
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "gift.my_gifts_btn", "🎁 Мои подарки"),
-            callback_data="my_gifts:0",
-        ),
-    ])
+    # Row 5: Сменить язык (primary blue)
+    buttons.append([InlineKeyboardButton(
+        text="🗣 Сменить язык / Change language",
+        callback_data="change_language",
+        style="primary",
+    )])
 
-    # Row 5: Автопродление (списывается с баланса; только при активной подписке)
-    if has_active_subscription and not is_bypass_only:
-        ar_text = "🔁 Автопродление с баланса ✅" if auto_renew else "🔁 Автопродление с баланса"
-        ar_data = "toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
-        buttons.append([InlineKeyboardButton(text=ar_text, callback_data=ar_data)])
+    # Row 6: Правила (primary blue)
+    buttons.append([InlineKeyboardButton(
+        text="📰 Правила",
+        callback_data="menu_legal",
+        style="primary",
+    )])
 
-    # Row 6: Назад
-    buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back", "← Назад"),
-            callback_data="menu_main",
-        ),
-    ])
+    # Row 7: Назад
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back", "← Назад"),
+        callback_data="menu_main",
+        style="primary",
+    )])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
