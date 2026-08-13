@@ -700,7 +700,12 @@ async def cb_pay_lava(callback: CallbackQuery, state: FSMContext):
             pass
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💳 Оплатить", url=invoice_data["payment_url"])],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop")],
+            [InlineKeyboardButton(
+                text="🔙 Назад",
+                callback_data="mini_shop",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
         ])
         await callback.message.answer(
             f"💳 Счёт создан: <b>{price}₽</b>\n\nОплатите по кнопке ниже.",
@@ -747,7 +752,12 @@ async def cb_pay_wata(callback: CallbackQuery, state: FSMContext):
             pass
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=invoice["payment_url"])],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop")],
+            [InlineKeyboardButton(
+                text="🔙 Назад",
+                callback_data="mini_shop",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
         ])
         await callback.message.answer(
             f"💳 <b>Wata (тест)</b> · {label}\nК оплате: <b>{price}₽</b>",
@@ -799,7 +809,12 @@ async def cb_pay_sbp(callback: CallbackQuery, state: FSMContext):
                 text=f"📱 Оплатить {sbp_price_rubles:.0f}₽",
                 url=tx["redirect_url"],
             )],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop")],
+            [InlineKeyboardButton(
+                text="🔙 Назад",
+                callback_data="mini_shop",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
         ])
         await callback.message.answer(
             f"📱 <b>СБП</b>\nК оплате: <b>{sbp_price_rubles:.0f}₽</b> "
@@ -851,7 +866,12 @@ async def send_spotify_success(
     )
     user_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 Поддержка", url=SUPPORT_URL)],
-        [InlineKeyboardButton(text="🔙 В магазин", callback_data="mini_shop")],
+        [InlineKeyboardButton(
+            text="🔙 В магазин",
+            callback_data="mini_shop",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
+        )],
     ])
     try:
         await bot.send_message(

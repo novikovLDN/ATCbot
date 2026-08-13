@@ -29,6 +29,7 @@ import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.core.rate_limit import check_rate_limit
+from app.handlers.common.emoji import CE
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.states import TelegramStarsState
 from app.handlers.common.utils import safe_edit_text
@@ -108,6 +109,7 @@ async def callback_stars_buy(callback: CallbackQuery, state: FSMContext):
         row.append(InlineKeyboardButton(
             text=label,
             callback_data=f"stars_pack:{stars}",
+            style="primary",
         ))
         if len(row) == 2:
             rows.append(row)
@@ -118,6 +120,8 @@ async def callback_stars_buy(callback: CallbackQuery, state: FSMContext):
     rows.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="mini_shop",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
@@ -170,11 +174,13 @@ async def callback_stars_pack(callback: CallbackQuery, state: FSMContext):
         f"Выберите получателя звёзд:"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 Себе", callback_data="stars_recipient:self")],
-        [InlineKeyboardButton(text="🎁 Подарить", callback_data="stars_recipient:gift")],
+        [InlineKeyboardButton(text="👤 Себе", callback_data="stars_recipient:self", style="primary")],
+        [InlineKeyboardButton(text="🎁 Подарить", callback_data="stars_recipient:gift", style="primary")],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="stars_buy",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
@@ -220,6 +226,8 @@ async def callback_stars_recipient(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data=f"stars_pack:{stars}",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -251,7 +259,12 @@ async def process_stars_username(message: Message, state: FSMContext):
         if attempts <= 0:
             await state.clear()
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+                [InlineKeyboardButton(
+                    text=i18n_get_text(language, "common.back"),
+                    callback_data="mini_shop",
+                    icon_custom_emoji_id=CE["back"],
+                    style="primary",
+                )],
             ])
             await message.answer(
                 "❌ Слишком много неверных попыток. Попробуйте позже.",
@@ -281,27 +294,29 @@ async def process_stars_username(message: Message, state: FSMContext):
     _ = await database.get_user_balance(telegram_id)
     buttons = []
     if config.TG_PROVIDER_TOKEN:
-        buttons.append([InlineKeyboardButton(text="💳 Банковская карта", callback_data="stars_pay:card")])
+        buttons.append([InlineKeyboardButton(text="💳 Банковская карта", callback_data="stars_pay:card", style="primary")])
 
     import lava_service
     if lava_service.is_enabled():
-        buttons.append([InlineKeyboardButton(text="💳 Карта (Lava)", callback_data="stars_pay:lava")])
+        buttons.append([InlineKeyboardButton(text="💳 Карта (Lava)", callback_data="stars_pay:lava", style="primary")])
     # Wata — admin-only beta
     try:
         import wata_service
         if wata_service.is_visible_to(telegram_id):
-            buttons.append([InlineKeyboardButton(text="💳 Wata (тест)", callback_data="stars_pay:wata")])
+            buttons.append([InlineKeyboardButton(text="💳 Wata (тест)", callback_data="stars_pay:wata", style="primary")])
     except Exception:
         pass
 
     if config.PLATEGA_MERCHANT_ID:
         import math
         sbp_price = math.ceil(price * (1 + config.SBP_MARKUP_PERCENT / 100))
-        buttons.append([InlineKeyboardButton(text=f"📱 СБП ({sbp_price} ₽)", callback_data="stars_pay:sbp")])
+        buttons.append([InlineKeyboardButton(text=f"📱 СБП ({sbp_price} ₽)", callback_data="stars_pay:sbp", style="primary")])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data=f"stars_pack:{stars}",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     await message.answer(confirm_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
@@ -438,7 +453,12 @@ async def callback_stars_pay_lava(callback: CallbackQuery, state: FSMContext):
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💳 Оплатить", url=invoice["url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="mini_shop",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
         ])
         msg = await callback.bot.send_message(telegram_id, i18n_get_text(language, "payment.invoice_timeout"), reply_markup=kb, parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg.message_id))
@@ -474,7 +494,12 @@ async def callback_stars_pay_wata(callback: CallbackQuery, state: FSMContext):
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=invoice["payment_url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="mini_shop",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
         ])
         msg = await callback.bot.send_message(
             telegram_id,
@@ -523,7 +548,12 @@ async def callback_stars_pay_sbp(callback: CallbackQuery, state: FSMContext):
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📱 Оплатить через СБП", url=transaction["url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="mini_shop",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
         ])
         await callback.bot.send_message(telegram_id, i18n_get_text(language, "payment.invoice_timeout"), reply_markup=kb, parse_mode="HTML")
         await state.set_state(TelegramStarsState.processing_payment)
@@ -572,7 +602,12 @@ async def send_stars_success(
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/atlas_suppbot")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
+        )],
     ])
     try:
         await bot.send_message(telegram_id, text, reply_markup=kb, parse_mode="HTML")
