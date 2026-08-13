@@ -454,24 +454,35 @@ async def cmd_start(message: Message, state: FSMContext):
                 }
             )
     
-    # 2026-08: язык автоопределяется из message.from_user.language_code для
-    # новых юзеров, для существующих берём ранее сохранённый. Picker больше
-    # не показываем — юзер меняет язык через Профиль → Сменить язык.
-    from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID
-    from app.handlers.callbacks.navigation import _get_main_text
+    # 2026-08: /start ВСЕГДА показывает язык-picker (ru/en), даже если
+    # мы уже auto-detect'нули язык. Отображение самого picker'а идёт
+    # на auto-detected языке — тексты кнопок и caption на понятном
+    # юзеру языке ещё до выбора. Callback start_lang_* сохраняет выбор
+    # в БД и переводит на главное меню.
+    from app.handlers.callbacks.language import START_LANG_PHOTO_FILE_ID
     language = await resolve_user_language(telegram_id)
-    text = await _get_main_text(telegram_id, language)
-    keyboard = await get_main_menu_keyboard(language, telegram_id)
+    title = i18n_get_text(language, "start_lang.title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ru"),
+                                 callback_data="start_lang_ru",
+                                 style="primary"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_en"),
+                                 callback_data="start_lang_en",
+                                 style="primary"),
+        ],
+    ])
     try:
         await message.bot.send_photo(
             chat_id=telegram_id,
-            photo=MAIN_PHOTO_FILE_ID,
-            caption=text,
+            photo=START_LANG_PHOTO_FILE_ID,
+            caption=title,
             reply_markup=keyboard,
             parse_mode="HTML",
         )
     except Exception:
-        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        # Fallback без фото если photo_file_id устарел на текущем боте
+        await message.answer(title, reply_markup=keyboard, parse_mode="HTML")
 
 
 _SHARE_DISCOUNT_PERCENT = 30
