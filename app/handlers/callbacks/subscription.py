@@ -390,6 +390,7 @@ async def callback_vip_access(callback: CallbackQuery):
     if is_vip:
         text += "\n\n" + i18n_get_text(language, "main.vip_status_active")
 
+    from app.handlers.common.emoji import CE
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.contact_manager_button"),
@@ -397,7 +398,9 @@ async def callback_vip_access(callback: CallbackQuery):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_profile"
+            callback_data="menu_profile",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )]
     ])
 

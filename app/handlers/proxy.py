@@ -23,6 +23,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import safe_edit_text
+from app.handlers.common.emoji import CE
 from app.utils.telegram_safe import safe_send_message
 
 proxy_router = Router()
@@ -78,14 +79,15 @@ def _delivery_text() -> str:
 
 def _sales_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📱 СБП", callback_data="proxy_pay_sbp")],
-        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="proxy_pay_lava")],
+        [InlineKeyboardButton(text="📱 СБП", callback_data="proxy_pay_sbp", style="primary")],
+        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="proxy_pay_lava", style="primary")],
         [InlineKeyboardButton(
             text="Купить VPN",
             callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
         )],
-        [InlineKeyboardButton(text="← Назад", callback_data="menu_main")],
+        [InlineKeyboardButton(text="← Назад", callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
 
 
@@ -103,9 +105,10 @@ def _delivery_keyboard() -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(
         text="Купить VPN",
         callback_data="menu_buy_vpn",
-        icon_custom_emoji_id="5199785165735367039",  # ⚡️
+        icon_custom_emoji_id=CE["buy"],
+        style="success",
     )])
-    rows.append([InlineKeyboardButton(text="← Назад", callback_data="menu_main")])
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -206,7 +209,7 @@ async def callback_proxy_pay_sbp(callback: CallbackQuery):
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Перейти к оплате", url=tx_data["redirect_url"])],
-            [InlineKeyboardButton(text="← Назад", callback_data="proxy_menu")],
+            [InlineKeyboardButton(text="← Назад", callback_data="proxy_menu", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
@@ -261,7 +264,7 @@ async def callback_proxy_pay_lava(callback: CallbackQuery):
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Перейти к оплате", url=invoice_data["payment_url"])],
-            [InlineKeyboardButton(text="← Назад", callback_data="proxy_menu")],
+            [InlineKeyboardButton(text="← Назад", callback_data="proxy_menu", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         asyncio.create_task(_auto_delete(callback.bot, telegram_id, lava_msg.message_id))

@@ -12,6 +12,7 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.screens import _open_referral_screen
+from app.handlers.common.emoji import CE
 from app.utils.referral_link import build_referral_link, build_share_discount_link
 import database
 
@@ -105,10 +106,12 @@ async def callback_referral_stats(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_referral"
+                callback_data="menu_referral",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
-        
+
         await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
         
@@ -129,7 +132,9 @@ async def callback_referral_how_it_works(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_referral"
+                callback_data="menu_referral",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         
@@ -181,6 +186,8 @@ async def callback_share_discount_open(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
 

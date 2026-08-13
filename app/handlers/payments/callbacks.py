@@ -249,6 +249,7 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
             buttons.append([InlineKeyboardButton(
                 text=btn_text,
                 callback_data=f"combo_period:{new_tariff}:{period_days}",
+                style="primary",
             )])
     else:
         # Обычный тариф: берём цены из TARIFFS + calculate_price
@@ -313,12 +314,15 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
 
             buttons.append([InlineKeyboardButton(
                 text=button_text,
-                callback_data=f"period:{new_tariff}:{period_days}"
+                callback_data=f"period:{new_tariff}:{period_days}",
+                style="primary",
             )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data="switch_tariff_menu"
+        callback_data="switch_tariff_menu",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -430,10 +434,12 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         for code, info in config.BIZ_COUNTRIES.items():
             price = config.get_biz_price(tariff_type, 30, code)
             btn_text = f"{info['flag']} {info['name']} · от {price:,} ₽/мес".replace(",", " ")
-            buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"biz_country:{code}")])
+            buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"biz_country:{code}", style="primary")])
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="corporate_access_request"
+            callback_data="corporate_access_request",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )])
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -527,7 +533,8 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         # КРИТИЧНО: callback_data БЕЗ purchase_id - только tariff и period
         buttons.append([InlineKeyboardButton(
             text=button_text,
-            callback_data=f"period:{tariff_type}:{period_days}"
+            callback_data=f"period:{tariff_type}:{period_days}",
+            style="primary",
         )])
     
     # Кнопка назад:
@@ -552,7 +559,9 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data=back_callback
+        callback_data=back_callback,
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     # Admin-managed global-discount notice (migration 069): если
@@ -736,8 +745,8 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
                 "Подтвердить переход?"
             )
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⚡️ Да, перейти на Basic", callback_data="downgrade_confirm_basic")],
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="tariff:basic")]
+                [InlineKeyboardButton(text="⚡️ Да, перейти на Basic", callback_data="downgrade_confirm_basic", style="primary")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="tariff:basic", style="primary")]
             ])
             await safe_edit_text(callback.message, downgrade_text, reply_markup=keyboard)
             return
@@ -878,13 +887,13 @@ async def callback_corporate_access_request(callback: CallbackQuery, state: FSMC
     text = i18n_get_text(language, "buy.biz_screen_title")
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_starter_btn"), callback_data="tariff:biz_starter")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_team_btn"), callback_data="tariff:biz_team")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_business_btn"), callback_data="tariff:biz_business")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_pro_btn"), callback_data="tariff:biz_pro")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_enterprise_btn"), callback_data="tariff:biz_enterprise")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_ultimate_btn"), callback_data="tariff:biz_ultimate")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_starter_btn"), callback_data="tariff:biz_starter", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_team_btn"), callback_data="tariff:biz_team", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_business_btn"), callback_data="tariff:biz_business", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_pro_btn"), callback_data="tariff:biz_pro", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_enterprise_btn"), callback_data="tariff:biz_enterprise", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_ultimate_btn"), callback_data="tariff:biz_ultimate", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
 
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -948,12 +957,15 @@ async def callback_biz_country_selected(callback: CallbackQuery, state: FSMConte
             button_text = f"{button_text} {badge}"
         buttons.append([InlineKeyboardButton(
             text=button_text,
-            callback_data=f"period:{tariff_type}:{period_days}"
+            callback_data=f"period:{tariff_type}:{period_days}",
+            style="primary",
         )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data=f"tariff:{tariff_type}"
+        callback_data=f"tariff:{tariff_type}",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1035,7 +1047,9 @@ async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMC
         user_keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "main.profile"),
-                callback_data="menu_profile"
+                callback_data="menu_profile",
+                icon_custom_emoji_id=CE["profile"],
+                style="primary",
             )],
         ])
 

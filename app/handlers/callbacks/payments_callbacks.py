@@ -33,6 +33,7 @@ from app.handlers.common.keyboards import (
 )
 from app.handlers.common.screens import show_profile
 from app.handlers.common.states import TopUpStates, WithdrawStates, PurchaseState
+from app.handlers.common.emoji import CE
 
 payments_router = Router()
 logger = logging.getLogger(__name__)
@@ -72,23 +73,32 @@ async def callback_topup_balance(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="250 ₽",
-            callback_data="topup_amount:250"
+            callback_data="topup_amount:250",
+            icon_custom_emoji_id=CE["wallet"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text="750 ₽",
-            callback_data="topup_amount:750"
+            callback_data="topup_amount:750",
+            icon_custom_emoji_id=CE["wallet"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text="999 ₽",
-            callback_data="topup_amount:999"
+            callback_data="topup_amount:999",
+            icon_custom_emoji_id=CE["wallet"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.topup_custom_amount"),
-            callback_data="topup_custom"
+            callback_data="topup_custom",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_profile"
+            callback_data="menu_profile",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     
@@ -128,22 +138,27 @@ async def callback_topup_amount(callback: CallbackQuery):
     buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.pay_with_card"),
-            callback_data=f"topup_card:{amount}"
+            callback_data=f"topup_card:{amount}",
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "payment.sbp"),
-            callback_data=f"topup_sbp:{amount}"
+            callback_data=f"topup_sbp:{amount}",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "payment.stars"),
-            callback_data=f"topup_stars:{amount}"
+            callback_data=f"topup_stars:{amount}",
+            style="primary",
         )],
     ]
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.lava"),
-            callback_data=f"topup_lava:{amount}"
+            callback_data=f"topup_lava:{amount}",
+            style="primary",
         )])
     # Wata — admin-only beta
     try:
@@ -151,13 +166,16 @@ async def callback_topup_amount(callback: CallbackQuery):
         if wata_service.is_visible_to(telegram_id):
             buttons.append([InlineKeyboardButton(
                 text="💳 Wata (тест)",
-                callback_data=f"topup_wata:{amount}"
+                callback_data=f"topup_wata:{amount}",
+                style="primary",
             )])
     except Exception:
         pass
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data="topup_balance"
+        callback_data="topup_balance",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -252,7 +270,7 @@ async def callback_withdraw_confirm_amount(callback: CallbackQuery, state: FSMCo
     await state.set_state(WithdrawStates.withdraw_requisites)
     text = i18n_get_text(language, "withdraw.requisites_prompt")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_back_to_amount")]
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_back_to_amount", icon_custom_emoji_id=CE["back"], style="primary")]
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
     await callback.answer()
@@ -587,7 +605,9 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             pending_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.profile"),
-                    callback_data="menu_profile"
+                    callback_data="menu_profile",
+                    icon_custom_emoji_id=CE["profile"],
+                    style="primary",
                 )],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.support"),
@@ -1211,7 +1231,9 @@ async def _start_platega_payment(
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn"
+                callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -1363,7 +1385,9 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn"
+                callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -1496,7 +1520,9 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn"
+                callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -1629,7 +1655,9 @@ async def callback_pay_lava(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn"
+                callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -1757,6 +1785,8 @@ async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMConte
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
@@ -1851,7 +1881,7 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
         text = f"💳 <b>Оплата через Wata (тест)</b>\n\nСумма: {final_price_rubles:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты (карта / СБП / T-Pay)."
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {final_price_rubles:.0f} ₽", url=invoice["payment_url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
@@ -1935,7 +1965,9 @@ async def callback_topup_sbp(callback: CallbackQuery):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="topup_balance"
+                callback_data="topup_balance",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -2016,7 +2048,9 @@ async def callback_topup_lava(callback: CallbackQuery):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="topup_balance"
+                callback_data="topup_balance",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -2084,7 +2118,7 @@ async def callback_topup_wata(callback: CallbackQuery):
         text = f"💳 <b>Оплата через Wata (тест)</b>\n\nСумма: {amount} ₽\n\nНажмите кнопку ниже — откроется форма оплаты."
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {amount} ₽", url=invoice["payment_url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="topup_balance")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="topup_balance", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))

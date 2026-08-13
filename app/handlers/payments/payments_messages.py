@@ -46,6 +46,7 @@ from app.handlers.common.keyboards import get_payment_success_keyboard
 from app.handlers.common.states import BroadcastCreate
 from app.handlers.admin.promo_trial import PromoTrialFSM
 from app.handlers.common.utils import clear_promo_session
+from app.handlers.common.emoji import CE
 
 payments_router = Router()
 logger = logging.getLogger(__name__)
@@ -236,14 +237,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "buy.renew_button", "buy_renew_button"),
-                callback_data="menu_buy_vpn"
+                callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["buy"],
+                style="success",
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "main.support_button", "support_button"),
                 url="https://t.me/atlas_suppbot"
             )]
         ])
-        
+
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         logger.error("Payment received but service unavailable (DB not ready)")
         duration_ms = (time.time() - start_time) * 1000
@@ -385,11 +388,15 @@ async def process_successful_payment(message: Message, state: FSMContext):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "buy.renew_button", "buy_renew_button"),
-                    callback_data="menu_buy_vpn"
+                    callback_data="menu_buy_vpn",
+                    icon_custom_emoji_id=CE["buy"],
+                    style="success",
                 )],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.profile", "profile"),
-                    callback_data="menu_profile"
+                    callback_data="menu_profile",
+                    icon_custom_emoji_id=CE["profile"],
+                    style="primary",
                 )]
             ])
             
@@ -814,19 +821,22 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     )
                 if _is_bypass:
                     kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
+                        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile", icon_custom_emoji_id=CE["profile"], style="primary")],
                         [InlineKeyboardButton(
                             text="Купить ещё ГБ",
                             callback_data="buy_traffic",
-                            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+                            icon_custom_emoji_id=CE["traffic"],
+                            style="success",
                         )],
-                        [InlineKeyboardButton(text="← На главную", callback_data="menu_main")],
+                        [InlineKeyboardButton(text="← На главную", callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
                     ])
                 else:
                     kb = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(
                             text=i18n_get_text(language, "common.back"),
                             callback_data="menu_main",
+                            icon_custom_emoji_id=CE["back"],
+                            style="primary",
                         )],
                     ])
                 await message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -889,7 +899,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
             pending_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.profile"),
-                    callback_data="menu_profile"
+                    callback_data="menu_profile",
+                    icon_custom_emoji_id=CE["profile"],
+                    style="primary",
                 )],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.support"),

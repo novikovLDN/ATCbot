@@ -31,6 +31,7 @@ import config
 import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
+from app.handlers.common.emoji import CE
 
 bgift_setup_router = Router()
 logger = logging.getLogger(__name__)
@@ -110,16 +111,18 @@ async def callback_bgift_setup(callback: CallbackQuery):
     text = i18n_get_text(language, "bgift_setup.select_device")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="bgift_step1:ios"),
-            InlineKeyboardButton(text="🤖 Android", callback_data="bgift_step1:android"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="bgift_step1:ios", style="primary"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="bgift_step1:android", style="primary"),
         ],
         [
-            InlineKeyboardButton(text="🍎 Mac", callback_data="bgift_step1:macos"),
-            InlineKeyboardButton(text="🪟 Windows", callback_data="bgift_step1:windows"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="bgift_step1:macos", style="primary"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="bgift_step1:windows", style="primary"),
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -194,10 +197,13 @@ async def callback_bgift_step1(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.next_step"),
         callback_data=f"bgift_step2:{platform}",
+        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="bgift_setup",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -294,6 +300,7 @@ async def callback_bgift_step2(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text="✅ Готово",
         callback_data="setup_done",
+        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text="💬 Поддержка",
@@ -302,6 +309,8 @@ async def callback_bgift_step2(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data=f"bgift_step1:{platform}",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)

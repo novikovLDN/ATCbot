@@ -24,6 +24,7 @@ from app.services.language_service import resolve_user_language
 from app.services import remnawave_api, remnawave_service
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import safe_edit_text
+from app.handlers.common.emoji import CE
 
 traffic_router = Router()
 logger = logging.getLogger(__name__)
@@ -67,6 +68,8 @@ async def callback_buy_bypass_only(callback: CallbackQuery):
         row.append(InlineKeyboardButton(
             text=label,
             callback_data=f"buy_bypass_pack:{gb}",
+            icon_custom_emoji_id=CE["traffic"],
+            style="success",
         ))
         if len(row) == 2:
             buttons.append(row)
@@ -77,10 +80,14 @@ async def callback_buy_bypass_only(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text="📦 Больше объёма →",
         callback_data="buy_bypass_extended",
+        icon_custom_emoji_id=CE["traffic"],
+        style="success",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="menu_main",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     text = i18n_get_text(language, "bypass.buy_title")
@@ -126,6 +133,8 @@ async def callback_buy_bypass_extended(callback: CallbackQuery):
         row.append(InlineKeyboardButton(
             text=label,
             callback_data=f"buy_bypass_pack:{gb}",
+            icon_custom_emoji_id=CE["traffic"],
+            style="success",
         ))
         if len(row) == 2:
             buttons.append(row)
@@ -136,6 +145,8 @@ async def callback_buy_bypass_extended(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="buy_bypass_only",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     text = i18n_get_text(language, "traffic.buy_title_extended")
@@ -180,14 +191,17 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.card"),
         callback_data=f"bypass_pay_card:{gb}",
+        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.sbp"),
         callback_data=f"bypass_pay_sbp:{gb}",
+        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.stars"),
         callback_data=f"bypass_pay_stars:{gb}",
+        style="primary",
     )])
 
     import cryptobot_service
@@ -195,6 +209,7 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.crypto"),
             callback_data=f"bypass_pay_crypto:{gb}",
+            style="primary",
         )])
 
     import lava_service
@@ -202,6 +217,7 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.lava"),
             callback_data=f"bypass_pay_lava:{gb}",
+            style="primary",
         )])
     # Wata — admin-only beta
     try:
@@ -210,6 +226,7 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
             buttons.append([InlineKeyboardButton(
                 text="💳 Wata (тест)",
                 callback_data=f"bypass_pay_wata:{gb}",
+                style="primary",
             )])
     except Exception:
         pass
@@ -217,6 +234,8 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="buy_bypass_only",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
@@ -265,6 +284,8 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
         buttons = [[InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="buy_bypass_only",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )]]
         await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
         return
@@ -319,13 +340,14 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
         text = i18n_get_text(language, "traffic.bypass_activated", gb=gb)
 
     buttons = [
-        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
+        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile", icon_custom_emoji_id=CE["profile"], style="primary")],
         [InlineKeyboardButton(
             text="Купить ещё ГБ",
             callback_data="buy_traffic",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            icon_custom_emoji_id=CE["traffic"],
+            style="success",
         )],
-        [InlineKeyboardButton(text="← На главную", callback_data="menu_main")],
+        [InlineKeyboardButton(text="← На главную", callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ]
 
     # Главный экран без подписки — это фото, его нельзя edit в текст. Удаляем и шлём новое.
@@ -381,10 +403,14 @@ async def callback_traffic_info(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "traffic.buy_subscription"),
                 callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["buy"],
+                style="success",
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
@@ -407,10 +433,12 @@ async def callback_traffic_info(callback: CallbackQuery):
             )
             text = i18n_get_text(language, "traffic.bypass_provisioning")
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Обновить", callback_data="traffic_refresh")],
+                [InlineKeyboardButton(text="🔄 Обновить", callback_data="traffic_refresh", style="primary")],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "common.back"),
                     callback_data="menu_main",
+                    icon_custom_emoji_id=CE["back"],
+                    style="primary",
                 )],
             ])
             await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
@@ -426,6 +454,8 @@ async def callback_traffic_info(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
@@ -436,10 +466,12 @@ async def callback_traffic_info(callback: CallbackQuery):
     if not traffic:
         text = i18n_get_text(language, "traffic.fetch_error")
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄", callback_data="traffic_refresh")],
+            [InlineKeyboardButton(text="🔄", callback_data="traffic_refresh", style="primary")],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
@@ -487,19 +519,23 @@ async def callback_traffic_info(callback: CallbackQuery):
         buttons.append([InlineKeyboardButton(
             text=_strip_lead_emoji(i18n_get_text(language, "traffic.buy_subscription")),
             callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
         )])
     else:
         from app.handlers.common.keyboards import _strip_lead_emoji
         buttons.append([InlineKeyboardButton(
             text=_strip_lead_emoji(i18n_get_text(language, "traffic.buy_traffic_btn")),
             callback_data="buy_traffic",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            icon_custom_emoji_id=CE["traffic"],
+            style="success",
         )])
-    buttons.append([InlineKeyboardButton(text="🔄", callback_data="traffic_refresh")])
+    buttons.append([InlineKeyboardButton(text="🔄", callback_data="traffic_refresh", style="primary")])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="menu_main",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
@@ -517,10 +553,14 @@ async def show_traffic_info_message(message):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "traffic.buy_subscription"),
                 callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["buy"],
+                style="success",
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -542,10 +582,12 @@ async def show_traffic_info_message(message):
             )
             text = i18n_get_text(language, "traffic.bypass_provisioning")
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Обновить", callback_data="traffic_refresh")],
+                [InlineKeyboardButton(text="🔄 Обновить", callback_data="traffic_refresh", style="primary")],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "common.back"),
                     callback_data="menu_main",
+                    icon_custom_emoji_id=CE["back"],
+                    style="primary",
                 )],
             ])
             await message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -555,6 +597,8 @@ async def show_traffic_info_message(message):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -568,10 +612,12 @@ async def show_traffic_info_message(message):
     if not traffic:
         text = i18n_get_text(language, "traffic.fetch_error")
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄", callback_data="traffic_refresh")],
+            [InlineKeyboardButton(text="🔄", callback_data="traffic_refresh", style="primary")],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -607,19 +653,23 @@ async def show_traffic_info_message(message):
         buttons.append([InlineKeyboardButton(
             text=_strip_lead_emoji(i18n_get_text(language, "traffic.buy_subscription")),
             callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
         )])
     else:
         from app.handlers.common.keyboards import _strip_lead_emoji
         buttons.append([InlineKeyboardButton(
             text=_strip_lead_emoji(i18n_get_text(language, "traffic.buy_traffic_btn")),
             callback_data="buy_traffic",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            icon_custom_emoji_id=CE["traffic"],
+            style="success",
         )])
-    buttons.append([InlineKeyboardButton(text="🔄", callback_data="traffic_refresh")])
+    buttons.append([InlineKeyboardButton(text="🔄", callback_data="traffic_refresh", style="primary")])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="menu_main",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -644,10 +694,14 @@ async def callback_buy_traffic(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "traffic.buy_subscription"),
                 callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["buy"],
+                style="success",
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
@@ -670,6 +724,8 @@ async def callback_buy_traffic(callback: CallbackQuery):
         row.append(InlineKeyboardButton(
             text=label,
             callback_data=f"buy_traffic_pack:{gb}",
+            icon_custom_emoji_id=CE["traffic"],
+            style="success",
         ))
         if len(row) == 2:
             buttons.append(row)
@@ -680,10 +736,14 @@ async def callback_buy_traffic(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text="📦 Больше объёма →",
         callback_data="buy_traffic_extended",
+        icon_custom_emoji_id=CE["traffic"],
+        style="success",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="traffic_info",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     text = i18n_get_text(language, "traffic.buy_title")
@@ -718,6 +778,8 @@ async def callback_buy_traffic_extended(callback: CallbackQuery):
         row.append(InlineKeyboardButton(
             text=label,
             callback_data=f"buy_traffic_pack:{gb}",
+            icon_custom_emoji_id=CE["traffic"],
+            style="success",
         ))
         if len(row) == 2:
             buttons.append(row)
@@ -728,6 +790,8 @@ async def callback_buy_traffic_extended(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="buy_traffic",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     text = i18n_get_text(language, "traffic.buy_title_extended")
@@ -784,6 +848,8 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.pay_card", price=price),
             callback_data=f"traffic_pay_card:{gb}",
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
         )])
 
     # SBP (Platega) button
@@ -792,6 +858,8 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.pay_sbp", price=f"{sbp_price:.0f}"),
             callback_data=f"traffic_pay_sbp:{gb}",
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
         )])
 
     # Lava (card) button
@@ -800,6 +868,8 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.pay_lava", price=price),
             callback_data=f"traffic_pay_lava:{gb}",
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
         )])
     # Wata — admin-only beta
     try:
@@ -808,6 +878,7 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
             buttons.append([InlineKeyboardButton(
                 text=f"💳 Wata тест · {price}₽",
                 callback_data=f"traffic_pay_wata:{gb}",
+                style="primary",
             )])
     except Exception:
         pass
@@ -815,6 +886,8 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="buy_traffic",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -924,10 +997,13 @@ async def callback_traffic_pay_balance(callback: CallbackQuery):
         [InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.back_to_traffic"),
             callback_data="traffic_info",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
@@ -1082,6 +1158,8 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="buy_traffic",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
 
@@ -1165,6 +1243,8 @@ async def callback_traffic_pay_lava(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="buy_traffic",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
 
@@ -1219,7 +1299,7 @@ async def callback_traffic_pay_wata(callback: CallbackQuery):
             pass
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=invoice["payment_url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_traffic")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_traffic", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(
             f"💳 <b>Wata (тест)</b>\n\n{gb} ГБ трафика · <b>{price}₽</b>",
@@ -1363,7 +1443,7 @@ async def callback_bypass_pay_sbp(callback: CallbackQuery):
         text = i18n_get_text(language, "payment.sbp_waiting", amount=sbp_price_rubles)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp_pay_button"), url=redirect_url)],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
@@ -1470,7 +1550,7 @@ async def callback_bypass_pay_crypto(callback: CallbackQuery):
         text = i18n_get_text(language, "payment.crypto_waiting", amount=float(price))
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=i18n_get_text(language, "payment.crypto_pay_button"), url=pay_url)],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
@@ -1531,7 +1611,7 @@ async def callback_bypass_pay_lava(callback: CallbackQuery):
         text = i18n_get_text(language, "payment.lava_waiting", amount=price_rubles)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button"), url=payment_url)],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, lava_msg))
@@ -1580,7 +1660,7 @@ async def callback_bypass_pay_wata(callback: CallbackQuery):
             pass
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=invoice["payment_url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(
             f"💳 <b>Wata (тест)</b> · Bypass {gb} GB · <b>{price}₽</b>",
