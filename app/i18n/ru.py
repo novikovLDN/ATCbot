@@ -996,7 +996,7 @@ LANG = {
 
     # --- Help / FAQ ---
     'help.menu_title': "❓ <b>Помощь</b>\n\nВыберите подходящий вариант ниже:\n\n<blockquote>📖 <b>Ответы на частые вопросы</b>\nКороткие решения типичных проблем</blockquote>\n\n<blockquote>📲 <b>Инструкции по сервису</b>\nКак настроить VPN на вашем устройстве</blockquote>\n\n<blockquote>📞 <b>Контакты</b>\nПочта поддержки и отдела продаж</blockquote>\n\n<blockquote>💬 <b>Помощь</b>\nНаписать живому оператору в Telegram</blockquote>",
-    'help.contacts_title': "📞 <b>Контакты</b>\n\nСвяжитесь с нами по электронной почте — <b>нажмите на адрес, и он скопируется</b>.\n\n━━━━━━━━━━\n\n📧 <b>Техническая поддержка</b>\n<code>support@atlassecure.uk</code>\n<i>Проекты Atlas Secure и QoDev</i>\n\n━━━━━━━━━━\n\n💼 <b>Отдел продаж</b>\n<code>sales@atlassecure.uk</code>\n<i>Инфраструктурные решения Atlas Secure</i>",
+    'help.contacts_title': "📞 <b>Контакты</b>\n\nСвяжитесь с нами по электронной почте — <b>нажмите на адрес, и он скопируется</b>.\n\n<blockquote>📧 <b>Техническая поддержка</b></blockquote>\n<code>support@atlassecure.uk</code>\nПроекты Atlas Secure и QoDev\n\n<blockquote>💼 <b>Отдел продаж</b></blockquote>\n<code>sales@atlassecure.uk</code>\nИнфраструктурные решения Atlas Secure",
     'help.faq_title': "📖 <b>Ответы на частые вопросы</b>\n\nВыберите свой вопрос — покажем короткое решение.",
     'help.faq_q1': "🚫 Не работает VPN",
     'help.faq_q2': "📲 Как подключиться / настроить",
