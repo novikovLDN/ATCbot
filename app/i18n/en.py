@@ -942,7 +942,7 @@ LANG = {
 
     # help / FAQ
     'help.menu_title': "❓ <b>Help</b>\n\nChoose an option below:\n\n<blockquote>📖 <b>Frequently asked questions</b>\nShort solutions to common issues</blockquote>\n\n<blockquote>📲 <b>Service guides</b>\nHow to set up VPN on your device</blockquote>\n\n<blockquote>📞 <b>Contacts</b>\nSupport and sales emails</blockquote>\n\n<blockquote>💬 <b>Help</b>\nMessage a live operator in Telegram</blockquote>",
-    'help.contacts_title': "📞 <b>Contacts</b>\n\nReach us by email:\n\n<blockquote>📧 <b>Technical support</b>\n<code>support@atlassecure.uk</code>\nAtlas Secure and QoDev projects</blockquote>\n\n<blockquote>💼 <b>Sales</b>\n<code>sales@atlassecure.uk</code>\nAtlas Secure infrastructure solutions</blockquote>\n\n<i>Tap an address to copy it.</i>",
+    'help.contacts_title': "📞 <b>Contacts</b>\n\nReach us by email — <b>tap an address to copy it</b>.\n\n━━━━━━━━━━\n\n📧 <b>Technical support</b>\n<code>support@atlassecure.uk</code>\n<i>Atlas Secure and QoDev projects</i>\n\n━━━━━━━━━━\n\n💼 <b>Sales</b>\n<code>sales@atlassecure.uk</code>\n<i>Atlas Secure infrastructure solutions</i>",
     'help.faq_title': "📖 <b>Frequently asked questions</b>\n\nPick your question — we'll show a short solution.",
     'help.faq_q1': "🚫 VPN not working",
     'help.faq_q2': "📲 How to connect / set up",
