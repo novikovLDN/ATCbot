@@ -513,6 +513,8 @@ async def show_profile(message_or_query, language: str):
         info_lines.append("")
         info_lines.append(i18n_get_text(language, "profile.info_invited_friends", "👥 Приглашено друзей: {count}", count=invited_count))
 
+        text += "\n".join(info_lines)
+
         # Bypass entity auto-provision (fire-and-forget) —
         # трафик уже показан выше цифрами, здесь только гарантируем,
         # что у пользователя вообще есть entity в Remnawave.
