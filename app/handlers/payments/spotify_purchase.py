@@ -560,7 +560,7 @@ async def cb_payment_methods(callback: CallbackQuery, state: FSMContext):
         import wata_service
         if wata_service.is_visible_to(callback.from_user.id):
             rows.append([InlineKeyboardButton(
-                text="💳 Wata (тест)",
+                text="🏦 СБП 2",
                 callback_data=f"spotify_pay:wata:{plan}:{months}",
                 style="primary",
             )])
@@ -760,7 +760,7 @@ async def cb_pay_wata(callback: CallbackQuery, state: FSMContext):
             )],
         ])
         await callback.message.answer(
-            f"💳 <b>Wata (тест)</b> · {label}\nК оплате: <b>{price}₽</b>",
+            f"💳 <b>СБП 2</b> · {label}\nК оплате: <b>{price}₽</b>",
             reply_markup=kb, parse_mode="HTML",
         )
     except Exception as e:

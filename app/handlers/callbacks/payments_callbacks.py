@@ -165,7 +165,7 @@ async def callback_topup_amount(callback: CallbackQuery):
         import wata_service
         if wata_service.is_visible_to(telegram_id):
             buttons.append([InlineKeyboardButton(
-                text="💳 Wata (тест)",
+                text="🏦 СБП 2",
                 callback_data=f"topup_wata:{amount}",
                 style="primary",
             )])
@@ -1879,7 +1879,7 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
         logger.info(
             f"invoice_created: provider=wata, user={telegram_id}, purchase_id={purchase_id}, price={final_price_rubles:.2f}",
         )
-        text = f"💳 <b>Оплата через Wata (тест)</b>\n\nСумма: {final_price_rubles:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты (карта / СБП / T-Pay)."
+        text = f"💳 <b>Оплата через СБП 2</b>\n\nСумма: {final_price_rubles:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты (карта / СБП / T-Pay)."
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {final_price_rubles:.0f} ₽", url=invoice["payment_url"])],
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn", icon_custom_emoji_id=CE["back"], style="primary")],
@@ -2116,7 +2116,7 @@ async def callback_topup_wata(callback: CallbackQuery):
             f"balance_topup_invoice_created: provider=wata, user={telegram_id}, "
             f"purchase_id={purchase_id}, amount={amount}",
         )
-        text = f"💳 <b>Оплата через Wata (тест)</b>\n\nСумма: {amount} ₽\n\nНажмите кнопку ниже — откроется форма оплаты."
+        text = f"💳 <b>Оплата через СБП 2</b>\n\nСумма: {amount} ₽\n\nНажмите кнопку ниже — откроется форма оплаты."
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {amount} ₽", url=invoice["payment_url"])],
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="topup_balance", icon_custom_emoji_id=CE["back"], style="primary")],

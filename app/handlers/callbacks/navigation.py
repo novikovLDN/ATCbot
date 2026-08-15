@@ -1816,7 +1816,7 @@ async def callback_apple_confirm(callback: CallbackQuery):
         import wata_service
         if wata_service.is_visible_to(telegram_id):
             buttons.append([InlineKeyboardButton(
-                text="💳 Wata (тест)", callback_data=f"apple_pay_wata:{region}:{nominal}",
+                text="🏦 СБП 2", callback_data=f"apple_pay_wata:{region}:{nominal}",
                 style="primary",
             )])
     except Exception:
@@ -1941,7 +1941,7 @@ async def callback_apple_pay_wata(callback: CallbackQuery):
     except Exception:
         pass
 
-    text = f"💳 <b>Оплата через Wata (тест)</b>\n\nApple ID {region_label} · {nominal_label}\nК оплате: <b>{price_rub:.2f} ₽</b>"
+    text = f"💳 <b>Оплата через СБП 2</b>\n\nApple ID {region_label} · {nominal_label}\nК оплате: <b>{price_rub:.2f} ₽</b>"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💳 Оплатить {price_rub:.0f} ₽", url=invoice["payment_url"])],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
