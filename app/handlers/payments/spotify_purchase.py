@@ -550,12 +550,10 @@ async def cb_payment_methods(callback: CallbackQuery, state: FSMContext):
         callback_data=f"spotify_pay:lava:{plan}:{months}",
         style="primary",
     )])
-    # СБП: Wata приоритет, Platega fallback
-    import wata_service as _wata_svc
-    _sbp_cb = f"spotify_pay:wata:{plan}:{months}" if _wata_svc.is_enabled() else f"spotify_pay:sbp:{plan}:{months}"
+    # СБП в shop-магазине оставляем Platega (Wata на магазин не ставим)
     rows.append([InlineKeyboardButton(
         text="📱 СБП",
-        callback_data=_sbp_cb,
+        callback_data=f"spotify_pay:sbp:{plan}:{months}",
         style="primary",
     )])
     rows.append([InlineKeyboardButton(

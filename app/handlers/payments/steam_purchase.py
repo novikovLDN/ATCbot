@@ -193,15 +193,8 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
     except Exception:
         pass
 
-    # СБП: Wata приоритет, Platega fallback
-    import wata_service as _wata_svc
-    if _wata_svc.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text=f"📱 СБП ({price_rub} ₽)",
-            callback_data="steam:pay:wata",
-            style="primary",
-        )])
-    elif getattr(config, "PLATEGA_MERCHANT_ID", None):
+    # СБП в shop-магазине оставляем Platega (Wata на магазин не ставим)
+    if getattr(config, "PLATEGA_MERCHANT_ID", None):
         sbp_price = math.ceil(price_rub * (1 + config.SBP_MARKUP_PERCENT / 100))
         buttons.append([InlineKeyboardButton(
             text=f"📱 СБП ({sbp_price} ₽)",

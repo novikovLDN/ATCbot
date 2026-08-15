@@ -300,11 +300,8 @@ async def process_stars_username(message: Message, state: FSMContext):
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(text="💳 Карта (Lava)", callback_data="stars_pay:lava", style="primary")])
 
-    # СБП: Wata приоритет, Platega fallback
-    import wata_service as _wata_svc
-    if _wata_svc.is_enabled():
-        buttons.append([InlineKeyboardButton(text=f"📱 СБП ({price} ₽)", callback_data="stars_pay:wata", style="primary")])
-    elif config.PLATEGA_MERCHANT_ID:
+    # СБП в shop-магазине оставляем Platega (Wata на магазин не ставим)
+    if config.PLATEGA_MERCHANT_ID:
         import math
         sbp_price = math.ceil(price * (1 + config.SBP_MARKUP_PERCENT / 100))
         buttons.append([InlineKeyboardButton(text=f"📱 СБП ({sbp_price} ₽)", callback_data="stars_pay:sbp", style="primary")])
