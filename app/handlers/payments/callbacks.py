@@ -618,7 +618,10 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         logger.warning("global-discount notice render failed: %s", _e)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    # Pass bot so that если предыдущий экран был photo (напр. invoice
+    # Wata с картинкой) — safe_edit_text корректно удалит photo-message
+    # и отправит текст вместо edit_caption поверх фотки.
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
 
     # КРИТИЧНО: Переходим в состояние choose_period
     await state.set_state(PurchaseState.choose_period)

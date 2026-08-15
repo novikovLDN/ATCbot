@@ -41,6 +41,10 @@ logger = logging.getLogger(__name__)
 # --- Invoice auto-deletion after timeout ---
 INVOICE_TIMEOUT = config.INVOICE_TIMEOUT_SECONDS  # 15 минут
 
+# Файл-id картинки, которую вешаем на экран «🏦 Оплата через СБП» (Wata).
+# Стабильный file_id из истории бота — загружать заново не надо.
+_WATA_INVOICE_PHOTO_ID = "AgACAgQAAxkBAAGAJRZqgECFrnKCZZWmXbWSjK2-PK1sWQACXRBrGwG9AVC_2M3k-snqYwEAAwIAA3cAAz0E"
+
 
 async def _schedule_invoice_deletion(bot: Bot, chat_id: int, invoice_message: Message, timeout: int = INVOICE_TIMEOUT):
     """Удаляет сообщение с инвойсом через timeout секунд."""
@@ -1255,13 +1259,23 @@ async def _start_platega_payment(
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn",
+                # То же поведение что и на Wata-экране: назад → выбор
+                # периода того же тарифа, а не в главное меню.
+                callback_data=f"tariff:{tariff_type}",
                 icon_custom_emoji_id=CE["back"],
                 style="primary",
             )]
         ])
 
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        _invoice_messages[purchase_id] = (telegram_id, msg.message_id)
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
+        # Убираем экран выбора способа оплаты — юзер смотрит только на
+        # активный invoice, чат не забит устаревшими экранами.
+        try:
+            await callback.message.delete()
+        except Exception as _e:
+            logger.debug("delete payment-method screen (%s) failed: %s", log_tag, _e)
         await callback.answer()
 
         await state.set_state(None)
@@ -1926,7 +1940,12 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
                 style="primary",
             )],
         ])
-        msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        msg = await callback.message.answer_photo(
+            photo=_WATA_INVOICE_PHOTO_ID,
+            caption=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
         _invoice_messages[purchase_id] = (telegram_id, msg.message_id)
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
         # Fast-path per-invoice polling: закрывает окно между Wata Paid и
@@ -2402,7 +2421,12 @@ async def callback_topup_wata(callback: CallbackQuery):
             )],
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="topup_balance", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
-        msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        msg = await callback.message.answer_photo(
+            photo=_WATA_INVOICE_PHOTO_ID,
+            caption=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
         _invoice_messages[purchase_id] = (telegram_id, msg.message_id)
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
         asyncio.create_task(_poll_wata_invoice(
