@@ -95,17 +95,15 @@ def _extract_amount(payment_details: Any, fallback: float = 0.0) -> float:
 
 
 def is_subscription_visible_to(telegram_id: int) -> bool:
-    """MVP-режим: кнопка СБП-подписки видна ТОЛЬКО админу.
+    """СБП-подписка теперь доступна всем юзерам — MVP-guard снят.
 
-    Симметричный аналог wata_service.is_visible_to. Когда протестируем
-    на живой оплате — снять guard, открыть всем.
+    Условие показа кнопки — только настроенность Platega (merchant_id
+    + secret).  Возвращаемый True гарантирует, что create_subscription
+    сможет реально дёрнуть API.
     """
     if not is_enabled():
         return False
-    try:
-        return int(telegram_id) == int(config.ADMIN_TELEGRAM_ID)
-    except Exception:
-        return False
+    return True
 
 
 def _apply_markup(price_kopecks: int, percent: int) -> int:
@@ -622,6 +620,66 @@ async def process_subscription_webhook_data(
             "platega_sub_status_event: sub_id=%s new_status=%s",
             subscription_id, new_status,
         )
+
+        # Уведомляем юзера о смене статуса подписки — важно, потому
+        # что от привязки до первого списания может пройти время, и
+        # юзер должен понимать, что происходит.
+        try:
+            sub_row_for_notify = await _psub_db.get_subscription(str(subscription_id))
+            if sub_row_for_notify:
+                _tg = int(sub_row_for_notify["telegram_id"])
+                _amt = int(sub_row_for_notify.get("amount_kopecks") or 0) / 100.0
+                if status_upper == "SUBSCRIPTION_ACTIVATED":
+                    _text = (
+                        "✅ <b>СБП-подписка активирована</b>\n\n"
+                        "Счёт привязан, первое списание пройдёт в ближайшее время.\n"
+                        f"Сумма: <b>{_amt:.2f} ₽</b> · Каждый месяц.\n\n"
+                        "Как только банк подтвердит списание — VPN автоматически "
+                        "активируется. Уведомим сразу же."
+                    )
+                elif status_upper == "SUBSCRIPTION_PAST_DUE":
+                    _text = (
+                        "⚠️ <b>Не удалось списать по подписке</b>\n\n"
+                        "Банк временно отклонил списание. Мы повторим попытку "
+                        "автоматически. VPN пока продолжает работать до конца "
+                        "оплаченного периода.\n\n"
+                        "Обычно причина — недостаточно средств или лимит по СБП. "
+                        "Проверьте счёт."
+                    )
+                elif status_upper == "SUBSCRIPTION_CANCELLED":
+                    _text = (
+                        "❌ <b>СБП-подписка отменена</b>\n\n"
+                        "Больше списаний не будет. VPN продолжает работать до "
+                        "конца оплаченного периода — потом можно оформить снова."
+                    )
+                else:  # SUBSCRIPTION_FAILED
+                    _text = (
+                        "❌ <b>СБП-подписка не активировалась</b>\n\n"
+                        "Привязка счёта не завершилась в течение 30 минут. "
+                        "Попробуйте оформить подписку заново либо оплатите обычным СБП."
+                    )
+                try:
+                    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text="🛡 Поддержка", url="https://t.me/atlas_suppbot",
+                        )],
+                    ])
+                    await bot.send_message(
+                        chat_id=_tg, text=_text,
+                        reply_markup=kb, parse_mode="HTML",
+                    )
+                except Exception as _e:
+                    logger.warning(
+                        "platega_sub_status_notify_failed: tg=%s status=%s err=%s",
+                        _tg, status_upper, _e,
+                    )
+        except Exception as _e:  # noqa: BLE001
+            logger.warning(
+                "platega_sub_status_lookup_failed: sub_id=%s err=%s",
+                subscription_id, _e,
+            )
+
         return {"status": "ok", "event": "status", "new_status": new_status}
 
     # ── Событие списания: должен быть Id (charge_id) ────────────────────
