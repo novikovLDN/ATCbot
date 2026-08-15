@@ -1275,6 +1275,7 @@ async def _start_platega_payment(
             description=f"Atlas Secure VPN — {tariff_type} {period_days}d",
             purchase_id=purchase_id,
             method=method,
+            telegram_id=telegram_id,
         )
 
         transaction_id = tx_data["transaction_id"]
@@ -1438,6 +1439,7 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
             amount_rubles=sbp_price_rubles,
             description=f"Atlas Secure VPN — {tariff_type} {period_days}d",
             purchase_id=purchase_id,
+            telegram_id=telegram_id,
         )
 
         transaction_id = tx_data["transaction_id"]

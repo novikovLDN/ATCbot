@@ -53,6 +53,47 @@ SUBSCRIPTION_INTERVAL_MONTH = 3
 SUBSCRIPTION_INTERVAL_YEAR = 4
 
 
+def _safe_redirect_urls() -> tuple[str, str]:
+    """Return (success_url, fail_url) that ALWAYS resolve to a public HTTPS
+    endpoint, even if PUBLIC_BASE_URL is empty.
+
+    Platega docs list `return` and `failedUrl` as REQUIRED — omitting them
+    causes 400.  Fallback chain:
+      1. PUBLIC_BASE_URL + /payment/{success,fail}   (production preference)
+      2. https://t.me/{BOT_USERNAME}                (all Telegram-hosted
+                                                     users end up back in the
+                                                     chat with our bot; no
+                                                     404, no cert issues)
+    """
+    base = (getattr(config, "PUBLIC_BASE_URL", "") or "").rstrip("/")
+    if base:
+        return f"{base}/payment/success", f"{base}/payment/fail"
+    bot_username = (getattr(config, "BOT_USERNAME", "") or "").lstrip("@").strip()
+    fallback = f"https://t.me/{bot_username}" if bot_username else "https://t.me/telegram"
+    return fallback, fallback
+
+
+def _extract_amount(payment_details: Any, fallback: float = 0.0) -> float:
+    """Parse Platega `paymentDetails` — сервер иногда шлёт строку
+    ("100 RUB"), иногда объект ({"amount": 100, "currency": "RUB"}).
+    Возвращаем сумму в рублях float, при неудаче — fallback."""
+    if isinstance(payment_details, dict):
+        try:
+            return float(payment_details.get("amount") or fallback)
+        except (TypeError, ValueError):
+            return fallback
+    if isinstance(payment_details, (int, float)):
+        return float(payment_details)
+    if isinstance(payment_details, str):
+        # "100 RUB" / "100.5 RUB"
+        for tok in payment_details.split():
+            try:
+                return float(tok)
+            except ValueError:
+                continue
+    return fallback
+
+
 def is_subscription_visible_to(telegram_id: int) -> bool:
     """MVP-режим: кнопка СБП-подписки видна ТОЛЬКО админу.
 
@@ -92,6 +133,7 @@ async def create_transaction(
     return_url: Optional[str] = None,
     failed_url: Optional[str] = None,
     method: int = PAYMENT_METHOD_SBP,
+    telegram_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Create a Platega payment transaction.
@@ -100,9 +142,12 @@ async def create_transaction(
         amount_rubles: Payment amount in rubles (already with markup applied)
         description: Payment description
         purchase_id: Internal purchase ID (stored in payload)
-        return_url: Redirect URL after successful payment
-        failed_url: Redirect URL after failed payment
+        return_url: Redirect URL after successful payment (auto-fallback if None)
+        failed_url: Redirect URL after failed payment (auto-fallback if None)
         method: Platega paymentMethod (2=SBP, 11=Card, 12=International)
+        telegram_id: Buyer's Telegram ID for `metadata.userId` (антифрод —
+                    Platega может выключить магазин, если поле отсутствует
+                    для категорий, где его требуют).
 
     Returns:
         {"transaction_id": str, "redirect_url": str}
@@ -113,21 +158,29 @@ async def create_transaction(
     if not is_enabled():
         raise Exception("Platega not configured")
 
-    request_body = {
+    # Гарантированные redirect URL — Platega помечает их как REQUIRED,
+    # без них будет 400.
+    _fb_ok, _fb_fail = _safe_redirect_urls()
+    _return_url = return_url or _fb_ok
+    _failed_url = failed_url or _fb_fail
+
+    request_body: Dict[str, Any] = {
         "paymentMethod": method,
-        "id": str(uuid4()),
+        # ВАЖНО: не передаём поле `id` — Platega docs, rule #1 (генерирует
+        # сама).  Раньше слали random UUID, работало по инерции.
         "paymentDetails": {
             "amount": round(amount_rubles, 2),
             "currency": "RUB",
         },
         "description": description[:250] if description else "Atlas Secure VPN",
         "payload": json.dumps({"purchase_id": purchase_id}),
+        "return": _return_url,
+        "failedUrl": _failed_url,
     }
-    if return_url:
-        request_body["return"] = return_url
-        request_body["returnUrl"] = None
-    if failed_url:
-        request_body["failedUrl"] = failed_url
+    if telegram_id is not None:
+        # metadata.userId — обязателен для магазинов ряда категорий
+        # (иначе антифрод отключается + возможна блокировка магазина).
+        request_body["metadata"] = {"userId": str(telegram_id)}
 
     async def _make_request():
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -232,9 +285,13 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
     pending_purchase = lookup["purchase"]
     telegram_id = lookup["telegram_id"]
 
-    # Get payment amount
-    payment_details = body.get("paymentDetails", {})
-    raw_amount = float(payment_details.get("amount", 0))
+    # Get payment amount — Platega возвращает paymentDetails то строкой
+    # ("100 RUB"), то dict'ом ({amount, currency}); также fallback на
+    # плоское поле `amount` (некоторые webhook-варианты).
+    raw_amount = _extract_amount(
+        body.get("paymentDetails"),
+        fallback=float(body.get("amount") or 0),
+    )
     expected_amount = pending_purchase["price_kopecks"] / 100.0
     if raw_amount <= 0:
         logger.warning(
@@ -326,6 +383,8 @@ async def create_subscription(
         "days": int(period_days),
     })
 
+    # Гарантированные redirect URL (Platega помечает как REQUIRED).
+    _fb_ok, _fb_fail = _safe_redirect_urls()
     request_body: Dict[str, Any] = {
         "paymentMethod": PAYMENT_METHOD_SUBSCRIPTION,
         "paymentDetails": {
@@ -336,11 +395,9 @@ async def create_subscription(
         "description": (description or "Atlas Secure VPN — подписка")[:250],
         "payload": payload_str,
         "metadata": {"userId": str(telegram_id)},
+        "return": return_url or _fb_ok,
+        "failedUrl": failed_url or _fb_fail,
     }
-    if return_url:
-        request_body["return"] = return_url
-    if failed_url:
-        request_body["failedUrl"] = failed_url
 
     async def _make_request():
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -406,6 +463,70 @@ async def create_subscription(
         "subscription_id": str(subscription_id),
         "redirect_url": str(redirect_url),
     }
+
+
+async def check_subscription_status(subscription_id: str) -> Optional[Dict[str, Any]]:
+    """GET /subscription/{id} — детальный статус подписки.
+
+    Полезно для диагностики (когда webhook'и SUBSCRIPTION_* не пришли)
+    и админ-команд.
+
+    ВАЖНО: детальная ручка возвращает `status`/`intervalUnit` СТРОКАМИ
+    («Active», «Month») — в отличие от списочной, которая шлёт числами.
+    Нормализуем к единому виду (строка) для консистентности.
+
+    Returns:
+        dict с полями подписки, None если 404 / ошибка.
+    """
+    if not is_enabled() or not subscription_id:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{PLATEGA_API_URL}/subscription/{subscription_id}",
+                headers=_get_headers(),
+            )
+            if resp.status_code == 404:
+                return None
+            if resp.status_code != 200:
+                logger.warning(
+                    "platega_check_subscription: status=%d body=%s",
+                    resp.status_code, resp.text[:300],
+                )
+                return None
+            return resp.json()
+    except Exception as e:
+        logger.error("platega_check_subscription error sub_id=%s: %s", subscription_id, e)
+        return None
+
+
+async def check_transaction_status(transaction_id: str) -> Optional[Dict[str, Any]]:
+    """GET /transaction/{id} — статус одноразовой транзакции.
+
+    Симметричный аналог wata_service.check_link_status: fallback для
+    восстановления, когда webhook не дошёл.  Возвращает None на 404 /
+    сетевые ошибки — вызывающий пусть решает, ретрайть ли позже.
+    """
+    if not is_enabled() or not transaction_id:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{PLATEGA_API_URL}/transaction/{transaction_id}",
+                headers=_get_headers(),
+            )
+            if resp.status_code == 404:
+                return None
+            if resp.status_code != 200:
+                logger.warning(
+                    "platega_check_transaction: status=%d body=%s",
+                    resp.status_code, resp.text[:300],
+                )
+                return None
+            return resp.json()
+    except Exception as e:
+        logger.error("platega_check_transaction error tx_id=%s: %s", transaction_id, e)
+        return None
 
 
 def _parse_next_charge_at(raw: Any) -> Optional[datetime]:
