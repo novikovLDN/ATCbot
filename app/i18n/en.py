@@ -814,7 +814,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 My Traffic",
-    'traffic.info': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Until: {expires}\n\n🔗 <b>Bypass key</b> <i>(tap to copy)</i>\n<blockquote expandable><code>{sub_url}</code></blockquote>\n\n<b>One-tap install</b>\nTap a button below — the app opens and imports the key automatically.\n\n<i>If auto-import fails:</i>\n└ <b>Happ:</b> Home → <b>+</b> → Paste from clipboard\n└ <b>Incy:</b> Settings → Import → From clipboard",
+    'traffic.info': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Until: {expires}\n\n🔗 <b>Key for Happ</b> <i>(tap to copy)</i>\n<blockquote expandable><code>{happ_url}</code></blockquote>\n\n🔗 <b>Key for Incy</b> <i>(tap to copy)</i>\n<blockquote expandable><code>{incy_url}</code></blockquote>\n\n<b>One-tap install</b>\nTap a button below — the app opens and imports the key automatically.\n\n<i>If auto-import fails:</i>\n└ <b>Happ:</b> Home → <b>+</b> → Paste from clipboard\n└ <b>Incy:</b> Settings → Import → From clipboard",
     'traffic.no_subscription': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 No active subscription.",
     'traffic.trial_no_bypass': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 Bypass is available on Basic and Plus plans.",
     'traffic.trial_upgrade_hint': "Get Basic or Plus subscription to unlock more GB and traffic purchases",
