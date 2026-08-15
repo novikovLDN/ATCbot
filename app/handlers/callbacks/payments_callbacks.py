@@ -2169,7 +2169,13 @@ async def callback_pay_wata_check(callback: CallbackQuery):
             pass
         return
 
-    invoice_id = str(purchase.get("invoice_id") or "").strip()
+    # DB-колонка называется provider_invoice_id; get_pending_purchase*
+    # возвращают SELECT * → ключ в dict именно такой.
+    invoice_id = str(
+        purchase.get("provider_invoice_id")
+        or purchase.get("invoice_id")  # alias-совместимость (reconciler-строки)
+        or ""
+    ).strip()
     if not invoice_id:
         await callback.answer(
             i18n_get_text(language, "payment.wata_check_not_paid"),

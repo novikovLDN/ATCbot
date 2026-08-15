@@ -78,11 +78,13 @@ async def _reconcile_iteration(bot) -> None:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT purchase_id, telegram_id, invoice_id, price_kopecks, created_at
+            SELECT purchase_id, telegram_id,
+                   provider_invoice_id AS invoice_id,
+                   price_kopecks, created_at
               FROM pending_purchases
              WHERE status = 'pending'
-               AND invoice_id IS NOT NULL
-               AND invoice_id <> ''
+               AND provider_invoice_id IS NOT NULL
+               AND provider_invoice_id <> ''
                AND created_at < $1
                AND created_at > $2
              ORDER BY created_at DESC
