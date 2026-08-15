@@ -4473,16 +4473,27 @@ async def finalize_purchase(
         is_traffic_pack = (purchase_type == "traffic_pack")
         is_apple_id = (purchase_type == "apple_id")
         is_farm_effect = (purchase_type == "farm_effect")
-        amount_diff = abs(amount_rubles - expected_amount_rubles)
-        # SECURITY: Percentage-based tolerance (3%) — покрывает комиссию
-        # эквайринга (Wata/Lava/Platega обычно берут 2–2.5% сверху,
-        # customer-pays-fee). Минимум ±0.5₽ для маленьких сумм.
-        # For 199₽ → max diff 5.97₽, for 1199₽ → max diff 35.97₽.
-        # Раньше было 0.5% — при 199₽ падало с mismatch 4.06₽.
-        # Если Wata позволяет — переключить в кабинете эквайринг на
-        # merchant-pays-fee, тогда tolerance можно вернуть к 0.5%.
-        max_tolerance = max(0.50, expected_amount_rubles * 0.03)
-        if amount_diff > max_tolerance:
+        # SECURITY: асимметричный tolerance.
+        #
+        # Overpayment (юзер заплатил БОЛЬШЕ ожидаемого) — принимаем всегда.
+        # Обычно это комиссия эквайринга customer-pays-fee (Wata ~2%,
+        # Lava ~1.5%, Platega ~1%). Деньги дошли, ничего не теряем.
+        # Не важно 2% или 20% — если провайдер решил накинуть больше,
+        # это его дело, наша логика видит подтверждённый платёж.
+        #
+        # Underpayment (юзер заплатил МЕНЬШЕ) — отклоняем строго (±0.5%
+        # или минимум 0.5₽). Реалистично разница может возникнуть только
+        # из-за rounding (₽.копейки), НЕ должно быть больше нескольких копеек.
+        # Всё что больше — потенциальная подмена суммы: атакующий пытается
+        # активировать дорогую подписку за копейки.
+        #
+        # Раньше проверка была симметричная 0.5% → при 199₽ комиссия
+        # Wata 4.06₽ ломала легитимные оплаты.
+        payment_delta = amount_rubles - expected_amount_rubles  # >0 если overpay
+        underpayment_tolerance = max(0.50, expected_amount_rubles * 0.005)
+        if payment_delta < -underpayment_tolerance:
+            amount_diff = abs(payment_delta)
+            max_tolerance = underpayment_tolerance
             error_msg = (
                 f"Payment amount mismatch: purchase_id={purchase_id}, user={telegram_id}, "
                 f"expected={expected_amount_rubles:.2f} RUB, actual={amount_rubles:.2f} RUB, "
