@@ -4474,9 +4474,14 @@ async def finalize_purchase(
         is_apple_id = (purchase_type == "apple_id")
         is_farm_effect = (purchase_type == "farm_effect")
         amount_diff = abs(amount_rubles - expected_amount_rubles)
-        # SECURITY: Percentage-based tolerance (0.5%) instead of fixed ±1₽
-        # For 149₽ → max diff 0.75₽, for 1199₽ → max diff 6₽, minimum floor 0.50₽
-        max_tolerance = max(0.50, expected_amount_rubles * 0.005)
+        # SECURITY: Percentage-based tolerance (3%) — покрывает комиссию
+        # эквайринга (Wata/Lava/Platega обычно берут 2–2.5% сверху,
+        # customer-pays-fee). Минимум ±0.5₽ для маленьких сумм.
+        # For 199₽ → max diff 5.97₽, for 1199₽ → max diff 35.97₽.
+        # Раньше было 0.5% — при 199₽ падало с mismatch 4.06₽.
+        # Если Wata позволяет — переключить в кабинете эквайринг на
+        # merchant-pays-fee, тогда tolerance можно вернуть к 0.5%.
+        max_tolerance = max(0.50, expected_amount_rubles * 0.03)
         if amount_diff > max_tolerance:
             error_msg = (
                 f"Payment amount mismatch: purchase_id={purchase_id}, user={telegram_id}, "
