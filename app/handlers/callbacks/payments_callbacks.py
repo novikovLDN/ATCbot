@@ -1871,7 +1871,12 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
         logger.info(
             f"invoice_created: provider=wata, user={telegram_id}, purchase_id={purchase_id}, price={final_price_rubles:.2f}",
         )
-        text = f"💳 <b>Оплата через СБП 2</b>\n\nСумма: {final_price_rubles:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты (карта / СБП / T-Pay)."
+        text = (
+            f"🏦 <b>Оплата через СБП</b>\n\n"
+            f"Сумма: {final_price_rubles:.2f} ₽\n\n"
+            f"Нажмите кнопку ниже — откроется форма оплаты.\n\n"
+            f"Ждём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>"
+        )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {final_price_rubles:.0f} ₽", url=invoice["payment_url"])],
             [InlineKeyboardButton(
