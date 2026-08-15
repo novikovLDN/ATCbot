@@ -1259,13 +1259,23 @@ async def _start_platega_payment(
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn",
+                # То же поведение что и на Wata-экране: назад → выбор
+                # периода того же тарифа, а не в главное меню.
+                callback_data=f"tariff:{tariff_type}",
                 icon_custom_emoji_id=CE["back"],
                 style="primary",
             )]
         ])
 
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        _invoice_messages[purchase_id] = (telegram_id, msg.message_id)
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
+        # Убираем экран выбора способа оплаты — юзер смотрит только на
+        # активный invoice, чат не забит устаревшими экранами.
+        try:
+            await callback.message.delete()
+        except Exception as _e:
+            logger.debug("delete payment-method screen (%s) failed: %s", log_tag, _e)
         await callback.answer()
 
         await state.set_state(None)

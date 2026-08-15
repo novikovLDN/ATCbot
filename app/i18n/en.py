@@ -510,7 +510,7 @@ LANG = {
     'payment.pending_activation': "✅ Subscription created!\n\n📅 Valid until: {date}\n\n⏳ Activation is in progress. VPN key will be sent to you shortly.\n\nIf the key doesn't arrive within an hour, please contact support.",
     'payment.rejected': "❌ Payment not confirmed.\n\nIf you are sure you paid —\ncontact support.",
     'payment.sbp': "🏦 SBP (+11%)",
-    'payment.sbp_waiting': "🏦 SBP Payment\n\nAmount: {amount:.2f} ₽ (including +11% fee)\n\n⏳ Follow the link to pay. Access will be granted automatically after confirmation.",
+    'payment.sbp_waiting': "🏦 <b>SBP Payment</b>\n\nAmount: {amount:.2f} ₽\n\nTap the button below to open the payment form.\n\nWaiting for payment <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Processing takes up to 5 minutes — depends on the bank.</i>",
     'payment.sbp_pay_button': "🏦 Pay via SBP",
     'payment.sbp_unavailable': "SBP payment is temporarily unavailable",
     'payment.wata_check_button': "🔄 Check payment",
@@ -971,11 +971,11 @@ LANG = {
 
     # payment
     'payment.card_pl': "Bank card",
-    'payment.card_pl_waiting': "💳 Card payment\n\nAmount: {amount:.2f} ₽\n\n⏳ Follow the link to pay. Access will be granted automatically after confirmation.",
+    'payment.card_pl_waiting': "💳 <b>Card payment</b>\n\nAmount: {amount:.2f} ₽\n\nTap the button below to open the payment form.\n\nWaiting for payment <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Processing takes up to 5 minutes — depends on the bank.</i>",
     'payment.card_pl_pay_button': "💳 Pay by card",
     'payment.card_pl_unavailable': "Card payment temporarily unavailable",
     'payment.intl_pl': "🌎 International payments",
-    'payment.intl_pl_waiting': "🌎 International payment\n\nAmount: {amount:.2f} ₽\n\n⏳ Follow the link to pay. Access will be granted automatically after confirmation.",
+    'payment.intl_pl_waiting': "🌎 <b>International payment</b>\n\nAmount: {amount:.2f} ₽\n\nTap the button below to open the payment form.\n\nWaiting for payment <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Processing takes up to 5 minutes — depends on the bank.</i>",
     'payment.intl_pl_pay_button': "🌎 Pay",
     'payment.intl_pl_unavailable': "International payments temporarily unavailable",
 
