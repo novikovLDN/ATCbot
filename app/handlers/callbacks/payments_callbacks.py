@@ -142,17 +142,20 @@ async def callback_topup_amount(callback: CallbackQuery):
             icon_custom_emoji_id=CE["buy"],
             style="success",
         )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.sbp"),
-            callback_data=f"topup_sbp:{amount}",
-            style="primary",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.stars"),
-            callback_data=f"topup_stars:{amount}",
-            style="primary",
-        )],
     ]
+    # СБП: Wata приоритет, Platega fallback
+    import wata_service as _wata_svc
+    _sbp_topup_cb = f"topup_wata:{amount}" if _wata_svc.is_enabled() else f"topup_sbp:{amount}"
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "payment.sbp"),
+        callback_data=_sbp_topup_cb,
+        style="primary",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "payment.stars"),
+        callback_data=f"topup_stars:{amount}",
+        style="primary",
+    )])
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
@@ -160,17 +163,6 @@ async def callback_topup_amount(callback: CallbackQuery):
             callback_data=f"topup_lava:{amount}",
             style="primary",
         )])
-    # Wata — admin-only beta
-    try:
-        import wata_service
-        if wata_service.is_visible_to(telegram_id):
-            buttons.append([InlineKeyboardButton(
-                text="🏦 СБП 2",
-                callback_data=f"topup_wata:{amount}",
-                style="primary",
-            )])
-    except Exception:
-        pass
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="topup_balance",

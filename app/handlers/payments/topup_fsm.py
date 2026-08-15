@@ -116,17 +116,14 @@ async def process_topup_amount(message: Message, state: FSMContext):
             callback_data=f"topup_lava:{amount}",
             style="primary",
         )])
-    # Wata — admin-only на этапе тестирования
-    try:
-        import wata_service
-        if wata_service.is_visible_to(telegram_id):
-            buttons.append([InlineKeyboardButton(
-                text="🏦 СБП 2",
-                callback_data=f"topup_wata:{amount}",
-                style="primary",
-            )])
-    except Exception:
-        pass
+    # СБП через Wata (2026-08)
+    import wata_service as _wata_svc
+    if _wata_svc.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.sbp"),
+            callback_data=f"topup_wata:{amount}",
+            style="primary",
+        )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="topup_balance",

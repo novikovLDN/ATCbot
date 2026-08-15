@@ -193,9 +193,13 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
         callback_data=f"bypass_pay_card:{gb}",
         style="primary",
     )])
+    # СБП теперь идёт через Wata (2026-08).
+    # Если Wata настроен → callback → bypass_pay_wata, иначе fallback Platega.
+    import wata_service as _wata_svc
+    _sbp_cb = f"bypass_pay_wata:{gb}" if _wata_svc.is_enabled() else f"bypass_pay_sbp:{gb}"
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.sbp"),
-        callback_data=f"bypass_pay_sbp:{gb}",
+        callback_data=_sbp_cb,
         style="primary",
     )])
     buttons.append([InlineKeyboardButton(
@@ -219,17 +223,6 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
             callback_data=f"bypass_pay_lava:{gb}",
             style="primary",
         )])
-    # Wata — admin-only beta
-    try:
-        import wata_service
-        if wata_service.is_visible_to(callback.from_user.id):
-            buttons.append([InlineKeyboardButton(
-                text="🏦 СБП 2",
-                callback_data=f"bypass_pay_wata:{gb}",
-                style="primary",
-            )])
-    except Exception:
-        pass
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
@@ -730,9 +723,17 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
             style="success",
         )])
 
-    # SBP (Platega) button
+    # СБП: Wata приоритет, Platega fallback
+    import wata_service as _wata_svc
     import platega_service
-    if platega_service.is_enabled():
+    if _wata_svc.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.pay_sbp", price=price),
+            callback_data=f"traffic_pay_wata:{gb}",
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
+        )])
+    elif platega_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.pay_sbp", price=f"{sbp_price:.0f}"),
             callback_data=f"traffic_pay_sbp:{gb}",
@@ -749,17 +750,6 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
             icon_custom_emoji_id=CE["buy"],
             style="success",
         )])
-    # Wata — admin-only beta
-    try:
-        import wata_service
-        if wata_service.is_visible_to(callback.from_user.id):
-            buttons.append([InlineKeyboardButton(
-                text=f"🏦 СБП 2 · {price}₽",
-                callback_data=f"traffic_pay_wata:{gb}",
-                style="primary",
-            )])
-    except Exception:
-        pass
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
