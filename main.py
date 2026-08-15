@@ -532,6 +532,21 @@ async def main():
         except Exception as e:
             logger.warning("Site sync worker failed to start: %s", e)
 
+    # Wata reconciler — защита от потерянных webhook'ов (каждые 5 минут)
+    wata_reconciler_task_instance = None
+    if database.DB_READY:
+        try:
+            import wata_service as _wata
+            if _wata.is_enabled():
+                from app.workers.wata_reconciler import wata_reconciler_task
+                wata_reconciler_task_instance = asyncio.create_task(wata_reconciler_task(bot))
+                background_tasks.append(wata_reconciler_task_instance)
+                logger.info("Wata reconciler task started (interval=5min)")
+            else:
+                logger.info("Wata reconciler skipped (WATA_ACCESS_TOKEN not configured)")
+        except Exception as e:
+            logger.warning("Wata reconciler failed to start: %s", e)
+
     # Xray sync: safe optional background worker (fail-safe, never crashes bot)
     async def start_xray_sync_safe(bot_obj):
         if not XRAY_SYNC_AVAILABLE:
