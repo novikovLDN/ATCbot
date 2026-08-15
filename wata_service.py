@@ -55,14 +55,19 @@ def is_enabled() -> bool:
 
 
 def is_visible_to(telegram_id: int) -> bool:
-    """Пока Wata в закрытом бета-режиме — показываем кнопку только
-    админу. Убрать проверку → показать всем, когда протестируется."""
-    if not is_enabled():
-        return False
-    try:
-        return int(telegram_id) == int(config.ADMIN_TELEGRAM_ID)
-    except Exception:
-        return False
+    """Wata раскатана на всех юзеров (2026-08). Кнопка видна при условии
+    что сервис настроен (WATA_ACCESS_TOKEN присутствует).
+
+    Rollback до admin-only: раскомментировать проверку ADMIN_TELEGRAM_ID.
+    """
+    return is_enabled()
+    # ── rollback: только админ видит Wata ──
+    # if not is_enabled():
+    #     return False
+    # try:
+    #     return int(telegram_id) == int(config.ADMIN_TELEGRAM_ID)
+    # except Exception:
+    #     return False
 
 
 logger.info(
