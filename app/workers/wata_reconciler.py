@@ -35,8 +35,8 @@ from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
-RECONCILER_INTERVAL_SEC = 300      # 5 минут между итерациями
-STALE_THRESHOLD_MIN = 5            # только pending старше 5 мин
+RECONCILER_INTERVAL_SEC = 120      # 2 минуты между итерациями (было 5)
+STALE_THRESHOLD_MIN = 2            # проверяем pending старше 2 мин (было 5)
 MAX_LOOKBACK_HOURS = 24            # не проверяем старше суток (там уже expired)
 MAX_BATCH = 20                     # лимит на одну итерацию (rate limit safety)
 INTER_ITEM_SLEEP_SEC = 1.0         # пауза между Wata-запросами внутри батча
