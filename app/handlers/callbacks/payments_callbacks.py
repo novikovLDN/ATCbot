@@ -87,6 +87,28 @@ async def delete_invoice_message_for_purchase(bot: Bot, purchase_id: str) -> Non
         )
 
 
+async def delete_all_invoice_messages_for_user(bot: Bot, telegram_id: int) -> int:
+    """Снести все залипшие invoice-экраны юзера (в т.ч. native TG-инвойсы).
+
+    Используется когда юзер стартует новый flow (/buy, «Купить трафик»
+    и т.п.): чтобы предыдущий open-invoice не мозолил глаз рядом с
+    новым экраном выбора тарифа/пакета.  Возвращает число снесённых
+    записей."""
+    stale = [
+        (pid, entry) for pid, entry in list(_invoice_messages.items())
+        if entry and entry[0] == telegram_id
+    ]
+    if not stale:
+        return 0
+    for pid, (chat_id, message_id) in stale:
+        _invoice_messages.pop(pid, None)
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("stale invoice cleanup: chat=%s msg=%s err=%s", chat_id, message_id, e)
+    return len(stale)
+
+
 # --- User withdrawal flow ---
 MIN_WITHDRAW_RUBLES = 500
 

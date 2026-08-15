@@ -814,7 +814,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 My Traffic",
-    'traffic.info': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Until: {expires}\n\n🔗 <b>Bypass key</b> <i>(tap to copy)</i>\n<blockquote expandable><code>{sub_url}</code></blockquote>\n\n📲 <b>Where to paste:</b>\n└ <b>Happ</b> → Home → <b>+</b> → Paste from clipboard",
+    'traffic.info': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Until: {expires}\n\n🔗 <b>Bypass key</b> <i>(tap to copy)</i>\n<blockquote expandable><code>{sub_url}</code></blockquote>\n\n<b>One-tap install</b>\nTap a button below — the app opens and imports the key automatically.\n\n<i>If auto-import fails:</i>\n└ <b>Happ:</b> Home → <b>+</b> → Paste from clipboard\n└ <b>Incy:</b> Settings → Import → From clipboard",
     'traffic.no_subscription': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 No active subscription.",
     'traffic.trial_no_bypass': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 Bypass is available on Basic and Plus plans.",
     'traffic.trial_upgrade_hint': "Get Basic or Plus subscription to unlock more GB and traffic purchases",
@@ -825,6 +825,10 @@ LANG = {
     'traffic.subscription_expired_bypass_active': "⚠️ <b>Your main subscription has expired</b>\n\nBypass continues to work — your GB are intact.\n\nDon't forget to buy more traffic if it's running low 👇",
     'traffic.buy_subscription': "📈 Buy Subscription",
     'traffic.buy_traffic_btn': "💳 Buy Traffic",
+    'traffic.install_insy_btn': "📥 Install in Incy",
+    'traffic.install_happ_btn': "📥 Install in Happ",
+    'traffic.buy_gb_btn': "📈 Buy more GB",
+    'traffic.main_menu_btn': "🏠 Main menu",
     'traffic.back_to_traffic': "📊 Back to Traffic",
     'traffic.buy_title': "📦 <b>Buy Traffic</b> 🇷🇺\n\nAdded to your current balance.\n\n📊 <b>The pack is your personal GB balance</b>\nIt doesn't expire and isn't tied to a subscription — it only depletes when you actually use it.\n\n✨ Get just what you need — and use it at your own pace.\nWhen it runs out, top up whenever it's convenient ⭐️\n\n<blockquote>📊 Estimated usage:\n├ 15 GB — ~1 week\n├ 50 GB — ~3 weeks\n├ 75 GB — ~1 month\n├ 100 GB — ~1.5 months\n├ 150 GB — ~2.5 months\n└ 200 GB — ~3 months</blockquote>\n\n💎 The bigger the pack — the cheaper per GB",
     'traffic.buy_title_extended': "🌐 <b>More Volume</b> 🇷🇺\n\nAdded to your current balance.\n\n<blockquote>📊 Estimated usage:\n├ 300 GB — ~5 months\n├ 600 GB — ~10 months\n├ 1,200 GB — ~1.5 years\n├ 2,200 GB — ~3 people for a year\n├ 5,000 GB — ~7 people for a year\n└ 8,000 GB — ~11 people for a year</blockquote>",

@@ -602,6 +602,15 @@ async def _open_buy_screen(
 
     await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
     await database.cancel_pending_purchases(telegram_id, "new_purchase_started")
+    # Снести залипшие invoice-экраны от предыдущих покупок (Wata «Ждём
+    # платёж», Lava/Platega, нативный Telegram Payments invoice и т.п.).
+    # Иначе они болтаются в чате рядом с новым «Выберите тариф» и путают
+    # юзера — он видит старый 89 ₽ invoice + новый экран тарифов.
+    try:
+        from app.handlers.callbacks.payments_callbacks import delete_all_invoice_messages_for_user
+        await delete_all_invoice_messages_for_user(bot, telegram_id)
+    except Exception:
+        pass
     await state.set_state(PurchaseState.choose_tariff)
     
     _tariffs_block = (
