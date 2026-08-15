@@ -175,6 +175,42 @@ async def process_confirmed_payment(
             logger.warning("SITE_SYNC_FIRE_AND_FORGET_ERROR: %s", sync_err)
 
     except ValueError as e:
+        # finalize_purchase кидает ValueError для ДВУХ разных случаев:
+        #  1. "already processed" — идемпотентный дубль webhook'а
+        #  2. "PAYMENT_AMOUNT_MISMATCH" — реальная ошибка, платёж НЕ обработан
+        # До 2026-08 оба обрабатывались одинаково — mismatch тихо шёл в лог
+        # как "already processed" без алерта админу. Теперь разделяем.
+        err_str = str(e)
+        if "PAYMENT_AMOUNT_MISMATCH" in err_str or "amount mismatch" in err_str.lower():
+            logger.error(
+                "PAYMENT_MISMATCH_UNRECOVERABLE: provider=%s user=%s purchase_id=%s error=%s",
+                provider, telegram_id, purchase_id, err_str,
+            )
+            # Уведомить админа — юзер оплатил, но mismatch мешает финализации.
+            # Нужно вручную либо активировать подписку, либо вернуть деньги.
+            try:
+                import admin_notifications as _an
+                admin_text = (
+                    f"⚠️ <b>Payment amount mismatch (unrecovered)</b>\n\n"
+                    f"Provider: <code>{provider}</code>\n"
+                    f"User: <code>{telegram_id}</code>\n"
+                    f"Purchase: <code>{purchase_id}</code>\n"
+                    f"Webhook amount: <b>{amount_rubles:.2f} ₽</b>\n\n"
+                    f"<b>Error:</b>\n<code>{err_str[:400]}</code>\n\n"
+                    f"Юзер оплатил, но подписка не активировалась. "
+                    f"Нужно либо активировать вручную, либо вернуть деньги."
+                )
+                await _an.send_admin_notification(
+                    bot=bot, message=admin_text,
+                    notification_type="payment_amount_mismatch",
+                    parse_mode="HTML",
+                )
+            except Exception as notify_err:
+                logger.warning("PAYMENT_MISMATCH_ADMIN_NOTIFY_FAILED: %s", notify_err)
+            # Возвращаем error чтобы провайдер НЕ считал успешным
+            # (не ретраил зря, но и не забыл).
+            return {"status": "amount_mismatch", "error": err_str[:200]}
+
         logger.info(
             f"{provider} webhook: purchase already processed (ValueError): "
             f"purchase_id={purchase_id}, error={e}"
