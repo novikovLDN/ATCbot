@@ -558,7 +558,14 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             await callback.message.answer(error_text, parse_mode="HTML")
             await state.set_state(None)
             return
-        
+
+        # Оплата прошла — сносим экран выбора способа оплаты, чтобы
+        # юзер остался с одним активным сообщением-подтверждением.
+        try:
+            await callback.message.delete()
+        except Exception as _e:
+            logger.debug("delete payment-method (balance) failed: %s", _e)
+
         # Извлекаем результаты
         payment_id = result["payment_id"]
         expires_at = result["expires_at"]
@@ -999,7 +1006,14 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
             prices=prices
         )
         await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
+        # Регистрируем нативный TG-invoice в общем реестре, чтобы
+        # _send_confirmation снёс его при успешной оплате.
+        _invoice_messages[purchase_id] = (telegram_id, invoice_msg.message_id)
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
+        try:
+            await callback.message.delete()
+        except Exception as _e:
+            logger.debug("delete payment-method (card) failed: %s", _e)
 
         # КРИТИЧНО: Переводим в состояние processing_payment
         await state.set_state(PurchaseState.processing_payment)
@@ -1011,7 +1025,7 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
         )
 
         await callback.answer()
-        
+
     except Exception as e:
         logger.exception(f"Error creating invoice for card payment: {e}")
         error_text = i18n_get_text(language, "errors.payment_create")
@@ -1133,7 +1147,12 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
             prices=prices
         )
         await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
+        _invoice_messages[purchase_id] = (telegram_id, invoice_msg.message_id)
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
+        try:
+            await callback.message.delete()
+        except Exception as _e:
+            logger.debug("delete payment-method (stars) failed: %s", _e)
 
         await state.set_state(PurchaseState.processing_payment)
 
@@ -1558,13 +1577,19 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn",
+                callback_data=f"tariff:{tariff_type}",
                 icon_custom_emoji_id=CE["back"],
                 style="primary",
             )]
         ])
 
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        _invoice_messages[purchase_id] = (telegram_id, msg.message_id)
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
+        try:
+            await callback.message.delete()
+        except Exception as _e:
+            logger.debug("delete payment-method (crypto) failed: %s", _e)
         await callback.answer()
 
         # Очищаем FSM state
@@ -1693,14 +1718,19 @@ async def callback_pay_lava(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn",
+                callback_data=f"tariff:{tariff_type}",
                 icon_custom_emoji_id=CE["back"],
                 style="primary",
             )]
         ])
 
         lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        _invoice_messages[purchase_id] = (telegram_id, lava_msg.message_id)
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg))
+        try:
+            await callback.message.delete()
+        except Exception as _e:
+            logger.debug("delete payment-method (lava) failed: %s", _e)
         await callback.answer()
 
         # Очищаем FSM state
@@ -1822,12 +1852,16 @@ async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMConte
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn",
+                callback_data=f"tariff:{tariff_type}",
                 icon_custom_emoji_id=CE["back"],
                 style="primary",
             )],
         ])
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        try:
+            await callback.message.delete()
+        except Exception as _e:
+            logger.debug("delete payment-method (sbp_sub) failed: %s", _e)
         await callback.answer()
         await state.set_state(None)
         await state.clear()
