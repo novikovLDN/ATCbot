@@ -530,6 +530,7 @@ async def show_traffic_info_message(message):
 
     from app.services import happ_crypto
     sub_url = happ_crypto.format_for_user(traffic.get("subscriptionUrl", ""))
+    raw_sub_url = traffic.get("subscriptionUrl", "") or ""
     text = i18n_get_text(
         language, "traffic.info",
         used=_format_bytes(used), limit=_format_bytes(limit),
@@ -539,7 +540,33 @@ async def show_traffic_info_message(message):
     if is_trial:
         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
 
+    # Build deep-link install buttons (Insy / Happ) — endpoint /open/{client}?url=
+    # обёртывает подписку в client-specific scheme (happ://crypt4/… или
+    # incy://crypt1/…) и открывает приложение с авто-импортом.
+    from urllib.parse import quote as _quote
+    from urllib.parse import urlparse as _urlparse
+    if config.PUBLIC_BASE_URL:
+        base_url = config.PUBLIC_BASE_URL.rstrip("/")
+    else:
+        parsed = _urlparse(config.WEBHOOK_URL or "")
+        base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else ""
+
     buttons = []
+    if base_url and raw_sub_url:
+        _encoded = _quote(raw_sub_url, safe='')
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "traffic.install_insy_btn", "📥 Установить в Insy"),
+                url=f"{base_url}/open/incy?url={_encoded}",
+                style="primary",
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "traffic.install_happ_btn", "📥 Установить в Happ"),
+                url=f"{base_url}/open/happ?url={_encoded}",
+                style="primary",
+            ),
+        ])
+
     if is_trial:
         from app.handlers.common.keyboards import _strip_lead_emoji
         buttons.append([InlineKeyboardButton(
@@ -549,18 +576,16 @@ async def show_traffic_info_message(message):
             style="success",
         )])
     else:
-        from app.handlers.common.keyboards import _strip_lead_emoji
         buttons.append([InlineKeyboardButton(
-            text=_strip_lead_emoji(i18n_get_text(language, "traffic.buy_traffic_btn")),
+            text=i18n_get_text(language, "traffic.buy_gb_btn", "📈 Докупить ГБ обхода"),
             callback_data="buy_traffic",
             icon_custom_emoji_id=CE["traffic"],
             style="success",
         )])
-    buttons.append([InlineKeyboardButton(text="🔄", callback_data="traffic_refresh", style="primary")])
+
     buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
+        text=i18n_get_text(language, "traffic.main_menu_btn", "🏠 Главное меню"),
         callback_data="menu_main",
-        icon_custom_emoji_id=CE["back"],
         style="primary",
     )])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)

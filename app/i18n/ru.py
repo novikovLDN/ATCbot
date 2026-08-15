@@ -1105,7 +1105,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 Мой трафик",
-    'traffic.info': "<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {used} / {limit}\n{bar} {pct}%\n\n<tg-emoji emoji-id=\"5454415424319931791\">⏳</tg-emoji> До: {expires}\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote expandable><code>{sub_url}</code></blockquote>\n\n📲 <b>Куда вставить:</b>\n└ <b>Happ</b> → Главная → <b>+</b> → Вставить из буфера",
+    'traffic.info': "<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {used} / {limit}\n{bar} {pct}%\n\n<tg-emoji emoji-id=\"5454415424319931791\">⏳</tg-emoji> До: {expires}\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote expandable><code>{sub_url}</code></blockquote>\n\n<b>Установка в один клик</b>\nНажмите кнопку ниже — приложение откроется и импортирует ключ автоматически.\n\n<i>Если авто-импорт не сработал:</i>\n└ <b>Happ:</b> Главная → <b>+</b> → Вставить из буфера\n└ <b>Insy:</b> Настройки → Импорт → Из буфера",
     'traffic.no_subscription': "📊 <b>Обход блокировок</b> 🇷🇺\n\n🔒 Нет активной подписки.",
     'traffic.trial_no_bypass': "📊 <b>Обход блокировок</b> 🇷🇺\n\n🔒 Обход доступен на тарифах Basic и Plus.",
     'traffic.trial_upgrade_hint': "Купите подписку Basic или Plus, чтобы разблокировать больше ГБ и покупку трафика",
@@ -1116,6 +1116,10 @@ LANG = {
     'traffic.subscription_expired_bypass_active': "⚠️ <b>Ваша основная подписка закончилась</b>\n\nОбход блокировок продолжает работать — ваши ГБ на месте.\n\nНе забудьте докупить трафик, если он заканчивается 👇",
     'traffic.buy_subscription': "📈 Купить подписку",
     'traffic.buy_traffic_btn': "💳 Купить трафик",
+    'traffic.install_insy_btn': "📥 Установить в Insy",
+    'traffic.install_happ_btn': "📥 Установить в Happ",
+    'traffic.buy_gb_btn': "📈 Докупить ГБ обхода",
+    'traffic.main_menu_btn': "🏠 Главное меню",
     'traffic.back_to_traffic': "📊 К трафику",
     'traffic.buy_title': "<tg-emoji emoji-id=\"5447410659077661506\">📦</tg-emoji> <b>Купить трафик 🇷🇺</b>\n\nДобавляется к текущему остатку.\n\n<tg-emoji emoji-id=\"5203993413346680064\">📊</tg-emoji> <b>Пакет — это ваш личный запас ГБ</b>\nНе сгорает по времени и не привязан к подписке — тратится только когда вы реально пользуетесь.\n\n<tg-emoji emoji-id=\"5325547803936572038\">✨</tg-emoji> Возьмите столько, сколько нужно — и пользуйтесь спокойно.\nЗакончится — пополните, когда удобно <tg-emoji emoji-id=\"5289944036881230584\">⭐️</tg-emoji>\n\n💎 Чем больше пакет — тем выгоднее за ГБ",
     'traffic.buy_title_extended': "<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> <b>Больше объёма 🇷🇺</b>\n\nДобавляется к текущему остатку.\n\n<blockquote><tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> Примерный расход:\n├ 300 ГБ — ~5 месяцев\n├ 600 ГБ — ~10 месяцев\n├ 1 200 ГБ — ~1.5 года\n├ 2 200 ГБ — ~3 чел. на год\n├ 5 000 ГБ — ~7 чел. на год\n└ 8 000 ГБ — ~11 чел. на год</blockquote>",
