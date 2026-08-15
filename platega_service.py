@@ -85,6 +85,19 @@ def apply_intl_markup(price_kopecks: int) -> int:
     return _apply_markup(price_kopecks, config.PLATEGA_INTL_MARKUP_PERCENT)
 
 
+# ── LAVA SHIM (urgent 2026-08) ──────────────────────────────────────
+# Кнопки «Банковская карта» и «СБП» продолжают использовать call-sites
+# platega_service.create_transaction(...), но под капотом делегируются
+# в Lava. Rollback:
+#   1) поставить env PLATEGA_CARD_SBP_VIA_LAVA=false → старое поведение
+#   2) полностью убрать shim — удалить блок ниже и следующие 40 строк
+#      «# SHIM: …» в теле create_transaction
+_LAVA_SHIM_ENABLED = (
+    (config.env("PLATEGA_CARD_SBP_VIA_LAVA", default="true") or "").lower()
+    in ("1", "true", "yes")
+)
+
+
 async def create_transaction(
     amount_rubles: float,
     description: str,
@@ -110,6 +123,31 @@ async def create_transaction(
     Raises:
         Exception on API errors
     """
+    # SHIM: для CARD/SBP делегируем в Lava (urgent 2026-08).
+    # Rollback: env PLATEGA_CARD_SBP_VIA_LAVA=false ИЛИ удалить блок.
+    if _LAVA_SHIM_ENABLED and method in (PAYMENT_METHOD_CARD, PAYMENT_METHOD_SBP):
+        import lava_service
+        if not lava_service.is_enabled():
+            logger.error(
+                "PLATEGA_LAVA_SHIM_FAIL: Lava not configured — fallback to Platega. "
+                "method=%s purchase_id=%s", method, purchase_id,
+            )
+        else:
+            invoice = await lava_service.create_invoice(
+                amount_rubles=amount_rubles,
+                purchase_id=purchase_id,
+                comment=description or "Atlas Secure",
+            )
+            logger.info(
+                "PLATEGA_SHIM_TO_LAVA: method=%s purchase_id=%s invoice_id=%s",
+                method, purchase_id, invoice.get("invoice_id"),
+            )
+            # Адаптируем под Platega-формат чтобы call-sites не менять.
+            return {
+                "transaction_id": invoice["invoice_id"],
+                "redirect_url": invoice["payment_url"],
+            }
+
     if not is_enabled():
         raise Exception("Platega not configured")
 
