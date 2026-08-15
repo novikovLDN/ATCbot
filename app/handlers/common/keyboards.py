@@ -399,9 +399,20 @@ def get_profile_keyboard(
         style="primary",
     )])
 
-    # Автопродление-тумблер убран из UI-профиля по запросу заказчика.
-    # Callback toggle_auto_renew оставлен рабочим — он ещё дёргается из
-    # inline-кнопок в напоминалках/broadcast'ах.
+    # Row 4a: Автопродление с баланса — только при активной non-bypass подписке.
+    # Тумблер: ✅ = включено, без галочки = выключено. Callback toggle_auto_renew.
+    if has_active_subscription and not is_bypass_only:
+        if auto_renew:
+            ar_text = i18n_get_text(language, "main.btn_auto_renew_on", "🔁 Автопродление с баланса ✅")
+            ar_data = "toggle_auto_renew:off"
+        else:
+            ar_text = i18n_get_text(language, "main.btn_auto_renew_off", "🔁 Автопродление с баланса")
+            ar_data = "toggle_auto_renew:on"
+        buttons.append([InlineKeyboardButton(
+            text=ar_text,
+            callback_data=ar_data,
+            style="primary",
+        )])
 
     # Row 5: Сменить язык (💬)
     buttons.append([InlineKeyboardButton(
