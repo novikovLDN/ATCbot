@@ -65,8 +65,12 @@ def _bypass_expire_iso() -> str:
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
     """Heuristic: does this panel entity belong to our bot?
 
-    Identical contract to remnawave_premium._is_our_entity — accept
-    on telegramId match OR description containing one of our markers.
+    Accept on any of:
+      - telegramId matches
+      - description contains one of our markers
+      - username equals the pattern we would generate for this telegram_id
+        (legacy imported entities may have no telegramId — but nobody else
+        creates entities with that exact username in our panel's namespace).
     """
     if not isinstance(user, dict):
         return False
@@ -78,6 +82,9 @@ def _is_our_entity(user: dict, telegram_id: int) -> bool:
             return True
     except (TypeError, ValueError):
         pass
+    entity_username = str(user.get("username") or "").strip()
+    if entity_username and entity_username == build_bypass_username(telegram_id):
+        return True
     desc = (user.get("description") or "").lower()
     if "bypass" in desc or "samopis" in desc or "via bot" in desc:
         return True
@@ -105,6 +112,35 @@ def _result_from_existing(user: dict, *, http_status: int) -> BypassCreateResult
         error=None,
         recovered=True,
     )
+
+
+async def _backfill_telegram_id(user: dict, telegram_id: int) -> None:
+    """PATCH telegramId onto an adopted entity that has none, so future
+    purchases match on the fast path instead of falling back to the
+    username heuristic.  Best-effort — never raises."""
+    if not isinstance(user, dict):
+        return
+    existing_tg = user.get("telegramId") if user.get("telegramId") is not None else user.get("telegram_id")
+    if existing_tg is not None:
+        try:
+            if int(existing_tg) == int(telegram_id):
+                return
+        except (TypeError, ValueError):
+            pass
+    panel_uuid = user.get("uuid")
+    if not panel_uuid:
+        return
+    try:
+        await remnawave_api.update_user(panel_uuid, telegramId=int(telegram_id))
+        logger.info(
+            "REMNAWAVE_BYPASS_TELEGRAM_ID_BACKFILLED: tg=%s uuid=%s",
+            telegram_id, str(panel_uuid)[:8],
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "REMNAWAVE_BYPASS_TELEGRAM_ID_BACKFILL_FAIL: tg=%s uuid=%s err=%s",
+            telegram_id, str(panel_uuid)[:8], e,
+        )
 
 
 # ── Create ────────────────────────────────────────────────────────────
@@ -154,6 +190,7 @@ async def create_bypass_user_entity(
                 "REMNAWAVE_BYPASS_RECOVERED_PREFLIGHT: tg=%s username=%s uuid=%s",
                 telegram_id, username, (existing.get("uuid") or "")[:8],
             )
+            await _backfill_telegram_id(existing, telegram_id)
             return _result_from_existing(existing, http_status=200)
         logger.warning(
             "REMNAWAVE_BYPASS_USERNAME_TAKEN_UNRELATED: tg=%s username=%s existing_tg=%s",
@@ -201,6 +238,7 @@ async def create_bypass_user_entity(
         except Exception:
             existing2 = None
         if existing2 and _is_our_entity(existing2, telegram_id):
+            await _backfill_telegram_id(existing2, telegram_id)
             return _result_from_existing(existing2, http_status=409)
 
     err_body = (raw or {}).get("body")

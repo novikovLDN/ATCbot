@@ -1874,6 +1874,11 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
         text = f"💳 <b>Оплата через СБП 2</b>\n\nСумма: {final_price_rubles:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты (карта / СБП / T-Pay)."
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {final_price_rubles:.0f} ₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.wata_check_button"),
+                callback_data=f"pay:wata:check:{purchase_id}",
+                style="success",
+            )],
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
@@ -1885,6 +1890,144 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
         logger.exception(f"Error creating Wata invoice: {e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
         await state.set_state(None)
+
+
+# ── "Проверить платёж" — принудительная сверка Wata invoice ────────────
+#
+# Кнопка на экране оплаты (см. callback_pay_wata). При клике: дёргаем
+# wata_service.check_link_status, ищем Paid-транзакцию и финализируем
+# через тот же process_confirmed_payment, что и webhook. Идемпотентно
+# благодаря row-level lock в mark_pending_purchase_paid.
+#
+# Rate limit: 30 сек на (user, purchase). Wata API сам ограничивает 1
+# GET / 30с на invoice_id — совпадает по цифре.
+_WATA_CHECK_COOLDOWN_SEC = 30
+_wata_check_last_at: dict[tuple[int, str], float] = {}
+_wata_check_lock = asyncio.Lock()
+
+
+@payments_router.callback_query(F.data.startswith("pay:wata:check:"))
+async def callback_pay_wata_check(callback: CallbackQuery):
+    """Принудительная проверка Wata платежа (пользовательская кнопка)."""
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        purchase_id = callback.data.split(":", 3)[3]
+    except IndexError:
+        await callback.answer(i18n_get_text(language, "payment.wata_check_error"), show_alert=True)
+        return
+    if not purchase_id:
+        await callback.answer(i18n_get_text(language, "payment.wata_check_error"), show_alert=True)
+        return
+
+    now = time.time()
+    key = (telegram_id, purchase_id)
+    async with _wata_check_lock:
+        last = _wata_check_last_at.get(key, 0.0)
+        elapsed = now - last
+        if elapsed < _WATA_CHECK_COOLDOWN_SEC:
+            wait = max(1, int(_WATA_CHECK_COOLDOWN_SEC - elapsed))
+            await callback.answer(
+                i18n_get_text(language, "payment.wata_check_cooldown", seconds=wait),
+                show_alert=False,
+            )
+            return
+        _wata_check_last_at[key] = now
+
+    import wata_service
+    from app.workers.wata_reconciler import _find_paid_transaction, _extract_amount
+    from app.services.payments.confirmation import process_confirmed_payment
+
+    try:
+        purchase = await database.get_pending_purchase(
+            purchase_id, telegram_id, check_expiry=False,
+        )
+    except Exception as e:
+        logger.warning("wata_check: get_pending_purchase failed purchase=%s err=%s", purchase_id, e)
+        purchase = None
+
+    if not purchase:
+        # Row moved out of 'pending' (already processed) or doesn't belong to us.
+        await callback.answer(
+            i18n_get_text(language, "payment.wata_check_already"),
+            show_alert=True,
+        )
+        try:
+            await safe_edit_reply_markup(callback.message, None)
+        except Exception:
+            pass
+        return
+
+    invoice_id = str(purchase.get("invoice_id") or "").strip()
+    if not invoice_id:
+        await callback.answer(
+            i18n_get_text(language, "payment.wata_check_not_paid"),
+            show_alert=False,
+        )
+        return
+
+    status_data = await wata_service.check_link_status(invoice_id)
+    if not status_data:
+        await callback.answer(
+            i18n_get_text(language, "payment.wata_check_not_paid"),
+            show_alert=False,
+        )
+        return
+
+    paid_tx = _find_paid_transaction(status_data)
+    if not paid_tx:
+        await callback.answer(
+            i18n_get_text(language, "payment.wata_check_not_paid"),
+            show_alert=False,
+        )
+        return
+
+    amount = _extract_amount(paid_tx) or (int(purchase.get("price_kopecks") or 0) / 100.0)
+    tx_id = paid_tx.get("id") or paid_tx.get("transactionId") or invoice_id
+
+    logger.info(
+        "wata_check_user_initiated: user=%s purchase=%s tx=%s amount=%.2f",
+        telegram_id, purchase_id, tx_id, amount,
+    )
+
+    try:
+        result = await process_confirmed_payment(
+            provider="wata",
+            purchase_id=purchase_id,
+            amount_rubles=float(amount),
+            invoice_id=str(tx_id),
+            telegram_id=telegram_id,
+            bot=callback.bot,
+        )
+    except Exception as e:
+        logger.exception("wata_check finalize failed purchase=%s: %s", purchase_id, e)
+        await callback.answer(
+            i18n_get_text(language, "payment.wata_check_error"),
+            show_alert=True,
+        )
+        return
+
+    outcome = (result or {}).get("status", "unknown")
+    if outcome in ("ok", "already_processed"):
+        toast_key = (
+            "payment.wata_check_paid"
+            if outcome == "ok"
+            else "payment.wata_check_already"
+        )
+        await callback.answer(
+            i18n_get_text(language, toast_key),
+            show_alert=True,
+        )
+        try:
+            await safe_edit_reply_markup(callback.message, None)
+        except Exception:
+            pass
+    else:
+        await callback.answer(
+            i18n_get_text(language, "payment.wata_check_not_paid"),
+            show_alert=False,
+        )
 
 
 @payments_router.callback_query(F.data.startswith("topup_sbp:"))
