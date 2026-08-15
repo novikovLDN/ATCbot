@@ -386,10 +386,19 @@ async def callback_traffic_info(callback: CallbackQuery):
         warning += "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
 
     # Subscription URL comes directly from Remnawave API response.
-    # User should never see the raw https://sub.atlassecure.ru/... — wrap
-    # it into a Happ crypt4 deeplink so the only visible key is sealed.
-    from app.services import happ_crypto
-    sub_url = happ_crypto.format_for_user(traffic.get("subscriptionUrl", ""))
+    # Пользователю никогда не показываем raw https://sub.atlassecure.ru/... —
+    # каждая ссылка обёрнута в client-specific encrypted scheme:
+    #   Happ → happ://crypt4/<base64> (RSA-4096, pure-Python, синхронно).
+    #   Incy → incy://crypt1/<payload> (AES-256-GCM via Node sidecar;
+    #          при недоступности sidecar'а fallback на incy://add/<url>).
+    from app.services import happ_crypto, incy_crypto
+    raw_sub_url = traffic.get("subscriptionUrl", "") or ""
+    happ_url = happ_crypto.format_for_user(raw_sub_url) or raw_sub_url
+    try:
+        incy_url = await incy_crypto.to_incy_link(raw_sub_url) or raw_sub_url
+    except Exception:
+        logger.exception("incy_crypto failed — using raw sub_url")
+        incy_url = raw_sub_url
 
     text = i18n_get_text(
         language,
@@ -399,13 +408,38 @@ async def callback_traffic_info(callback: CallbackQuery):
         bar=bar,
         pct=pct,
         expires=expires_str,
-        sub_url=sub_url,
+        happ_url=happ_url,
+        incy_url=incy_url,
     ) + warning
 
     if is_trial:
         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
 
+    # Deep-link install buttons (Incy / Happ) через /open/{client}?url=...
+    from urllib.parse import quote as _quote
+    from urllib.parse import urlparse as _urlparse
+    if config.PUBLIC_BASE_URL:
+        base_url = config.PUBLIC_BASE_URL.rstrip("/")
+    else:
+        parsed = _urlparse(config.WEBHOOK_URL or "")
+        base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else ""
+
     buttons = []
+    if base_url and raw_sub_url:
+        _encoded = _quote(raw_sub_url, safe='')
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "traffic.install_incy_btn", "📥 Установить в Incy"),
+                url=f"{base_url}/open/incy?url={_encoded}",
+                style="primary",
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "traffic.install_happ_btn", "📥 Установить в Happ"),
+                url=f"{base_url}/open/happ?url={_encoded}",
+                style="primary",
+            ),
+        ])
+
     if is_trial:
         from app.handlers.common.keyboards import _strip_lead_emoji
         buttons.append([InlineKeyboardButton(
@@ -415,18 +449,16 @@ async def callback_traffic_info(callback: CallbackQuery):
             style="success",
         )])
     else:
-        from app.handlers.common.keyboards import _strip_lead_emoji
         buttons.append([InlineKeyboardButton(
-            text=_strip_lead_emoji(i18n_get_text(language, "traffic.buy_traffic_btn")),
+            text=i18n_get_text(language, "traffic.buy_gb_btn", "📈 Докупить ГБ обхода"),
             callback_data="buy_traffic",
             icon_custom_emoji_id=CE["traffic"],
             style="success",
         )])
-    buttons.append([InlineKeyboardButton(text="🔄", callback_data="traffic_refresh", style="primary")])
+
     buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
+        text=i18n_get_text(language, "traffic.main_menu_btn", "🏠 Главное меню"),
         callback_data="menu_main",
-        icon_custom_emoji_id=CE["back"],
         style="primary",
     )])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -528,13 +560,21 @@ async def show_traffic_info_message(message):
     elif remaining <= 3 * 1024**3:
         warning += "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
 
-    from app.services import happ_crypto
-    sub_url = happ_crypto.format_for_user(traffic.get("subscriptionUrl", ""))
+    from app.services import happ_crypto, incy_crypto
     raw_sub_url = traffic.get("subscriptionUrl", "") or ""
+    # Happ: pure-Python RSA — синхронно и всегда работает.
+    happ_url = happ_crypto.format_for_user(raw_sub_url) or raw_sub_url
+    # Incy: async через Node-sidecar (или fallback incy://add/<url>).
+    try:
+        incy_url = await incy_crypto.to_incy_link(raw_sub_url) or raw_sub_url
+    except Exception:
+        logger.exception("incy_crypto failed — using raw sub_url")
+        incy_url = raw_sub_url
     text = i18n_get_text(
         language, "traffic.info",
         used=_format_bytes(used), limit=_format_bytes(limit),
-        bar=bar, pct=pct, expires=expires_str, sub_url=sub_url,
+        bar=bar, pct=pct, expires=expires_str,
+        happ_url=happ_url, incy_url=incy_url,
     ) + warning
 
     if is_trial:
