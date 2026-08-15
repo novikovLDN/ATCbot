@@ -88,10 +88,10 @@ def apply_intl_markup(price_kopecks: int) -> int:
 # ── LAVA SHIM (urgent 2026-08) ──────────────────────────────────────
 # Кнопки «Банковская карта» и «СБП» продолжают использовать call-sites
 # platega_service.create_transaction(...), но под капотом делегируются
-# в Lava. Rollback:
-#   1) поставить env PLATEGA_CARD_SBP_VIA_LAVA=false → старое поведение
-#   2) полностью убрать shim — удалить блок ниже и следующие 40 строк
-#      «# SHIM: …» в теле create_transaction
+# в Lava (у Platega сбой оплаты). Rollback:
+#   1) env PLATEGA_CARD_SBP_VIA_LAVA=false → restart → старое Platega
+#   2) физически удалить блок «# SHIM: …» в create_transaction и константу
+#      _LAVA_SHIM_ENABLED над функцией
 _LAVA_SHIM_ENABLED = (
     (config.env("PLATEGA_CARD_SBP_VIA_LAVA", default="true") or "").lower()
     in ("1", "true", "yes")
