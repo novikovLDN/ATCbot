@@ -198,7 +198,7 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
         import wata_service
         if wata_service.is_visible_to(telegram_id):
             buttons.append([InlineKeyboardButton(
-                text="💳 Wata (тест)",
+                text="🏦 СБП 2",
                 callback_data="steam:pay:wata",
                 style="primary",
             )])
@@ -582,7 +582,7 @@ async def callback_steam_pay_wata(callback: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.bot.send_message(
-            telegram_id, f"💳 Wata (тест) · Steam {login} · {amount} ₽",
+            telegram_id, f"💳 СБП 2 · Steam {login} · {amount} ₽",
             reply_markup=kb, parse_mode="HTML",
         )
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg.message_id))

@@ -303,7 +303,7 @@ async def process_stars_username(message: Message, state: FSMContext):
     try:
         import wata_service
         if wata_service.is_visible_to(telegram_id):
-            buttons.append([InlineKeyboardButton(text="💳 Wata (тест)", callback_data="stars_pay:wata", style="primary")])
+            buttons.append([InlineKeyboardButton(text="🏦 СБП 2", callback_data="stars_pay:wata", style="primary")])
     except Exception:
         pass
 
@@ -503,7 +503,7 @@ async def callback_stars_pay_wata(callback: CallbackQuery, state: FSMContext):
         ])
         msg = await callback.bot.send_message(
             telegram_id,
-            f"💳 <b>Wata (тест)</b> · {stars}⭐ → {username} · <b>{price}₽</b>",
+            f"💳 <b>СБП 2</b> · {stars}⭐ → {username} · <b>{price}₽</b>",
             reply_markup=kb, parse_mode="HTML",
         )
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg.message_id))

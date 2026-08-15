@@ -265,7 +265,7 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
         import wata_service
         if wata_service.is_visible_to(callback.from_user.id):
             buttons.append([InlineKeyboardButton(
-                text="💳 Wata (тест)",
+                text="🏦 СБП 2",
                 callback_data="gift_pay:wata",
                 style="primary",
             )])
@@ -730,7 +730,7 @@ async def callback_gift_pay_wata(callback: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="gift_subscription", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(
-            f"💳 <b>Wata (тест)</b>\n\nПодарок {tariff_name} на {period_text}\n<b>{price_rubles:.0f} ₽</b>",
+            f"💳 <b>СБП 2</b>\n\nПодарок {tariff_name} на {period_text}\n<b>{price_rubles:.0f} ₽</b>",
             reply_markup=keyboard, parse_mode="HTML",
         )
         asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg))

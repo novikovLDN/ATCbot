@@ -224,7 +224,7 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
         import wata_service
         if wata_service.is_visible_to(callback.from_user.id):
             buttons.append([InlineKeyboardButton(
-                text="💳 Wata (тест)",
+                text="🏦 СБП 2",
                 callback_data=f"bypass_pay_wata:{gb}",
                 style="primary",
             )])
@@ -754,7 +754,7 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
         import wata_service
         if wata_service.is_visible_to(callback.from_user.id):
             buttons.append([InlineKeyboardButton(
-                text=f"💳 Wata тест · {price}₽",
+                text=f"🏦 СБП 2 · {price}₽",
                 callback_data=f"traffic_pay_wata:{gb}",
                 style="primary",
             )])
@@ -1065,7 +1065,7 @@ async def callback_traffic_pay_wata(callback: CallbackQuery):
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_traffic", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(
-            f"💳 <b>Wata (тест)</b>\n\n{gb} ГБ трафика · <b>{price}₽</b>",
+            f"💳 <b>СБП 2</b>\n\n{gb} ГБ трафика · <b>{price}₽</b>",
             reply_markup=keyboard, parse_mode="HTML",
         )
         asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg))
@@ -1426,7 +1426,7 @@ async def callback_bypass_pay_wata(callback: CallbackQuery):
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(
-            f"💳 <b>Wata (тест)</b> · Bypass {gb} GB · <b>{price}₽</b>",
+            f"💳 <b>СБП 2</b> · Bypass {gb} GB · <b>{price}₽</b>",
             reply_markup=keyboard, parse_mode="HTML",
         )
         asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg))

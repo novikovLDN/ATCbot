@@ -121,7 +121,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
         import wata_service
         if wata_service.is_visible_to(telegram_id):
             buttons.append([InlineKeyboardButton(
-                text="💳 Wata (тест)",
+                text="🏦 СБП 2",
                 callback_data=f"topup_wata:{amount}",
                 style="primary",
             )])
