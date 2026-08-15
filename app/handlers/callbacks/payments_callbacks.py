@@ -50,6 +50,37 @@ async def _schedule_invoice_deletion(bot: Bot, chat_id: int, invoice_message: Me
         logger.info(f"INVOICE_EXPIRED: deleted invoice message_id={invoice_message.message_id} chat_id={chat_id}")
     except Exception as e:
         logger.debug(f"Failed to delete expired invoice: chat_id={chat_id}, error={e}")
+    finally:
+        # Даже если удаление упало (уже удалено), почистим карту, чтобы
+        # не держать в памяти висячий mapping.
+        for pid, entry in list(_invoice_messages.items()):
+            if entry == (chat_id, invoice_message.message_id):
+                _invoice_messages.pop(pid, None)
+
+
+# ── Провайдер-agnostic реестр «invoice-экранов» ────────────────────────
+#
+# Ключ — purchase_id, значение — (chat_id, message_id) экрана «Ждём
+# платёж».  Заполняется хендлерами callback_pay_wata / callback_topup_wata
+# при создании экрана и вычитывается из _send_confirmation после успешного
+# уведомления: экран старой «оплаты» удаляется, чтобы юзер не видел
+# устаревший текст рядом с «Платёж успешно обработан».
+_invoice_messages: dict[str, tuple[int, int]] = {}
+
+
+async def delete_invoice_message_for_purchase(bot: Bot, purchase_id: str) -> None:
+    """Best-effort удаление экрана «Ждём платёж» после успешного платежа."""
+    entry = _invoice_messages.pop(purchase_id, None)
+    if not entry:
+        return
+    chat_id, message_id = entry
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(
+            "delete_invoice_message: chat=%s msg=%s err=%s (ok if уже удалили)",
+            chat_id, message_id, e,
+        )
 
 
 # --- User withdrawal flow ---
@@ -1885,9 +1916,18 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
                 callback_data=f"pay:wata:check:{purchase_id}",
                 style="success",
             )],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn", icon_custom_emoji_id=CE["back"], style="primary")],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                # Назад с экрана «Оплата через СБП» ведёт обратно на выбор
+                # периода для того же тарифа — экран периода живёт под
+                # хендлером callback_tariff_type (F.data.startswith("tariff:")).
+                callback_data=f"tariff:{tariff_type}",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
         ])
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        _invoice_messages[purchase_id] = (telegram_id, msg.message_id)
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
         # Fast-path per-invoice polling: закрывает окно между Wata Paid и
         # приходом webhook'а (иногда 1-3 минуты). Гнать не чаще 30 сек —
@@ -1899,6 +1939,12 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
             purchase_id=purchase_id,
             invoice_id=str(invoice["invoice_id"]),
         ))
+        # Удаляем экран выбора способа оплаты — теперь юзер смотрит только
+        # на активный invoice.
+        try:
+            await callback.message.delete()
+        except Exception as _e:
+            logger.debug("delete payment-method screen failed: %s", _e)
         await callback.answer()
         await state.set_state(None)
         await state.clear()
@@ -2340,13 +2386,35 @@ async def callback_topup_wata(callback: CallbackQuery):
             f"balance_topup_invoice_created: provider=wata, user={telegram_id}, "
             f"purchase_id={purchase_id}, amount={amount}",
         )
-        text = f"💳 <b>Оплата через СБП 2</b>\n\nСумма: {amount} ₽\n\nНажмите кнопку ниже — откроется форма оплаты."
+        text = (
+            f"🏦 <b>Оплата через СБП</b>\n\n"
+            f"Сумма: {amount} ₽\n\n"
+            f"Нажмите кнопку ниже — откроется форма оплаты.\n\n"
+            f"Ждём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n"
+            f"<i>Обработка занимает до 5 минут — зависит от банка.</i>"
+        )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {amount} ₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.wata_check_button"),
+                callback_data=f"pay:wata:check:{purchase_id}",
+                style="success",
+            )],
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="topup_balance", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        _invoice_messages[purchase_id] = (telegram_id, msg.message_id)
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
+        asyncio.create_task(_poll_wata_invoice(
+            callback.bot,
+            telegram_id=telegram_id,
+            purchase_id=purchase_id,
+            invoice_id=str(invoice["invoice_id"]),
+        ))
+        try:
+            await callback.message.delete()
+        except Exception as _e:
+            logger.debug("delete topup-picker screen failed: %s", _e)
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error creating Wata invoice for balance top-up: {e}")

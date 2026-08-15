@@ -407,6 +407,15 @@ async def _send_confirmation(
 
     language = await resolve_user_language(telegram_id)
 
+    # Убираем экран «Ждём платёж» перед отправкой подтверждения — иначе
+    # юзер видит одновременно устаревший invoice и «✅ Платёж успешно
+    # обработан».  Best-effort, никаких await на удаление.
+    try:
+        from app.handlers.callbacks.payments_callbacks import delete_invoice_message_for_purchase
+        await delete_invoice_message_for_purchase(bot, purchase_id)
+    except Exception as _e:  # noqa: BLE001
+        logger.debug("invoice_screen_cleanup skipped: %s", _e)
+
     if is_balance_topup:
         topup_amount = result.get("amount", amount_rubles)
         text = i18n_get_text(language, "main.balance_topup_success", amount=topup_amount)
