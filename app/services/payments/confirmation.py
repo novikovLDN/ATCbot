@@ -407,6 +407,30 @@ async def _send_confirmation(
 
     language = await resolve_user_language(telegram_id)
 
+    # Идемпотентность: mark-before-send через payment_notifications_sent.
+    # finalize_purchase уже гарантирует single-writer через FOR UPDATE
+    # SKIP LOCKED — но на нём защита СТАТУСА покупки, а не факта отправки
+    # уведомления. Если между finalize и send прилетит другой путь
+    # (fast-poll + webhook, reconciler + webhook, кнопка «Проверить» +
+    # webhook) — второй пропустится сразу. Даёт двойной страховщик поверх
+    # DB-lock и гасит любые оставшиеся гонки.
+    try:
+        sent = await database.mark_payment_notification_sent(payment_id)
+    except Exception as _flag_err:  # noqa: BLE001
+        logger.warning(
+            "notification_flag_check_failed provider=%s user=%s payment_id=%s err=%s — "
+            "продолжаем отправку (fail-open)",
+            provider, telegram_id, payment_id, _flag_err,
+        )
+        sent = True
+    if not sent:
+        logger.info(
+            "NOTIFICATION_IDEMPOTENT_SKIP: provider=%s user=%s payment_id=%s purchase_id=%s "
+            "— повторное подтверждение подавлено",
+            provider, telegram_id, payment_id, purchase_id,
+        )
+        return
+
     # Убираем экран «Ждём платёж» перед отправкой подтверждения — иначе
     # юзер видит одновременно устаревший invoice и «✅ Платёж успешно
     # обработан».  Best-effort, никаких await на удаление.
