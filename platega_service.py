@@ -123,30 +123,31 @@ async def create_transaction(
     Raises:
         Exception on API errors
     """
-    # SHIM: для CARD/SBP делегируем в Lava (urgent 2026-08).
-    # Rollback: env PLATEGA_CARD_SBP_VIA_LAVA=false ИЛИ удалить блок.
+    # SHIM: CARD/SBP всегда идут в Lava (urgent 2026-08 — у Platega сбой).
+    # Нет fallback на Platega — если Lava не настроен, падаем громко.
+    # Rollback: env PLATEGA_CARD_SBP_VIA_LAVA=false → старое Platega-поведение.
     if _LAVA_SHIM_ENABLED and method in (PAYMENT_METHOD_CARD, PAYMENT_METHOD_SBP):
         import lava_service
         if not lava_service.is_enabled():
-            logger.error(
-                "PLATEGA_LAVA_SHIM_FAIL: Lava not configured — fallback to Platega. "
-                "method=%s purchase_id=%s", method, purchase_id,
+            raise Exception(
+                f"Lava not configured but CARD/SBP shim enabled (method={method}, "
+                f"purchase_id={purchase_id}). Fix: configure LAVA_SHOP_ID/LAVA_SECRET_KEY, "
+                f"or set PLATEGA_CARD_SBP_VIA_LAVA=false to fall back to Platega."
             )
-        else:
-            invoice = await lava_service.create_invoice(
-                amount_rubles=amount_rubles,
-                purchase_id=purchase_id,
-                comment=description or "Atlas Secure",
-            )
-            logger.info(
-                "PLATEGA_SHIM_TO_LAVA: method=%s purchase_id=%s invoice_id=%s",
-                method, purchase_id, invoice.get("invoice_id"),
-            )
-            # Адаптируем под Platega-формат чтобы call-sites не менять.
-            return {
-                "transaction_id": invoice["invoice_id"],
-                "redirect_url": invoice["payment_url"],
-            }
+        invoice = await lava_service.create_invoice(
+            amount_rubles=amount_rubles,
+            purchase_id=purchase_id,
+            comment=description or "Atlas Secure",
+        )
+        logger.info(
+            "PLATEGA_SHIM_TO_LAVA: method=%s purchase_id=%s invoice_id=%s",
+            method, purchase_id, invoice.get("invoice_id"),
+        )
+        # Адаптируем под Platega-формат чтобы call-sites не менять.
+        return {
+            "transaction_id": invoice["invoice_id"],
+            "redirect_url": invoice["payment_url"],
+        }
 
     if not is_enabled():
         raise Exception("Platega not configured")
