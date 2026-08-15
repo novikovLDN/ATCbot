@@ -1011,31 +1011,32 @@ async def show_payment_method_selection(
     crypto_on = cryptobot_service.is_enabled()
 
     btn_card_pl = InlineKeyboardButton(text=i18n_get_text(language, "payment.card_pl"), callback_data="pay:card_pl")
-    btn_sbp = InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp"), callback_data="pay:sbp")
+    # СБП теперь идёт через Wata (2026-08). callback_data=pay:wata
+    # чтобы не менять существующий wata handler.
+    btn_sbp = InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp"), callback_data="pay:wata")
     btn_card = InlineKeyboardButton(text=i18n_get_text(language, "payment.card"), callback_data="pay:card")
     btn_lava = InlineKeyboardButton(text=i18n_get_text(language, "payment.lava"), callback_data="pay:lava")
     btn_intl = InlineKeyboardButton(text=i18n_get_text(language, "payment.intl_pl"), callback_data="pay:intl_pl")
     btn_stars = InlineKeyboardButton(text=i18n_get_text(language, "payment.stars"), callback_data="pay:stars")
     btn_crypto = InlineKeyboardButton(text=i18n_get_text(language, "payment.crypto"), callback_data="pay:crypto")
 
-    if platega_on:
-        buttons.append([btn_card_pl, btn_sbp])
+    # Wata теперь работает через кнопку СБП — отдельную не показываем.
+    # Проверяем что Wata сконфигурирован — иначе кнопку СБП надо скрыть.
+    try:
+        import wata_service
+        wata_on = wata_service.is_enabled()
+    except Exception:
+        wata_on = False
+
+    if wata_on:
+        buttons.append([btn_sbp])   # СБП через Wata
+    elif platega_on:
+        buttons.append([btn_card_pl, btn_sbp])   # fallback на Platega
 
     row2 = [btn_card]
     if lava_on:
         row2.append(btn_lava)
     buttons.append(row2)
-
-    # Wata — admin-only beta
-    try:
-        import wata_service
-        if wata_service.is_visible_to(telegram_id):
-            buttons.append([InlineKeyboardButton(
-                text="💳 Wata (тест)",
-                callback_data="pay:wata",
-            )])
-    except Exception:
-        pass
 
     # Platega recurring SBP subscription — admin-only beta (MVP: только 30д)
     try:

@@ -193,20 +193,15 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
     except Exception:
         pass
 
-    # Wata — admin-only beta
-    try:
-        import wata_service
-        if wata_service.is_visible_to(telegram_id):
-            buttons.append([InlineKeyboardButton(
-                text="🏦 СБП 2",
-                callback_data="steam:pay:wata",
-                style="primary",
-            )])
-    except Exception:
-        pass
-
-    # SBP via Platega (+markup)
-    if getattr(config, "PLATEGA_MERCHANT_ID", None):
+    # СБП: Wata приоритет, Platega fallback
+    import wata_service as _wata_svc
+    if _wata_svc.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=f"📱 СБП ({price_rub} ₽)",
+            callback_data="steam:pay:wata",
+            style="primary",
+        )])
+    elif getattr(config, "PLATEGA_MERCHANT_ID", None):
         sbp_price = math.ceil(price_rub * (1 + config.SBP_MARKUP_PERCENT / 100))
         buttons.append([InlineKeyboardButton(
             text=f"📱 СБП ({sbp_price} ₽)",

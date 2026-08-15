@@ -299,15 +299,12 @@ async def process_stars_username(message: Message, state: FSMContext):
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(text="💳 Карта (Lava)", callback_data="stars_pay:lava", style="primary")])
-    # Wata — admin-only beta
-    try:
-        import wata_service
-        if wata_service.is_visible_to(telegram_id):
-            buttons.append([InlineKeyboardButton(text="🏦 СБП 2", callback_data="stars_pay:wata", style="primary")])
-    except Exception:
-        pass
 
-    if config.PLATEGA_MERCHANT_ID:
+    # СБП: Wata приоритет, Platega fallback
+    import wata_service as _wata_svc
+    if _wata_svc.is_enabled():
+        buttons.append([InlineKeyboardButton(text=f"📱 СБП ({price} ₽)", callback_data="stars_pay:wata", style="primary")])
+    elif config.PLATEGA_MERCHANT_ID:
         import math
         sbp_price = math.ceil(price * (1 + config.SBP_MARKUP_PERCENT / 100))
         buttons.append([InlineKeyboardButton(text=f"📱 СБП ({sbp_price} ₽)", callback_data="stars_pay:sbp", style="primary")])

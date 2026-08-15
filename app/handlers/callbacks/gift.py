@@ -260,17 +260,14 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
             callback_data="gift_pay:lava",
             style="primary",
         )])
-    # Wata — admin-only beta
-    try:
-        import wata_service
-        if wata_service.is_visible_to(callback.from_user.id):
-            buttons.append([InlineKeyboardButton(
-                text="🏦 СБП 2",
-                callback_data="gift_pay:wata",
-                style="primary",
-            )])
-    except Exception:
-        pass
+    # СБП через Wata (2026-08)
+    import wata_service as _wata_svc
+    if _wata_svc.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text="📱 СБП",
+            callback_data="gift_pay:wata",
+            style="primary",
+        )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),

@@ -550,22 +550,14 @@ async def cb_payment_methods(callback: CallbackQuery, state: FSMContext):
         callback_data=f"spotify_pay:lava:{plan}:{months}",
         style="primary",
     )])
+    # СБП: Wata приоритет, Platega fallback
+    import wata_service as _wata_svc
+    _sbp_cb = f"spotify_pay:wata:{plan}:{months}" if _wata_svc.is_enabled() else f"spotify_pay:sbp:{plan}:{months}"
     rows.append([InlineKeyboardButton(
         text="📱 СБП",
-        callback_data=f"spotify_pay:sbp:{plan}:{months}",
+        callback_data=_sbp_cb,
         style="primary",
     )])
-    # Wata — admin-only beta
-    try:
-        import wata_service
-        if wata_service.is_visible_to(callback.from_user.id):
-            rows.append([InlineKeyboardButton(
-                text="🏦 СБП 2",
-                callback_data=f"spotify_pay:wata:{plan}:{months}",
-                style="primary",
-            )])
-    except Exception:
-        pass
     rows.append([InlineKeyboardButton(
         text="🔙 К заказу",
         callback_data="spotify:pass:ok",

@@ -1806,21 +1806,14 @@ async def callback_apple_confirm(callback: CallbackQuery):
     text = i18n_get_text(language, "shop.apple_confirm",
                          region=region_label, nominal=nominal_str, price=price_rub)
 
+    # СБП: Wata приоритет, Platega fallback
+    import wata_service as _wata_svc
+    _sbp_cb = f"apple_pay_wata:{region}:{nominal}" if _wata_svc.is_enabled() else f"apple_pay_sbp:{region}:{nominal}"
     buttons = [
         [InlineKeyboardButton(text=i18n_get_text(language, "payment.card_pl_pay_button", "💳 Оплатить картой"), callback_data=f"apple_pay_card:{region}:{nominal}", style="primary")],
         [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button", "📱 Оплатить по СБП") + " 3%", callback_data=f"apple_pay_lava:{region}:{nominal}", style="primary")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp_pay_button", "🏦 Оплатить через СБП"), callback_data=f"apple_pay_sbp:{region}:{nominal}", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp_pay_button", "🏦 Оплатить через СБП"), callback_data=_sbp_cb, style="primary")],
     ]
-    # Wata — admin-only beta
-    try:
-        import wata_service
-        if wata_service.is_visible_to(telegram_id):
-            buttons.append([InlineKeyboardButton(
-                text="🏦 СБП 2", callback_data=f"apple_pay_wata:{region}:{nominal}",
-                style="primary",
-            )])
-    except Exception:
-        pass
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"), callback_data=f"apple_amount:{region}",
         icon_custom_emoji_id=CE["back"], style="primary",
