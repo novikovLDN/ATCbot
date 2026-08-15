@@ -440,6 +440,25 @@ async def process_webhook_data(
     )
     lookup = await lookup_pending_purchase("wata", order_id)
     if lookup["status"] != "ok":
+        if lookup["status"] == "not_found":
+            # Wata подтвердил Paid, а pending_purchase row отсутствует —
+            # это data loss / orphaned invoice.  Дёргаем админа, пусть
+            # руками сверит по ID транзакции.
+            try:
+                from app.services.admin_alerts import send_alert
+                echo_user = body.get("userId") or body.get("customerUserId") or "—"
+                details = (
+                    f"Wata webhook Paid, но pending_purchase не найден!\n"
+                    f"orderId: {order_id}\n"
+                    f"transactionId: {transaction_id}\n"
+                    f"amount: {amount} RUB\n"
+                    f"echo userId (from invoice.userId): {echo_user}\n"
+                    f"Действие: свериться в кабинете Wata по tx id, "
+                    f"найти юзера и вручную оформить подписку/возврат."
+                )
+                await send_alert(bot, "payment", details, force=True)
+            except Exception as e:  # noqa: BLE001
+                logger.error("wata orphan-webhook admin alert failed: %s", e)
         return lookup
     pending_purchase = lookup["purchase"]
     telegram_id = lookup["telegram_id"]

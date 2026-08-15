@@ -4245,11 +4245,11 @@ async def get_pending_purchase(purchase_id: str, telegram_id: int, check_expiry:
 async def get_pending_purchase_by_id(purchase_id: str, check_expiry: bool = False) -> Optional[Dict[str, Any]]:
     """
     Get pending purchase by purchase_id only (for webhook when payload is "purchase:{id}").
-    
+
     Args:
         purchase_id: ID покупки
         check_expiry: Проверять ли срок действия (по умолчанию False для webhook)
-    
+
     Returns:
         Словарь с данными покупки или None
     """
@@ -4273,6 +4273,26 @@ async def get_pending_purchase_by_id(purchase_id: str, check_expiry: bool = Fals
                    WHERE purchase_id = $1 AND status IN ('pending', 'expired')""",
                 purchase_id
             )
+        return dict(row) if row else None
+
+
+async def get_pending_purchase_any_status(purchase_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a purchase by purchase_id REGARDLESS of status.
+
+    Used by webhook handlers to distinguish "already processed" (row exists
+    with status='paid') from "truly missing" (no row at all — data loss or
+    orphaned Wata invoice pointing at a purchase_id we never persisted).
+    """
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM pending_purchases WHERE purchase_id = $1",
+            purchase_id,
+        )
         return dict(row) if row else None
 
 
