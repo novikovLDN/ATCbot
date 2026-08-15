@@ -540,7 +540,7 @@ async def show_traffic_info_message(message):
     if is_trial:
         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
 
-    # Build deep-link install buttons (Insy / Happ) — endpoint /open/{client}?url=
+    # Build deep-link install buttons (Incy / Happ) — endpoint /open/{client}?url=
     # обёртывает подписку в client-specific scheme (happ://crypt4/… или
     # incy://crypt1/…) и открывает приложение с авто-импортом.
     from urllib.parse import quote as _quote
@@ -556,7 +556,7 @@ async def show_traffic_info_message(message):
         _encoded = _quote(raw_sub_url, safe='')
         buttons.append([
             InlineKeyboardButton(
-                text=i18n_get_text(language, "traffic.install_insy_btn", "📥 Установить в Insy"),
+                text=i18n_get_text(language, "traffic.install_insy_btn", "📥 Установить в Incy"),
                 url=f"{base_url}/open/incy?url={_encoded}",
                 style="primary",
             ),
