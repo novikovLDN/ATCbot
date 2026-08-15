@@ -328,16 +328,22 @@ async def lookup_pending_purchase(
     """
     Look up pending purchase and validate status.
 
+    Fetches ANY status so we can distinguish an idempotent webhook retry
+    (row exists with status='paid') from a truly missing row (data loss
+    or an orphaned provider invoice pointing at a purchase_id we never
+    persisted — the latter needs manual admin attention).
+
     Returns:
         {"status": "ok", "purchase": dict, "telegram_id": int} on success
-        {"status": "not_found"|"already_processed"} on failure
+        {"status": "not_found"|"already_processed"|"invalid_status"} on failure
     """
-    pending_purchase = await database.get_pending_purchase_by_id(
-        purchase_id, check_expiry=False
-    )
+    pending_purchase = await database.get_pending_purchase_any_status(purchase_id)
 
     if not pending_purchase:
-        logger.warning(f"{provider} webhook: purchase not found: purchase_id={purchase_id}")
+        logger.error(
+            f"{provider} webhook: purchase not found in DB: purchase_id={purchase_id} — "
+            "row missing entirely, payment cannot be reconciled automatically"
+        )
         return {"status": "not_found"}
 
     telegram_id = pending_purchase["telegram_id"]
@@ -345,8 +351,8 @@ async def lookup_pending_purchase(
 
     if purchase_status == "paid":
         logger.info(
-            f"{provider} webhook: purchase already processed: "
-            f"purchase_id={purchase_id}, status={purchase_status}"
+            f"{provider} webhook: purchase already processed (idempotent retry): "
+            f"purchase_id={purchase_id}, user={telegram_id}"
         )
         return {"status": "already_processed"}
 

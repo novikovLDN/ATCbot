@@ -1871,7 +1871,13 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
         logger.info(
             f"invoice_created: provider=wata, user={telegram_id}, purchase_id={purchase_id}, price={final_price_rubles:.2f}",
         )
-        text = f"💳 <b>Оплата через СБП 2</b>\n\nСумма: {final_price_rubles:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты (карта / СБП / T-Pay)."
+        text = (
+            f"🏦 <b>Оплата через СБП</b>\n\n"
+            f"Сумма: {final_price_rubles:.2f} ₽\n\n"
+            f"Нажмите кнопку ниже — откроется форма оплаты.\n\n"
+            f"Ждём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n"
+            f"<i>Обработка занимает до 5 минут — зависит от банка.</i>"
+        )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {final_price_rubles:.0f} ₽", url=invoice["payment_url"])],
             [InlineKeyboardButton(
@@ -1883,6 +1889,16 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
         ])
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
+        # Fast-path per-invoice polling: закрывает окно между Wata Paid и
+        # приходом webhook'а (иногда 1-3 минуты). Гнать не чаще 30 сек —
+        # это лимит Wata GET /links/{id}. Идемпотентность — row-level
+        # lock в mark_pending_purchase_paid.
+        asyncio.create_task(_poll_wata_invoice(
+            callback.bot,
+            telegram_id=telegram_id,
+            purchase_id=purchase_id,
+            invoice_id=str(invoice["invoice_id"]),
+        ))
         await callback.answer()
         await state.set_state(None)
         await state.clear()
@@ -1890,6 +1906,79 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
         logger.exception(f"Error creating Wata invoice: {e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
         await state.set_state(None)
+
+
+# ── Fast-path per-invoice polling ───────────────────────────────────
+#
+# После создания Wata-инвойса запускаем фоновый polling: раз в 35 сек
+# (>30-секундного лимита Wata GET /links/{id}) до финализации либо
+# 10-минутного таймаута.  Устраняет 1-3-минутную задержку между Wata
+# "Paid" и приходом webhook'а.  Reconciler (5 мин) остаётся защитой
+# от рестарта контейнера — задачи в памяти теряются при рестарте.
+#
+# Идемпотентно: row-level lock в mark_pending_purchase_paid
+# (UPDATE ... WHERE status='pending' RETURNING) гарантирует single-writer,
+# даже если webhook, fast-poll и reconciler прилетят одновременно.
+_WATA_POLL_INITIAL_DELAY_SEC = 40.0
+_WATA_POLL_INTERVAL_SEC = 35.0
+_WATA_POLL_MAX_ATTEMPTS = 15  # 15 × 35s ≈ 8.75 мин активного poll'а
+
+
+async def _poll_wata_invoice(
+    bot: Bot,
+    *,
+    telegram_id: int,
+    purchase_id: str,
+    invoice_id: str,
+) -> None:
+    """Фоновый poll конкретного Wata-инвойса до финализации или таймаута."""
+    from app.workers.wata_reconciler import _find_paid_transaction, _extract_amount
+    from app.services.payments.confirmation import process_confirmed_payment
+    import wata_service
+
+    try:
+        await asyncio.sleep(_WATA_POLL_INITIAL_DELAY_SEC)
+    except asyncio.CancelledError:
+        return
+
+    for attempt in range(_WATA_POLL_MAX_ATTEMPTS):
+        try:
+            purchase = await database.get_pending_purchase_any_status(purchase_id)
+            if not purchase:
+                return
+            if str(purchase.get("status") or "") != "pending":
+                # Webhook / reconciler / кнопка «Проверить» опередили — выходим.
+                return
+
+            status_data = await wata_service.check_link_status(invoice_id)
+            if status_data:
+                paid_tx = _find_paid_transaction(status_data)
+                if paid_tx:
+                    amount = _extract_amount(paid_tx) or (int(purchase.get("price_kopecks") or 0) / 100.0)
+                    tx_id = paid_tx.get("id") or paid_tx.get("transactionId") or invoice_id
+                    logger.info(
+                        "wata_fast_poll_finalizing: user=%s purchase=%s tx=%s amount=%.2f attempt=%d",
+                        telegram_id, purchase_id, tx_id, amount, attempt + 1,
+                    )
+                    await process_confirmed_payment(
+                        provider="wata",
+                        purchase_id=purchase_id,
+                        amount_rubles=float(amount),
+                        invoice_id=str(tx_id),
+                        telegram_id=telegram_id,
+                        bot=bot,
+                    )
+                    return
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "wata_fast_poll error: user=%s purchase=%s attempt=%d err=%s",
+                telegram_id, purchase_id, attempt + 1, e,
+            )
+
+        try:
+            await asyncio.sleep(_WATA_POLL_INTERVAL_SEC)
+        except asyncio.CancelledError:
+            return
 
 
 # ── "Проверить платёж" — принудительная сверка Wata invoice ────────────
