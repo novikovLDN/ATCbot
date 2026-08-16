@@ -181,6 +181,15 @@ async def check_link_status(link_id: str) -> Optional[Dict[str, Any]]:
 
     Rate limit: 1 GET раз в 30с на конкретный id. Используем ТОЛЬКО
     как fallback для webhook-верификации (не polling).
+
+    Возвращает:
+      - dict  → payload от Wata
+      - None  → любая non-200 (429/404/500/сеть). Вызывающему хочется
+                отличать 404 «инвойса больше нет» от «сеть моргнула»,
+                поэтому кладём HTTP-статус в dict под ключом `_http`
+                когда статус != 200 (кроме 200 — там натуральный dict).
+                Reconciler читает `_http == 404` и помечает pending
+                строку как expired, чтобы не долбить бесконечно.
     """
     if not is_enabled() or not link_id:
         return None
@@ -190,16 +199,24 @@ async def check_link_status(link_id: str) -> Optional[Dict[str, Any]]:
                 f"{WATA_API_URL}/links/{link_id}",
                 headers=_headers(),
             )
+            if response.status_code == 200:
+                return response.json()
             if response.status_code == 429:
                 logger.warning("Wata link status: rate limited (30s)")
                 return None
-            if response.status_code != 200:
-                logger.error(
-                    "Wata link status failed: id=%s status=%d",
-                    link_id, response.status_code,
+            # 404 = инвойс удалён Wata по retention; логируем INFO
+            # (не ERROR — это ожидаемое состояние для старых pending'ов).
+            if response.status_code == 404:
+                logger.info(
+                    "Wata link status 404: id=%s — invoice purged by Wata retention",
+                    link_id,
                 )
-                return None
-            return response.json()
+                return {"_http": 404, "_link_id": link_id}
+            logger.error(
+                "Wata link status failed: id=%s status=%d",
+                link_id, response.status_code,
+            )
+            return None
     except Exception as e:
         logger.error("Wata check_link_status error: %s", e)
         return None
@@ -317,7 +334,7 @@ async def _notify_user_declined(
 
     # Помечаем pending как expired — юзер сможет попробовать заново.
     try:
-        pool = await get_pool()
+        pool = await database.get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE pending_purchases SET status = 'expired' "
@@ -355,25 +372,11 @@ async def _notify_user_declined(
     except Exception as e:
         logger.warning("Wata declined: user notify failed tg=%s: %s", telegram_id, e)
 
-    # Админу — уведомление с полным контекстом для дебага.
-    try:
-        import config as _cfg
-        admin_text = (
-            f"❌ <b>Wata: отклонённая оплата</b>\n\n"
-            f"Юзер: <code>{telegram_id}</code>\n"
-            f"Заказ: <code>{order_id}</code>\n"
-            f"Транзакция: <code>{transaction_id or '—'}</code>\n"
-            f"🎫 Тикет юзеру: <code>{ticket}</code>\n\n"
-            f"<b>Error code:</b> <code>{error_code or '—'}</code>\n"
-            f"<b>Description:</b> {error_description or '—'}"
-        )
-        await bot.send_message(
-            chat_id=int(_cfg.ADMIN_TELEGRAM_ID),
-            text=admin_text, parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.warning("Wata declined: admin notify failed: %s", e)
-
+    # Админ-уведомление по каждой отклонённой оплате раньше слалось
+    # сюда — но 95% отказов это банальные «эмитент не пропустил»
+    # (TRA_2999 и т.п.), к которым админ ничего сделать не может.
+    # Info-лог остаётся для аудита — если юзер напишет с тикетом,
+    # можно грепнуть по order_id и найти всё, что нужно.
     logger.info(
         "Wata declined notified: tg=%s order=%s tx=%s code=%s ticket=%s",
         telegram_id, order_id, transaction_id, error_code, ticket,

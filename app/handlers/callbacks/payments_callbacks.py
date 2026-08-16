@@ -1275,6 +1275,7 @@ async def _start_platega_payment(
             description=f"Atlas Secure VPN — {tariff_type} {period_days}d",
             purchase_id=purchase_id,
             method=method,
+            telegram_id=telegram_id,
         )
 
         transaction_id = tx_data["transaction_id"]
@@ -1438,6 +1439,7 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
             amount_rubles=sbp_price_rubles,
             description=f"Atlas Secure VPN — {tariff_type} {period_days}d",
             purchase_id=purchase_id,
+            telegram_id=telegram_id,
         )
 
         transaction_id = tx_data["transaction_id"]
@@ -1778,7 +1780,9 @@ async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMConte
     telegram_id = callback.from_user.id
     import platega_service
     if not platega_service.is_subscription_visible_to(telegram_id):
-        await callback.answer("СБП-подписка пока в закрытой бете", show_alert=True)
+        await callback.answer(
+            "СБП-подписка временно недоступна", show_alert=True,
+        )
         return
 
     is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
@@ -1863,8 +1867,11 @@ async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMConte
             f"Сумма: <b>{final_price_rubles:.2f} ₽</b> / 30 дней\n"
             f"Тариф: <b>{tariff_name}</b>\n\n"
             f"Нажмите кнопку ниже — откроется окно привязки счёта в вашем банке.\n"
-            f"<b>Окно активно 30 минут.</b> После подтверждения списания "
-            f"будут проходить автоматически каждый месяц.\n\n"
+            f"<b>Окно активно 30 минут.</b>\n\n"
+            f"После подтверждения привязки в банке будет проведено первое "
+            f"списание — VPN активируется автоматически. Дальше каждые "
+            f"30 дней сумма будет списываться автоматически, ничего "
+            f"нажимать не нужно.\n\n"
             f"<i>Отменить подписку можно, написав в поддержку.</i>"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
