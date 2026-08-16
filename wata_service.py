@@ -372,25 +372,11 @@ async def _notify_user_declined(
     except Exception as e:
         logger.warning("Wata declined: user notify failed tg=%s: %s", telegram_id, e)
 
-    # Админу — уведомление с полным контекстом для дебага.
-    try:
-        import config as _cfg
-        admin_text = (
-            f"❌ <b>Wata: отклонённая оплата</b>\n\n"
-            f"Юзер: <code>{telegram_id}</code>\n"
-            f"Заказ: <code>{order_id}</code>\n"
-            f"Транзакция: <code>{transaction_id or '—'}</code>\n"
-            f"🎫 Тикет юзеру: <code>{ticket}</code>\n\n"
-            f"<b>Error code:</b> <code>{error_code or '—'}</code>\n"
-            f"<b>Description:</b> {error_description or '—'}"
-        )
-        await bot.send_message(
-            chat_id=int(_cfg.ADMIN_TELEGRAM_ID),
-            text=admin_text, parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.warning("Wata declined: admin notify failed: %s", e)
-
+    # Админ-уведомление по каждой отклонённой оплате раньше слалось
+    # сюда — но 95% отказов это банальные «эмитент не пропустил»
+    # (TRA_2999 и т.п.), к которым админ ничего сделать не может.
+    # Info-лог остаётся для аудита — если юзер напишет с тикетом,
+    # можно грепнуть по order_id и найти всё, что нужно.
     logger.info(
         "Wata declined notified: tg=%s order=%s tx=%s code=%s ticket=%s",
         telegram_id, order_id, transaction_id, error_code, ticket,
