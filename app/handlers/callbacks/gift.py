@@ -260,14 +260,8 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
             callback_data="gift_pay:lava",
             style="primary",
         )])
-    # СБП через Wata (2026-08)
-    import wata_service as _wata_svc
-    if _wata_svc.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text="📱 СБП",
-            callback_data="gift_pay:wata",
-            style="primary",
-        )])
+    # Wata-СБП убран (revert). В gift-flow отдельного Platega-СБП handler'а
+    # никогда не было — юзеры платят через Lava (payment.lava выше).
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),

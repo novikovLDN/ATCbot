@@ -200,12 +200,10 @@ async def callback_topup_amount(callback: CallbackQuery):
             style="success",
         )],
     ]
-    # СБП: Wata приоритет, Platega fallback
-    import wata_service as _wata_svc
-    _sbp_topup_cb = f"topup_wata:{amount}" if _wata_svc.is_enabled() else f"topup_sbp:{amount}"
+    # СБП — обратно через Platega (revert Wata-миграции).
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.sbp"),
-        callback_data=_sbp_topup_cb,
+        callback_data=f"topup_sbp:{amount}",
         style="primary",
     )])
     buttons.append([InlineKeyboardButton(
