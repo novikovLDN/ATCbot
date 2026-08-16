@@ -1011,30 +1011,17 @@ async def show_payment_method_selection(
     crypto_on = cryptobot_service.is_enabled()
 
     btn_card_pl = InlineKeyboardButton(text=i18n_get_text(language, "payment.card_pl"), callback_data="pay:card_pl")
-    # СБП теперь идёт через Wata (2026-08). callback_data=pay:wata
-    # чтобы не менять существующий wata handler.
-    btn_sbp = InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp"), callback_data="pay:wata")
+    # СБП — обратно через Platega (revert Wata-миграции по просьбе).
+    btn_sbp = InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp"), callback_data="pay:sbp")
     btn_card = InlineKeyboardButton(text=i18n_get_text(language, "payment.card"), callback_data="pay:card")
     btn_lava = InlineKeyboardButton(text=i18n_get_text(language, "payment.lava"), callback_data="pay:lava")
     btn_intl = InlineKeyboardButton(text=i18n_get_text(language, "payment.intl_pl"), callback_data="pay:intl_pl")
     btn_stars = InlineKeyboardButton(text=i18n_get_text(language, "payment.stars"), callback_data="pay:stars")
     btn_crypto = InlineKeyboardButton(text=i18n_get_text(language, "payment.crypto"), callback_data="pay:crypto")
 
-    # Wata теперь обслуживает кнопку СБП. Кнопка Карты остаётся Platega.
-    # Layout: [Карта (Platega)] [СБП (Wata / Platega fallback)] — в одном ряду.
-    try:
-        import wata_service
-        wata_on = wata_service.is_enabled()
-    except Exception:
-        wata_on = False
-
     if platega_on:
-        # [Карта Platega] [СБП (Wata если on, иначе Platega)] — btn_sbp
-        # уже указывает на pay:wata (см. выше).
+        # [Карта Platega] [СБП Platega]
         buttons.append([btn_card_pl, btn_sbp])
-    elif wata_on:
-        # Platega выключена, но Wata есть — только СБП
-        buttons.append([btn_sbp])
 
     row2 = [btn_card]
     if lava_on:

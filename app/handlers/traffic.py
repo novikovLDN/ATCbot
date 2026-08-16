@@ -214,13 +214,10 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
         callback_data=f"bypass_pay_card:{gb}",
         style="primary",
     )])
-    # СБП теперь идёт через Wata (2026-08).
-    # Если Wata настроен → callback → bypass_pay_wata, иначе fallback Platega.
-    import wata_service as _wata_svc
-    _sbp_cb = f"bypass_pay_wata:{gb}" if _wata_svc.is_enabled() else f"bypass_pay_sbp:{gb}"
+    # СБП — обратно через Platega (revert Wata-миграции).
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.sbp"),
-        callback_data=_sbp_cb,
+        callback_data=f"bypass_pay_sbp:{gb}",
         style="primary",
     )])
     buttons.append([InlineKeyboardButton(
@@ -809,17 +806,9 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
             style="success",
         )])
 
-    # СБП: Wata приоритет, Platega fallback
-    import wata_service as _wata_svc
+    # СБП — обратно через Platega (revert Wata-миграции).
     import platega_service
-    if _wata_svc.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_sbp", price=price),
-            callback_data=f"traffic_pay_wata:{gb}",
-            icon_custom_emoji_id=CE["buy"],
-            style="success",
-        )])
-    elif platega_service.is_enabled():
+    if platega_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.pay_sbp", price=f"{sbp_price:.0f}"),
             callback_data=f"traffic_pay_sbp:{gb}",

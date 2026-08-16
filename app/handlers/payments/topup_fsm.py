@@ -116,12 +116,12 @@ async def process_topup_amount(message: Message, state: FSMContext):
             callback_data=f"topup_lava:{amount}",
             style="primary",
         )])
-    # СБП через Wata (2026-08)
-    import wata_service as _wata_svc
-    if _wata_svc.is_enabled():
+    # СБП — обратно через Platega (revert Wata-миграции).
+    import platega_service
+    if platega_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.sbp"),
-            callback_data=f"topup_wata:{amount}",
+            callback_data=f"topup_sbp:{amount}",
             style="primary",
         )])
     buttons.append([InlineKeyboardButton(
