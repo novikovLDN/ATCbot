@@ -145,8 +145,33 @@ async def _check_and_finalize(bot, row: Dict[str, Any]) -> str:
 
     status_data = await wata_service.check_link_status(invoice_id)
     if not status_data:
-        # 404 (не Wata invoice) / rate-limit / сеть — просто пропускаем
+        # rate-limit / сеть — попробуем в следующей итерации.
         return "not_wata"
+
+    # 404 → инвойс удалён Wata по retention. Помечаем pending как
+    # expired, чтобы reconciler больше не долбил Wata по нему каждые
+    # 2 минуты и не спамил логи. Оплата уже никогда не придёт.
+    if isinstance(status_data, dict) and status_data.get("_http") == 404:
+        try:
+            import database
+            pool = await database.get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE pending_purchases SET status = 'expired' "
+                    "WHERE purchase_id = $1 AND status = 'pending'",
+                    purchase_id,
+                )
+            logger.info(
+                "WATA_RECONCILER_EXPIRED_STALE: purchase=%s invoice=%s "
+                "(Wata retention purge — link больше не существует)",
+                purchase_id, invoice_id,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "WATA_RECONCILER_EXPIRE_FAIL: purchase=%s err=%s",
+                purchase_id, e,
+            )
+        return "expired_stale"
 
     # Wata возвращает объект payment link. Смотрим есть ли Paid транзакция.
     # Возможные поля: transactions[] или transaction (в зависимости от API-версии)
