@@ -334,7 +334,7 @@ async def _notify_user_declined(
 
     # Помечаем pending как expired — юзер сможет попробовать заново.
     try:
-        pool = await get_pool()
+        pool = await database.get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE pending_purchases SET status = 'expired' "
