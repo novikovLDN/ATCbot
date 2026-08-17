@@ -637,6 +637,16 @@ export const endpoints = {
       "/settings/notifications/test",
     ),
 
+  settingsSbpRouterGet: () =>
+    api.get<{ mode: "platega" | "wata" | "split"; wata_percent: number }>(
+      "/settings/sbp-router",
+    ),
+  settingsSbpRouterPatch: (mode: "platega" | "wata" | "split", wata_percent: number) =>
+    api.post<{ mode: "platega" | "wata" | "split"; wata_percent: number }>(
+      "/settings/sbp-router",
+      { mode, wata_percent },
+    ),
+
   // ── Reconciliation («Сверка») ─────────────────────────────────────
   reconciliationCandidates: () =>
     api.get<{

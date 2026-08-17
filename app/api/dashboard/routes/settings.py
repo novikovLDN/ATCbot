@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 import config
 from app.api.dashboard.deps import require_admin
-from app.services import admin_settings
+from app.services import admin_settings, sbp_router
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,31 @@ async def _send_test_sequence(bot):
             )
         except Exception as e:
             logger.warning("test notification send failed: %s", e)
+
+
+# ── SBP router (Platega ↔ Wata live-switch) ──────────────────────────
+
+
+@router.get("/sbp-router")
+async def settings_get_sbp_router():
+    """Текущий режим SBP: platega | wata | split (+процент для split)."""
+    return await sbp_router.get_config()
+
+
+class SbpRouterPatch(BaseModel):
+    mode: str = Field(..., pattern="^(platega|wata|split)$")
+    wata_percent: int = Field(50, ge=0, le=100)
+
+
+@router.post("/sbp-router")
+async def settings_patch_sbp_router(body: SbpRouterPatch):
+    try:
+        return await sbp_router.set_config(
+            mode=body.mode,
+            wata_percent=body.wata_percent,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.post("/notifications/test")
