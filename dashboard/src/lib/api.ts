@@ -457,6 +457,16 @@ export const endpoints = {
   }) => api.post<Record<string, unknown>>("/bgift", body),
   bgiftDelete: (id: number) => api.del<{ ok: boolean }>(`/bgift/${id}`),
 
+  // ── Beta-testing applications ──────────────────────────────────────
+  betaAppsSummary: (program = "vpn_innovator") =>
+    api.get<{ program: string; total: number }>(
+      `/beta-applications/summary?program=${encodeURIComponent(program)}`,
+    ),
+  betaAppsList: (page = 0, page_size = 50, program = "vpn_innovator") =>
+    api.get<Array<Record<string, unknown>>>(
+      `/beta-applications/list?program=${encodeURIComponent(program)}&page=${page}&page_size=${page_size}`,
+    ),
+
   userDelete: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}`),
 
   // ── Marketing links: stats + promo ─────────────────────────────────

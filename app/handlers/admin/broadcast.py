@@ -248,6 +248,16 @@ def _build_broadcast_reply_markup(
                 text="🎁 Поделиться скидкой",
                 callback_data="share_discount_open",
             )])
+        elif btn == "beta_apply":
+            # Заявка на бета-тест (VPN-Инноватор). Клик → пишем в
+            # beta_applications (UNIQUE tg_id+program), удаляем это
+            # сообщение рассылки, шлём подтверждение. Handler в
+            # app/handlers/callbacks/beta_apply.py, dashboard-таблица
+            # /dashboard/beta-applications.
+            rows.append([InlineKeyboardButton(
+                text="🧪 Оставить заявку (бета-тест)",
+                callback_data=f"beta_apply:{broadcast_id}",
+            )])
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
