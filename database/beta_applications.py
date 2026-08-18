@@ -38,6 +38,23 @@ async def record_application(
         return {"status": "error"}
     try:
         async with pool.acquire() as conn:
+            # Атомарный upsert: INSERT ... ON CONFLICT DO NOTHING RETURNING.
+            # Если строка вставилась — вернётся row (status=created).
+            # Если конфликт по UNIQUE(telegram_id, program) — RETURNING даст
+            # NULL, тогда добираем существующую строку отдельным SELECT
+            # (status=already_applied). Убирает race при одновременных
+            # кликах, где SELECT-then-INSERT ловил UniqueViolationError.
+            row = await conn.fetchrow(
+                """INSERT INTO beta_applications
+                       (telegram_id, program, username, first_name, source_broadcast_id)
+                   VALUES ($1, $2, $3, $4, $5)
+                   ON CONFLICT (telegram_id, program) DO NOTHING
+                   RETURNING id, telegram_id, program, username, first_name,
+                             applied_at, source_broadcast_id""",
+                telegram_id, program, username, first_name, source_broadcast_id,
+            )
+            if row is not None:
+                return {"status": "created", "row": dict(row)}
             existing = await conn.fetchrow(
                 "SELECT id, telegram_id, program, username, first_name, applied_at, "
                 "source_broadcast_id FROM beta_applications "
@@ -46,15 +63,9 @@ async def record_application(
             )
             if existing:
                 return {"status": "already_applied", "row": dict(existing)}
-            row = await conn.fetchrow(
-                """INSERT INTO beta_applications
-                       (telegram_id, program, username, first_name, source_broadcast_id)
-                   VALUES ($1, $2, $3, $4, $5)
-                   RETURNING id, telegram_id, program, username, first_name,
-                             applied_at, source_broadcast_id""",
-                telegram_id, program, username, first_name, source_broadcast_id,
-            )
-            return {"status": "created", "row": dict(row)}
+            # Крайне маловероятная ситуация: ON CONFLICT DO NOTHING без
+            # RETURNING, но и SELECT не нашёл строки — трактуем как ошибку.
+            return {"status": "error"}
     except Exception as e:  # noqa: BLE001
         logger.exception(
             "beta_applications.record_application failed tg=%s program=%s: %s",

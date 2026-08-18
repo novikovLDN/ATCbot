@@ -489,6 +489,7 @@ _BUTTON_TYPES = {
     "share_discount",
     "my_proxy",
     "gift_combo",
+    "beta_apply",
 }
 
 
@@ -911,6 +912,14 @@ def _build_reply_markup(
             rows.append([InlineKeyboardButton(
                 text="🧩 Мой прокси",
                 callback_data="proxy_open",
+            )])
+        elif btn == "beta_apply":
+            # Бета-заявка «🧪 VPN-Инноватор»: запись в beta_applications с
+            # source_broadcast_id, повторный клик → toast «Заявка уже
+            # принята». Handler: app/handlers/callbacks/beta_apply.py.
+            rows.append([InlineKeyboardButton(
+                text="🧪 Оставить заявку",
+                callback_data=f"beta_apply:{broadcast_id}",
             )])
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
