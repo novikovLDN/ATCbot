@@ -59,6 +59,10 @@ const BUTTON_OPTIONS = [
   // получает 30%/24ч (lifetime-once). Без extra discount-параметров —
   // и %, и продолжительность зашиты в коде (см. start.py refd_-handler).
   { key: "share_discount", label: "🎁 Поделиться скидкой (друг = −30% / 24ч)" },
+  // Beta-testing: клик записывает юзера в beta_applications
+  // (UNIQUE tg_id+program), удаляет сообщение и шлёт подтверждение.
+  // Список заявок — /dashboard/beta-applications.
+  { key: "beta_apply", label: "🧪 Оставить заявку (VPN-Инноватор, бета-тест)" },
 ];
 
 export function BroadcastCreate() {

@@ -457,6 +457,16 @@ export const endpoints = {
   }) => api.post<Record<string, unknown>>("/bgift", body),
   bgiftDelete: (id: number) => api.del<{ ok: boolean }>(`/bgift/${id}`),
 
+  // ── Beta-testing applications ──────────────────────────────────────
+  betaAppsSummary: (program = "vpn_innovator") =>
+    api.get<{ program: string; total: number }>(
+      `/beta-applications/summary?program=${encodeURIComponent(program)}`,
+    ),
+  betaAppsList: (page = 0, page_size = 50, program = "vpn_innovator") =>
+    api.get<Array<Record<string, unknown>>>(
+      `/beta-applications/list?program=${encodeURIComponent(program)}&page=${page}&page_size=${page_size}`,
+    ),
+
   userDelete: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}`),
 
   // ── Marketing links: stats + promo ─────────────────────────────────
@@ -625,6 +635,16 @@ export const endpoints = {
   settingsTestNotifications: () =>
     api.post<{ ok: boolean; count: number; delay_seconds: number }>(
       "/settings/notifications/test",
+    ),
+
+  settingsSbpRouterGet: () =>
+    api.get<{ mode: "platega" | "wata" | "split"; wata_percent: number }>(
+      "/settings/sbp-router",
+    ),
+  settingsSbpRouterPatch: (mode: "platega" | "wata" | "split", wata_percent: number) =>
+    api.post<{ mode: "platega" | "wata" | "split"; wata_percent: number }>(
+      "/settings/sbp-router",
+      { mode, wata_percent },
     ),
 
   // ── Reconciliation («Сверка») ─────────────────────────────────────

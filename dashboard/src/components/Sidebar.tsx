@@ -18,6 +18,7 @@ import {
   BarChart3,
   Tag as TagIcon,
   Settings as SettingsIcon,
+  FlaskConical,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { auth } from "@/lib/auth";
@@ -56,6 +57,7 @@ const sections: Section[] = [
       { to: "/links", label: "Ссылки", icon: LinkIcon },
       { to: "/referrals", label: "Рефералы", icon: Share2 },
       { to: "/bgift", label: "Гифт-ГБ", icon: Gift },
+      { to: "/beta-applications", label: "🧪 VPN-Инноватор", icon: FlaskConical },
     ],
   },
   {
