@@ -90,6 +90,7 @@ export function BetaApplications() {
           </div>
         ) : rows.length === 0 ? (
           <EmptyState
+            icon={FlaskConical}
             title="Заявок пока нет"
             description="Отправьте рассылку с кнопкой «🧪 Оставить заявку (VPN-Инноватор, бета-тест)» — они появятся здесь."
           />
