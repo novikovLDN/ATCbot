@@ -1235,6 +1235,8 @@ LANG = {
     'main.btn_help': "Help",
     'main.btn_devices': "My devices",
     'main.btn_topup_balance': "Top up balance",
+    'main.btn_auto_renew_on': "🔁 Auto-renew from balance ✅",
+    'main.btn_auto_renew_off': "🔁 Auto-renew from balance",
     'main.btn_change_language_full': "Change language / Сменить язык",
     'main.btn_legal': "Legal",
 
