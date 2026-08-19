@@ -174,6 +174,9 @@ async def create_user(
         "trafficLimitStrategy": traffic_limit_strategy,
         "status": "ACTIVE",
         "expireAt": expire_at,
+        # 3.x переименовал deviceLimit → hwidDeviceLimit. Шлём оба поля
+        # для совместимости (панель принимает лишние поля молча).
+        "hwidDeviceLimit": device_limit,
         "deviceLimit": device_limit,
     }
     if uuid:
@@ -616,7 +619,8 @@ async def get_user_traffic(user_id: Union[str, int]) -> Optional[Dict[str, Any]]
     return {
         "usedTrafficBytes": user_traffic.get("usedTrafficBytes", user.get("usedTrafficBytes", 0)),
         "trafficLimitBytes": user.get("trafficLimitBytes", 0),
-        "deviceLimit": user.get("deviceLimit", 0),
+        # 3.x: hwidDeviceLimit — новое имя, оставляем fallback на старое.
+        "deviceLimit": user.get("hwidDeviceLimit", user.get("deviceLimit", 0)),
         "onlineDevices": user.get("onlineDevices", 0),
         "status": user.get("status", "UNKNOWN"),
         "subscriptionUrl": sub_url,

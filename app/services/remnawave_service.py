@@ -255,6 +255,8 @@ async def renew_remnawave_user(
             api_uuid,
             trafficLimitBytes=new_limit,
             expireAt=expire_str,
+            # 3.x: hwidDeviceLimit — новое имя. Шлём оба для совместимости.
+            hwidDeviceLimit=_device_limit_for_tariff(tariff),
             deviceLimit=_device_limit_for_tariff(tariff),
         )
         # Re-enable if disabled
@@ -493,6 +495,7 @@ async def update_tariff(telegram_id: int, new_tariff: str, period_days: int = 30
         await remnawave_api.update_user(
             api_uuid,
             trafficLimitBytes=new_limit,
+            hwidDeviceLimit=new_devices,
             deviceLimit=new_devices,
         )
         logger.info("REMNAWAVE_TARIFF_UPDATED: tg=%s tariff=%s", telegram_id, new_tariff)
