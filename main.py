@@ -35,13 +35,10 @@ import trial_notifications
 import activation_worker
 from app.workers import farm_notifications
 from app.workers import traffic_monitor
-try:
-    import xray_sync
-    XRAY_SYNC_AVAILABLE = True
-except Exception as e:
-    XRAY_SYNC_AVAILABLE = False
-    xray_sync = None
-    print(f"[XRAY_SYNC] disabled: {e}")
+# xray_sync worker удалён вместе с samopis-мастером (cutover 2026-08).
+# Единственный источник provisioning — Remnawave 3.x через remnawave_api.
+XRAY_SYNC_AVAILABLE = False
+xray_sync = None
 
 # ====================================================================================
 # STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
@@ -356,7 +353,6 @@ async def main():
         "fast_cleanup": None,
         "auto_renewal": None,
         "activation_worker": None,
-        "xray_sync": None,
     }
     
     async def retry_db_init():
@@ -373,7 +369,7 @@ async def main():
         - Никогда не падает (все исключения обрабатываются)
         - Не блокирует главный event loop
         """
-        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, xray_sync_task, recovered_tasks, background_tasks
+        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, recovered_tasks, background_tasks
         retry_interval = 30  # секунд
         
         # Если БД уже готова, задача не запускается
@@ -436,16 +432,6 @@ async def main():
                             recovered_tasks["activation_worker"] = t
                             background_tasks.append(t)
                             logger.info("Activation worker task started (recovered)")
-                        
-                        if XRAY_SYNC_AVAILABLE and config.XRAY_SYNC_ENABLED and xray_sync_task is None and recovered_tasks["xray_sync"] is None:
-                            try:
-                                t = await start_xray_sync_safe(bot)
-                                if t:
-                                    recovered_tasks["xray_sync"] = t
-                                    background_tasks.append(t)
-                                    logger.info("Xray sync worker started (recovered)")
-                            except Exception as e:
-                                logger.warning("Xray sync recovery failed: %s", e)
                         
                         # Успешно инициализировали БД - выходим из цикла
                         logger.info("DB retry task completed successfully, stopping retry loop")
@@ -547,30 +533,9 @@ async def main():
         except Exception as e:
             logger.warning("Wata reconciler failed to start: %s", e)
 
-    # Xray sync: safe optional background worker (fail-safe, never crashes bot)
-    async def start_xray_sync_safe(bot_obj):
-        if not XRAY_SYNC_AVAILABLE:
-            print("[XRAY_SYNC] module not available, skipping startup")
-            return None
-        if not config.XRAY_SYNC_ENABLED:
-            logger.info("[XRAY_SYNC] disabled by config (XRAY_SYNC_ENABLED=false), skipping")
-            return None
-        if not database.DB_READY or not config.VPN_ENABLED:
-            logger.info("[XRAY_SYNC] DB or VPN not ready, skipping (will start on recovery if enabled)")
-            return None
-        try:
-            task = asyncio.create_task(xray_sync.start(bot_obj))
-            print("[XRAY_SYNC] started successfully")
-            return task
-        except Exception as e:
-            logger.error("[XRAY_SYNC] failed to start: %s", e)
-            return None
+    # xray_sync worker удалён вместе с samopis-мастером — весь sync
+    # теперь встроен в purchase_flow.provision_subscription (Remnawave 3.x).
 
-    xray_sync_task = None
-    xray_sync_task = await start_xray_sync_safe(bot)
-    if xray_sync_task:
-        background_tasks.append(xray_sync_task)
-    
     # Bot initialization complete
     if database.DB_READY:
         logger.info("✅ Бот запущен в полнофункциональном режиме")

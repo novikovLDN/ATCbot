@@ -25,6 +25,23 @@ class TransientPaymentError(Exception):
     pass
 
 
+async def _get_current_bypass_bytes(telegram_id: int) -> Optional[int]:
+    """Snapshot текущего trafficLimitBytes bypass entity перед top-up.
+    Нужен verify_bypass_delivery — точно сравнить diff после add_traffic.
+    """
+    try:
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if not rmn_uuid:
+            return None
+        from app.services import remnawave_api
+        traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+        if not traffic:
+            return None
+        return int(traffic.get("trafficLimitBytes") or 0)
+    except Exception:
+        return None
+
+
 async def process_confirmed_payment(
     provider: str,
     purchase_id: str,
@@ -515,6 +532,8 @@ async def _send_confirmation(
                 )
             combo_gb = combo_info["gb"]
             traffic_bytes = combo_gb * 1024**3
+            # Baseline для точной верификации diff после add_bypass_traffic.
+            baseline_bytes = await _get_current_bypass_bytes(telegram_id)
             from app.services.remnawave_service import add_bypass_traffic
             rmn_ok = await add_bypass_traffic(
                 telegram_id,
@@ -532,6 +551,26 @@ async def _send_confirmation(
             await database.record_traffic_purchase(telegram_id, combo_gb, 0)
             logger.info("COMBO_BYPASS_TRAFFIC_ADDED: provider=%s user=%s gb=%s",
                         provider, telegram_id, combo_gb)
+            # Verify — реально ли применилось в панели. Fire-and-forget.
+            try:
+                from app.services.payments.verify_delivery import (
+                    verify_bypass_delivery, verify_premium_delivery,
+                )
+                asyncio.create_task(verify_bypass_delivery(
+                    telegram_id=telegram_id, provider=provider, kind="combo",
+                    expected_added_bytes=traffic_bytes,
+                    baseline_bytes=baseline_bytes,
+                    purchase_id=str(purchase_id), tariff=combo_key,
+                    period_days=_pd,
+                ))
+                asyncio.create_task(verify_premium_delivery(
+                    telegram_id=telegram_id, provider=provider,
+                    expected_expire_at=expires_at,
+                    purchase_id=str(purchase_id), tariff=combo_key,
+                    period_days=_pd,
+                ))
+            except Exception:
+                pass
 
 
 async def _handle_traffic_pack_confirmation(
@@ -569,6 +608,8 @@ async def _handle_traffic_pack_confirmation(
             from app.services.remnawave_service import add_bypass_traffic
             from datetime import datetime, timezone, timedelta
             far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+            # Baseline для точной верификации.
+            baseline_bytes = await _get_current_bypass_bytes(telegram_id)
             rmn_success = await add_bypass_traffic(
                 telegram_id,
                 traffic_bytes,
@@ -580,11 +621,38 @@ async def _handle_traffic_pack_confirmation(
                     "BYPASS_REMNAWAVE_TRAFFIC_ADDED provider=%s user=%s gb=%s",
                     provider, telegram_id, traffic_gb,
                 )
+            # Verify реального применения в панели (fire-and-forget).
+            try:
+                from app.services.payments.verify_delivery import verify_bypass_delivery
+                asyncio.create_task(verify_bypass_delivery(
+                    telegram_id=telegram_id, provider=provider,
+                    kind="traffic_pack",
+                    expected_added_bytes=traffic_bytes,
+                    baseline_bytes=baseline_bytes,
+                    purchase_id=str(purchase_id),
+                    tariff=f"pack_{traffic_gb}gb",
+                ))
+            except Exception:
+                pass
         except Exception as rmn_err:
             logger.error(
                 "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
                 provider, telegram_id, traffic_gb, rmn_err,
             )
+            # Отдельный DM админу — Remnawave call бросил исключение.
+            try:
+                from app.services.payments.verify_delivery import _send_admin_alert
+                asyncio.create_task(_send_admin_alert(
+                    "Traffic pack: Remnawave EXCEPTION",
+                    (
+                        f"User: <code>tg:{telegram_id}</code>\n"
+                        f"Provider: <b>{provider}</b> · Pack: <b>{traffic_gb} GB</b>\n"
+                        f"Purchase: <code>{purchase_id}</code>\n"
+                        f"Error: <code>{type(rmn_err).__name__}: {str(rmn_err)[:150]}</code>"
+                    ),
+                ))
+            except Exception:
+                pass
     else:
         logger.error(
             "TRAFFIC_PACK_INVALID_GB: provider=%s tg=%s gb=%s purchase=%s — pack not found in config",
