@@ -1,32 +1,22 @@
-"""PRE-миграция под Remnawave Panel 2.7.4 → 3.x.
+"""Backfill numeric id и telegramId в панель Remnawave 3.x после апгрейда.
 
-⚠️ ЗАПУСКАТЬ ПОКА ПАНЕЛЬ ЕЩЁ 2.7.4 ⚠️
-После апгрейда до 3.x endpoint'ы `/api/users/{uuid}` перестают работать
-(поле uuid удалено), поэтому кешировать numeric id из UUID можно только
-сейчас.
+Панель уже на 3.x. Скрипт:
+  1. По каждой активной строке `subscriptions` с непустым UUID:
+      a. find_user_by_telegram_id(tg) → берём entity {id, telegramId, ...}
+      b. UPDATE subscriptions SET remnawave_id / remnawave_premium_id.
+         (Требуется миграция 078_remnawave_numeric_id.sql.)
+  2. Для entity без telegramId в панели (или отличающимся) →
+     PATCH /api/users body {id, telegramId=<наш>}.
 
-Что делает:
-  1. По каждой активной строке `subscriptions` с `remnawave_uuid` /
-     `remnawave_premium_uuid`:
-        a. GET /api/users/{uuid} на 2.7.4 → берём числовой поле `id`.
-        b. UPDATE subscriptions SET remnawave_id / remnawave_premium_id.
-     (Миграция 078 должна быть применена — иначе колонок нет.)
-  2. Для тех же entities проверяет `telegramId` в панели:
-        - если пусто ИЛИ отличается от нашего telegram_id →
-          PATCH /api/users body {uuid, telegramId=<наш>}.
-     Это нужно для чистого `_is_our_entity` recovery после апгрейда:
-     в 3.x единственный способ найти нашего юзера по TG —
-     `GET /api/users/stream?telegramId=X`.
-
-Идемпотентно: повторные запуски пропускают уже забэкфильнутые записи.
-
-Rate limit: 5 req/sec (панель не любит спам).
-
-Использует ПРЯМЫЕ httpx-запросы к 2.7.4 endpoints — НЕ через
-app.services.remnawave_api (тот уже переведён на 3.x).
+Идемпотентно: повторные запуски пропускают уже забэкфильнутые.
+Rate limit: 5 req/sec.
 
 Запуск:
   python -m scripts.prep_remnawave_v3_migration [--dry-run] [--limit N]
+
+Flags:
+  --dry-run — только вывод, ничего не пишем.
+  --limit N — обработать не более N записей (тест).
 """
 from __future__ import annotations
 
@@ -34,12 +24,10 @@ import argparse
 import asyncio
 import logging
 import sys
-from typing import Any, Optional
+from typing import Optional
 
-import httpx
-
-import config
 import database
+from app.services import remnawave_api
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,62 +35,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("prep_remnawave_v3")
 
-_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
-_HEADERS = {
-    "Authorization": f"Bearer {config.REMNAWAVE_API_TOKEN}",
-    "Content-Type": "application/json",
-}
-
-
-async def _get_user_v27(client: httpx.AsyncClient, uuid: str) -> Optional[dict]:
-    """GET /api/users/{uuid} на панели 2.7.4."""
-    url = f"{config.REMNAWAVE_API_URL}/api/users/{uuid}"
-    try:
-        resp = await client.get(url, headers=_HEADERS)
-    except Exception as e:
-        logger.warning("GET %s failed: %s", uuid[:8], e)
-        return None
-    if resp.status_code == 404:
-        return None
-    if resp.status_code >= 400:
-        logger.warning("GET %s status=%s body=%s", uuid[:8], resp.status_code, resp.text[:200])
-        return None
-    try:
-        data = resp.json()
-    except Exception:
-        return None
-    if isinstance(data, dict) and "response" in data:
-        return data["response"]
-    return data if isinstance(data, dict) else None
-
-
-async def _patch_telegram_id_v27(
-    client: httpx.AsyncClient, uuid: str, telegram_id: int,
-) -> bool:
-    """PATCH через 2.7.4 auto-discover для установки telegramId.
-
-    2.7.4 не имел стабильного пути — пробуем /api/users body-based
-    (тот же паттерн что и в старом app/services/remnawave_api.py:_update_method).
-    """
-    body = {"uuid": uuid, "telegramId": int(telegram_id)}
-    variants = [
-        ("PATCH", "/api/users"),
-        ("POST", "/api/users/update"),
-        ("PUT", "/api/users"),
-    ]
-    for method, path in variants:
-        url = f"{config.REMNAWAVE_API_URL}{path}"
-        try:
-            resp = await client.request(method, url, headers=_HEADERS, json=body)
-        except Exception as e:
-            logger.debug("%s %s failed: %s", method, path, e)
-            continue
-        if 200 <= resp.status_code < 300:
-            return True
-    return False
-
 
 async def _iter_our_entities():
+    """Пары (telegram_id, kind, uuid, cached_id) из subscriptions.
+
+    kind ∈ {"bypass", "premium"}. Один tg может дать 2 entities.
+    Отфильтровано на активные подписки.
+    """
     pool = await database.get_pool()
     if pool is None:
         raise RuntimeError("database pool not ready")
@@ -125,7 +64,6 @@ async def _iter_our_entities():
 
 
 async def _has_migration_078() -> bool:
-    """Проверить что миграция 078 применена (колонка remnawave_id есть)."""
     pool = await database.get_pool()
     if pool is None:
         return False
@@ -151,7 +89,6 @@ async def _cache_id(telegram_id: int, kind: str, num_id: int) -> None:
 
 
 async def _process(
-    client: httpx.AsyncClient,
     telegram_id: int,
     kind: str,
     uuid: str,
@@ -160,27 +97,33 @@ async def _process(
     dry_run: bool,
 ) -> tuple[str, str]:
     """Вернуть (outcome, note). outcome ∈
-    {id-cached, id-already-cached, tg-patched, tg-already-set, missing, error}"""
-    entity = await _get_user_v27(client, uuid)
+    {processed, missing, error}."""
+    entity = await remnawave_api.find_user_by_telegram_id(telegram_id)
     if entity is None:
-        return ("missing", "not found in panel")
+        # 3.x панель не знает нашего юзера по telegram_id. Возможно
+        # entity действительно нет, ИЛИ панель не знает telegramId
+        # (в старой 2.7.4 не проставлялся). Попробуем через username
+        # (наш default = str(telegram_id)).
+        entity = await remnawave_api.find_user_by_username(str(telegram_id))
+        if entity is None:
+            return ("missing", f"not found in panel by tg={telegram_id} or username")
 
     # (1) id caching
     num_id = entity.get("id")
-    id_outcome = None
+    id_note = None
     if num_id is not None:
         try:
             n = int(num_id)
             if cached_id != n:
                 if dry_run:
-                    id_outcome = f"would cache id={n} (was {cached_id})"
+                    id_note = f"would cache id={n} (was {cached_id})"
                 else:
                     await _cache_id(telegram_id, kind, n)
-                    id_outcome = f"cached id={n}"
+                    id_note = f"cached id={n}"
             else:
-                id_outcome = "id already cached"
+                id_note = "id already cached"
         except (TypeError, ValueError):
-            id_outcome = f"bad id {num_id!r}"
+            id_note = f"bad id {num_id!r}"
 
     # (2) telegramId sync
     panel_tg = entity.get("telegramId")
@@ -190,21 +133,22 @@ async def _process(
             same = int(panel_tg) == int(telegram_id)
         except (TypeError, ValueError):
             pass
-    tg_outcome = None
     if same:
-        tg_outcome = "tg already set"
+        tg_note = "tg already set"
     else:
         if dry_run:
-            tg_outcome = f"would PATCH telegramId={telegram_id} (panel={panel_tg})"
+            tg_note = f"would PATCH telegramId={telegram_id} (panel={panel_tg})"
         else:
-            ok = await _patch_telegram_id_v27(client, uuid, telegram_id)
-            tg_outcome = (
-                f"PATCH telegramId={telegram_id} ok" if ok
+            # 3.x PATCH /api/users с body {id, telegramId}
+            result = await remnawave_api.update_user(
+                int(num_id), telegramId=int(telegram_id),
+            )
+            tg_note = (
+                f"PATCH telegramId={telegram_id} ok" if result is not None
                 else f"PATCH telegramId={telegram_id} failed"
             )
 
-    outcome = "processed"
-    return (outcome, f"{id_outcome} | {tg_outcome}")
+    return ("processed", f"{id_note} | {tg_note}")
 
 
 async def _main(dry_run: bool, limit: Optional[int]) -> int:
@@ -217,7 +161,9 @@ async def _main(dry_run: bool, limit: Optional[int]) -> int:
 
     if not await _has_migration_078():
         logger.error(
-            "миграция 078 не применена — apply migrations/078_remnawave_numeric_id.sql сначала",
+            "миграция 078_remnawave_numeric_id.sql не применена — "
+            "перезапустите бот, чтобы автомиграция подхватила её, или "
+            "примените вручную.",
         )
         return 3
 
@@ -225,25 +171,22 @@ async def _main(dry_run: bool, limit: Optional[int]) -> int:
     per_kind = {"bypass": 0, "premium": 0}
     processed_n = 0
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        async for tg, kind, uuid, cached_id in _iter_our_entities():
-            if limit is not None and processed_n >= limit:
-                break
-            processed_n += 1
-            per_kind[kind] += 1
-            try:
-                outcome, note = await _process(
-                    client, tg, kind, uuid, cached_id, dry_run=dry_run,
-                )
-            except Exception as e:
-                outcome, note = ("error", str(e))
-            counts[outcome] += 1
-            if outcome != "processed" or processed_n % 100 == 0:
-                logger.info(
-                    "tg=%s kind=%s uuid=%s → %s (%s)",
-                    tg, kind, uuid[:8], outcome, note,
-                )
-            await asyncio.sleep(0.2)  # ~5 req/sec
+    async for tg, kind, uuid, cached_id in _iter_our_entities():
+        if limit is not None and processed_n >= limit:
+            break
+        processed_n += 1
+        per_kind[kind] += 1
+        try:
+            outcome, note = await _process(tg, kind, uuid, cached_id, dry_run=dry_run)
+        except Exception as e:
+            outcome, note = ("error", str(e))
+        counts[outcome] += 1
+        if outcome != "processed" or processed_n % 100 == 0:
+            logger.info(
+                "tg=%s kind=%s uuid=%s → %s (%s)",
+                tg, kind, uuid[:8], outcome, note,
+            )
+        await asyncio.sleep(0.2)  # ~5 req/sec
 
     logger.info(
         "done. processed=%s, per-kind=%s, outcomes=%s",

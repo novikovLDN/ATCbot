@@ -221,9 +221,13 @@ async def assign_user_to_squad(user_id: Union[str, int], squad_uuid: str) -> boo
     В 3.x единый путь: POST /api/internal-squads/{uuid}/bulk-actions/add-many-users
     body {userIds: [...]}. Fallback — PATCH /api/users с activeInternalSquads.
     """
+    resolved = await _resolve_to_int_id(user_id)
+    if resolved is None:
+        logger.warning("assign_user_to_squad: cannot resolve id from %s", str(user_id)[:16])
+        return False
     logger.info(
         "REMNAWAVE_SQUAD_ASSIGN_START: user_id=%s squad=%s",
-        user_id, squad_uuid[:8],
+        resolved, squad_uuid[:8],
     )
 
     # Approach 1: 3.x канонический endpoint (bulk на 1 юзере).
@@ -231,23 +235,22 @@ async def assign_user_to_squad(user_id: Union[str, int], squad_uuid: str) -> boo
         "POST",
         f"/api/internal-squads/{squad_uuid}/bulk-actions/add-many-users",
         quiet=True,
-        json={"userIds": [int(user_id) if str(user_id).isdigit() else user_id]},
+        json={"userIds": [resolved]},
     )
     if result is not None:
-        logger.info("REMNAWAVE_SQUAD_ASSIGN: via internal-squads bulk-actions user_id=%s", user_id)
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via internal-squads bulk-actions user_id=%s", resolved)
         return True
 
     # Approach 2: PATCH /api/users body-based
-    body = {"id": int(user_id) if str(user_id).isdigit() else user_id,
-            "activeInternalSquads": [squad_uuid]}
+    body = {"id": resolved, "activeInternalSquads": [squad_uuid]}
     r = await _request("PATCH", "/api/users", quiet=True, json=body)
     if r is not None:
-        logger.info("REMNAWAVE_SQUAD_ASSIGN: via PATCH /users user_id=%s", user_id)
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via PATCH /users user_id=%s", resolved)
         return True
 
     logger.error(
         "REMNAWAVE_SQUAD_ASSIGN_FAILED: all approaches failed user_id=%s squad=%s",
-        user_id, squad_uuid[:8],
+        resolved, squad_uuid[:8],
     )
     return False
 
@@ -305,6 +308,33 @@ async def _lookup_telegram_id_by_uuid(uuid: str) -> Optional[int]:
         return int(row["telegram_id"])
     except Exception:
         return None
+
+
+async def _resolve_to_int_id(value: Union[str, int]) -> Optional[int]:
+    """UUID / int / digit-str → numeric panel id (3.x).
+
+    Универсальный резолвер для всех user-scoped endpoints, которым нужен
+    integer id (delete/, actions/*, /users/{id}). Порядок:
+      1. int / str-цифры → OK как есть.
+      2. UUID → _lookup_telegram_id_by_uuid → find_user_by_telegram_id
+         → берём .id из entity.
+      3. None если не резолвится (caller должен обработать).
+    """
+    if isinstance(value, int):
+        return value
+    s = str(value)
+    if s.isdigit():
+        return int(s)
+    tg_id = await _lookup_telegram_id_by_uuid(s)
+    if tg_id is None:
+        return None
+    entity = await find_user_by_telegram_id(tg_id)
+    if entity and entity.get("id") is not None:
+        try:
+            return int(entity["id"])
+        except (TypeError, ValueError):
+            pass
+    return None
 
 
 async def get_all_users(
@@ -378,30 +408,47 @@ async def get_all_users(
 async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, Any]]:
     """PATCH /api/users — обновить поля юзера (3.x canonical).
 
-    Body содержит `id` (integer). UUID в теле в 3.x игнорируется.
+    Body содержит `id` (integer). UUID резолвится через нашу БД →
+    find_user_by_telegram_id → берём numeric id.
     """
-    body = {"id": int(user_id) if str(user_id).isdigit() else user_id, **fields}
+    resolved = await _resolve_to_int_id(user_id)
+    if resolved is None:
+        logger.warning("update_user: cannot resolve id from %s", str(user_id)[:16])
+        return None
+    body = {"id": resolved, **fields}
     return await _request("PATCH", "/api/users", json=body)
 
 
 async def reset_user_traffic(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
     """POST /api/users/{userId}/actions/reset-traffic (3.x)."""
-    return await _request("POST", f"/api/users/{user_id}/actions/reset-traffic")
+    resolved = await _resolve_to_int_id(user_id)
+    if resolved is None:
+        return None
+    return await _request("POST", f"/api/users/{resolved}/actions/reset-traffic")
 
 
 async def enable_user(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
     """POST /api/users/{userId}/actions/enable (3.x dedicated)."""
-    return await _request("POST", f"/api/users/{user_id}/actions/enable")
+    resolved = await _resolve_to_int_id(user_id)
+    if resolved is None:
+        return None
+    return await _request("POST", f"/api/users/{resolved}/actions/enable")
 
 
 async def disable_user(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
     """POST /api/users/{userId}/actions/disable (3.x dedicated)."""
-    return await _request("POST", f"/api/users/{user_id}/actions/disable")
+    resolved = await _resolve_to_int_id(user_id)
+    if resolved is None:
+        return None
+    return await _request("POST", f"/api/users/{resolved}/actions/disable")
 
 
 async def revoke_user_subscription(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
     """POST /api/users/{userId}/actions/revoke — invalidate subscription URL."""
-    return await _request("POST", f"/api/users/{user_id}/actions/revoke")
+    resolved = await _resolve_to_int_id(user_id)
+    if resolved is None:
+        return None
+    return await _request("POST", f"/api/users/{resolved}/actions/revoke")
 
 
 async def extend_user_expiry(
@@ -424,7 +471,10 @@ async def extend_user_expiry(
         body["expireAt"] = expire_at
     if not body:
         raise ValueError("extend_user_expiry: pass either days or expire_at")
-    return await _request("POST", f"/api/users/{user_id}/actions/extend", json=body)
+    resolved = await _resolve_to_int_id(user_id)
+    if resolved is None:
+        return None
+    return await _request("POST", f"/api/users/{resolved}/actions/extend", json=body)
 
 
 # ── HWID devices (3.x) ─────────────────────────────────────────────────
@@ -437,7 +487,10 @@ async def extend_user_expiry(
 
 async def get_user_hwid_devices(user_id: Union[str, int]) -> Optional[list]:
     """Return list of HWID device dicts for a user, or None on failure."""
-    result = await _request("GET", f"/api/hwid/devices/{user_id}")
+    resolved = await _resolve_to_int_id(user_id)
+    if resolved is None:
+        return None
+    result = await _request("GET", f"/api/hwid/devices/{resolved}")
     if result is None:
         return None
     return result.get("devices") or []
@@ -445,21 +498,30 @@ async def get_user_hwid_devices(user_id: Union[str, int]) -> Optional[list]:
 
 async def delete_user_hwid_device(user_id: Union[str, int], hwid: str) -> bool:
     """Revoke a single device by hwid (3.x DELETE)."""
-    body = {"userId": int(user_id) if str(user_id).isdigit() else user_id, "hwid": hwid}
+    resolved = await _resolve_to_int_id(user_id)
+    if resolved is None:
+        return False
+    body = {"userId": resolved, "hwid": hwid}
     result = await _request("DELETE", "/api/hwid/devices/delete", json=body)
     return result is not None
 
 
 async def delete_all_user_hwid_devices(user_id: Union[str, int]) -> bool:
     """Revoke every device for a user (3.x DELETE)."""
-    body = {"userId": int(user_id) if str(user_id).isdigit() else user_id}
+    resolved = await _resolve_to_int_id(user_id)
+    if resolved is None:
+        return False
+    body = {"userId": resolved}
     result = await _request("DELETE", "/api/hwid/devices/delete-all", json=body)
     return result is not None
 
 
 async def delete_user(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
     """DELETE /api/users/{userId} (3.x). Возвращает 204 → {}."""
-    return await _request("DELETE", f"/api/users/{user_id}")
+    resolved = await _resolve_to_int_id(user_id)
+    if resolved is None:
+        return None
+    return await _request("DELETE", f"/api/users/{resolved}")
 
 
 # ── Search (3.x — только через stream) ────────────────────────────────
