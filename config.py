@@ -448,6 +448,14 @@ if REMNAWAVE_ENABLED:
 else:
     _log.info("REMNAWAVE_ENABLED=false (URL or TOKEN not set)")
 
+# Cutover 2026-08: samopis Xray-мастер выведен из эксплуатации, единственный
+# источник provisioning — Remnawave 3.x. Все существующие call-sites
+# `config.VPN_ENABLED` / `config.VPN_PROVISIONING_ENABLED` семантически
+# означают "можно ли боту выдавать/продлять VPN" — переменяем на статус
+# Remnawave, чтобы не переписывать 20+ мест по коду.
+VPN_ENABLED = REMNAWAVE_ENABLED  # noqa: F811 — override с 352
+VPN_PROVISIONING_ENABLED = REMNAWAVE_ENABLED  # noqa: F811 — override с 355
+
 # Traffic limits per tariff (in bytes). Trial has NO bypass.
 TRAFFIC_LIMITS = {
     "basic": {
