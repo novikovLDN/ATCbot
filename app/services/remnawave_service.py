@@ -375,21 +375,35 @@ def delete_remnawave_user_bg(telegram_id: int) -> None:
 # ── Add traffic (purchased pack) ──────────────────────────────────────
 
 async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
-    """Add purchased traffic to current limit. Returns True on success."""
+    """Add purchased traffic to current limit. Returns True on success.
+
+    Safe против overwrite unlimited: если у entity уже trafficLimitBytes=0
+    (безлимит), сохраняем 0 — иначе +extra превратил бы безлимит в лимит.
+    """
     if not config.REMNAWAVE_ENABLED:
+        logger.warning("REMNAWAVE_ADD_TRAFFIC_DISABLED: tg=%s", telegram_id)
         return False
     try:
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
+            logger.info("REMNAWAVE_ADD_TRAFFIC_NO_UUID: tg=%s (need recovery)", telegram_id)
             return False
 
         user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
         if not user_data:
+            logger.warning(
+                "REMNAWAVE_ADD_TRAFFIC_NO_USER: tg=%s uuid=%s (get_user returned None)",
+                telegram_id, str(rmn_uuid)[:8],
+            )
             return False
 
         api_uuid = user_data.get("uuid") or rmn_uuid
-        current_limit = user_data.get("trafficLimitBytes", 0)
-        new_limit = current_limit + extra_bytes
+        current_limit = int(user_data.get("trafficLimitBytes", 0) or 0)
+        # Unlimited (=0) остаётся unlimited — top-up не имеет смысла.
+        if current_limit == 0:
+            new_limit = 0
+        else:
+            new_limit = current_limit + int(extra_bytes)
 
         result = await remnawave_api.update_user(api_uuid, trafficLimitBytes=new_limit)
         if result is not None:
@@ -398,13 +412,17 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
                 await remnawave_api.update_user(api_uuid, status="ACTIVE")
             await database.reset_traffic_notification_flags(telegram_id)
             logger.info(
-                "REMNAWAVE_TRAFFIC_ADDED: tg=%s +%d bytes, new_limit=%d",
-                telegram_id, extra_bytes, new_limit,
+                "REMNAWAVE_TRAFFIC_ADDED: tg=%s +%d bytes, current=%d → new=%d",
+                telegram_id, extra_bytes, current_limit, new_limit,
             )
             return True
+        logger.warning(
+            "REMNAWAVE_ADD_TRAFFIC_PATCH_FAILED: tg=%s uuid=%s (update_user returned None)",
+            telegram_id, str(api_uuid)[:16],
+        )
         return False
     except Exception as e:
-        logger.error("REMNAWAVE_ADD_TRAFFIC_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
+        logger.exception("REMNAWAVE_ADD_TRAFFIC_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
         return False
 
 
