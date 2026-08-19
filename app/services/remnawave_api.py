@@ -320,9 +320,12 @@ async def _lookup_telegram_id_by_uuid(uuid: str) -> Optional[int]:
 
 
 async def _lookup_cached_id_by_uuid(uuid: str) -> Optional[int]:
-    """Ищем закешированный numeric id прямо в subscriptions по UUID —
-    fast-path fer backfill'нутых юзеров (миграция 078 + backfill service).
-    Один DB-select без обращения к панели.
+    """Ищем закешированный numeric id по UUID в subscriptions.
+
+    ⚠️ КРИТИЧНО: возвращаем id ТОЙ ЖЕ колонки, что совпала по UUID —
+    bypass_uuid → remnawave_id, premium_uuid → remnawave_premium_id.
+    Раньше возвращали первый non-null → PATCH premium_uuid резолвился
+    в bypass_id → PATCH шёл в bypass entity вместо premium.
     """
     try:
         import database
@@ -331,24 +334,25 @@ async def _lookup_cached_id_by_uuid(uuid: str) -> Optional[int]:
             return None
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                """SELECT remnawave_id, remnawave_premium_id FROM subscriptions
-                    WHERE remnawave_uuid = $1
-                       OR remnawave_premium_uuid = $1
-                    LIMIT 1""",
+                """SELECT
+                     CASE
+                       WHEN remnawave_uuid = $1 THEN remnawave_id
+                       WHEN remnawave_premium_uuid = $1 THEN remnawave_premium_id
+                     END AS matched_id
+                   FROM subscriptions
+                   WHERE remnawave_uuid = $1 OR remnawave_premium_uuid = $1
+                   LIMIT 1""",
                 uuid,
             )
         if row is None:
             return None
-        # Матч по конкретной колонке — если uuid = bypass, вернём bypass_id.
-        # Проверяем оба на всякий случай (COALESCE-подобное поведение).
-        for key in ("remnawave_id", "remnawave_premium_id"):
-            val = row.get(key)
-            if val is not None:
-                try:
-                    return int(val)
-                except (TypeError, ValueError):
-                    pass
-        return None
+        val = row.get("matched_id")
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return None
     except Exception:
         return None
 
