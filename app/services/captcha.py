@@ -86,20 +86,14 @@ def render_prompt_text(challenge: Challenge) -> str:
 
 def render_keyboard(challenge: Challenge) -> InlineKeyboardMarkup:
     """4 кнопки-варианта. callback_data = captcha:{expected}:{chosen}.
-
-    Верная кнопка — зелёная (style="success"), остальные — красные
-    (style="danger"). Осознанный компромисс: подсветка правильного
-    ответа ослабляет anti-bot смысл капчи (бот легко парсит style),
-    но помогает слабовидящим пользователям, читающим кнопки без
-    опоры на картинку.
-    """
+    Все кнопки одного стиля danger — правильную не выделяем, иначе
+    капча теряет anti-bot смысл (бот считывает style)."""
     rows: list[list[InlineKeyboardButton]] = []
     for key, _emoji, name, _photo in challenge.options:
-        is_correct = key == challenge.expected_key
         rows.append([InlineKeyboardButton(
             text=name,
             callback_data=f"captcha:{challenge.expected_key}:{key}",
-            style="success" if is_correct else "danger",
+            style="danger",
         )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
