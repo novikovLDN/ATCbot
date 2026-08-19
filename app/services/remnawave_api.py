@@ -718,12 +718,25 @@ async def find_user_by_short_uuid(short_uuid: str) -> Optional[Dict[str, Any]]:
 # ── Convenience ───────────────────────────────────────────────────────
 
 async def get_user_traffic(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
-    """Return traffic info including subscriptionUrl and happ_url, or None."""
+    """Return traffic info including subscriptionUrl and happ_url, or None.
+
+    subscriptionUrl приводим через централизованный host-rewrite
+    (sub.atlassecure.ru → subscription.vps-cloud.uk): cert для старого
+    хоста невалиден → Happ/Incy покажут "сертификат недействителен",
+    если отдать raw URL. Rewrite здесь = единая точка входа для всех
+    callers (traffic, bypass_gift_setup, admin), не надо помнить о
+    нём в каждом хендлере.
+    """
     user = await get_user(user_id)
     if not user:
         return None
     user_traffic = user.get("userTraffic") or {}
-    sub_url = user.get("subscriptionUrl", "")
+    raw_sub_url = user.get("subscriptionUrl", "") or ""
+    try:
+        from app.services.user_subscription_links import rewrite_sub_host
+        sub_url = rewrite_sub_host(raw_sub_url) or raw_sub_url
+    except Exception:
+        sub_url = raw_sub_url
     return {
         "usedTrafficBytes": user_traffic.get("usedTrafficBytes", user.get("usedTrafficBytes", 0)),
         "trafficLimitBytes": user.get("trafficLimitBytes", 0),

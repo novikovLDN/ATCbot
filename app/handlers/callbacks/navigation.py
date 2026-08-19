@@ -595,17 +595,18 @@ async def callback_setup_step2(callback: CallbackQuery):
     sub_url = ""
     bypass_url = ""
     if subscription:
-        from app.services.user_subscription_links import get_user_primary_subscription_url
+        from app.services.user_subscription_links import (
+            get_user_primary_subscription_url,
+            get_user_bypass_url,
+        )
         sub_url = await get_user_primary_subscription_url(telegram_id)
-
-    # Bypass key: available independently of main subscription
-    if config.REMNAWAVE_ENABLED:
-        from app.services import remnawave_api
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-            if traffic:
-                bypass_url = traffic.get("subscriptionUrl", "") or ""
+        # ⚠️ ВАЖНО: bypass URL берём через helper, который применяет
+        # _rewrite_sub_host (sub.atlassecure.ru → subscription.vps-cloud.uk).
+        # Раньше здесь был прямой get_user_traffic — Happ получал raw
+        # panel URL с sub.atlassecure.ru и падал в "сертификат недействителен",
+        # т.к. cert на этом хосте отсутствует/невалиден.
+        if config.REMNAWAVE_ENABLED:
+            bypass_url = await get_user_bypass_url(telegram_id) or ""
 
     text = i18n_get_text(language, "setup.key_install_title")
 

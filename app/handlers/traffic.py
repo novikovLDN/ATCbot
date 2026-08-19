@@ -398,7 +398,10 @@ async def callback_traffic_info(callback: CallbackQuery):
     #   Incy → incy://crypt1/<payload> (AES-256-GCM via Node sidecar;
     #          при недоступности sidecar'а fallback на incy://add/<url>).
     from app.services import happ_crypto, incy_crypto
-    raw_sub_url = traffic.get("subscriptionUrl", "") or ""
+    from app.services.user_subscription_links import _rewrite_sub_host
+    # sub.atlassecure.ru → subscription.vps-cloud.uk (cert для старого хоста
+    # невалиден → Happ показывает "сертификат недействителен").
+    raw_sub_url = _rewrite_sub_host(traffic.get("subscriptionUrl", "") or "") or ""
     happ_url = happ_crypto.format_for_user(raw_sub_url) or raw_sub_url
     try:
         incy_url = await incy_crypto.to_incy_link(raw_sub_url) or raw_sub_url
@@ -567,7 +570,10 @@ async def show_traffic_info_message(message):
         warning += "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
 
     from app.services import happ_crypto, incy_crypto
-    raw_sub_url = traffic.get("subscriptionUrl", "") or ""
+    from app.services.user_subscription_links import _rewrite_sub_host
+    # sub.atlassecure.ru → subscription.vps-cloud.uk (cert для старого хоста
+    # невалиден → Happ показывает "сертификат недействителен").
+    raw_sub_url = _rewrite_sub_host(traffic.get("subscriptionUrl", "") or "") or ""
     # Happ: pure-Python RSA — синхронно и всегда работает.
     happ_url = happ_crypto.format_for_user(raw_sub_url) or raw_sub_url
     # Incy: async через Node-sidecar (или fallback incy://add/<url>).
