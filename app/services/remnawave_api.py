@@ -273,28 +273,39 @@ async def get_user(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
     """GET /api/users/{userId} — по числовому id (3.x).
 
     UUID в 3.x НЕ работает как path-параметр — панель отдаёт 400
-    "expected number, received NaN". Мы получаем UUID из legacy-кеша
-    (`subscriptions.remnawave_uuid`, миграция 048), поэтому здесь
-    добавлен backwards-compat резолв: UUID → telegram_id через
-    subscriptions-таблицу → id через find_user_by_telegram_id →
-    GET /api/users/{id}.
+    "expected number, received NaN". Резолв UUID→numeric id:
 
-    Это костыль на время фазы 2 (пока high-level модули не переписаны
-    на remnawave_id-based кеш; см. миграцию 078 + prep-скрипт).
-    Один лишний DB-select + один stream-запрос на UUID — не идеал по
-    latency, но останавливает 400-спам в traffic_monitor.
+      1) `_lookup_cached_id_by_uuid` — matched-column lookup из subscriptions
+         (bypass_uuid → remnawave_id, premium_uuid → premium_id). Разделяет
+         entities одного и того же tg_id, без коллизии в stream.
+      2) resolve по shortUuid / vlessUuid → id.
+      3) legacy fallback: если entity сохранена как username=str(tg_id) —
+         `find_user_by_username(str(tg_id))`.
+
+    ⚠️ Раньше здесь стоял `find_user_by_telegram_id` (stream ?telegramId=X),
+    что при 2 entities одного юзера (bypass + premium) возвращало ПЕРВУЮ
+    → GET bypass_uuid уходил в premium entity и наоборот. Fix: используем
+    cached numeric id вместо stream.
     """
     s = str(user_id)
     if s.isdigit():
         return await _request("GET", f"/api/users/{s}")
-    # UUID → резолв через нашу БД. Работает и для bypass (remnawave_uuid),
-    # и для premium (remnawave_premium_uuid).
-    tg_id = await _lookup_telegram_id_by_uuid(s)
-    if tg_id is None:
-        # UUID неизвестен нашей БД — legacy или удалённый. Пробуем
-        # прямой запрос всё равно (панель отдаст 400, вернём None).
-        return await _request("GET", f"/api/users/{s}", quiet=True)
-    return await find_user_by_telegram_id(tg_id)
+    # UUID → numeric id (cached в БД, matched-column split).
+    cached_id = await _lookup_cached_id_by_uuid(s)
+    if cached_id is not None:
+        return await _request("GET", f"/api/users/{cached_id}")
+    # Fallback 1: shortUuid резолвится через /api/users/resolve.
+    try:
+        by_short = await find_user_by_short_uuid(s)
+    except Exception:
+        by_short = None
+    if by_short and by_short.get("id") is not None:
+        try:
+            return await _request("GET", f"/api/users/{int(by_short['id'])}")
+        except (TypeError, ValueError):
+            pass
+    # Fallback 2: legacy — прямой запрос (панель отдаст 400, вернём None).
+    return await _request("GET", f"/api/users/{s}", quiet=True)
 
 
 async def _lookup_telegram_id_by_uuid(uuid: str) -> Optional[int]:

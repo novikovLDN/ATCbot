@@ -276,6 +276,33 @@ async def provision_subscription(
                     telegram_id, e,
                 )
 
+    # Backfill bypass_sub_url через панель, если POST не отдал subscriptionUrl
+    # (защита: без URL bypass-кнопка "Подключиться" не появится).
+    if not bypass_sub_url:
+        try:
+            from app.services import remnawave_api
+            # Приоритет — numeric id (стабильно 3.x), затем uuid, затем tg_id.
+            probe_key = None
+            cache = await database.get_remnawave_bypass_cache(telegram_id)
+            if cache and cache.get("remnawave_uuid"):
+                probe_key = cache["remnawave_uuid"]
+            if probe_key:
+                entity = await remnawave_api.get_user(probe_key)
+            else:
+                entity = await remnawave_api.find_user_by_telegram_id(telegram_id)
+            fetched_url = ((entity or {}).get("subscriptionUrl") or "").strip() or None
+            if fetched_url:
+                bypass_sub_url = fetched_url
+                try:
+                    # Сохраняем URL в кеш — не перезаписывает uuid/short_uuid.
+                    await database.set_remnawave_bypass_cache(
+                        telegram_id, None, fetched_url, None,
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("PURCHASE_FLOW: bypass url back-fill failed tg=%s %s", telegram_id, e)
+
     logger.info(
         "PURCHASE_FLOW_DONE: tg=%s tariff=%s premium_uuid=%s bypass_uuid=%s "
         "premium_url=%s bypass_url=%s",
