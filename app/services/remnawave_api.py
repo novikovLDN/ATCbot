@@ -255,12 +255,56 @@ async def assign_user_to_squad(user_id: Union[str, int], squad_uuid: str) -> boo
 async def get_user(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
     """GET /api/users/{userId} — по числовому id (3.x).
 
-    UUID в 3.x НЕ работает как path-параметр (удалён). Caller обязан
-    передать integer id (наш кеш remnawave_id из БД). Если id
-    неизвестен — сначала resolve через find_user_by_username /
-    find_user_by_telegram_id.
+    UUID в 3.x НЕ работает как path-параметр — панель отдаёт 400
+    "expected number, received NaN". Мы получаем UUID из legacy-кеша
+    (`subscriptions.remnawave_uuid`, миграция 048), поэтому здесь
+    добавлен backwards-compat резолв: UUID → telegram_id через
+    subscriptions-таблицу → id через find_user_by_telegram_id →
+    GET /api/users/{id}.
+
+    Это костыль на время фазы 2 (пока high-level модули не переписаны
+    на remnawave_id-based кеш; см. миграцию 078 + prep-скрипт).
+    Один лишний DB-select + один stream-запрос на UUID — не идеал по
+    latency, но останавливает 400-спам в traffic_monitor.
     """
-    return await _request("GET", f"/api/users/{user_id}")
+    s = str(user_id)
+    if s.isdigit():
+        return await _request("GET", f"/api/users/{s}")
+    # UUID → резолв через нашу БД. Работает и для bypass (remnawave_uuid),
+    # и для premium (remnawave_premium_uuid).
+    tg_id = await _lookup_telegram_id_by_uuid(s)
+    if tg_id is None:
+        # UUID неизвестен нашей БД — legacy или удалённый. Пробуем
+        # прямой запрос всё равно (панель отдаст 400, вернём None).
+        return await _request("GET", f"/api/users/{s}", quiet=True)
+    return await find_user_by_telegram_id(tg_id)
+
+
+async def _lookup_telegram_id_by_uuid(uuid: str) -> Optional[int]:
+    """Найти telegram_id в subscriptions по любому из UUID-полей.
+
+    Совпадение может быть в remnawave_uuid (bypass) или
+    remnawave_premium_uuid (premium). Fail-safe: ошибку БД глотаем,
+    возвращаем None — caller упадёт в 404-путь.
+    """
+    try:
+        import database
+        pool = await database.get_pool()
+        if pool is None:
+            return None
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT telegram_id FROM subscriptions
+                    WHERE remnawave_uuid = $1
+                       OR remnawave_premium_uuid = $1
+                    LIMIT 1""",
+                uuid,
+            )
+        if row is None:
+            return None
+        return int(row["telegram_id"])
+    except Exception:
+        return None
 
 
 async def get_all_users(
