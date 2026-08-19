@@ -110,6 +110,22 @@ def _extract_id(user: dict) -> Optional[int]:
         return None
 
 
+def _extract_panel_uuid(payload: dict) -> Optional[str]:
+    """Вернуть UUID entity для сохранения в subscriptions.remnawave_premium_uuid.
+
+    3.x panel POST/GET-response больше не отдаёт `uuid` — только `vlessUuid`
+    (VLESS-UUID клиента, тоже уникальный per-user). Fallback гарантирует,
+    что колонка `remnawave_premium_uuid` никогда не остаётся NULL при
+    успешном создании — иначе downstream-код (profile show_traffic,
+    verify_delivery, lazy-provision) видит пусто и либо прячет UI, либо
+    создаёт дубль-entity через preflight+adopt и перетирает трафик.
+    """
+    if not isinstance(payload, dict):
+        return None
+    v = payload.get("uuid") or payload.get("vlessUuid")
+    return str(v) if v else None
+
+
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
     """Decide whether a panel entity originated from this bot's migration.
 
@@ -146,7 +162,7 @@ def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResul
     """Build a `recovered=True` PremiumCreateResult from an already-existing entity."""
     return PremiumCreateResult(
         ok=True,
-        panel_uuid=user.get("uuid"),
+        panel_uuid=_extract_panel_uuid(user),
         forced_uuid_accepted=False,
         subscription_url=user.get("subscriptionUrl") or None,
         status=http_status,
@@ -299,7 +315,7 @@ async def create_premium_user_entity(
         )
         return PremiumCreateResult(
             ok=False,
-            panel_uuid=existing.get("uuid"),
+            panel_uuid=_extract_panel_uuid(existing),
             forced_uuid_accepted=False,
             subscription_url=None,
             status=409,
@@ -313,7 +329,7 @@ async def create_premium_user_entity(
 
     if raw and raw.get("ok"):
         response = raw.get("response") or {}
-        panel_uuid = response.get("uuid")
+        panel_uuid = _extract_panel_uuid(response)
         # Acceptance is decided by `vlessUuid` — `uuid` is always panel-assigned.
         accepted_vless = response.get("vlessUuid")
         accepted = bool(force_uuid) and (accepted_vless == requested_uuid)
@@ -372,7 +388,7 @@ async def create_premium_user_entity(
             response = raw2.get("response") or {}
             return PremiumCreateResult(
                 ok=True,
-                panel_uuid=response.get("uuid"),
+                panel_uuid=_extract_panel_uuid(response),
                 forced_uuid_accepted=False,
                 subscription_url=response.get("subscriptionUrl"),
                 status=int(raw2.get("status") or 0),
