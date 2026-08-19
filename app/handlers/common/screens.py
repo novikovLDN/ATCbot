@@ -527,7 +527,15 @@ async def show_profile(message_or_query, language: str):
                 _rmn_svc._fire_and_forget(_rmn_svc.ensure_squad(telegram_id))
             elif has_active_subscription and expires_at and sub_type in ("basic", "plus", "trial"):
                 from app.services import remnawave_service as _rmn_svc
-                override = 5 * 1024**3 if is_trial else 10 * 1024**3
+                # Trial → TRIAL_BYPASS_MB (default 500 MB, per ТЗ),
+                # paid → 10 GB старт-пак. Раньше был баг: trial=5GB —
+                # profile.show fallback выдавал в 10× больше, чем
+                # provision_subscription при первичной активации.
+                if is_trial:
+                    trial_mb = int(getattr(config, "TRIAL_BYPASS_MB", 500)) or 500
+                    override = trial_mb * (1024 ** 2)
+                else:
+                    override = 10 * 1024**3
                 _rmn_svc._fire_and_forget(
                     _rmn_svc.create_remnawave_user(
                         telegram_id, sub_type, expires_at,

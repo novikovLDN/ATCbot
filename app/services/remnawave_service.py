@@ -126,10 +126,13 @@ async def create_remnawave_user(
         existing = await remnawave_api.find_user_by_username(str(telegram_id))
         if existing and isinstance(existing, dict):
             existing_id = existing.get("id")
-            existing_uuid = existing.get("uuid")
+            # 3.x response не отдаёт `uuid` — только `vlessUuid`.
+            # Fallback гарантирует, что колонка `remnawave_uuid`
+            # не останется NULL после adopt.
+            existing_uuid = existing.get("uuid") or existing.get("vlessUuid")
             if existing_id is not None or existing_uuid:
                 if existing_uuid:
-                    await database.set_remnawave_uuid(telegram_id, existing_uuid)
+                    await database.set_remnawave_uuid(telegram_id, str(existing_uuid))
                 if existing_id is not None:
                     try:
                         await database.set_remnawave_id(telegram_id, int(existing_id))
@@ -139,13 +142,22 @@ async def create_remnawave_user(
                     "REMNAWAVE_USER_ADOPTED: tg=%s uuid=%s id=%s (bypass legacy)",
                     telegram_id, str(existing_uuid or "")[:8], existing_id,
                 )
-                # Обновляем limits + expiry на актуальные значения. Также
-                # проставляем telegramId если пусто — для _is_our_entity.
+                # Обновляем expiry + status. trafficLimitBytes — ТОЛЬКО
+                # если у существующей entity лимит меньше нужного (never-
+                # -decrease, чтобы не обнулить накопленные покупки/докупки
+                # трафика при повторном adopt из profile.show fallback).
                 update_fields = {
-                    "trafficLimitBytes": traffic_limit,
                     "expireAt": expire_str,
                     "status": "ACTIVE",
                 }
+                try:
+                    existing_limit = int(existing.get("trafficLimitBytes") or 0)
+                except (TypeError, ValueError):
+                    existing_limit = 0
+                # Если у entity безлимит (0) — оставить безлимитом.
+                # Иначе — set только если новый лимит строго больше.
+                if existing_limit != 0 and int(traffic_limit) > existing_limit:
+                    update_fields["trafficLimitBytes"] = int(traffic_limit)
                 if not existing.get("telegramId"):
                     update_fields["telegramId"] = int(telegram_id)
                 await remnawave_api.update_user(
@@ -164,8 +176,10 @@ async def create_remnawave_user(
             telegram_id=telegram_id,
         )
         if result:
-            # Save full UUID for API calls (/api/users/{uuid})
-            rmn_uuid = result.get("uuid") or short_uuid
+            # 3.x: response не отдаёт `uuid` — только `vlessUuid` + `id`.
+            # Fallback на vlessUuid → short_uuid, чтобы колонка не осталась
+            # пустой (иначе profile.show_traffic=False и т.д.).
+            rmn_uuid = result.get("uuid") or result.get("vlessUuid") or short_uuid
             await database.set_remnawave_uuid(telegram_id, rmn_uuid)
             # 3.x: сохранить numeric id (панель отдаёт его в response.id).
             rmn_id = result.get("id")
@@ -456,9 +470,11 @@ async def add_bypass_traffic(
         # by username first, cache its UUID, and top-up its trafficLimitBytes.
         existing = await remnawave_api.find_user_by_username(str(telegram_id))
         if existing:
-            api_uuid = existing.get("uuid")
+            # 3.x response не отдаёт `uuid` — только `vlessUuid`. Берём его
+            # как idempotent connection UUID, чтобы колонка не осталась пустой.
+            api_uuid = existing.get("uuid") or existing.get("vlessUuid")
             if api_uuid:
-                await database.set_remnawave_uuid(telegram_id, api_uuid)
+                await database.set_remnawave_uuid(telegram_id, str(api_uuid))
                 # 3.x: сразу закешируем numeric id, чтобы add_traffic /
                 # update_user работали без повторного stream-резолва.
                 api_id = existing.get("id")
@@ -469,7 +485,7 @@ async def add_bypass_traffic(
                         pass
                 logger.info(
                     "REMNAWAVE_BYPASS_RECOVERED: tg=%s uuid=%s id=%s (was orphaned in panel)",
-                    telegram_id, api_uuid[:8], api_id,
+                    telegram_id, str(api_uuid)[:8], api_id,
                 )
                 if await add_traffic(telegram_id, extra_bytes):
                     return True

@@ -114,10 +114,26 @@ def _extract_id(user: dict) -> Optional[int]:
         return None
 
 
+def _extract_panel_uuid(payload: dict) -> Optional[str]:
+    """Вернуть UUID entity для сохранения в subscriptions.remnawave_uuid.
+
+    3.x POST/GET-response больше не отдаёт `uuid` — только `vlessUuid`
+    (VLESS-UUID клиента, тоже уникальный per-user). Fallback гарантирует,
+    что колонка `remnawave_uuid` никогда не остаётся NULL при успешном
+    создании — иначе downstream-код (profile show_traffic, verify_delivery,
+    top-up) считает "у юзера нет bypass" и либо прячет UI, либо создаёт
+    дубль и перетирает trafficLimitBytes.
+    """
+    if not isinstance(payload, dict):
+        return None
+    v = payload.get("uuid") or payload.get("vlessUuid")
+    return str(v) if v else None
+
+
 def _result_from_existing(user: dict, *, http_status: int) -> BypassCreateResult:
     return BypassCreateResult(
         ok=True,
-        panel_uuid=user.get("uuid"),
+        panel_uuid=_extract_panel_uuid(user),
         subscription_url=user.get("subscriptionUrl") or None,
         short_uuid=user.get("shortUuid"),
         status=http_status,
@@ -140,19 +156,23 @@ async def _backfill_telegram_id(user: dict, telegram_id: int) -> None:
                 return
         except (TypeError, ValueError):
             pass
-    panel_uuid = user.get("uuid")
-    if not panel_uuid:
+    # 3.x: сначала id, потом uuid/vlessUuid — update_user резолвит
+    # оба, но numeric id — самый прямой путь без лишних lookup'ов.
+    target = user.get("id")
+    if target is None:
+        target = user.get("uuid") or user.get("vlessUuid")
+    if not target:
         return
     try:
-        await remnawave_api.update_user(panel_uuid, telegramId=int(telegram_id))
+        await remnawave_api.update_user(target, telegramId=int(telegram_id))
         logger.info(
-            "REMNAWAVE_BYPASS_TELEGRAM_ID_BACKFILLED: tg=%s uuid=%s",
-            telegram_id, str(panel_uuid)[:8],
+            "REMNAWAVE_BYPASS_TELEGRAM_ID_BACKFILLED: tg=%s target=%s",
+            telegram_id, str(target)[:16],
         )
     except Exception as e:  # noqa: BLE001
         logger.warning(
-            "REMNAWAVE_BYPASS_TELEGRAM_ID_BACKFILL_FAIL: tg=%s uuid=%s err=%s",
-            telegram_id, str(panel_uuid)[:8], e,
+            "REMNAWAVE_BYPASS_TELEGRAM_ID_BACKFILL_FAIL: tg=%s target=%s err=%s",
+            telegram_id, str(target)[:16], e,
         )
 
 
@@ -211,7 +231,7 @@ async def create_bypass_user_entity(
         )
         return BypassCreateResult(
             ok=False,
-            panel_uuid=existing.get("uuid"),
+            panel_uuid=_extract_panel_uuid(existing),
             subscription_url=None,
             short_uuid=None,
             status=409,
@@ -236,7 +256,7 @@ async def create_bypass_user_entity(
         response = raw.get("response") or {}
         return BypassCreateResult(
             ok=True,
-            panel_uuid=response.get("uuid"),
+            panel_uuid=_extract_panel_uuid(response),
             subscription_url=response.get("subscriptionUrl"),
             short_uuid=response.get("shortUuid"),
             status=int(raw.get("status") or 0),
