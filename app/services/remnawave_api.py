@@ -550,12 +550,33 @@ async def find_user_by_telegram_id(telegram_id: int) -> Optional[Dict[str, Any]]
 
 
 async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
-    """GET /api/users/stream?username=X — единственный способ найти
-    юзера по username в 3.x (dedicated `/by-username/` endpoint удалён
-    в общей политике убирания `/by-*`)."""
+    """POST /api/users/resolve body {username} — точечный поиск в 3.x.
+
+    ⚠️ `/api/users/stream?username=X` НЕ работает: username не в списке
+    stream-фильтров (только telegramId/email/tag/status/...). Панель
+    молча игнорирует параметр и возвращает первую страницу — из-за
+    этого _is_our_entity получал случайного юзера и падал в
+    conflict_unrelated_user.
+
+    Правильный 3.x-путь: POST /api/users/resolve с body { username } —
+    единый resolver, принимающий { id | shortUuid | username | email
+    | tag } и возвращающий одну entity.
+    """
     if not username:
         return None
-    return await _stream_first(f"username={quote(str(username), safe='')}")
+    result = await _request(
+        "POST", "/api/users/resolve",
+        quiet=True, json={"username": str(username)},
+    )
+    if result is None:
+        return None
+    # resolve может обернуть в {user: {...}} — распакуем.
+    if isinstance(result, dict):
+        if "user" in result and isinstance(result["user"], dict):
+            return result["user"]
+        if "id" in result or "username" in result:
+            return result
+    return None
 
 
 async def find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
@@ -566,10 +587,21 @@ async def find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
 
 
 async def find_user_by_short_uuid(short_uuid: str) -> Optional[Dict[str, Any]]:
-    """GET /api/users/short-uuid/{shortUuid} (3.x, без by-)."""
+    """POST /api/users/resolve body {shortUuid} (3.x — единый resolver)."""
     if not short_uuid:
         return None
-    return await _request("GET", f"/api/users/short-uuid/{quote(short_uuid, safe='')}")
+    result = await _request(
+        "POST", "/api/users/resolve",
+        quiet=True, json={"shortUuid": str(short_uuid)},
+    )
+    if result is None:
+        return None
+    if isinstance(result, dict):
+        if "user" in result and isinstance(result["user"], dict):
+            return result["user"]
+        if "id" in result:
+            return result
+    return None
 
 
 # ── Convenience ───────────────────────────────────────────────────────
