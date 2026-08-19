@@ -46,7 +46,7 @@ _ANIMALS: list[tuple[str, str, str, str]] = [
 
 _ANIMALS_BY_KEY: dict[str, tuple[str, str, str, str]] = {a[0]: a for a in _ANIMALS}
 
-MAX_ATTEMPTS = 4           # ошибок подряд
+MAX_ATTEMPTS = 2           # ошибок подряд
 COOLDOWN_SEC = 60           # длительность лока после MAX_ATTEMPTS (1 минута)
 
 

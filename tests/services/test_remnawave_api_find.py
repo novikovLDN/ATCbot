@@ -1,11 +1,10 @@
 """
-Unit tests for remnawave_api.find_user_by_username on Remnawave v2.7.4.
+Unit tests for remnawave_api.find_user_by_username on Remnawave v3.x.
 
-The deployment exposes a dedicated `GET /api/users/by-username/{name}`
-endpoint that returns the entity on 200 and errorCode "A063" on 404 when
-the username is free.  The fallback list pagination path that earlier
-revisions of this module carried has been removed; these tests pin the
-remaining behaviour so a future regression is loud.
+Панель 3.x переехала `/api/users/by-username/{name}` → `/api/users/username/{name}`
+(убрали `by-` префикс). Endpoint возвращает entity на 200 и errorCode "A063"
+на 404 когда username свободен. Fallback list pagination path из старых
+ревизий модуля выпилен; эти тесты пинят поведение.
 """
 from unittest.mock import AsyncMock, patch
 
@@ -37,7 +36,7 @@ async def test_find_user_returns_entity_on_200():
     raw_mock.assert_awaited_once()
     method, path = raw_mock.call_args.args[0], raw_mock.call_args.args[1]
     assert method == "GET"
-    assert path == "/api/users/by-username/tg_42_premium"
+    assert path == "/api/users/username/tg_42_premium"
 
 
 @pytest.mark.asyncio
@@ -45,7 +44,7 @@ async def test_find_user_returns_none_on_404():
     """404 with errorCode A063 → username is free."""
     body = {
         "timestamp": "2026-05-12T19:19:58.895Z",
-        "path": "/api/users/by-username/test_nonexistent_xxx",
+        "path": "/api/users/username/test_nonexistent_xxx",
         "message": "User with specified params not found",
         "errorCode": "A063",
     }
