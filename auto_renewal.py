@@ -376,21 +376,24 @@ async def process_auto_renewals(bot: Bot):
 
             # PHASE B: после commit — xray sync + отправка уведомлений (без финансовых мутаций)
             for item in notifications_to_send:
-                # B0: Xray sync deferred from grant_access (must run post-commit)
+                # B0: Post-commit Remnawave sync (renewal_xray_sync_after_commit
+                # emitted by grant_access). ОБЯЗАТЕЛЬНО дёргаем
+                # purchase_flow.sync_renewal_to_remnawave — иначе premium
+                # expireAt в панели останется старым и ключ умрёт на
+                # предыдущей дате даже после успешной DB-renewal.
+                # Legacy vpn_utils.ensure_user_in_xray (samopis-мастер) —
+                # больше не нужен, samopis мёртв.
                 xray_sync = item.get("xray_sync")
                 if xray_sync:
                     try:
-                        import vpn_utils
-                        await vpn_utils.ensure_user_in_xray(
-                            telegram_id=xray_sync["telegram_id"],
-                            uuid=xray_sync["uuid"],
-                            subscription_end=xray_sync["subscription_end"],
-                        )
+                        from app.services import purchase_flow
+                        await purchase_flow.sync_renewal_to_remnawave(xray_sync)
                     except Exception as e:
                         logger.error(
-                            f"AUTO_RENEWAL_XRAY_SYNC_FAILED user={item['telegram_id']} error={e}"
+                            f"AUTO_RENEWAL_PREMIUM_SYNC_FAILED user={item['telegram_id']} error={e}"
                         )
-                # Fire-and-forget: renew Remnawave bypass user
+                # Fire-and-forget: renew Remnawave bypass user (extend expireAt
+                # для bypass entity — независимо от premium sync выше).
                 try:
                     from app.services.remnawave_service import renew_remnawave_user_bg
                     _ar_tariff = item.get("tariff_type", "basic")

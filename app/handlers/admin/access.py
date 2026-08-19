@@ -1756,13 +1756,22 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
             admin_telegram_id=callback.from_user.id
         )
 
-        # Fire-and-forget: disable Remnawave bypass
+        # Fire-and-forget: disable BOTH bypass + premium entities.
+        # Иначе premium subscriptionUrl остаётся валидным до его
+        # собственного expireAt, и юзер продолжает пользоваться VPN
+        # после админского revoke.
         if revoked:
             try:
                 from app.services.remnawave_service import disable_remnawave_user_bg
                 disable_remnawave_user_bg(user_id)
             except Exception as rmn_err:
                 logger.warning("REMNAWAVE_ADMIN_REVOKE_FAIL: tg=%s %s", user_id, rmn_err)
+            try:
+                from app.services import remnawave_premium
+                import asyncio as _aio
+                _aio.create_task(remnawave_premium.disable_premium_user(user_id))
+            except Exception as rmn_err:
+                logger.warning("REMNAWAVE_PREMIUM_ADMIN_REVOKE_FAIL: tg=%s %s", user_id, rmn_err)
 
         if not revoked:
             text = "❌ У пользователя нет активной подписки"

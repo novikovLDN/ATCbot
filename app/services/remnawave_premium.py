@@ -113,24 +113,26 @@ def _extract_id(user: dict) -> Optional[int]:
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
     """Decide whether a panel entity originated from this bot's migration.
 
-    True if any of:
-      - telegramId matches (Remnawave returns it as either `telegramId` or
-        `telegram_id` depending on version), OR
-      - description contains our import marker, OR
-      - username matches our canonical format `tg_{telegram_id}_premium`
-        (legacy-safe: в 2.7.4 telegramId не проставлялся автоматически,
-        а username по этому шаблону может создавать только наш бот).
+    Priorities (fail-safe против takeover):
+      1. Если panel.telegramId явно указан — решаем СТРОГО по нему:
+         match → True, mismatch → False. Никакие другие маркеры
+         (username / description) не могут перезаписать явный owner.
+      2. panel.telegramId отсутствует (legacy 2.7.4 не проставлялся) —
+         адоптим по нашему username-паттерну `tg_{tg}_premium` или
+         маркеру описания.
     """
     if not isinstance(user, dict):
         return False
     tg_field = user.get("telegramId")
     if tg_field is None:
         tg_field = user.get("telegram_id")
-    try:
-        if tg_field is not None and int(tg_field) == int(telegram_id):
-            return True
-    except (TypeError, ValueError):
-        pass
+    if tg_field is not None:
+        # Явный владелец в панели — строгое решение по нему.
+        try:
+            return int(tg_field) == int(telegram_id)
+        except (TypeError, ValueError):
+            return False
+    # panel.telegramId пусто → fallback на маркеры (только для legacy).
     desc = (user.get("description") or "").lower()
     if "samopis" in desc or "imported from samopis" in desc or "premium via bot" in desc:
         return True

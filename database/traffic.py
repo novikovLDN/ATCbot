@@ -584,7 +584,12 @@ async def record_traffic_purchase(
 # ── Queries for traffic monitor worker ─────────────────────────────────
 
 async def get_active_remnawave_users() -> List[Dict[str, Any]]:
-    """Users with active subscription AND remnawave_uuid set."""
+    """Users with active subscription AND remnawave_uuid set.
+
+    Возвращает также remnawave_id (numeric, 3.x) — traffic_monitor
+    предпочитает id, чтобы избежать UUID→id resolve на каждый check
+    (5min × 10k юзеров = 2k stream-запросов в панель, лишний overhead).
+    """
     if not _core.DB_READY:
         return []
     pool = await get_pool()
@@ -592,7 +597,8 @@ async def get_active_remnawave_users() -> List[Dict[str, Any]]:
         return []
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT s.telegram_id, s.remnawave_uuid, s.subscription_type
+            """SELECT s.telegram_id, s.remnawave_uuid, s.remnawave_id,
+                      s.subscription_type
                FROM subscriptions s
                WHERE s.status = 'active'
                  AND s.remnawave_uuid IS NOT NULL

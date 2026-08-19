@@ -65,23 +65,23 @@ def _bypass_expire_iso() -> str:
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
     """Heuristic: does this panel entity belong to our bot?
 
-    Accept on any of:
-      - telegramId matches
-      - description contains one of our markers
-      - username equals the pattern we would generate for this telegram_id
-        (legacy imported entities may have no telegramId — but nobody else
-        creates entities with that exact username in our panel's namespace).
+    Fail-safe против takeover:
+      1. Явный panel.telegramId → строгое решение по нему (match/mismatch).
+         Никакие другие маркеры не могут перехватить существующего owner'а.
+      2. panel.telegramId отсутствует (legacy 2.7.4 не проставлял) → адоптим
+         по нашему username-паттерну или маркеру описания.
     """
     if not isinstance(user, dict):
         return False
     tg_field = user.get("telegramId")
     if tg_field is None:
         tg_field = user.get("telegram_id")
-    try:
-        if tg_field is not None and int(tg_field) == int(telegram_id):
-            return True
-    except (TypeError, ValueError):
-        pass
+    if tg_field is not None:
+        try:
+            return int(tg_field) == int(telegram_id)
+        except (TypeError, ValueError):
+            return False
+    # telegramId пусто → fallback на username / description (только legacy).
     entity_username = str(user.get("username") or "").strip()
     if entity_username and entity_username == build_bypass_username(telegram_id):
         return True

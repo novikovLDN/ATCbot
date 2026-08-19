@@ -4372,6 +4372,10 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
 
     pool = await get_pool()
     uuid_to_remove = None
+    remnawave_bypass_uuid = None
+    remnawave_bypass_id = None
+    remnawave_premium_uuid = None
+    remnawave_premium_id = None
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -4382,12 +4386,22 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
             if not user_row:
                 return False
 
-            # Получаем UUID из подписки для удаления из Xray
+            # Получаем UUID / numeric id из подписки ДО DELETE — иначе
+            # delete_remnawave_user_bg (fire-and-forget после tx) не сможет
+            # прочитать их из уже удалённой subscriptions-строки и оставит
+            # entities-orphans в панели (bypass + premium).
             sub_row = await conn.fetchrow(
-                "SELECT uuid FROM subscriptions WHERE telegram_id = $1", telegram_id
+                "SELECT uuid, remnawave_uuid, remnawave_id, "
+                "remnawave_premium_uuid, remnawave_premium_id "
+                "FROM subscriptions WHERE telegram_id = $1", telegram_id
             )
-            if sub_row and sub_row.get("uuid"):
-                uuid_to_remove = sub_row["uuid"]
+            if sub_row:
+                if sub_row.get("uuid"):
+                    uuid_to_remove = sub_row["uuid"]
+                remnawave_bypass_uuid = sub_row.get("remnawave_uuid")
+                remnawave_bypass_id = sub_row.get("remnawave_id")
+                remnawave_premium_uuid = sub_row.get("remnawave_premium_uuid")
+                remnawave_premium_id = sub_row.get("remnawave_premium_id")
 
             # Удаляем все связанные данные (порядок важен для FK constraints)
             await conn.execute("DELETE FROM promo_usage_logs WHERE telegram_id = $1", telegram_id)
@@ -4420,10 +4434,51 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
         except Exception as e:
             logger.error(f"ADMIN_DELETE_UUID_REMOVAL_FAILED uuid={uuid_to_remove[:8]}... error={e}")
 
-    # Delete Remnawave user (fire-and-forget)
+    # Delete Remnawave entities — bypass + premium (оба!).
+    # UUID auto-резолв через subscriptions-lookup здесь НЕ работает
+    # (запись уже удалена). Действуем явно: если есть numeric id —
+    # DELETE напрямую, иначе резолв через find_user_by_username по
+    # НАШЕМУ шаблону username → берём id из entity → DELETE.
+    async def _delete_pair(*, numeric_id, uuid, username_hint):
+        if numeric_id is None and not uuid:
+            return
+        try:
+            from app.services import remnawave_api
+            target_id = numeric_id
+            if target_id is None and username_hint:
+                entity = await remnawave_api.find_user_by_username(username_hint)
+                if entity and entity.get("id") is not None:
+                    try:
+                        target_id = int(entity["id"])
+                    except (TypeError, ValueError):
+                        pass
+            if target_id is None:
+                logger.warning(
+                    "REMNAWAVE_ADMIN_DELETE_SKIP: tg=%s no numeric id, uuid=%s",
+                    telegram_id, str(uuid or "")[:16],
+                )
+                return
+            await remnawave_api._request(
+                "DELETE", f"/api/users/delete/{target_id}", quiet=True,
+            )
+        except Exception as e:
+            logger.warning(
+                "REMNAWAVE_ADMIN_DELETE_ENTITY_FAIL: tg=%s err=%s",
+                telegram_id, e,
+            )
+
     try:
-        from app.services.remnawave_service import delete_remnawave_user_bg
-        delete_remnawave_user_bg(telegram_id)
+        import asyncio as _aio
+        _aio.create_task(_delete_pair(
+            numeric_id=remnawave_bypass_id,
+            uuid=remnawave_bypass_uuid,
+            username_hint=str(telegram_id),
+        ))
+        _aio.create_task(_delete_pair(
+            numeric_id=remnawave_premium_id,
+            uuid=remnawave_premium_uuid,
+            username_hint=f"tg_{telegram_id}_premium",
+        ))
     except Exception as rmn_err:
         logger.warning("REMNAWAVE_ADMIN_DELETE_FAIL: tg=%s %s", telegram_id, rmn_err)
 
