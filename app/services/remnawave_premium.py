@@ -94,6 +94,20 @@ class PremiumCreateResult:
     short_uuid: Optional[str] = None  # panel-assigned shortUuid (used to
                                        # rebuild subscription URLs if the
                                        # cached value goes stale).
+    panel_id: Optional[int] = None    # numeric id from Remnawave 3.x
+                                       # (обязателен для /api/users/{id}
+                                       # actions/* и delete/).
+
+
+def _extract_id(user: dict) -> Optional[int]:
+    """Извлечь numeric .id из panel entity (3.x). None если нет."""
+    v = user.get("id") if isinstance(user, dict) else None
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
@@ -131,6 +145,7 @@ def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResul
         error=None,
         recovered=True,
         short_uuid=user.get("shortUuid"),
+        panel_id=_extract_id(user),
     )
 
 
@@ -308,6 +323,7 @@ async def create_premium_user_entity(
             error=None,
             recovered=False,
             short_uuid=response.get("shortUuid"),
+            panel_id=_extract_id(response),
         )
 
     first_status = int((raw or {}).get("status") or 0)
@@ -355,6 +371,7 @@ async def create_premium_user_entity(
                 error=None,
                 recovered=False,
                 short_uuid=response.get("shortUuid"),
+                panel_id=_extract_id(response),
             )
         raw = raw2
 

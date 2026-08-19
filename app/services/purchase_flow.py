@@ -180,6 +180,9 @@ async def provision_subscription(
                 result.subscription_url,
                 short_uuid=result.short_uuid,
             )
+            # 3.x: numeric id обязателен для последующих actions/PATCH.
+            if result.panel_id is not None:
+                await database.set_remnawave_premium_id(telegram_id, result.panel_id)
         except Exception as e:
             logger.error(
                 "PURCHASE_FLOW: failed to persist premium mapping tg=%s err=%s",
