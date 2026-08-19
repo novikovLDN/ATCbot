@@ -454,11 +454,38 @@ async def cmd_start(message: Message, state: FSMContext):
                 }
             )
     
+    # Anti-bot капча перед языком. Если юзер уже проходил её когда-либо
+    # (users.captcha_passed_at IS NOT NULL) — пропускаем сразу к языку.
+    # При активном лок-cooldown после N ошибок показываем "попробуй позже".
+    from app.services import captcha as _captcha
+    if not await _captcha.has_passed(telegram_id):
+        lock_left = await _captcha.is_locked(telegram_id)
+        if lock_left is not None:
+            minutes = max(1, (lock_left + 59) // 60)
+            await message.answer(
+                f"🚫 Слишком много ошибок в капче. Попробуй через {minutes} мин.",
+                parse_mode="HTML",
+            )
+            return
+        challenge = _captcha.build_challenge()
+        await message.answer(
+            _captcha.render_prompt_text(challenge),
+            reply_markup=_captcha.render_keyboard(challenge),
+            parse_mode="HTML",
+        )
+        return
+
     # 2026-08: /start ВСЕГДА показывает язык-picker (ru/en), даже если
     # мы уже auto-detect'нули язык. Отображение самого picker'а идёт
     # на auto-detected языке — тексты кнопок и caption на понятном
     # юзеру языке ещё до выбора. Callback start_lang_* сохраняет выбор
     # в БД и переводит на главное меню.
+    await _show_language_picker(message, telegram_id)
+
+
+async def _show_language_picker(message_or_bot, telegram_id: int) -> None:
+    """Отрисовать язык-picker. Единая точка — вызывается из cmd_start и
+    из captcha-success callback после успешной проверки."""
     from app.handlers.callbacks.language import START_LANG_PHOTO_FILE_ID
     language = await resolve_user_language(telegram_id)
     title = i18n_get_text(language, "start_lang.title")
@@ -472,8 +499,11 @@ async def cmd_start(message: Message, state: FSMContext):
                                  style="primary"),
         ],
     ])
+    # Определяем bot для send_photo — если пришёл Message, берём его bot,
+    # если сам bot — используем как есть.
+    bot = getattr(message_or_bot, "bot", None) or message_or_bot
     try:
-        await message.bot.send_photo(
+        await bot.send_photo(
             chat_id=telegram_id,
             photo=START_LANG_PHOTO_FILE_ID,
             caption=title,
@@ -482,7 +512,77 @@ async def cmd_start(message: Message, state: FSMContext):
         )
     except Exception:
         # Fallback без фото если photo_file_id устарел на текущем боте
-        await message.answer(title, reply_markup=keyboard, parse_mode="HTML")
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=title,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+
+
+@user_router.callback_query(F.data.startswith("captcha:"))
+async def callback_captcha(callback: CallbackQuery, state: FSMContext):
+    """Проверка ответа на анти-бот капчу.
+
+    callback_data: `captcha:{expected}:{chosen}`. При совпадении
+    отмечаем captcha_passed_at, удаляем сообщение капчи, показываем
+    язык-picker. При ошибке — новая капча (новое сообщение), инкремент
+    счётчика; после 5 ошибок — лок на 5 минут.
+    """
+    from app.services import captcha as _captcha
+    telegram_id = callback.from_user.id
+    parsed = _captcha.parse_callback(callback.data or "")
+    if parsed is None:
+        await callback.answer()
+        return
+    expected, chosen = parsed
+
+    lock_left = await _captcha.is_locked(telegram_id)
+    if lock_left is not None:
+        minutes = max(1, (lock_left + 59) // 60)
+        await callback.answer(
+            f"Слишком много ошибок. Попробуй через {minutes} мин.",
+            show_alert=True,
+        )
+        return
+
+    if expected == chosen:
+        await _captcha.mark_passed(telegram_id)
+        await _captcha.reset_failures(telegram_id)
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.answer("✅ Готово")
+        await _show_language_picker(callback.bot, telegram_id)
+        return
+
+    # Неверно — новая капча + инкремент счётчика.
+    attempts, now_locked = await _captcha.register_failure(telegram_id)
+    if now_locked:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.answer(
+            f"🚫 {_captcha.MAX_ATTEMPTS} ошибок подряд. Попробуй через "
+            f"{_captcha.COOLDOWN_SEC // 60} мин.",
+            show_alert=True,
+        )
+        return
+
+    left = max(0, _captcha.MAX_ATTEMPTS - attempts)
+    await callback.answer(
+        f"❌ Не тот. Попыток осталось: {left}",
+        show_alert=False,
+    )
+    challenge = _captcha.build_challenge()
+    await callback.bot.send_message(
+        chat_id=telegram_id,
+        text=_captcha.render_prompt_text(challenge),
+        reply_markup=_captcha.render_keyboard(challenge),
+        parse_mode="HTML",
+    )
 
 
 _SHARE_DISCOUNT_PERCENT = 30

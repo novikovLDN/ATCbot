@@ -1806,10 +1806,12 @@ async def callback_apple_confirm(callback: CallbackQuery):
     text = i18n_get_text(language, "shop.apple_confirm",
                          region=region_label, nominal=nominal_str, price=price_rub)
 
-    # СБП в shop-магазине (Apple ID) оставляем Platega — Wata на магазин не ставим
+    # СБП в shop-магазине (Apple ID) оставляем Platega. Lava-кнопка
+    # подменена на Wata (apple_pay_lava → apple_pay_wata) — код Lava
+    # не удаляем, только UI-роутинг.
     buttons = [
         [InlineKeyboardButton(text=i18n_get_text(language, "payment.card_pl_pay_button", "💳 Оплатить картой"), callback_data=f"apple_pay_card:{region}:{nominal}", style="primary")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button", "📱 Оплатить по СБП") + " 3%", callback_data=f"apple_pay_lava:{region}:{nominal}", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button", "📱 Оплатить по СБП") + " 3%", callback_data=f"apple_pay_wata:{region}:{nominal}", style="primary")],
         [InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp_pay_button", "🏦 Оплатить через СБП"), callback_data=f"apple_pay_sbp:{region}:{nominal}", style="primary")],
     ]
     buttons.append([InlineKeyboardButton(

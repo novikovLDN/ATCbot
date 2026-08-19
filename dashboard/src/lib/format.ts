@@ -61,6 +61,26 @@ export function truncate(s: string, max = 32): string {
   return s.slice(0, max - 1) + "…";
 }
 
+/** «12.3 ГБ» / «450 МБ» / «120 КБ». Отрицательное значение обнуляем. */
+export function fmtBytes(n: number | null | undefined): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  const v = Math.max(0, Number(n));
+  if (v >= 1024 ** 3) return `${(v / 1024 ** 3).toFixed(1)} ГБ`;
+  if (v >= 1024 ** 2) return `${(v / 1024 ** 2).toFixed(0)} МБ`;
+  if (v >= 1024) return `${(v / 1024).toFixed(0)} КБ`;
+  return `${v} Б`;
+}
+
+/** Дней до ISO-даты (округление вниз, минимум 0). */
+export function daysUntil(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  const diffMs = t - Date.now();
+  if (diffMs <= 0) return 0;
+  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+}
+
 /** Today's 00:00 Europe/Moscow as a UTC instant.
  * Moscow is fixed at UTC+3 (no DST since 2014), so we just take
  * the current UTC time, add 3 hours, floor to the day, subtract

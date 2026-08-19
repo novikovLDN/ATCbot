@@ -211,11 +211,13 @@ async def callback_topup_amount(callback: CallbackQuery):
         callback_data=f"topup_stars:{amount}",
         style="primary",
     )])
+    # Lava-кнопка подменена на Wata: callback уходит в топап-Wata.
+    # Код lava_service не удаляем — оставляем условие видимости.
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.lava"),
-            callback_data=f"topup_lava:{amount}",
+            callback_data=f"topup_wata:{amount}",
             style="primary",
         )])
     buttons.append([InlineKeyboardButton(

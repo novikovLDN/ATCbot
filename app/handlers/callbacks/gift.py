@@ -252,12 +252,14 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
             style="primary",
         )])
 
-    # Lava (card) — если настроен
+    # Lava-кнопка подменена на Wata: та же надпись, но callback уходит
+    # в подарочный Wata-хендлер. Код lava_service не удаляем — оставляем
+    # гейт видимости.
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.lava", "📱 СБП 3%"),
-            callback_data="gift_pay:lava",
+            callback_data="gift_pay:wata",
             style="primary",
         )])
     # СБП — обратно через Platega (revert Wata-миграции).
