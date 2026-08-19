@@ -98,10 +98,27 @@ export interface RevenueStats {
   avg_ltv_rubles: number;
 }
 
+export interface PremiumState {
+  has_entity: boolean;
+  is_active: boolean;
+  expires_at: string | null;
+  subscription_type?: string | null;
+}
+
+export interface BypassState {
+  has_entity: boolean;
+  used_bytes: number;
+  limit_bytes: number;
+  remaining_bytes: number;
+  status: string | null;
+}
+
 export interface UserDetail {
   user: Record<string, unknown>;
   balance_rubles: number;
   subscription: Record<string, unknown> | null;
+  premium: PremiumState;
+  bypass: BypassState;
   trial: Record<string, unknown> | null;
   discount: Record<string, unknown> | null;
   traffic_discount: Record<string, unknown> | null;
