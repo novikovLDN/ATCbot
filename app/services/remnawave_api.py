@@ -1,18 +1,31 @@
 """
-Low-level HTTP client for Remnawave Panel API.
+Low-level HTTP client for Remnawave Panel API (v3.x).
 
-All methods return parsed JSON dict on success, None on failure.
-Errors are logged but never raised — callers must check for None.
+Все методы возвращают parsed JSON dict при успехе, None при неудаче.
+Ошибки логируются, но не бросаются — caller обязан проверить на None.
 
-Verified endpoints on this panel instance:
-- POST   /api/users                       — create user (201)
-- GET    /api/users/{uuid}                — get by full UUID (400 if invalid)
-- POST   /api/users/update                — update user fields (uuid in body)
-- DELETE /api/users/{uuid}                — delete user
-- POST   /api/users/{uuid}/reset-traffic  — reset traffic counter
+Совместимость: код рассчитан на Remnawave 3.x (проверено на 3.2.3).
+2.7.4 endpoints НЕ поддерживаются — миграция описана в
+docs/REMNAWAVE_3_MIGRATION.md.
+
+Ключевые изменения 2.7.4 → 3.x (реализовано здесь):
+  - path /api/users → /api/users/create, /users/get, /users/update
+  - /by-username/ → /username/, /by-short-uuid/ → /short-uuid/
+  - PATCH /users/update body-based (без auto-discover)
+  - HWID delete: POST → DELETE, userUuid → userId в body
+  - reset-traffic: /users/{id}/reset-traffic → /users/{id}/actions/reset-traffic
+  - delete: DELETE /users/{id} → DELETE /users/delete/{id}
+  - новые dedicated endpoints: enable, disable, revoke, extend
+
+ID vs UUID: в 3.x path-параметр для user-actions — числовой userId.
+Панель продолжает отдавать UUID в response.uuid (для совместимости с
+subscription URLs), но /api/users/{path} ждёт integer. Наш кеш в БД
+пока UUID-based — миграция 078 добавляет `remnawave_id` колонку.
+Функции, требующие id, принимают integer ИЛИ строку, содержащую
+только цифры.
 """
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 
 import httpx
 import config
@@ -55,7 +68,8 @@ async def _request(
             return None
 
         data = resp.json()
-        # Remnawave wraps successful responses in {"response": {...}}
+        # Remnawave wraps successful responses in {"response": {...}}.
+        # В 3.x envelope сохранён.
         if isinstance(data, dict) and "response" in data:
             return data["response"]
         return data
@@ -97,7 +111,7 @@ async def _request_raw(
     unwrapped = body["response"] if isinstance(body, dict) and "response" in body else body
     ok = resp.status_code < 400
     if not ok:
-        # Only log at warning level — caller decides whether it is fatal.
+        # Только warning — caller решает, критично или нет.
         logger.warning(
             "REMNAWAVE_HTTP_%s: %s %s body=%s",
             resp.status_code, method, path, str(body)[:500],
@@ -122,35 +136,24 @@ async def create_user(
     external_squad_uuid: Optional[str] = None,
     raw_response: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """POST /api/users — create a new Remnawave user.
+    """POST /api/users/create — create a new Remnawave user (3.x).
 
-    Extra keyword args (added for the samopis→premium migration):
-      uuid                 — VLESS UUID to force.  On Remnawave v2.7+ the
-                             panel separates entity into `uuid` (panel-internal,
-                             always panel-assigned) and `vlessUuid` (used in
-                             VLESS connection strings).  When this param is
-                             supplied the value is sent in the `vlessUuid`
-                             field so legacy samopis links keep working on the
-                             new inbounds.  Callers MUST read
-                             result['vlessUuid'] to learn whether the panel
-                             honoured the request and result['uuid'] for the
-                             internal identifier used by subsequent API calls.
-      squad_uuid           — override config.REMNAWAVE_SQUAD_UUID (e.g. the
-                             "MainServer" squad for the premium tier).  Pass
-                             "" to skip the default-squad assignment entirely.
-      description          — passed through to Remnawave (e.g. "Imported from
-                             samopis vpnapi").
-      telegram_id          — passed through as `telegramId` for panel-side
-                             cross-reference.
-      traffic_limit_strategy — Remnawave reset strategy (default NO_RESET).
-      external_squad_uuid  — Task 6: when set, sent as `externalSquadUuid`
-                             so Remnawave overrides the subscription
-                             Template (used for the premium "Unlimited"
-                             template with SDK/SMTP/mining blocklists).
-                             None → field omitted (default for bypass).
-      raw_response         — when True the caller wants the HTTP status code
-                             alongside the body to disambiguate 409/400
-                             responses (used by the migration script).
+    Extra keyword args (наследие с premium/samopis migration):
+      uuid                 — VLESS UUID для форсинга; отправляется как
+                             `vlessUuid` в body. Панель может честно
+                             принять либо проигнорировать в зависимости
+                             от version — читайте result['vlessUuid'].
+      squad_uuid           — override config.REMNAWAVE_SQUAD_UUID
+                             (например, MainServer для premium tier).
+                             Пустая строка → пропускаем squad assignment.
+      description          — passed through (например, "Imported from…").
+      telegram_id          — `telegramId` для panel-side cross-reference.
+                             КРИТИЧНО для _is_our_entity recovery в
+                             remnawave_bypass._is_our_entity.
+      traffic_limit_strategy — reset strategy (default NO_RESET).
+      external_squad_uuid  — Task 6 override subscription Template.
+      raw_response         — True → возвращаем _request_raw envelope,
+                             False → распакованный dict (default).
     """
     body: Dict[str, Any] = {
         "username": username,
@@ -162,9 +165,6 @@ async def create_user(
         "deviceLimit": device_limit,
     }
     if uuid:
-        # Remnawave v2.7+ moved the connection UUID to `vlessUuid` —
-        # `uuid` is panel-assigned and cannot be overridden.  See module
-        # docstring on find_user_by_username.
         body["vlessUuid"] = uuid
     if description:
         body["description"] = description
@@ -173,8 +173,6 @@ async def create_user(
     if external_squad_uuid:
         body["externalSquadUuid"] = external_squad_uuid
 
-    # Squad assignment: explicit param wins, "" disables it, None falls back to
-    # the global default (existing bypass behaviour).
     if squad_uuid is None:
         effective_squad = config.REMNAWAVE_SQUAD_UUID
     else:
@@ -182,10 +180,11 @@ async def create_user(
     if effective_squad:
         body["activeInternalSquads"] = [effective_squad]
 
+    path = "/api/users/create"
     if raw_response:
-        return await _request_raw("POST", "/api/users", json=body)
+        return await _request_raw("POST", path, json=body)
 
-    result = await _request("POST", "/api/users", json=body)
+    result = await _request("POST", path, json=body)
     if result:
         logger.info(
             "REMNAWAVE_CREATE: success for %s, response keys=%s squad_in_response=%s",
@@ -193,75 +192,52 @@ async def create_user(
             result.get("activeInternalSquads"),
         )
 
-        # Also try dedicated squad endpoint (belt-and-suspenders)
+        # Belt-and-suspenders: если squad не осел в response, дёргаем
+        # dedicated endpoint. В 3.x чаще всего одного POST /create хватает.
         if effective_squad:
             user_uuid = result.get("uuid")
-            if user_uuid:
-                squad_result = result.get("activeInternalSquads") or []
-                if not squad_result:
-                    logger.warning(
-                        "REMNAWAVE_SQUAD_NOT_IN_RESPONSE: user=%s, trying assign_user_to_squad",
-                        user_uuid[:8],
-                    )
-                    await assign_user_to_squad(user_uuid, effective_squad)
-        else:
-            logger.warning("REMNAWAVE_SQUAD_UUID not set — skipping squad assignment")
+            if user_uuid and not (result.get("activeInternalSquads") or []):
+                logger.warning(
+                    "REMNAWAVE_SQUAD_NOT_IN_RESPONSE: user=%s, trying assign_user_to_squad",
+                    user_uuid[:8],
+                )
+                await assign_user_to_squad(user_uuid, effective_squad)
     else:
         logger.warning("REMNAWAVE_CREATE: failed for %s", username)
     return result
 
 
 async def assign_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
-    """Try multiple approaches to assign user to a squad."""
+    """Assign existing user to a squad.
+
+    В 3.x канонический endpoint — POST /api/squads/add-users-to-squad
+    body {squadUuid, userUuids: [...]}. Оставляем ещё 2 fallback'а на
+    случай минорных различий в патч-версиях (assign через PATCH-body в
+    /users/update с activeInternalSquads).
+    """
     logger.info(
         "REMNAWAVE_SQUAD_ASSIGN_START: user=%s squad=%s",
         user_uuid[:8], squad_uuid[:8],
     )
 
-    # Approach 1: POST /api/squads/add-users-to-squad (Remnawave standard)
+    # Approach 1: канонический
     result = await _request(
         "POST", "/api/squads/add-users-to-squad",
         quiet=True,
         json={"squadUuid": squad_uuid, "userUuids": [user_uuid]},
     )
     if result is not None:
-        logger.info("REMNAWAVE_SQUAD_ASSIGN: via /api/squads/add-users-to-squad user=%s", user_uuid[:8])
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via add-users-to-squad user=%s", user_uuid[:8])
         return True
 
-    # Approach 2: POST /api/squads/{squad_uuid}/users
-    result = await _request(
-        "POST", f"/api/squads/{squad_uuid}/users",
-        quiet=True,
-        json={"userUuid": user_uuid},
-    )
-    if result is not None:
-        logger.info("REMNAWAVE_SQUAD_ASSIGN: via /api/squads/.../users user=%s", user_uuid[:8])
-        return True
-
-    # Approach 3: POST /api/squads/{squad_uuid}/users with array body
-    result = await _request(
-        "POST", f"/api/squads/{squad_uuid}/users",
-        quiet=True,
-        json={"userUuids": [user_uuid]},
-    )
-    if result is not None:
-        logger.info("REMNAWAVE_SQUAD_ASSIGN: via /api/squads/.../users array user=%s", user_uuid[:8])
-        return True
-
-    # Approach 4: PUT user update with activeInternalSquads
+    # Approach 2: PATCH user update с activeInternalSquads
     body = {"uuid": user_uuid, "activeInternalSquads": [squad_uuid]}
-    for method in ("PATCH", "POST", "PUT"):
-        for path in ("/api/users", "/api/users/update"):
-            r = await _request(method, path, quiet=True, json=body)
-            if r is not None:
-                # Verify squad was actually set
-                check = await get_user(user_uuid)
-                if check and check.get("activeInternalSquads"):
-                    logger.info(
-                        "REMNAWAVE_SQUAD_ASSIGN: via %s %s user=%s",
-                        method, path, user_uuid[:8],
-                    )
-                    return True
+    r = await _request("PATCH", "/api/users/update", quiet=True, json=body)
+    if r is not None:
+        check = await get_user(user_uuid)
+        if check and check.get("activeInternalSquads"):
+            logger.info("REMNAWAVE_SQUAD_ASSIGN: via PATCH /users/update user=%s", user_uuid[:8])
+            return True
 
     logger.error(
         "REMNAWAVE_SQUAD_ASSIGN_FAILED: all approaches failed user=%s squad=%s",
@@ -270,27 +246,29 @@ async def assign_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
     return False
 
 
-async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
-    """GET /api/users/{uuid} — get user by full UUID."""
-    return await _request("GET", f"/api/users/{uuid}")
+async def get_user(id_or_uuid: Union[str, int]) -> Optional[Dict[str, Any]]:
+    """GET /api/users/{userId}.
+
+    3.x path-параметр — integer userId. Панель может дополнительно
+    поддерживать UUID для backwards-compat; наш вызов принимает оба,
+    подставляем как есть. Если запрос 404 — caller обязан fallback'нуть
+    на find_user_by_username / find_user_by_uuid.
+    """
+    return await _request("GET", f"/api/users/{id_or_uuid}")
 
 
 async def get_all_users(page_size: int = 1000, progress_cb=None) -> Optional[list]:
-    """Fetch every Remnawave user via paginated GET /api/users.
+    """GET /api/users/get?size=…&start=… — pagination scan.
 
-    Remnawave caps `size` at 1000 (HTTP 400 above that). page_size=1000
-    halves the page count vs the original 500 (~10 pages for the current
-    10k-entity panel) without tripping the validation cap.
+    Remnawave капит `size` на 1000 (400 если выше). page_size=1000
+    → ~10 страниц на 10k entity базе.
 
-    Each page is retried up to 3 times with exponential backoff so a
-    single transient failure (timeout / 5xx) doesn't trash a multi-page
-    scan. Permanent failures (HTTP 4xx) propagate as None — callers must
-    treat None as "cannot list" and fail loudly rather than act on
-    partial data.
+    Retries: 3 попытки на страницу с exponential backoff. При постоянной
+    ошибке (4xx) возвращаем None — caller обязан считать «нельзя
+    прочитать» и не действовать на partial data.
 
-    If `progress_cb` is given, it's awaited after each page with
-    (collected_count, total_or_none) so the caller can render a live
-    counter.
+    progress_cb (опциональный, sync или async) вызывается после каждой
+    страницы с (collected, total) для live-счётчика.
     """
     import asyncio
     collected: list = []
@@ -299,7 +277,7 @@ async def get_all_users(page_size: int = 1000, progress_cb=None) -> Optional[lis
     while True:
         page = None
         for attempt in range(3):
-            page = await _request("GET", f"/api/users?size={page_size}&start={start}")
+            page = await _request("GET", f"/api/users/get?size={page_size}&start={start}")
             if page is not None:
                 break
             backoff = 1.5 ** attempt
@@ -333,135 +311,154 @@ async def get_all_users(page_size: int = 1000, progress_cb=None) -> Optional[lis
         if total is not None and len(collected) >= total:
             break
         start += page_size
-        # Hard safety stop. Sized for the current prod base (~358k) with
-        # plenty of headroom; raise if you grow past it.
         if start > 2_000_000:
             logger.error("REMNAWAVE_LIST: aborted, start exceeded 2_000_000")
             break
     return collected
 
 
-_update_method: Optional[tuple] = None  # cached working (method, path_template)
+async def update_user(id_or_uuid: Union[str, int], **fields) -> Optional[Dict[str, Any]]:
+    """PATCH /api/users/update — обновить поля юзера (3.x canonical).
 
-async def update_user(uuid: str, **fields) -> Optional[Dict[str, Any]]:
-    """Update user fields. Auto-discovers the correct endpoint on first call."""
-    global _update_method
-    body = {"uuid": uuid, **fields}
-
-    # Use cached method if already discovered
-    if _update_method:
-        method, path_tpl = _update_method
-        path = path_tpl.format(uuid=uuid)
-        return await _request(method, path, json=body)
-
-    # Probe all known Remnawave panel endpoint variants
-    _variants = [
-        ("PUT", "/api/users/{uuid}"),
-        ("POST", "/api/users/{uuid}"),
-        ("PATCH", "/api/users"),
-        ("POST", "/api/users/update"),
-        ("PUT", "/api/users"),
-    ]
-    for method, path_tpl in _variants:
-        path = path_tpl.format(uuid=uuid)
-        result = await _request(method, path, quiet=True, json=body)
-        if result is not None:
-            _update_method = (method, path_tpl)
-            logger.info("REMNAWAVE_UPDATE_DISCOVERED: %s %s works, caching", method, path_tpl)
-            return result
-
-    logger.error(
-        "REMNAWAVE_UPDATE_FAIL: no endpoint worked for uuid=%s fields=%s. "
-        "Tried: %s", uuid[:8], list(fields.keys()),
-        [(m, p) for m, p in _variants],
-    )
-    return None
+    В 3.x auto-discover больше не нужен: путь стабильный, body-based.
+    Ключ идентификации в body — `uuid` (панель отдаёт его в response
+    даже в 3.x). Если у вас в кеше числовой id — так и передавайте,
+    панель распознает.
+    """
+    body = {"uuid": id_or_uuid, **fields}
+    return await _request("PATCH", "/api/users/update", json=body)
 
 
-async def reset_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
-    """POST /api/users/{uuid}/reset-traffic"""
-    return await _request("POST", f"/api/users/{uuid}/reset-traffic")
+async def _needs_int_id(value: Union[str, int]) -> Union[str, int]:
+    """Резолвим UUID → int id для endpoints, которые требуют integer.
+
+    Каноничные 3.x пути (delete/, actions/*) документированы как integer-only.
+    Наш кеш пока UUID-based (миграция 078 добавит remnawave_id), поэтому
+    делаем one-shot resolve через get_user → берём .id из response.
+    Возвращаем int если удалось, иначе оригинал (пусть API отдаст 400/404
+    и caller разберётся)."""
+    if isinstance(value, int):
+        return value
+    s = str(value)
+    if s.isdigit():
+        return int(s)
+    resolved = await resolve_user_id(s)
+    return resolved if resolved is not None else s
+
+
+async def reset_user_traffic(user_id_or_uuid: Union[str, int]) -> Optional[Dict[str, Any]]:
+    """POST /api/users/{userId}/actions/reset-traffic (3.x)."""
+    resolved = await _needs_int_id(user_id_or_uuid)
+    return await _request("POST", f"/api/users/{resolved}/actions/reset-traffic")
+
+
+async def enable_user(user_id_or_uuid: Union[str, int]) -> Optional[Dict[str, Any]]:
+    """POST /api/users/{userId}/actions/enable (3.x dedicated).
+
+    Заменяет update_user(status='ACTIVE') — предпочтительно, атомарно,
+    без риска затереть другие поля.
+    """
+    resolved = await _needs_int_id(user_id_or_uuid)
+    return await _request("POST", f"/api/users/{resolved}/actions/enable")
+
+
+async def disable_user(user_id_or_uuid: Union[str, int]) -> Optional[Dict[str, Any]]:
+    """POST /api/users/{userId}/actions/disable (3.x dedicated)."""
+    resolved = await _needs_int_id(user_id_or_uuid)
+    return await _request("POST", f"/api/users/{resolved}/actions/disable")
+
+
+async def revoke_user_subscription(user_id_or_uuid: Union[str, int]) -> Optional[Dict[str, Any]]:
+    """POST /api/users/{userId}/actions/revoke (3.x new) —
+    инвалидирует subscription URL юзера. В 2.7.4 не было."""
+    resolved = await _needs_int_id(user_id_or_uuid)
+    return await _request("POST", f"/api/users/{resolved}/actions/revoke")
+
+
+async def extend_user_expiry(
+    user_id_or_uuid: Union[str, int],
+    *,
+    days: Optional[int] = None,
+    expire_at: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """POST /api/users/{userId}/actions/extend (3.x new).
+
+    Один из параметров ОБЯЗАТЕЛЕН:
+      days       — сколько дней добавить к текущему expireAt.
+      expire_at  — ISO-строка, полная замена expireAt.
+    """
+    body: Dict[str, Any] = {}
+    if days is not None:
+        body["days"] = int(days)
+    if expire_at is not None:
+        body["expireAt"] = expire_at
+    if not body:
+        raise ValueError("extend_user_expiry: pass either days or expire_at")
+    resolved = await _needs_int_id(user_id_or_uuid)
+    return await _request("POST", f"/api/users/{resolved}/actions/extend", json=body)
 
 
 # ── HWID devices ───────────────────────────────────────────────────────
 #
-# Per-device tracking lives in the optional HWID module on Remnawave
-# (Subscription → Settings → HWID Device Limit). When enabled, the panel
-# records each client that adds the subscription (via `x-hwid` header)
-# and lets admins/end users revoke a specific device.
+# 3.x: DELETE (не POST) на delete/delete-all endpoints. Body field
+# переименован userUuid → userId, но по практике панель принимает оба
+# (для backwards-compat), поэтому шлём оба поля.
 #
-# Routes (Remnawave backend-contract v2.8, compatible with v2.7+ panels):
-#   GET  /api/hwid/devices/{userUuid}          — list devices for user
-#   POST /api/hwid/devices/delete              — body: {userUuid, hwid}
-#   POST /api/hwid/devices/delete-all          — body: {userUuid}
-#
-# Device DTO fields: hwid, userId, platform, osVersion, deviceModel,
-# userAgent, requestIp, createdAt, updatedAt. All optional except hwid.
+# Routes:
+#   GET    /api/hwid/devices/{userId}          — list devices
+#   DELETE /api/hwid/devices/delete            — body: {userId, hwid}
+#   DELETE /api/hwid/devices/delete-all        — body: {userId}
 
-async def get_user_hwid_devices(user_uuid: str) -> Optional[list]:
+async def get_user_hwid_devices(user_id_or_uuid: Union[str, int]) -> Optional[list]:
     """Return list of HWID device dicts for a user, or None on failure."""
-    result = await _request("GET", f"/api/hwid/devices/{user_uuid}")
+    result = await _request("GET", f"/api/hwid/devices/{user_id_or_uuid}")
     if result is None:
         return None
     return result.get("devices") or []
 
 
-async def delete_user_hwid_device(user_uuid: str, hwid: str) -> bool:
-    """Revoke a single device by hwid. Returns True on success."""
-    result = await _request(
-        "POST", "/api/hwid/devices/delete",
-        json={"userUuid": user_uuid, "hwid": hwid},
-    )
+async def delete_user_hwid_device(user_id_or_uuid: Union[str, int], hwid: str) -> bool:
+    """Revoke a single device by hwid (3.x DELETE)."""
+    body = {"userId": user_id_or_uuid, "userUuid": user_id_or_uuid, "hwid": hwid}
+    result = await _request("DELETE", "/api/hwid/devices/delete", json=body)
     return result is not None
 
 
-async def delete_all_user_hwid_devices(user_uuid: str) -> bool:
-    """Revoke every device for a user. Returns True on success."""
-    result = await _request(
-        "POST", "/api/hwid/devices/delete-all",
-        json={"userUuid": user_uuid},
-    )
+async def delete_all_user_hwid_devices(user_id_or_uuid: Union[str, int]) -> bool:
+    """Revoke every device for a user (3.x DELETE)."""
+    body = {"userId": user_id_or_uuid, "userUuid": user_id_or_uuid}
+    result = await _request("DELETE", "/api/hwid/devices/delete-all", json=body)
     return result is not None
 
 
-async def delete_user(uuid: str) -> Optional[Dict[str, Any]]:
-    """DELETE /api/users/{uuid}"""
-    return await _request("DELETE", f"/api/users/{uuid}")
+async def delete_user(user_id_or_uuid: Union[str, int]) -> Optional[Dict[str, Any]]:
+    """DELETE /api/users/delete/{userId} (3.x path)."""
+    resolved = await _needs_int_id(user_id_or_uuid)
+    return await _request("DELETE", f"/api/users/delete/{resolved}")
 
 
-# ── Username search (preflight for the samopis migration) ──────────────
-#
-# Remnawave v2.7.4 (this deployment) exposes a dedicated endpoint:
-#   GET /api/users/by-username/{username}
-#     → 200 + user entity   (username taken)
-#     → 404 + errorCode A063 ("User with specified params not found")
-# No pagination / list-fallback is needed.  If the dedicated endpoint
-# ever disappears in a future panel version the migration script will
-# fail loudly via the "unexpected_http_status" code path and we'll
-# know to add a fallback again.
-
+# ── Username / short-uuid search ───────────────────────────────────────
 
 async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
-    """Return the user entity whose `username` matches, or None if free.
+    """GET /api/users/username/{username} (3.x, без `by-` префикса).
 
-    Confirmed working on Remnawave v2.7.4.  Returns None on any
-    non-200/404 status so that callers can decide whether to retry — the
-    raw HTTP status is logged at WARN level for diagnostics.
+    Возвращает user entity если username занят, None если свободен или
+    при других ошибках (404 = свободен; иное — логируется).
+
+    КРИТИЧНО для _is_our_entity в remnawave_bypass — recovery-путь
+    при adopting existing entity (fix 62 для conflict_unrelated_user).
     """
     if not username:
         return None
     from urllib.parse import quote
-    path = f"/api/users/by-username/{quote(username, safe='')}"
+    path = f"/api/users/username/{quote(username, safe='')}"
     raw = await _request_raw("GET", path)
     status = int(raw.get("status") or 0)
     if status == 200 and isinstance(raw.get("response"), dict):
         return raw["response"]
     if status == 404:
-        # errorCode A063 is the expected "no such user" body — username is free.
+        # errorCode A063 = "no such user" — username свободен.
         return None
-    # Anything else: transient or unexpected.  Don't claim the username is
-    # free (could be a transient panel hiccup); return None and let the
-    # caller decide whether to proceed with POST.
     logger.warning(
         "REMNAWAVE_FIND_UNEXPECTED_STATUS: username=%s status=%s body=%s",
         username, status, str(raw.get("body") or "")[:200],
@@ -469,14 +466,22 @@ async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+async def find_user_by_short_uuid(short_uuid: str) -> Optional[Dict[str, Any]]:
+    """GET /api/users/short-uuid/{shortUuid} (3.x, без `by-` префикса)."""
+    if not short_uuid:
+        return None
+    from urllib.parse import quote
+    return await _request("GET", f"/api/users/short-uuid/{quote(short_uuid, safe='')}")
+
+
 # ── Convenience ───────────────────────────────────────────────────────
 
-async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
+async def get_user_traffic(id_or_uuid: Union[str, int]) -> Optional[Dict[str, Any]]:
     """Return traffic info including subscriptionUrl and happ_url, or None."""
-    user = await get_user(uuid)
+    user = await get_user(id_or_uuid)
     if not user:
         return None
-    # Traffic data may be nested in userTraffic or at top level
+    # Traffic data может быть в userTraffic или на top level.
     user_traffic = user.get("userTraffic") or {}
     sub_url = user.get("subscriptionUrl", "")
     return {
@@ -490,3 +495,35 @@ async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
     }
 
 
+async def resolve_user_id(uuid_or_username: str) -> Optional[int]:
+    """Резолвит числовой user.id по UUID или username.
+
+    3.x actions endpoints (`/users/{id}/actions/*`) требуют integer id.
+    В нашей БД пока кешируется UUID (миграция 078 добавит remnawave_id).
+    Fallback путь: сначала пробуем GET /api/users/{uuid} — если панель
+    отдаёт entity с полем `id` — берём. Иначе пробуем find_by_username.
+
+    Возвращает None если не нашли — caller обязан обработать.
+    """
+    if not uuid_or_username:
+        return None
+    # 1. Пробуем как id прямо
+    if isinstance(uuid_or_username, int) or (
+        isinstance(uuid_or_username, str) and uuid_or_username.isdigit()
+    ):
+        return int(uuid_or_username)
+    # 2. GET /api/users/{uuid} — панель может отдать entity с id
+    user = await get_user(uuid_or_username)
+    if user and user.get("id") is not None:
+        try:
+            return int(user["id"])
+        except (TypeError, ValueError):
+            pass
+    # 3. find_by_username
+    user = await find_user_by_username(uuid_or_username)
+    if user and user.get("id") is not None:
+        try:
+            return int(user["id"])
+        except (TypeError, ValueError):
+            pass
+    return None
