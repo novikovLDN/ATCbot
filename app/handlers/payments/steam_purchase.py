@@ -182,12 +182,14 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
         )])
 
     # Lava
+    # Lava-кнопка подменена на Wata (steam:pay:lava → steam:pay:wata).
+    # Код lava_service не удаляем — оставляем гейт видимости.
     try:
         import lava_service
         if lava_service.is_enabled():
             buttons.append([InlineKeyboardButton(
                 text="💳 Карта (Lava)",
-                callback_data="steam:pay:lava",
+                callback_data="steam:pay:wata",
                 style="primary",
             )])
     except Exception:

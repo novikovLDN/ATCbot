@@ -234,11 +234,13 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
             style="primary",
         )])
 
+    # Lava-кнопка подменена на Wata: bypass_pay_lava → bypass_pay_wata.
+    # Код lava_service не удаляем — оставляем гейт видимости.
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.lava"),
-            callback_data=f"bypass_pay_lava:{gb}",
+            callback_data=f"bypass_pay_wata:{gb}",
             style="primary",
         )])
 
@@ -816,12 +818,13 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
             style="success",
         )])
 
-    # Lava (card) button
+    # Lava-кнопка подменена на Wata: traffic_pay_lava → traffic_pay_wata.
+    # Код lava_service не удаляем — оставляем гейт видимости.
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.pay_lava", price=price),
-            callback_data=f"traffic_pay_lava:{gb}",
+            callback_data=f"traffic_pay_wata:{gb}",
             icon_custom_emoji_id=CE["buy"],
             style="success",
         )])

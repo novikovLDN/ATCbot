@@ -296,9 +296,11 @@ async def process_stars_username(message: Message, state: FSMContext):
     if config.TG_PROVIDER_TOKEN:
         buttons.append([InlineKeyboardButton(text="💳 Банковская карта", callback_data="stars_pay:card", style="primary")])
 
+    # Lava-кнопка подменена на Wata (stars_pay:lava → stars_pay:wata).
+    # Код lava_service не удаляем — только UI-роутинг.
     import lava_service
     if lava_service.is_enabled():
-        buttons.append([InlineKeyboardButton(text="💳 Карта (Lava)", callback_data="stars_pay:lava", style="primary")])
+        buttons.append([InlineKeyboardButton(text="💳 Карта (Lava)", callback_data="stars_pay:wata", style="primary")])
 
     # СБП в shop-магазине оставляем Platega (Wata на магазин не ставим)
     if config.PLATEGA_MERCHANT_ID:
