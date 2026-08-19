@@ -33,6 +33,7 @@ from app.api.dashboard.routes import links as _links
 from app.api.dashboard.routes import automated_notifications as _autonotif
 from app.api.dashboard.routes import pricing as _pricing
 from app.api.dashboard.routes import beta_applications as _beta_apps
+from app.api.dashboard.routes import remnawave as _remnawave
 from app.api.dashboard import auth as _auth
 from app.api.dashboard import ws as _ws
 
@@ -57,6 +58,7 @@ router.include_router(_links.router, prefix="/links", tags=["links"])
 router.include_router(_autonotif.router, prefix="/automated-notifications", tags=["automated-notifications"])
 router.include_router(_pricing.router, prefix="/pricing", tags=["pricing"])
 router.include_router(_beta_apps.router, prefix="/beta-applications", tags=["beta-applications"])
+router.include_router(_remnawave.router, prefix="/remnawave", tags=["remnawave"])
 
 # Separate router for the WebSocket endpoint — FastAPI requires WS
 # routes to be on a router (or app) that hasn't had a `prefix` applied

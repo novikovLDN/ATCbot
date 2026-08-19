@@ -8,6 +8,10 @@ import {
   Megaphone,
   Sparkles,
   TrendingUp,
+  Database,
+  RefreshCcw,
+  CheckCircle2,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Area,
@@ -32,6 +36,8 @@ import {
 } from "@/lib/format";
 import { EmptyState } from "@/components/EmptyState";
 import { ReconciliationSection } from "@/components/ReconciliationSection";
+import { toast } from "@/store/toast";
+import type { RemnawaveBackfillStatus } from "@/lib/api";
 
 // ─ Daily chart metric/range config ──────────────────────────────────
 
@@ -335,6 +341,10 @@ export function Dashboard() {
 
         {/* LIVE ticker — real-time платежи бегущей строкой. */}
         <LivePaymentTicker />
+
+        {/* Remnawave 3.x backfill — admin-only ручной запуск,
+            заполняет numeric id в БД + telegramId в панели. */}
+        <RemnawaveBackfillCard />
 
         {/* Hero — revenue + active + paying */}
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -2299,4 +2309,184 @@ function AnimatedNum({
   const animated = useCountUp(value, duration);
   if (loading || value == null) return <span>…</span>;
   return <span>{fmt(animated)}</span>;
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Remnawave 3.x backfill — админский разовый прогон.
+// Заполняет subscriptions.remnawave_id / remnawave_premium_id
+// (numeric id из панели) + telegramId в панели для legacy-юзеров,
+// у которых после апгрейда 2.7.4→3.x поле пустое. Всё работает
+// через _resolve_to_int_id и без этого, но каждый вызов делает
+// лишний stream-запрос — backfill убирает overhead.
+// ───────────────────────────────────────────────────────────────────
+function RemnawaveBackfillCard() {
+  const [status, setStatus] = useState<RemnawaveBackfillStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Poll every 2s пока задача running.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const s = await endpoints.remnawaveBackfillStatus();
+        if (!cancelled) setStatus(s);
+      } catch {
+        // silent
+      }
+    };
+    tick();
+    const iv = setInterval(() => {
+      if (status?.running) tick();
+    }, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, [status?.running]);
+
+  const start = async (dry: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await endpoints.remnawaveBackfillStart(dry);
+      setStatus(r.status);
+      if (!r.ok) {
+        toast.info("Уже запущено — жди прогресс ниже");
+      } else {
+        toast.success(dry ? "Dry-run запущен" : "Backfill запущен");
+      }
+    } catch (e) {
+      toast.error("Не удалось запустить: " + (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const s = status;
+  const pct = s && s.total > 0 ? Math.round((s.processed / s.total) * 100) : 0;
+  const done = s && s.finished_at != null && !s.running;
+
+  return (
+    <section className="card overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
+        <div className="flex items-center gap-3">
+          <div className="grid h-9 w-9 place-items-center rounded-xl bg-accent/15 text-accent">
+            <Database className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-medium uppercase tracking-[0.15em] text-fg-subtle">
+              Remnawave 3.x · backfill
+            </div>
+            <div className="text-sm font-semibold text-fg">
+              Синхронизация numeric id + telegramId в панель
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => start(true)}
+            disabled={busy || s?.running}
+            className="rounded-xl border border-border bg-bg-elevated px-4 py-2 text-xs font-medium text-fg-muted transition-colors hover:text-fg disabled:opacity-40"
+          >
+            Dry-run
+          </button>
+          <button
+            type="button"
+            onClick={() => start(false)}
+            disabled={busy || s?.running}
+            className="rounded-xl bg-accent px-4 py-2 text-xs font-semibold text-bg shadow-glow-sm transition-all hover:bg-accent-hover disabled:opacity-40"
+          >
+            <RefreshCcw className="mr-1 inline h-3 w-3" />
+            Запустить backfill
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 px-5 py-4 md:grid-cols-6">
+        <BackfillStat label="Всего" value={s?.total ?? 0} />
+        <BackfillStat label="Обработано" value={s?.processed ?? 0} />
+        <BackfillStat label="ID закешено" value={s?.id_backfilled ?? 0} accent />
+        <BackfillStat label="tgID в панель" value={s?.tg_backfilled ?? 0} accent />
+        <BackfillStat label="Не найдены" value={s?.missing ?? 0} />
+        <BackfillStat
+          label="Ошибок"
+          value={s?.errors ?? 0}
+          warning={(s?.errors ?? 0) > 0}
+        />
+      </div>
+
+      {s?.total ? (
+        <div className="px-5 pb-4">
+          <div className="mb-1 flex items-center justify-between text-[11px] text-fg-subtle">
+            <span>
+              {pct}% · {s.elapsed_sec.toFixed(0)}с
+              {s.dry_run && " · dry-run"}
+            </span>
+            <span>
+              {s.running ? (
+                <>
+                  <RefreshCcw className="inline h-3 w-3 animate-spin" /> идёт
+                </>
+              ) : done ? (
+                <>
+                  <CheckCircle2 className="inline h-3 w-3 text-success" /> готово
+                </>
+              ) : null}
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-elevated">
+            <div
+              className="h-full bg-accent transition-all duration-500"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          {s.last_error && (
+            <div className="mt-2 flex items-start gap-2 text-[11px] text-danger">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+              <span className="truncate">{s.last_error}</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="px-5 pb-4 text-[11px] text-fg-subtle">
+          Панель Remnawave 3.x уже отдаёт id для новых entities автоматически;
+          этот прогон нужен один раз для legacy-юзеров (после апгрейда 2.7.4 →
+          3.x). Dry-run покажет что бы сделалось без записи.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function BackfillStat({
+  label,
+  value,
+  accent,
+  warning,
+}: {
+  label: string;
+  value: number;
+  accent?: boolean;
+  warning?: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-bg-subtle/60 p-3">
+      <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
+        {label}
+      </div>
+      <div
+        className={
+          "mt-1 text-lg font-semibold " +
+          (warning
+            ? "text-danger"
+            : accent
+              ? "text-accent"
+              : "text-fg")
+        }
+      >
+        {value.toLocaleString("ru-RU")}
+      </div>
+    </div>
+  );
 }

@@ -917,7 +917,32 @@ export const endpoints = {
   }) => api.put<{ ok: boolean; percent: number }>("/pricing/global-discount", body),
   pricingClearGlobalDiscount: () =>
     api.del<{ ok: boolean; cleared: boolean }>("/pricing/global-discount"),
+
+  remnawaveBackfillStart: (dry_run: boolean) =>
+    api.post<{
+      ok: boolean;
+      error?: string;
+      status: RemnawaveBackfillStatus;
+    }>("/remnawave/backfill/start", { dry_run }),
+  remnawaveBackfillStatus: () =>
+    api.get<RemnawaveBackfillStatus>("/remnawave/backfill/status"),
 };
+
+export interface RemnawaveBackfillStatus {
+  running: boolean;
+  started_at: number | null;
+  finished_at: number | null;
+  dry_run: boolean;
+  total: number;
+  processed: number;
+  already_set: number;
+  id_backfilled: number;
+  tg_backfilled: number;
+  missing: number;
+  errors: number;
+  last_error: string | null;
+  elapsed_sec: number;
+}
 
 // Auth-aware CSV download via fetch + blob. Returns nothing; triggers
 // a browser download. We can't use a plain <a href="..."> because the
