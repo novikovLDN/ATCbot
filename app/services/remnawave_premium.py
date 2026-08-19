@@ -113,10 +113,13 @@ def _extract_id(user: dict) -> Optional[int]:
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
     """Decide whether a panel entity originated from this bot's migration.
 
-    True if either:
+    True if any of:
       - telegramId matches (Remnawave returns it as either `telegramId` or
         `telegram_id` depending on version), OR
-      - description contains our import marker.
+      - description contains our import marker, OR
+      - username matches our canonical format `tg_{telegram_id}_premium`
+        (legacy-safe: в 2.7.4 telegramId не проставлялся автоматически,
+        а username по этому шаблону может создавать только наш бот).
     """
     if not isinstance(user, dict):
         return False
@@ -129,7 +132,10 @@ def _is_our_entity(user: dict, telegram_id: int) -> bool:
     except (TypeError, ValueError):
         pass
     desc = (user.get("description") or "").lower()
-    if "samopis" in desc or "imported from samopis" in desc:
+    if "samopis" in desc or "imported from samopis" in desc or "premium via bot" in desc:
+        return True
+    uname = (user.get("username") or "").strip()
+    if uname == f"tg_{int(telegram_id)}_premium":
         return True
     return False
 
