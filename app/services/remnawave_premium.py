@@ -94,15 +94,32 @@ class PremiumCreateResult:
     short_uuid: Optional[str] = None  # panel-assigned shortUuid (used to
                                        # rebuild subscription URLs if the
                                        # cached value goes stale).
+    panel_id: Optional[int] = None    # numeric id from Remnawave 3.x
+                                       # (обязателен для /api/users/{id}
+                                       # actions/* и delete/).
+
+
+def _extract_id(user: dict) -> Optional[int]:
+    """Извлечь numeric .id из panel entity (3.x). None если нет."""
+    v = user.get("id") if isinstance(user, dict) else None
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
     """Decide whether a panel entity originated from this bot's migration.
 
-    True if either:
+    True if any of:
       - telegramId matches (Remnawave returns it as either `telegramId` or
         `telegram_id` depending on version), OR
-      - description contains our import marker.
+      - description contains our import marker, OR
+      - username matches our canonical format `tg_{telegram_id}_premium`
+        (legacy-safe: в 2.7.4 telegramId не проставлялся автоматически,
+        а username по этому шаблону может создавать только наш бот).
     """
     if not isinstance(user, dict):
         return False
@@ -115,7 +132,10 @@ def _is_our_entity(user: dict, telegram_id: int) -> bool:
     except (TypeError, ValueError):
         pass
     desc = (user.get("description") or "").lower()
-    if "samopis" in desc or "imported from samopis" in desc:
+    if "samopis" in desc or "imported from samopis" in desc or "premium via bot" in desc:
+        return True
+    uname = (user.get("username") or "").strip()
+    if uname == f"tg_{int(telegram_id)}_premium":
         return True
     return False
 
@@ -131,6 +151,7 @@ def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResul
         error=None,
         recovered=True,
         short_uuid=user.get("shortUuid"),
+        panel_id=_extract_id(user),
     )
 
 
@@ -308,6 +329,7 @@ async def create_premium_user_entity(
             error=None,
             recovered=False,
             short_uuid=response.get("shortUuid"),
+            panel_id=_extract_id(response),
         )
 
     first_status = int((raw or {}).get("status") or 0)
@@ -355,6 +377,7 @@ async def create_premium_user_entity(
                 error=None,
                 recovered=False,
                 short_uuid=response.get("shortUuid"),
+                panel_id=_extract_id(response),
             )
         raw = raw2
 

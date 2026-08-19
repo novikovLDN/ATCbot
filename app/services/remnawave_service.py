@@ -129,6 +129,13 @@ async def create_remnawave_user(
             # Save full UUID for API calls (/api/users/{uuid})
             rmn_uuid = result.get("uuid") or short_uuid
             await database.set_remnawave_uuid(telegram_id, rmn_uuid)
+            # 3.x: сохранить numeric id (панель отдаёт его в response.id).
+            rmn_id = result.get("id")
+            if rmn_id is not None:
+                try:
+                    await database.set_remnawave_id(telegram_id, int(rmn_id))
+                except (TypeError, ValueError):
+                    pass
             await database.reset_traffic_notification_flags(telegram_id)
             sub_url = result.get("subscriptionUrl", "")
             logger.info(
@@ -394,9 +401,17 @@ async def add_bypass_traffic(
             api_uuid = existing.get("uuid")
             if api_uuid:
                 await database.set_remnawave_uuid(telegram_id, api_uuid)
+                # 3.x: сразу закешируем numeric id, чтобы add_traffic /
+                # update_user работали без повторного stream-резолва.
+                api_id = existing.get("id")
+                if api_id is not None:
+                    try:
+                        await database.set_remnawave_id(telegram_id, int(api_id))
+                    except (TypeError, ValueError):
+                        pass
                 logger.info(
-                    "REMNAWAVE_BYPASS_RECOVERED: tg=%s uuid=%s (was orphaned in panel)",
-                    telegram_id, api_uuid[:8],
+                    "REMNAWAVE_BYPASS_RECOVERED: tg=%s uuid=%s id=%s (was orphaned in panel)",
+                    telegram_id, api_uuid[:8], api_id,
                 )
                 if await add_traffic(telegram_id, extra_bytes):
                     return True

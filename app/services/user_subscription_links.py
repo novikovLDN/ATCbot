@@ -204,6 +204,8 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
                             presult.subscription_url,
                             short_uuid=presult.short_uuid,
                         )
+                        if presult.panel_id is not None:
+                            await database.set_remnawave_premium_id(telegram_id, presult.panel_id)
                         out["created_premium"] = True
                         logger.info(
                             "LAZY_PROVISION_PREMIUM_DONE: tg=%s uuid=%s recovered=%s trial=%s",
@@ -248,6 +250,8 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
                             bresult.subscription_url,
                             bresult.short_uuid,
                         )
+                        if bresult.panel_id is not None:
+                            await database.set_remnawave_id(telegram_id, bresult.panel_id)
                         out["created_bypass"] = True
                         logger.info(
                             "LAZY_PROVISION_BYPASS_DONE: tg=%s uuid=%s bytes=%d trial=%s",

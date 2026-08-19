@@ -44,6 +44,67 @@ async def set_remnawave_uuid(telegram_id: int, uuid: str) -> None:
         )
 
 
+async def set_remnawave_id(telegram_id: int, numeric_id: int) -> None:
+    """Кеш numeric id панели 3.x (миграция 078) для bypass entity."""
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET remnawave_id = $1 "
+            "WHERE telegram_id = $2 AND status = 'active'",
+            int(numeric_id), telegram_id,
+        )
+
+
+async def get_remnawave_id(telegram_id: int) -> Optional[int]:
+    """Return cached numeric id from panel 3.x, or None."""
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT remnawave_id FROM subscriptions "
+            "WHERE telegram_id = $1 AND status = 'active'",
+            telegram_id,
+        )
+        return int(val) if val is not None else None
+
+
+async def set_remnawave_premium_id(telegram_id: int, numeric_id: int) -> None:
+    """Кеш numeric id для premium entity (3.x)."""
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET remnawave_premium_id = $1 "
+            "WHERE telegram_id = $2 AND status = 'active'",
+            int(numeric_id), telegram_id,
+        )
+
+
+async def get_remnawave_premium_id(telegram_id: int) -> Optional[int]:
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT remnawave_premium_id FROM subscriptions "
+            "WHERE telegram_id = $1 AND status = 'active'",
+            telegram_id,
+        )
+        return int(val) if val is not None else None
+
+
 async def clear_remnawave_uuid(telegram_id: int) -> None:
     if not _core.DB_READY:
         return

@@ -100,6 +100,18 @@ class BypassCreateResult:
     status: int
     error: Optional[str]
     recovered: bool = False
+    panel_id: Optional[int] = None  # numeric id панели 3.x
+
+
+def _extract_id(user: dict) -> Optional[int]:
+    """Достать numeric .id из entity (3.x). None если нет / кривой."""
+    v = user.get("id") if isinstance(user, dict) else None
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _result_from_existing(user: dict, *, http_status: int) -> BypassCreateResult:
@@ -111,6 +123,7 @@ def _result_from_existing(user: dict, *, http_status: int) -> BypassCreateResult
         status=http_status,
         error=None,
         recovered=True,
+        panel_id=_extract_id(user),
     )
 
 
@@ -228,6 +241,7 @@ async def create_bypass_user_entity(
             short_uuid=response.get("shortUuid"),
             status=int(raw.get("status") or 0),
             error=None,
+            panel_id=_extract_id(response),
         )
 
     # 409 from POST — race between preflight and POST.
