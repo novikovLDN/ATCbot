@@ -468,11 +468,23 @@ async def cmd_start(message: Message, state: FSMContext):
             )
             return
         challenge = _captcha.build_challenge()
-        await message.answer(
-            _captcha.render_prompt_text(challenge),
-            reply_markup=_captcha.render_keyboard(challenge),
-            parse_mode="HTML",
-        )
+        try:
+            await message.bot.send_photo(
+                chat_id=telegram_id,
+                photo=challenge.expected_photo_id,
+                caption=_captcha.render_prompt_text(challenge),
+                reply_markup=_captcha.render_keyboard(challenge),
+                parse_mode="HTML",
+            )
+        except Exception:
+            # Fallback: если photo_file_id не резолвится на этом боте
+            # (напр. клонирован из другого) — уходит текстом с подписью
+            # цели, чтобы юзер не остался без экрана.
+            await message.answer(
+                f"🤖 Выберите <b>{challenge.expected_name}</b> из списка ниже.",
+                reply_markup=_captcha.render_keyboard(challenge),
+                parse_mode="HTML",
+            )
         return
 
     # 2026-08: /start ВСЕГДА показывает язык-picker (ru/en), даже если
@@ -577,12 +589,22 @@ async def callback_captcha(callback: CallbackQuery, state: FSMContext):
         show_alert=False,
     )
     challenge = _captcha.build_challenge()
-    await callback.bot.send_message(
-        chat_id=telegram_id,
-        text=_captcha.render_prompt_text(challenge),
-        reply_markup=_captcha.render_keyboard(challenge),
-        parse_mode="HTML",
-    )
+    try:
+        await callback.bot.send_photo(
+            chat_id=telegram_id,
+            photo=challenge.expected_photo_id,
+            caption=_captcha.render_prompt_text(challenge),
+            reply_markup=_captcha.render_keyboard(challenge),
+            parse_mode="HTML",
+        )
+    except Exception:
+        # Fallback: если photo_file_id не резолвится — уходит текстом.
+        await callback.bot.send_message(
+            chat_id=telegram_id,
+            text=f"🤖 Выберите <b>{challenge.expected_name}</b> из списка ниже.",
+            reply_markup=_captcha.render_keyboard(challenge),
+            parse_mode="HTML",
+        )
 
 
 _SHARE_DISCOUNT_PERCENT = 30

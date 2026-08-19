@@ -22,20 +22,29 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 logger = logging.getLogger(__name__)
 
-# Пул эмодзи-животных. Каждая капча берёт случайные 4 из этого списка.
-# key — стабильный ASCII-идентификатор (уезжает в callback_data, ≤64 байт).
-_ANIMALS: list[tuple[str, str, str]] = [
-    ("frog",   "🐸", "Лягушка"),
-    ("dog",    "🐶", "Собака"),
-    ("fox",    "🦊", "Лиса"),
-    ("cat",    "🐱", "Кошка"),
-    ("bear",   "🐻", "Медведь"),
-    ("wolf",   "🐺", "Волк"),
-    ("rabbit", "🐰", "Кролик"),
-    ("panda",  "🐼", "Панда"),
+# Пул животных. Каждая капча берёт случайные 4 из этого списка,
+# один из четырёх — expected (тот, чьё фото и подпись «Кот»/«Волк»/…
+# показывается в тексте изображения). Юзер выбирает соответствующую
+# кнопку из четырёх.
+#
+# key       — стабильный ASCII-идентификатор (уходит в callback_data)
+# emoji     — не показываем в тексте, оставили для будущей отладки/логов
+# name      — русское имя, отображается на кнопке
+# photo_id  — Telegram file_id заранее загруженной картинки для этой цели
+#             (создание видел в чате: см. https://t.me/AtlasSecure на 1:42
+#             от 18.08.2026). Все file_id получены при аплоаде на
+#             prod-бота, устойчивы к рестартам.
+_ANIMALS: list[tuple[str, str, str, str]] = [
+    ("bear",   "🐻", "Медведь",  "AgACAgQAAxkBAAGDLS5qhYhZRo-5B6K_vdS3AAH3-KdF-PYAApsPaxtYFzBQEB7MPSm-1SkBAAMCAAN3AAM9BA"),
+    ("rabbit", "🐰", "Кролик",   "AgACAgQAAxkBAAGDLTBqhYhiCpA4gVR3jMmLWFtCdzbWrwACnA9rG1gXMFBs4nT73ujyhAEAAwIAA3cAAz0E"),
+    ("wolf",   "🐺", "Волк",     "AgACAgQAAxkBAAGDLTJqhYhm-UQzLLfMq-lCIpJItEd1TQACnQ9rG1gXMFBkgvIy7UUEAgEAAwIAA3cAAz0E"),
+    ("cat",    "🐱", "Кот",      "AgACAgQAAxkBAAGDLTZqhYhxw1h3PfPXSMS0GQHrcYy_agACnw9rG1gXMFA10tquCwABPFcBAAMCAAN3AAM9BA"),
+    ("fox",    "🦊", "Лиса",     "AgACAgQAAxkBAAGDLThqhYh22bzPNwFGVZLkJ4hgIKe8cAACoA9rG1gXMFDXp0MrxGi-LQEAAwIAA3cAAz0E"),
+    ("dog",    "🐶", "Собака",   "AgACAgQAAxkBAAGDLTpqhYh-TegVb06U_Vngb2hbx54BLgACoQ9rG1gXMFDNfRzngp_DuwEAAwIAA3cAAz0E"),
+    ("frog",   "🐸", "Лягушка",  "AgACAgQAAxkBAAGDLTxqhYiGa9jWjZO-0x-3s4EskyFQ9gACog9rG1gXMFBPmxBHUZjCUAEAAwIAA3cAAz0E"),
 ]
 
-_ANIMALS_BY_KEY: dict[str, tuple[str, str, str]] = {a[0]: a for a in _ANIMALS}
+_ANIMALS_BY_KEY: dict[str, tuple[str, str, str, str]] = {a[0]: a for a in _ANIMALS}
 
 MAX_ATTEMPTS = 4           # ошибок подряд
 COOLDOWN_SEC = 60           # длительность лока после MAX_ATTEMPTS (1 минута)
@@ -47,7 +56,8 @@ class Challenge:
     expected_key: str
     expected_emoji: str
     expected_name: str
-    options: list[tuple[str, str, str]]  # 4 из _ANIMALS, включая expected
+    expected_photo_id: str
+    options: list[tuple[str, str, str, str]]  # 4 из _ANIMALS, включая expected
 
 
 def build_challenge() -> Challenge:
@@ -58,26 +68,31 @@ def build_challenge() -> Challenge:
         expected_key=expected[0],
         expected_emoji=expected[1],
         expected_name=expected[2],
+        expected_photo_id=expected[3],
         options=options,
     )
 
 
 def render_prompt_text(challenge: Challenge) -> str:
-    """Готовая HTML-строка для caption/text капчи."""
+    """Caption под фото капчи. Имя цели дублируем в текст жирным для
+    страховки — на случай если картинка не подгрузилась / read-only-
+    режим / VoiceOver. HTML-экранирование не требуется — имена в
+    _ANIMALS зашиты кодом, спецсимволов не содержат."""
     return (
-        f"🤖 Пожалуйста, выберите {challenge.expected_emoji} "
-        f"<b>{challenge.expected_name}</b> из списка ниже, чтобы "
-        f"подтвердить, что вы не робот."
+        f"🤖 Пожалуйста, выберите <b>{challenge.expected_name}</b> "
+        "из списка ниже, чтобы подтвердить, что вы не робот."
     )
 
 
 def render_keyboard(challenge: Challenge) -> InlineKeyboardMarkup:
-    """4 кнопки-варианта. callback_data = captcha:{expected}:{chosen}."""
+    """4 кнопки-варианта. callback_data = captcha:{expected}:{chosen}.
+    Стиль danger — красный акцент, отличает капчу от обычных экранов."""
     rows: list[list[InlineKeyboardButton]] = []
-    for key, emoji, name in challenge.options:
+    for key, _emoji, name, _photo in challenge.options:
         rows.append([InlineKeyboardButton(
-            text=f"{emoji} {name}",
+            text=name,
             callback_data=f"captcha:{challenge.expected_key}:{key}",
+            style="danger",
         )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
