@@ -698,6 +698,22 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
                     # Don't mark subscription as expired if VPN removal failed — retry next cycle
                     return
 
+            # 3.x: убрать Remnawave premium entity после истечения триала
+            # (bypass, если он был у trial-юзера, обрабатывается ниже — либо
+            # оставляем как "bypass-only" при has_remnawave). Premium
+            # должен быть отключён/удалён иначе живёт в панели вечно.
+            try:
+                from app.services import remnawave_premium
+                await remnawave_premium.disable_premium_user(telegram_id)
+                logger.info(
+                    "trial_expired: Remnawave premium disabled tg=%s", telegram_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "trial_expired: disable_premium_user failed tg=%s err=%s",
+                    telegram_id, e,
+                )
+
             # Check if user has Remnawave bypass traffic — keep it active
             has_remnawave = await conn.fetchval(
                 "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1 AND remnawave_uuid IS NOT NULL",

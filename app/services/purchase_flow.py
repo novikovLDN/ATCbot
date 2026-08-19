@@ -238,6 +238,10 @@ async def provision_subscription(
                 bresult.subscription_url,
                 bresult.short_uuid,
             )
+            # 3.x: numeric id для быстрого пути update/actions без
+            # UUID→id auto-resolve overhead.
+            if bresult.panel_id is not None:
+                await database.set_remnawave_id(telegram_id, bresult.panel_id)
         except Exception as e:
             logger.warning(
                 "PURCHASE_FLOW: failed to persist bypass cache tg=%s %s",

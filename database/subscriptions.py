@@ -952,31 +952,25 @@ async def reissue_subscription_key(subscription_id: int) -> "Tuple[str, str]":
         logger.error(f"reissue_subscription_key: {error_msg}")
         raise ValueError(error_msg)
     
+    # 3.x: samopis-мастер мёртв, vpn_utils.reissue_vpn_access — no-op
+    # (возвращает пустой vless_link → VPNAPIError). Делегируем в
+    # atomic-версию, которая работает через
+    # remnawave_premium.reissue_premium_user_entity.
     try:
-        new_uuid, vless_url = await vpn_utils.reissue_vpn_access(
-            old_uuid=old_uuid,
-            telegram_id=telegram_id,
-            subscription_end=expires_at
-        )
+        new_uuid, vless_url = await reissue_vpn_key_atomic(telegram_id)
     except Exception as e:
         logger.error(
-            f"reissue_subscription_key: VPN_API_FAILED [subscription_id={subscription_id}, "
-            f"telegram_id={telegram_id}, error={str(e)}]"
+            f"reissue_subscription_key: REMNAWAVE_REISSUE_FAILED "
+            f"[subscription_id={subscription_id}, telegram_id={telegram_id}, "
+            f"error={str(e)}]"
         )
         raise
+    if not new_uuid or not vless_url:
+        raise ValueError(
+            f"reissue_vpn_key_atomic returned empty result "
+            f"(new_uuid={new_uuid!r}, vless_url_present={bool(vless_url)})"
+        )
 
-    # 3. Обновляем UUID и vpn_key в БД (vless_url from API — single source of truth)
-    try:
-        await update_subscription_uuid(subscription_id, new_uuid, vpn_key=vless_url)
-    except Exception as e:
-        logger.error(
-            f"reissue_subscription_key: DB_UPDATE_FAILED [subscription_id={subscription_id}, "
-            f"telegram_id={telegram_id}, new_uuid={new_uuid[:8]}..., error={str(e)}]"
-        )
-        # КРИТИЧНО: UUID в VPN API уже обновлён, но БД не обновлена
-        # Это несоответствие, но мы не можем откатить VPN API
-        raise
-    
     new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
     logger.info(
         f"reissue_subscription_key: SUCCESS [subscription_id={subscription_id}, "

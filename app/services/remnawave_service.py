@@ -118,12 +118,50 @@ async def create_remnawave_user(
         far_future = datetime.now(timezone.utc) + timedelta(days=3650)
         expire_str = far_future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        # PREFLIGHT (3.x): существующий bypass entity с username=str(tg_id)
+        # уже мог быть создан ранее (2.7.4 legacy). POST /api/users вернёт
+        # 400 A019 "username already exists" без preflight. Найдём entity
+        # через resolve, адоптим (кешируем uuid + id + telegramId), затем
+        # PATCH trafficLimitBytes + expireAt в актуальные значения.
+        existing = await remnawave_api.find_user_by_username(str(telegram_id))
+        if existing and isinstance(existing, dict):
+            existing_id = existing.get("id")
+            existing_uuid = existing.get("uuid")
+            if existing_id is not None or existing_uuid:
+                if existing_uuid:
+                    await database.set_remnawave_uuid(telegram_id, existing_uuid)
+                if existing_id is not None:
+                    try:
+                        await database.set_remnawave_id(telegram_id, int(existing_id))
+                    except (TypeError, ValueError):
+                        pass
+                logger.info(
+                    "REMNAWAVE_USER_ADOPTED: tg=%s uuid=%s id=%s (bypass legacy)",
+                    telegram_id, str(existing_uuid or "")[:8], existing_id,
+                )
+                # Обновляем limits + expiry на актуальные значения. Также
+                # проставляем telegramId если пусто — для _is_our_entity.
+                update_fields = {
+                    "trafficLimitBytes": traffic_limit,
+                    "expireAt": expire_str,
+                    "status": "ACTIVE",
+                }
+                if not existing.get("telegramId"):
+                    update_fields["telegramId"] = int(telegram_id)
+                await remnawave_api.update_user(
+                    int(existing_id) if existing_id is not None else existing_uuid,
+                    **update_fields,
+                )
+                await database.reset_traffic_notification_flags(telegram_id)
+                return
+
         result = await remnawave_api.create_user(
             username=str(telegram_id),
             short_uuid=short_uuid,
             traffic_limit_bytes=traffic_limit,
             expire_at=expire_str,
             device_limit=_device_limit_for_tariff(tariff),
+            telegram_id=telegram_id,
         )
         if result:
             # Save full UUID for API calls (/api/users/{uuid})
@@ -217,6 +255,8 @@ async def renew_remnawave_user(
             api_uuid,
             trafficLimitBytes=new_limit,
             expireAt=expire_str,
+            # 3.x: hwidDeviceLimit — новое имя. Шлём оба для совместимости.
+            hwidDeviceLimit=_device_limit_for_tariff(tariff),
             deviceLimit=_device_limit_for_tariff(tariff),
         )
         # Re-enable if disabled
@@ -455,6 +495,7 @@ async def update_tariff(telegram_id: int, new_tariff: str, period_days: int = 30
         await remnawave_api.update_user(
             api_uuid,
             trafficLimitBytes=new_limit,
+            hwidDeviceLimit=new_devices,
             deviceLimit=new_devices,
         )
         logger.info("REMNAWAVE_TARIFF_UPDATED: tg=%s tariff=%s", telegram_id, new_tariff)
