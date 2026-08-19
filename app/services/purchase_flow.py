@@ -226,27 +226,34 @@ async def provision_subscription(
             description=f"Bypass via bot ({tariff})",
         )
         if not bresult.ok:
-            raise RuntimeError(
-                f"bypass provision failed: tg={telegram_id} "
-                f"status={bresult.status} error={bresult.error}"
-            )
-        bypass_sub_url = bresult.subscription_url
-        try:
-            await database.set_remnawave_bypass_cache(
-                telegram_id,
-                bresult.panel_uuid,
-                bresult.subscription_url,
-                bresult.short_uuid,
-            )
-            # 3.x: numeric id для быстрого пути update/actions без
-            # UUID→id auto-resolve overhead.
-            if bresult.panel_id is not None:
-                await database.set_remnawave_id(telegram_id, bresult.panel_id)
-        except Exception as e:
+            # Bypass fail НЕ должен блокировать premium — premium уже
+            # успешно создан выше, ключ у юзера работает. Bypass —
+            # опциональный tier для VPN на резервных серверах,
+            # добэкфилится админом позже (reconciliation flow).
             logger.warning(
-                "PURCHASE_FLOW: failed to persist bypass cache tg=%s %s",
-                telegram_id, e,
+                "PURCHASE_FLOW_BYPASS_FAILED_NON_FATAL: tg=%s status=%s error=%s",
+                telegram_id, bresult.status, bresult.error,
             )
+            bypass_sub_url = None
+        else:
+            bypass_sub_url = bresult.subscription_url
+        if bresult.ok:
+            try:
+                await database.set_remnawave_bypass_cache(
+                    telegram_id,
+                    bresult.panel_uuid,
+                    bresult.subscription_url,
+                    bresult.short_uuid,
+                )
+                # 3.x: numeric id для быстрого пути update/actions без
+                # UUID→id auto-resolve overhead.
+                if bresult.panel_id is not None:
+                    await database.set_remnawave_id(telegram_id, bresult.panel_id)
+            except Exception as e:
+                logger.warning(
+                    "PURCHASE_FLOW: failed to persist bypass cache tg=%s %s",
+                    telegram_id, e,
+                )
 
     logger.info(
         "PURCHASE_FLOW_DONE: tg=%s tariff=%s premium_uuid=%s bypass_uuid=%s "

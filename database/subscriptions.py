@@ -360,12 +360,23 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     "EXPIRY_DB_UPDATE_SUCCESS",
                     extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
                 )
-                # Disable Remnawave bypass (fire-and-forget) — no remnawave_uuid means safe to disable
+                # Disable Remnawave — ОБА entity: bypass (по трафику) + premium.
+                # Panel-side auto-expiry по expireAt тоже сработал бы,
+                # но explicit disable гарантирует что subscriptionUrl
+                # немедленно инвалидируется даже если DB.expires_at
+                # разошёлся с panel.expireAt (см. audit bucket
+                # `panel_ahead_of_paid` в admin/audit_subs).
                 try:
                     from app.services.remnawave_service import disable_remnawave_user_bg
                     disable_remnawave_user_bg(telegram_id)
                 except Exception as rmn_err:
                     logger.warning("REMNAWAVE_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
+                try:
+                    import asyncio as _aio
+                    from app.services import remnawave_premium
+                    _aio.create_task(remnawave_premium.disable_premium_user(telegram_id))
+                except Exception as rmn_err:
+                    logger.warning("REMNAWAVE_PREMIUM_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
 
                 # Создаем спецпредложение -15% на 3 дня для пользователей с оплаченной подпиской
                 sub_source = subscription.get("source", "")
