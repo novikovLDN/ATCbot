@@ -287,12 +287,7 @@ async def get_user(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
 
 
 async def _lookup_telegram_id_by_uuid(uuid: str) -> Optional[int]:
-    """Найти telegram_id в subscriptions по любому из UUID-полей.
-
-    Совпадение может быть в remnawave_uuid (bypass) или
-    remnawave_premium_uuid (premium). Fail-safe: ошибку БД глотаем,
-    возвращаем None — caller упадёт в 404-путь.
-    """
+    """Найти telegram_id в subscriptions по любому из UUID-полей."""
     try:
         import database
         pool = await database.get_pool()
@@ -313,21 +308,59 @@ async def _lookup_telegram_id_by_uuid(uuid: str) -> Optional[int]:
         return None
 
 
+async def _lookup_cached_id_by_uuid(uuid: str) -> Optional[int]:
+    """Ищем закешированный numeric id прямо в subscriptions по UUID —
+    fast-path fer backfill'нутых юзеров (миграция 078 + backfill service).
+    Один DB-select без обращения к панели.
+    """
+    try:
+        import database
+        pool = await database.get_pool()
+        if pool is None:
+            return None
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT remnawave_id, remnawave_premium_id FROM subscriptions
+                    WHERE remnawave_uuid = $1
+                       OR remnawave_premium_uuid = $1
+                    LIMIT 1""",
+                uuid,
+            )
+        if row is None:
+            return None
+        # Матч по конкретной колонке — если uuid = bypass, вернём bypass_id.
+        # Проверяем оба на всякий случай (COALESCE-подобное поведение).
+        for key in ("remnawave_id", "remnawave_premium_id"):
+            val = row.get(key)
+            if val is not None:
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    pass
+        return None
+    except Exception:
+        return None
+
+
 async def _resolve_to_int_id(value: Union[str, int]) -> Optional[int]:
     """UUID / int / digit-str → numeric panel id (3.x).
 
-    Универсальный резолвер для всех user-scoped endpoints, которым нужен
-    integer id (delete/, actions/*, /users/{id}). Порядок:
-      1. int / str-цифры → OK как есть.
-      2. UUID → _lookup_telegram_id_by_uuid → find_user_by_telegram_id
-         → берём .id из entity.
-      3. None если не резолвится (caller должен обработать).
+    Порядок (быстро → медленно):
+      1. int / str-цифры → OK.
+      2. UUID → cached remnawave_id/premium_id из subscriptions
+         (1 DB SELECT, без обращения к панели — fast-path после backfill'а).
+      3. UUID → find_user_by_telegram_id (DB + stream) — fallback для
+         legacy без backfill'а.
+      4. None если ничего не резолвится.
     """
     if isinstance(value, int):
         return value
     s = str(value)
     if s.isdigit():
         return int(s)
+    cached = await _lookup_cached_id_by_uuid(s)
+    if cached is not None:
+        return cached
     tg_id = await _lookup_telegram_id_by_uuid(s)
     if tg_id is None:
         return None

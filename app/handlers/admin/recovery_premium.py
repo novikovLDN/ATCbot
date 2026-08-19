@@ -481,12 +481,15 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
                     pass
 
                 # All clear — PATCH (also wrapped).
+                # 3.x: numeric id из only-что полученного entity даёт
+                # прямой PATCH без auto-resolve через нашу БД.
                 fields = {"expireAt": _iso_z(p["real_end"]), "status": "ACTIVE"}
                 if external_squad:
                     fields["externalSquadUuid"] = external_squad
+                panel_ref = user.get("id") if isinstance(user, dict) and user.get("id") is not None else uuid
                 try:
                     result = await asyncio.wait_for(
-                        remnawave_api.update_user(uuid, **fields),
+                        remnawave_api.update_user(panel_ref, **fields),
                         timeout=_FIX_HTTP_TIMEOUT_S,
                     )
                 except asyncio.TimeoutError:
