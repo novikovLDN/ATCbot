@@ -1225,6 +1225,8 @@ LANG = {
     'main.btn_help': "Помощь",
     'main.btn_devices': "Мои устройства",
     'main.btn_topup_balance': "Пополнить баланс",
+    'main.btn_auto_renew_on': "🔁 Автопродление с баланса ✅",
+    'main.btn_auto_renew_off': "🔁 Автопродление с баланса",
     'main.btn_change_language_full': "Сменить язык / Change language",
     'main.btn_legal': "Правила",
 

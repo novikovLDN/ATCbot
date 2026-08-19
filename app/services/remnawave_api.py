@@ -541,10 +541,14 @@ async def extend_user_expiry(
 # ── HWID devices (3.x) ─────────────────────────────────────────────────
 #
 #   GET    /api/hwid/devices/{userId}          — list devices
-#   DELETE /api/hwid/devices/delete            — body: {userId, hwid}
-#   DELETE /api/hwid/devices/delete-all        — body: {userId}
+#   POST   /api/hwid/devices/delete            — body: {userId, hwid}
+#   POST   /api/hwid/devices/delete-all        — body: {userId}
 #
-# ⚠️ HTTP verb POST → DELETE.
+# ⚠️ Первичная миграция ставила verb DELETE (по докам) — панель
+# отдавала 404 "Cannot DELETE /api/hwid/devices/delete". Живой контракт
+# 3.x — POST (verb НЕ поменялся с 2.7.4, изменилось только поле
+# userUuid → userId). Fallback на DELETE оставлен на случай, если
+# некоторые панели всё-таки принимают DELETE.
 
 async def get_user_hwid_devices(user_id: Union[str, int]) -> Optional[list]:
     """Return list of HWID device dicts for a user, or None on failure."""
@@ -557,24 +561,35 @@ async def get_user_hwid_devices(user_id: Union[str, int]) -> Optional[list]:
     return result.get("devices") or []
 
 
+async def _hwid_delete(path_suffix: str, body: dict) -> bool:
+    """POST-first, DELETE-fallback — реальный контракт 3.x."""
+    path = f"/api/hwid/devices/{path_suffix}"
+    # 1) POST (панель отвечает 200/201 в 3.x).
+    raw = await _request_raw("POST", path, json=body)
+    if raw and raw.get("ok"):
+        return True
+    # 405/404 на POST → верб не тот → пробуем DELETE.
+    if int((raw or {}).get("status") or 0) in (404, 405):
+        raw2 = await _request_raw("DELETE", path, json=body)
+        if raw2 and raw2.get("ok"):
+            return True
+    return False
+
+
 async def delete_user_hwid_device(user_id: Union[str, int], hwid: str) -> bool:
-    """Revoke a single device by hwid (3.x DELETE)."""
+    """Revoke a single device by hwid (3.x POST, DELETE-fallback)."""
     resolved = await _resolve_to_int_id(user_id)
     if resolved is None:
         return False
-    body = {"userId": resolved, "hwid": hwid}
-    result = await _request("DELETE", "/api/hwid/devices/delete", json=body)
-    return result is not None
+    return await _hwid_delete("delete", {"userId": resolved, "hwid": hwid})
 
 
 async def delete_all_user_hwid_devices(user_id: Union[str, int]) -> bool:
-    """Revoke every device for a user (3.x DELETE)."""
+    """Revoke every device for a user (3.x POST, DELETE-fallback)."""
     resolved = await _resolve_to_int_id(user_id)
     if resolved is None:
         return False
-    body = {"userId": resolved}
-    result = await _request("DELETE", "/api/hwid/devices/delete-all", json=body)
-    return result is not None
+    return await _hwid_delete("delete-all", {"userId": resolved})
 
 
 async def delete_user(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
@@ -622,6 +637,13 @@ async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     Правильный 3.x-путь: POST /api/users/resolve с body { username } —
     единый resolver, принимающий { id | shortUuid | username | email
     | tag } и возвращающий одну entity.
+
+    ⚠️ /resolve возвращает УРЕЗАННЫЙ user (id/username/telegramId/etc)
+    БЕЗ `subscriptionUrl` — критично для preflight+adopt в
+    create_bypass/premium_user_entity. Если в ответе subscriptionUrl
+    отсутствует — дозапросим полную entity через GET /api/users/{id},
+    иначе клиент получит пустой vless_url и платёж уйдёт в
+    PAYMENT_PERMANENT_ERROR (юзер заплатил — доступа нет).
     """
     if not username:
         return None
@@ -632,12 +654,29 @@ async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     if result is None:
         return None
     # resolve может обернуть в {user: {...}} — распакуем.
+    entity: Optional[Dict[str, Any]] = None
     if isinstance(result, dict):
         if "user" in result and isinstance(result["user"], dict):
-            return result["user"]
-        if "id" in result or "username" in result:
-            return result
-    return None
+            entity = result["user"]
+        elif "id" in result or "username" in result:
+            entity = result
+    if entity is None:
+        return None
+    # subscriptionUrl обязателен для клиента → дозагрузка через GET по id.
+    if not entity.get("subscriptionUrl") and entity.get("id") is not None:
+        try:
+            full = await _request(
+                "GET", f"/api/users/{int(entity['id'])}", quiet=True,
+            )
+            if isinstance(full, dict):
+                # Merge full over entity — полная entity обязана быть super-set.
+                return {**entity, **full}
+        except Exception as e:
+            logger.warning(
+                "find_user_by_username: full-fetch failed username=%s id=%s err=%s",
+                username, entity.get("id"), e,
+            )
+    return entity
 
 
 async def find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
