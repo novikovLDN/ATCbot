@@ -615,33 +615,65 @@ async def _handle_traffic_pack_confirmation(
     if _is_bypass:
         await database.ensure_bypass_only_subscription(telegram_id)
 
-    # Add traffic via Remnawave (create user if stale/missing)
+    # Add traffic via Remnawave — clean primitive через numeric bypass id.
+    # Если entity нет вообще (первый bypass-buy без подписки) — создаём.
     rmn_success = False
     pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
     if pack:
         traffic_bytes = pack["bytes"]
-        # add_bypass_traffic handles all three cases:
-        #   1. DB uuid present         → panel add_traffic
-        #   2. DB uuid missing, panel  → recover by username, cache uuid, add_traffic
-        #      entity exists            (fixes A019 for users whose DB cache was
-        #                                cleared while the panel entity remained)
-        #   3. Neither exists          → create fresh entity
         try:
-            from app.services.remnawave_service import add_bypass_traffic
-            from datetime import datetime, timezone, timedelta
-            far_future = datetime.now(timezone.utc) + timedelta(days=3650)
-            # Baseline для точной верификации.
             baseline_bytes = await _get_current_bypass_bytes(telegram_id)
-            rmn_success = await add_bypass_traffic(
-                telegram_id,
-                traffic_bytes,
-                subscription_type="basic",
-                subscription_end=far_future,
+            # Ветка 1: entity уже есть — top-up через clean primitive.
+            from app.services import remnawave_bypass, remnawave_api
+            rmn_success = await remnawave_bypass.add_bypass_traffic(
+                telegram_id, extra_bytes=traffic_bytes,
             )
+            if not rmn_success:
+                # Ветка 2: entity нет — проверим панель по username, если
+                # тоже нет → create fresh. Self-heal DB кеш через
+                # get_bypass_entity_safe.
+                entity = await remnawave_api.get_bypass_entity_safe(telegram_id)
+                if entity is not None:
+                    # Entity в панели есть — второй try top-up
+                    # (self-heal обновил DB, теперь numeric id корректен).
+                    rmn_success = await remnawave_bypass.add_bypass_traffic(
+                        telegram_id, extra_bytes=traffic_bytes,
+                    )
+                if not rmn_success:
+                    # Ветка 3: entity в панели нет → создаём fresh с
+                    # extra_bytes как первичным limit.
+                    result_create = await remnawave_bypass.create_bypass_user_entity(
+                        telegram_id, traffic_limit_bytes=traffic_bytes,
+                    )
+                    if result_create.ok:
+                        # Персистим uuid + id в БД.
+                        import database
+                        if result_create.panel_uuid:
+                            await database.set_remnawave_bypass_cache(
+                                telegram_id,
+                                str(result_create.panel_uuid),
+                                str(result_create.subscription_url) if result_create.subscription_url else None,
+                                str(result_create.short_uuid) if result_create.short_uuid else None,
+                            )
+                        if result_create.panel_id is not None:
+                            try:
+                                await database.set_remnawave_id(telegram_id, int(result_create.panel_id))
+                            except (TypeError, ValueError):
+                                pass
+                        rmn_success = True
             if rmn_success:
                 logger.info(
                     "BYPASS_REMNAWAVE_TRAFFIC_ADDED provider=%s user=%s gb=%s",
                     provider, telegram_id, traffic_gb,
+                )
+            else:
+                logger.error(
+                    "BYPASS_TRAFFIC_ADD_FAILED provider=%s user=%s gb=%s — "
+                    "все 3 ветки не помогли (top-up / self-heal / create)",
+                    provider, telegram_id, traffic_gb,
+                )
+                raise TransientPaymentError(
+                    f"traffic_pack bypass add failed: user={telegram_id} gb={traffic_gb}"
                 )
             # Verify реального применения в панели (fire-and-forget).
             try:
@@ -656,12 +688,13 @@ async def _handle_traffic_pack_confirmation(
                 ))
             except Exception:
                 pass
+        except TransientPaymentError:
+            raise
         except Exception as rmn_err:
             logger.error(
                 "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
                 provider, telegram_id, traffic_gb, rmn_err,
             )
-            # Отдельный DM админу — Remnawave call бросил исключение.
             try:
                 from app.services.payments.verify_delivery import _send_admin_alert
                 asyncio.create_task(_send_admin_alert(
