@@ -90,12 +90,11 @@ async def _run_aggregator_cmd(message: Message, tg_id: int) -> None:
         )
         return
 
+    # ⚠️ Telegram запрещает custom-protocol (happ://, v2raytun://, clash://)
+    # в url-кнопках inline-клавиатуры — Bad Request Unsupported URL protocol.
+    # Кладём deep-link'и в текст: Telegram сам подсвечивает их clickable.
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Скопировать", url=url)],
-        [InlineKeyboardButton(
-            text="🚀 Открыть в Happ",
-            url=f"happ://add/{url}",
-        )],
+        [InlineKeyboardButton(text="📋 Скопировать / открыть в браузере", url=url)],
         [InlineKeyboardButton(
             text="↻ Перевыпустить + сбросить кеш",
             callback_data="agg_admin_refresh",
@@ -106,6 +105,10 @@ async def _run_aggregator_cmd(message: Message, tg_id: int) -> None:
     text = (
         "🔗 <b>Sub-Aggregator URL</b>\n\n"
         f"<code>{url}</code>\n\n"
+        "<b>Deep-links</b> (тапни, чтобы открыть в клиенте):\n"
+        f"• Happ: <code>happ://add/{url}</code>\n"
+        f"• v2rayTun: <code>v2raytun://import/{url}</code>\n"
+        f"• Streisand: <code>streisand://import/{url}</code>\n\n"
         f"Scope: <b>{scope}</b>\n"
         "Кэш агрегатора сброшен — следующий запрос перечитает обе апстрим ссылки.\n\n"
         "<b>Тест-план:</b>\n"
