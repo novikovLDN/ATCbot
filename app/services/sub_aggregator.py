@@ -196,17 +196,47 @@ async def revoke(telegram_id: int) -> None:
 
 
 async def invalidate(token: str) -> bool:
-    """No-op — embedded агрегатор в боте кэша не имеет.
+    """Сбросить 60-сек кеш агрегатора для этого токена.
 
-    Раньше POST'или /internal/invalidate/<token> в отдельный Node-сервис
-    с Redis-кешем. Сейчас aggregator = FastAPI endpoint внутри бота
-    (app/api/sub_aggregator_route.py), каждый GET тянет из панели напрямую.
-    Инвалидировать нечего.
+    Embedded FastAPI-endpoint /a/{token} держит in-memory dict-кеш; после
+    mutation'ов (renew premium, +ГБ bypass, combo) бот зовёт этот метод —
+    endpoint через /a/_invalidate/{token} чистит запись → следующий GET
+    от клиента = fresh данные из панели.
 
-    Функция оставлена для обратной совместимости — все callers (renew,
-    add_traffic, purchase confirm) продолжают её звать, no-op-ит.
+    Локальный POST в тот же процесс — по внутреннему loopback URL из
+    WEBHOOK_URL (тот же host). Без секрета, если SUB_AGGREGATOR_INTERNAL_SECRET
+    пусто (беты хватает).
     """
-    return True
+    if not token:
+        return True
+    base = getattr(config, "WEBHOOK_URL", "") or ""
+    if not base:
+        return True
+    # WEBHOOK_URL = https://api.atlassecure.ru/telegram/webhook
+    # Нужен базовый host — обрезаем всё после третьего "/".
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(base)
+        origin = f"{p.scheme}://{p.netloc}"
+    except Exception:
+        return True
+    url = f"{origin}/a/_invalidate/{token}"
+    headers = {}
+    if config.SUB_AGGREGATOR_INTERNAL_SECRET:
+        headers["x-internal-secret"] = config.SUB_AGGREGATOR_INTERNAL_SECRET
+    try:
+        client = _get_client()
+        resp = await client.post(url, headers=headers)
+        if resp.status_code == 200:
+            return True
+        logger.warning(
+            "SUB_AGG_INVALIDATE_BAD_STATUS token=%s… status=%s body=%s",
+            token[:6], resp.status_code, resp.text[:120],
+        )
+        return False
+    except Exception as e:
+        logger.warning("SUB_AGG_INVALIDATE_FAIL token=%s… err=%s", token[:6], str(e)[:120])
+        return False
 
 
 def invalidate_bg(telegram_id: int) -> None:
