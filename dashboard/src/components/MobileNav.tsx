@@ -17,6 +17,11 @@ import {
   Settings as SettingsIcon,
   LogOut,
   FlaskConical,
+  Bell,
+  BarChart3,
+  Stethoscope,
+  Gauge,
+  Tag as TagIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { auth } from "@/lib/auth";
@@ -36,13 +41,18 @@ const PRIMARY: Item[] = [
 ];
 
 const MORE: Item[] = [
+  { to: "/statistics", label: "📊 Статистика", icon: BarChart3 },
   { to: "/analytics", label: "Аналитика", icon: TrendingUp },
+  { to: "/automated-notifications", label: "Автоуведомления", icon: Bell },
+  { to: "/pricing", label: "💸 Цены и скидки", icon: TagIcon },
   { to: "/promo", label: "Промокоды", icon: Tag },
   { to: "/links", label: "Ссылки", icon: LinkIcon },
   { to: "/referrals", label: "Рефералы", icon: Share2 },
   { to: "/bgift", label: "Гифт-ГБ", icon: Gift },
   { to: "/beta-applications", label: "🧪 VPN-Инноватор", icon: FlaskConical },
   { to: "/audit", label: "Аудит", icon: ScrollText },
+  { to: "/bypass-audit", label: "Bypass Audit", icon: Stethoscope },
+  { to: "/traffic-audit", label: "Traffic Audit", icon: Gauge },
   { to: "/service", label: "Сервис", icon: Wrench },
   { to: "/settings", label: "Настройки", icon: SettingsIcon },
 ];
