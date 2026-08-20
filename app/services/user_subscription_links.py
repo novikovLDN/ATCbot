@@ -63,6 +63,12 @@ def _rewrite_sub_host(url: Optional[str]) -> Optional[str]:
     return url.replace(_OLD_HOST, _NEW_HOST)
 
 
+# Публичный alias — низкоуровневые сервисы (remnawave_api) применяют
+# этот rewrite централизованно, чтобы raw URL из панели никогда не
+# уходил юзеру с невалидным cert-хостом.
+rewrite_sub_host = _rewrite_sub_host
+
+
 def _legacy_sub_url(telegram_id: int) -> str:
     """Fallback to the existing samopis-style URL. Sync so it always works."""
     from vpn_utils import build_sub_url

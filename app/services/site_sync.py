@@ -40,10 +40,15 @@ def _is_temporarily_disabled() -> bool:
 
 
 def is_enabled() -> bool:
-    """Check if site sync is configured AND not admin-disabled recently."""
-    if _is_temporarily_disabled():
-        return False
-    return bool(config.SITE_API_URL and config.SITE_BOT_API_KEY)
+    """Синхронизация с сайтом ОТКЛЮЧЕНА глобально по требованию клиента.
+
+    Все callers (`sync_balance`, `sync_referrals`, `full_sync_after_payment`,
+    `notify_subscription_extend`, `site_sync_worker_task`) уже проверяют
+    `is_enabled()` перед вызовом — им достаточно False, чтобы стать no-op'ом.
+    Оставили функции и модуль как заглушку на случай если сайт снова
+    появится: снять эту заглушку → вернуть проверку конфига.
+    """
+    return False
 
 
 def _headers() -> Dict[str, str]:

@@ -414,33 +414,16 @@ async def callback_connect_instruction(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    # Auto-provision Remnawave user for existing subscribers + ensure squad (fire-and-forget)
+    # Existing Remnawave юзер → ensure squad + продлить bypass expiry.
+    # Для юзеров без remnawave_uuid НИЧЕГО тут не форсим: setup_step1
+    # ниже позовёт get_user_bypass_url → _try_lazy_provision_entities,
+    # который сам создаст bypass с правильным TRIAL_BYPASS_MB / 10 GB.
+    # Раньше здесь были bogus overrides (2 GB для trial и 1 GB для paid),
+    # которые перетирали накопленный трафик — убрано.
     if config.REMNAWAVE_ENABLED:
         from app.services import remnawave_service
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if not rmn_uuid:
-            subscription = await database.get_subscription(telegram_id)
-            if subscription:
-                sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-                expires_at = subscription.get("expires_at")
-                if expires_at and sub_type == "trial":
-                    override = 2 * 1024**3  # Trial: 2 GB bypass
-                    remnawave_service._fire_and_forget(
-                        remnawave_service.create_remnawave_user(
-                            telegram_id, sub_type, expires_at,
-                            traffic_limit_override=override,
-                        )
-                    )
-                elif expires_at and sub_type != "trial":
-                    override = 1 * 1024**3  # 1 GB starter pack
-                    remnawave_service._fire_and_forget(
-                        remnawave_service.create_remnawave_user(
-                            telegram_id, sub_type, expires_at,
-                            traffic_limit_override=override,
-                        )
-                    )
-        else:
-            # Existing Remnawave user — ensure expiry is far future (bypass works by GB, not date)
+        if rmn_uuid:
             remnawave_service._fire_and_forget(
                 remnawave_service.extend_remnawave_for_bypass(telegram_id)
             )
@@ -612,17 +595,18 @@ async def callback_setup_step2(callback: CallbackQuery):
     sub_url = ""
     bypass_url = ""
     if subscription:
-        from app.services.user_subscription_links import get_user_primary_subscription_url
+        from app.services.user_subscription_links import (
+            get_user_primary_subscription_url,
+            get_user_bypass_url,
+        )
         sub_url = await get_user_primary_subscription_url(telegram_id)
-
-    # Bypass key: available independently of main subscription
-    if config.REMNAWAVE_ENABLED:
-        from app.services import remnawave_api
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-            if traffic:
-                bypass_url = traffic.get("subscriptionUrl", "") or ""
+        # ⚠️ ВАЖНО: bypass URL берём через helper, который применяет
+        # _rewrite_sub_host (sub.atlassecure.ru → subscription.vps-cloud.uk).
+        # Раньше здесь был прямой get_user_traffic — Happ получал raw
+        # panel URL с sub.atlassecure.ru и падал в "сертификат недействителен",
+        # т.к. cert на этом хосте отсутствует/невалиден.
+        if config.REMNAWAVE_ENABLED:
+            bypass_url = await get_user_bypass_url(telegram_id) or ""
 
     text = i18n_get_text(language, "setup.key_install_title")
 
