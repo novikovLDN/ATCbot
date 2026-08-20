@@ -634,3 +634,33 @@ LEGACY_SAMOPIS_SUB_BASE_URL = env(
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# Sub-aggregator service (separate process, see sub-aggregator/)
+#
+# Один URL агрегатора вместо двух отдельных ссылок Remnawave (main+gb).
+# Rollout strategy: сначала SUB_AGGREGATOR_ADMIN_ONLY=true — только админ
+# видит агрегатор-ссылку, тестируем; потом флип на false → все юзеры.
+# ─────────────────────────────────────────────────────────────────────────
+
+SUB_AGGREGATOR_ENABLED = env(
+    "SUB_AGGREGATOR_ENABLED", default="false"
+).strip().lower() in {"1", "true", "yes", "on"}
+
+# Base URL публичного домена агрегатора (без trailing slash).
+# Пример: https://sub.atlassecure.io
+SUB_AGGREGATOR_URL = env("SUB_AGGREGATOR_URL", default="").rstrip("/")
+
+# Beta gate: пока true — только ADMIN_TELEGRAM_ID получает aggregator ссылку.
+# Флип на false когда админ подтвердит что все клиенты (Happ/Incy/v2rayTun)
+# корректно съедают склеенную подписку.
+SUB_AGGREGATOR_ADMIN_ONLY = env(
+    "SUB_AGGREGATOR_ADMIN_ONLY", default="true"
+).strip().lower() in {"1", "true", "yes", "on"}
+
+# Shared secret для POST /internal/invalidate/<token> — тот же, что в
+# INTERNAL_SECRET сервиса. Без него бот не сможет чистить кеш после
+# renew/create/revoke — юзер будет ждать CACHE_TTL (5 мин) вместо
+# мгновенного обновления. Обязателен если SUB_AGGREGATOR_ENABLED=true.
+SUB_AGGREGATOR_INTERNAL_SECRET = env("SUB_AGGREGATOR_INTERNAL_SECRET", default="")
+

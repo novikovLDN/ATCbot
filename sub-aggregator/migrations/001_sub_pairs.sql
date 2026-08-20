@@ -1,18 +1,21 @@
 -- 001_sub_pairs.sql — mapping table read by the aggregator.
--- FR §2: bot populates this table; aggregator only reads (except for
--- optional invalidation triggers wired via /internal/invalidate, which is
--- also outside the write path).
+--
+-- Bot populates this table (see bot repo migrations/079_sub_pairs.sql —
+-- schemas MUST match). Aggregator only reads; writes come from the bot
+-- via INSERT ON CONFLICT (telegram_id) DO UPDATE + POST /internal/invalidate.
 
 CREATE TABLE IF NOT EXISTS sub_pairs (
-    token         TEXT PRIMARY KEY,          -- opaque stable key in the public URL
-    main_sub_url  TEXT NOT NULL,             -- full upstream subscription URL (main)
-    gb_sub_url    TEXT NOT NULL,             -- full upstream subscription URL (gb)
-    main_user_uuid UUID NULL,                -- for webhook invalidation
+    token          TEXT PRIMARY KEY,
+    telegram_id    BIGINT NOT NULL,
+    main_sub_url   TEXT NOT NULL,
+    gb_sub_url     TEXT NOT NULL,
+    main_user_uuid UUID NULL,
     gb_user_uuid   UUID NULL,
-    status        TEXT NOT NULL DEFAULT 'active',  -- active | revoked
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    status         TEXT NOT NULL DEFAULT 'active',   -- active | revoked
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS sp_telegram_id_uq ON sub_pairs (telegram_id);
 CREATE INDEX IF NOT EXISTS sp_main_uuid ON sub_pairs (main_user_uuid);
 CREATE INDEX IF NOT EXISTS sp_gb_uuid   ON sub_pairs (gb_user_uuid);
 
