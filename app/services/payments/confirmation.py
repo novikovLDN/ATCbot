@@ -518,12 +518,43 @@ async def _send_confirmation(
         #   combo_basic / combo_plus   → COMBO_TARIFFS[key][period]["gb"] GB
         #   basic / plus (обычные)     → TRAFFIC_LIMITS[tariff][period] bytes
         #   trial / telegram_* / biz   → skip (не имеют bypass ГБ по ТЗ)
+        #
+        # ВАЖНО: если bypass entity ТОЛЬКО ЧТО создан (fresh) — provision уже
+        # выставил ему финальный лимит (75 GB combo или 10 GB basic 30d).
+        # Здесь пропускаем top-up, иначе double-add → 150 GB для fresh combo.
+        # Для renewal (entity уже был) — top-up здесь единственный источник GB.
         is_combo = result.get("is_combo", False)
+        bypass_created_fresh = result.get("bypass_created_fresh", False)
         _skip_bypass = (
             not expires_at
             or subscription_type in ("trial", "telegram_premium", "telegram_stars")
             or subscription_type in config.BIZ_TARIFFS
+            or bypass_created_fresh  # fresh entity → уже с финальным лимитом
         )
+        if bypass_created_fresh and not _skip_bypass:
+            # Не должно случиться (fresh уже в _skip_bypass) — защита от рефакторингов.
+            _skip_bypass = True
+        if bypass_created_fresh:
+            logger.info(
+                "BYPASS_TOPUP_SKIPPED_FRESH_ENTITY: provider=%s user=%s tariff=%s "
+                "is_combo=%s — bypass entity создан с финальным лимитом в provision_subscription",
+                provider, telegram_id, subscription_type, is_combo,
+            )
+            # Для combo всё равно записываем в traffic_purchases (для Traffic Audit).
+            if is_combo:
+                try:
+                    _pd_combo = result.get("period_days", 30) or 30
+                    _combo_key = f"combo_{subscription_type}"
+                    _combo_info = config.COMBO_TARIFFS.get(_combo_key, {}).get(_pd_combo)
+                    if _combo_info:
+                        await database.record_traffic_purchase(
+                            telegram_id, int(_combo_info["gb"]), 0,
+                        )
+                except Exception as _rp_err:
+                    logger.warning(
+                        "record_traffic_purchase (fresh combo) failed user=%s: %s",
+                        telegram_id, _rp_err,
+                    )
         if not _skip_bypass:
             _pd = result.get("period_days", 30) or 30
             gb_to_add = 0

@@ -4562,12 +4562,17 @@ async def finalize_purchase(
                         subscription_end=subscription_end_pre,
                         period_days=period_days,
                         is_trial=False,  # finalize_purchase is paid flow only
+                        is_combo=is_combo_purchase,  # 🆕 fresh combo → bypass с 75 GB
                     )
                     pre_provisioned_uuid = {
                         "uuid": vless_result["uuid"].strip(),
                         "vless_url": vless_result["vless_url"],
                         "vless_url_plus": vless_result.get("vless_url_plus"),
                         "subscription_type": vless_result.get("subscription_type") or tariff_type or "basic",
+                        # 🆕 True if we just created the bypass entity — confirmation
+                        # SHOULD NOT top-up again (иначе double-add: 75+75=150 для combo,
+                        # 10+10=20 для обычной basic 30d).
+                        "bypass_created_fresh": bool(vless_result.get("bypass_created_fresh", False)),
                     }
                     uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                     logger.info(
@@ -4975,6 +4980,7 @@ async def finalize_purchase(
                         "is_renewal": False,
                         "is_combo": is_combo_purchase,
                         "period_days": period_days,
+                        "bypass_created_fresh": bool(pre_provisioned_uuid.get("bypass_created_fresh")) if pre_provisioned_uuid else False,
                     }
                 else:
                     # Получаем VPN ключ для нормальной активации
@@ -5096,6 +5102,9 @@ async def finalize_purchase(
                         "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
                         "is_combo": is_combo_purchase,
                         "period_days": period_days,
+                        # 🆕 Fresh bypass — уже создан с ФИНАЛЬНЫМ лимитом (75 GB для combo,
+                        # 10 GB для basic). confirmation.py: skip top-up → no double-add.
+                        "bypass_created_fresh": bool(pre_provisioned_uuid.get("bypass_created_fresh")) if pre_provisioned_uuid else False,
                     }
         except Exception as tx_err:
             # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray
