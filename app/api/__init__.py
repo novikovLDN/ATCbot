@@ -10,6 +10,7 @@ from app.api import telegram_webhook
 from app.api import payment_webhook
 from app.api import deeplink_redirect
 from app.api import subscription_proxy
+from app.api import sub_aggregator_route
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,17 @@ try:
         logger.info("SUBSCRIPTION_PROXY_ENABLED — mounted /sub/{uuid} + /api/sub/{token}")
 except Exception:
     logger.exception("subscription_proxy mount failed")
+
+# Sub-aggregator embedded endpoint — GET /a/{token}.
+# Работает если SUB_AGGREGATOR_ENABLED=True в config.py. RF-1 nginx делает
+# HTTPS reverse-proxy https://subscription.palantirdns.uk/{token} → сюда.
+try:
+    import config as _cfg
+    if getattr(_cfg, "SUB_AGGREGATOR_ENABLED", False):
+        app.include_router(sub_aggregator_route.router)
+        logger.info("SUB_AGGREGATOR_ENABLED — mounted /a/{token}")
+except Exception:
+    logger.exception("sub_aggregator_route mount failed")
 
 # Admin web dashboard — mounted only when JWT_SECRET + DASHBOARD_BASE_URL are
 # set (config.DASHBOARD_ENABLED). When disabled, the bot runs identically to

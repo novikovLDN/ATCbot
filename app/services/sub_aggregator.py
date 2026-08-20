@@ -59,8 +59,13 @@ def is_enabled_for(telegram_id: int) -> bool:
 
 
 def build_public_url(token: str) -> str:
-    """https://<SUB_DOMAIN>/<token> — то, что мы отдаём клиенту."""
-    return f"{config.SUB_AGGREGATOR_URL}/{token}"
+    """Публичная ссылка на агрегатор.
+
+    Формат: https://subscription.palantirdns.uk/a/{token}
+    - RF-1 nginx reverse-proxies /a/{token} → https://api.atlassecure.ru/a/{token}
+    - Бот embedded-endpoint app/api/sub_aggregator_route.py делает merge и отдаёт.
+    """
+    return f"{config.SUB_AGGREGATOR_URL}/a/{token}"
 
 
 def _generate_token() -> str:
@@ -191,33 +196,17 @@ async def revoke(telegram_id: int) -> None:
 
 
 async def invalidate(token: str) -> bool:
-    """POST /internal/invalidate/<token> — fire-and-forget best-effort.
-    Returns True on success, False on any error (log-warn, don't raise —
-    aggregator will refresh naturally after CACHE_TTL anyway)."""
-    if not config.SUB_AGGREGATOR_URL or not config.SUB_AGGREGATOR_INTERNAL_SECRET:
-        return False
-    if not token:
-        return False
-    url = f"{config.SUB_AGGREGATOR_URL}/internal/invalidate/{token}"
-    try:
-        client = _get_client()
-        resp = await client.post(
-            url,
-            headers={"x-internal-secret": config.SUB_AGGREGATOR_INTERNAL_SECRET},
-        )
-        if resp.status_code == 200:
-            return True
-        logger.warning(
-            "SUB_AGGREGATOR_INVALIDATE_BAD_STATUS token=%s… status=%s body=%s",
-            token[:6], resp.status_code, resp.text[:120],
-        )
-        return False
-    except Exception as e:
-        logger.warning(
-            "SUB_AGGREGATOR_INVALIDATE_FAIL token=%s… err=%s",
-            token[:6], str(e)[:120],
-        )
-        return False
+    """No-op — embedded агрегатор в боте кэша не имеет.
+
+    Раньше POST'или /internal/invalidate/<token> в отдельный Node-сервис
+    с Redis-кешем. Сейчас aggregator = FastAPI endpoint внутри бота
+    (app/api/sub_aggregator_route.py), каждый GET тянет из панели напрямую.
+    Инвалидировать нечего.
+
+    Функция оставлена для обратной совместимости — все callers (renew,
+    add_traffic, purchase confirm) продолжают её звать, no-op-ит.
+    """
+    return True
 
 
 def invalidate_bg(telegram_id: int) -> None:
