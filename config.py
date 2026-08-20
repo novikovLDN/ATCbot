@@ -634,3 +634,21 @@ LEGACY_SAMOPIS_SUB_BASE_URL = env(
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# Sub-aggregator service — константы (без ENV).
+#
+# Меняешь прямо здесь и рестартишь бота. Держим захардкоженным чтобы не
+# плодить переменные окружения в Railway UI.
+#
+# INTERNAL_SECRET должен совпадать с тем, что в .env сервиса-агрегатора
+# (sub-aggregator/.env → INTERNAL_SECRET). Пустая строка → invalidate
+# skip-нётся, кеш обновится через CACHE_TTL (5 мин) автоматически —
+# приемлемо для беты.
+# ─────────────────────────────────────────────────────────────────────────
+
+SUB_AGGREGATOR_ENABLED = True
+SUB_AGGREGATOR_URL = "https://subscription.palantirdns.uk"
+SUB_AGGREGATOR_ADMIN_ONLY = True   # beta-gate; флип на False когда протестируем
+SUB_AGGREGATOR_INTERNAL_SECRET = ""  # заполни после генерации в sub-aggregator/.env
+

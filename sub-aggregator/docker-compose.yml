@@ -1,0 +1,49 @@
+# Minimal compose: aggregator + redis. Postgres is assumed to live on the
+# host (bot's DB) — override PG_DSN via .env to point at it.
+#
+#   docker compose up -d
+#
+# nginx (origin) terminates TLS and proxies to 127.0.0.1:8080 — see nginx/origin.conf.
+
+services:
+  aggregator:
+    build: .
+    image: sub-aggregator:local
+    container_name: sub-aggregator
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 3s
+
+  redis:
+    image: redis:7-alpine
+    container_name: sub-aggregator-redis
+    restart: unless-stopped
+    # No persistence: cache-only, restart is cheap; --save "" disables
+    # RDB, --appendonly no disables AOF. LRU eviction so memory stays bounded.
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - "512mb"
+      - --maxmemory-policy
+      - "allkeys-lru"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 3

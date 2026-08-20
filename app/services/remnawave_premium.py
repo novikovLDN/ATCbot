@@ -461,6 +461,13 @@ async def renew_premium_user(telegram_id: int, new_expire_at: datetime) -> bool:
                     telegram_id, rmn_uuid[:8], _iso_z(new_expire_at),
                     (external_squad_uuid or "")[:8] or "—", attempt,
                 )
+                # Sub-aggregator: premium expireAt изменился → бросить кеш,
+                # чтобы клиент увидел новый срок в userinfo. Fire-and-forget.
+                try:
+                    from app.services import sub_aggregator
+                    sub_aggregator.invalidate_bg(telegram_id)
+                except Exception:
+                    pass
                 return True
             logger.warning(
                 "REMNAWAVE_PREMIUM_RENEW_FAILED_ATTEMPT: tg=%s uuid=%s attempt=%d/%d",

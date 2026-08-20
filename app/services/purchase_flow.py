@@ -320,6 +320,16 @@ async def provision_subscription(
         bypass_bytes if bypass_created_fresh else "(untouched)",
     )
 
+    # Sub-aggregator hook: entities только что созданы/продлены → нужно
+    # выкинуть кеш и перечитать. Fire-and-forget, no-op если агрегатор
+    # отключён (SUB_AGGREGATOR_ENABLED=false) или юзер не в бета-скоупе
+    # (SUB_AGGREGATOR_ADMIN_ONLY=true и юзер не админ).
+    try:
+        from app.services import sub_aggregator
+        sub_aggregator.invalidate_bg(telegram_id)
+    except Exception as _agg_err:
+        logger.warning("sub_aggregator hook failed tg=%s: %s", telegram_id, _agg_err)
+
     return {
         # legacy uuid lives in subscriptions.uuid; the connection uuid that
         # ended up in the panel may differ if forced-uuid was rejected.
