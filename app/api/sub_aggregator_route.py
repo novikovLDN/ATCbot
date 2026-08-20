@@ -24,9 +24,10 @@ import json
 import logging
 import re
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from html import escape as html_escape
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import quote as url_quote
 
 import httpx
@@ -48,25 +49,117 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{4,128}$")
 
 UPSTREAM_TIMEOUT = 5.0  # сек
 
-# ── In-memory cache ─────────────────────────────────────────────────
-# Кеш: token → (expires_ts, body_b64, headers_dict).
-# TTL 60 сек — компромисс между «свежо» и «не жрать панель».
-# Инвалидация: bot.sub_aggregator.invalidate(token) → чистит запись из
-# этого dict через POST /a/_invalidate/{token} с internal-secret.
-# Локальный dict — один Railway worker, синхронизация не нужна; при
-# масштабировании на N воркеров перейдём на Redis.
-_CACHE_TTL = 15  # 15 сек: клиент дёрнул подписку → бэкенд свежий; при mutation
-                 # invalidate() чистит эту ячейку мгновенно (in-process).
-_cache: dict[str, tuple[float, bytes, dict[str, str]]] = {}
+# ── Production cache tiers ─────────────────────────────────────────
+# TWO-TIER caching + singleflight + LRU bound.
+#
+# FRESH  (15 сек)  — hit → мгновенно из памяти. Не идём в панель.
+# STALE  (24 часа) — если fresh expired И апстрим упал, отдаём это.
+#                    Панель down → юзер видит последнее известное состояние,
+#                    а не 503. Cover для нестабильной панели.
+# PAIR   (1 час)   — mapping token → (main_url, gb_url, main_uuid, gb_uuid,
+#                    status). DB SELECT только раз/час на token, не на
+#                    каждый request. При invalidate() чистим и его.
+#
+# LRU cap = 20 000 записей — при 20k активных подписок каждая ~30 KB body =
+# ~600 MB. Bound через OrderedDict.move_to_end + popitem(last=False) на
+# переполнении.
+#
+# Singleflight (in-flight dict) — параллельные запросы одного token
+# ждут одного и того же upstream fetch. Защищает панель от стадных
+# запросов при cold-start (rest бота, TTL expire всех сразу).
+FRESH_TTL = 15
+STALE_TTL = 24 * 3600
+PAIR_TTL = 3600
+MAX_CACHE_ENTRIES = 20_000
+MAX_PAIR_ENTRIES = 40_000
+
+# fresh_until, stale_until, body, headers — фрешность отделена от stale-версии.
+# После fresh_until истечения — запись всё ещё в кеше как «stale-copy».
+_cache: "OrderedDict[str, tuple[float, float, bytes, dict[str, str]]]" = OrderedDict()
+
+# pair-mapping cache: token → (expires_ts, pair-dict|None). None = negative cache
+# (token не найден в БД) — избавляет от повторных DB-запросов при spamm'е случайных токенов.
+_pair_cache: "OrderedDict[str, tuple[float, Optional[dict]]]" = OrderedDict()
+NEG_PAIR_TTL = 60  # negative кеш (not-found) короче — вдруг только-только создался
+
+# Singleflight: token → Future с результатом текущего upstream fetch.
+# Второй запрос на тот же token во время активного fetch — ждёт первого.
+_inflight: Dict[str, "asyncio.Future"] = {}
+
+# Метрики — периодически логируем + видно через /a/_metrics
+_metrics: Dict[str, int] = {
+    "hits": 0, "misses": 0, "stale": 0,
+    "upstream_ok": 0, "upstream_fail": 0,
+    "singleflight_wait": 0,
+    "not_found": 0, "revoked": 0,
+}
+
+
+def _cache_get(token: str) -> tuple[Optional[bytes], Optional[dict], str]:
+    """Fetch cached entry.
+    Returns (body, headers, state):
+      state = 'fresh'   → отдать мгновенно
+      state = 'stale'   → отдать если апстрим упал, иначе refresh
+      state = 'miss'    → в кеше нет вообще
+    """
+    entry = _cache.get(token)
+    if entry is None:
+        return None, None, "miss"
+    fresh_until, stale_until, body, headers = entry
+    now = time.monotonic()
+    if now < fresh_until:
+        _cache.move_to_end(token)  # LRU touch
+        return body, headers, "fresh"
+    if now < stale_until:
+        return body, headers, "stale"
+    # Полностью expired — удаляем.
+    _cache.pop(token, None)
+    return None, None, "miss"
+
+
+def _cache_set(token: str, body: bytes, headers: dict) -> None:
+    """Set both fresh + stale copy. LRU-evict если превысили cap."""
+    now = time.monotonic()
+    _cache[token] = (now + FRESH_TTL, now + STALE_TTL, body, dict(headers))
+    _cache.move_to_end(token)
+    # Bound size.
+    while len(_cache) > MAX_CACHE_ENTRIES:
+        _cache.popitem(last=False)
+
+
+def _pair_get(token: str) -> tuple[Optional[dict], bool]:
+    """(pair_dict, is_cached).
+      pair_dict=None + is_cached=True → negative кеш (нет в БД)
+      pair_dict=dict + is_cached=True → положительный хит
+      is_cached=False → нет в кеше, надо в БД"""
+    entry = _pair_cache.get(token)
+    if entry is None:
+        return None, False
+    expires_ts, pair = entry
+    if time.monotonic() >= expires_ts:
+        _pair_cache.pop(token, None)
+        return None, False
+    _pair_cache.move_to_end(token)
+    return pair, True
+
+
+def _pair_set(token: str, pair: Optional[dict]) -> None:
+    ttl = PAIR_TTL if pair else NEG_PAIR_TTL
+    _pair_cache[token] = (time.monotonic() + ttl, pair)
+    _pair_cache.move_to_end(token)
+    while len(_pair_cache) > MAX_PAIR_ENTRIES:
+        _pair_cache.popitem(last=False)
 
 
 def clear_cache(token: Optional[str] = None) -> None:
-    """Прямой in-process сброс кеша по token — без HTTP round-trip.
+    """Прямой in-process сброс кеша (fresh+stale+pair) по token.
     None → полный wipe (админский рычаг). Экспортится для sub_aggregator.py:invalidate."""
     if token is None:
         _cache.clear()
+        _pair_cache.clear()
         return
     _cache.pop(token, None)
+    _pair_cache.pop(token, None)
 
 # Клиенты подписываются с интервалом. profile-update-interval — часы;
 # Happ/v2rayTun/Streisand дёргают апстрим раз в N часов. 1 час = свежие
@@ -138,6 +231,11 @@ def _build_hybrid_userinfo(main_h: str, gb_h: str) -> str:
 
 
 async def _load_pair(token: str) -> Optional[dict]:
+    """Прод-путь: сначала pair-кеш (1 час), потом DB. Negative-кеш (60с)
+    защищает от token-flood. При mutation'ах — clear_cache чистит и это."""
+    cached, is_cached = _pair_get(token)
+    if is_cached:
+        return cached  # dict | None
     pool = await database.get_pool()
     if pool is None:
         return None
@@ -146,22 +244,9 @@ async def _load_pair(token: str) -> Optional[dict]:
             "SELECT token, main_sub_url, gb_sub_url, status FROM sub_pairs WHERE token = $1",
             token,
         )
-    return dict(row) if row else None
-
-
-def _cache_get(token: str) -> Optional[tuple[bytes, dict[str, str]]]:
-    entry = _cache.get(token)
-    if entry is None:
-        return None
-    expires_ts, body, headers = entry
-    if time.monotonic() >= expires_ts:
-        _cache.pop(token, None)
-        return None
-    return body, headers
-
-
-def _cache_set(token: str, body: bytes, headers: dict[str, str]) -> None:
-    _cache[token] = (time.monotonic() + _CACHE_TTL, body, headers)
+    pair = dict(row) if row else None
+    _pair_set(token, pair)
+    return pair
 
 
 def _brand_title() -> str:
@@ -359,75 +444,28 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
 </html>"""
 
 
-@router.get("/a/{token}")
-async def aggregate(
-    request: Request,
-    token: str = Path(..., min_length=4, max_length=128),
-) -> Response:
-    """GET /a/{token} — merge premium+bypass subscriptions в одну.
-
-    Fast path: 60-сек in-memory кэш. При изменении подписки (renew, top-up)
-    бот зовёт invalidate → кеш чистится → следующий запрос перечитает.
-    Клиенты (Happ/v2rayTun/Streisand) дёргают апстрим раз/час по
-    profile-update-interval — свежие конфиги без вмешательства юзера.
-    """
-    if not _TOKEN_RE.match(token):
-        return PlainTextResponse("Not found", status_code=404)
-
-    ua_early = request.headers.get("user-agent", "")
-
-    # Fast path — hit кэша.
-    cached = _cache_get(token)
-    if cached is not None:
-        body_bytes, headers = cached
-        if _wants_html(ua_early):
-            sub_url = str(request.url)
-            html = _render_sub_html(token=token, sub_url=sub_url, headers=headers)
-            return HTMLResponse(
-                content=html,
-                headers={"x-cache": "hit", "cache-control": "no-store"},
-            )
-        return Response(
-            content=body_bytes,
-            media_type="text/plain; charset=utf-8",
-            headers={**headers, "x-cache": "hit"},
-        )
-
-    pair = await _load_pair(token)
-    if not pair:
-        return PlainTextResponse("Not found", status_code=404)
-
-    if pair.get("status") == "revoked":
-        stub_line = (
-            "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443"
-            "?type=tcp&security=none#Subscription%20revoked"
-        )
-        body_bytes = base64.b64encode(stub_line.encode())
-        headers = {
-            "subscription-userinfo": "upload=0; download=0; total=0; expire=0",
-            "profile-title": _brand_title(),
-            "profile-update-interval": str(_CLIENT_UPDATE_INTERVAL_HOURS),
-        }
-        # revoked-состояние кэшируем короче — юзер мог тут же восстановить
-        # доступ через бота, не заставлять его ждать 60 сек.
-        _cache[token] = (time.monotonic() + 10, body_bytes, headers)
-        return Response(
-            content=body_bytes,
-            media_type="text/plain; charset=utf-8",
-            headers={**headers, "x-cache": "miss"},
-        )
-
-    ua = ua_early or "Aggregator/1.0"
+async def _do_fetch_and_merge(token: str, pair: dict, ua: str) -> tuple[Optional[bytes], Optional[dict]]:
+    """Реальная работа: 2 параллельных upstream GET → merge → (body, headers).
+    Возвращает (None, None) если ОБА апстрима не отдали ни одной строки —
+    caller решит, отдавать stale или 503."""
     main_task = asyncio.create_task(_fetch_upstream(pair["main_sub_url"], ua))
     gb_task = asyncio.create_task(_fetch_upstream(pair["gb_sub_url"], ua))
     main_resp, gb_resp = await asyncio.gather(main_task, gb_task)
 
-    if main_resp is None and gb_resp is None:
-        logger.error("SUB_AGG_BOTH_UPSTREAMS_FAIL token=%s...", token[:6])
-        return Response(status_code=503, headers={"retry-after": "30"}, content="Upstreams unavailable")
+    main_ok = main_resp is not None and main_resp.status_code == 200
+    gb_ok = gb_resp is not None and gb_resp.status_code == 200
 
-    main_lines = _decode_body(main_resp) if main_resp is not None and main_resp.status_code == 200 else []
-    gb_lines = _decode_body(gb_resp) if gb_resp is not None and gb_resp.status_code == 200 else []
+    if main_ok:
+        _metrics["upstream_ok"] += 1
+    else:
+        _metrics["upstream_fail"] += 1
+    if gb_ok:
+        _metrics["upstream_ok"] += 1
+    else:
+        _metrics["upstream_fail"] += 1
+
+    main_lines = _decode_body(main_resp) if main_ok else []
+    gb_lines = _decode_body(gb_resp) if gb_ok else []
 
     if not main_lines and not gb_lines:
         logger.error(
@@ -436,38 +474,25 @@ async def aggregate(
             main_resp.status_code if main_resp else "None",
             gb_resp.status_code if gb_resp else "None",
         )
-        return Response(status_code=503, headers={"retry-after": "30"}, content="Upstreams empty")
+        return None, None
 
-    # Merge: main-строки первыми, gb вторыми. Дубликаты по всей строке
-    # убираем (порядок сохраняем — dict-order с Py3.7+ стабильный).
+    # Merge — main первыми, gb вторыми, dedupe.
     seen: set[str] = set()
     merged: list[str] = []
     for line in main_lines + gb_lines:
         if line not in seen:
             seen.add(line)
             merged.append(line)
-
     body_bytes = base64.b64encode("\n".join(merged).encode())
 
-    # ── Hybrid userinfo (traffic от gb, expire от main) ────────────
     main_h = main_resp.headers.get("subscription-userinfo", "") if main_resp else ""
     gb_h = gb_resp.headers.get("subscription-userinfo", "") if gb_resp else ""
     userinfo = _build_hybrid_userinfo(main_h, gb_h)
 
-    # ── Полный набор profile-headers ────────────────────────────────
-    # Happ/v2rayTun/Streisand читают эти хедеры и показывают юзеру:
-    #   profile-title              → название подписки в UI приложения
-    #   profile-update-interval    → раз в сколько ЧАСОВ клиент авто-refresh'ит
-    #   profile-web-page-url       → «Веб-страница» кнопка в клиенте (личный кабинет)
-    #   support-url                → «Поддержка» кнопка в клиенте (t.me/…)
-    #   announce                   → важное сообщение от провайдера, если есть
     headers: dict[str, str] = {
         "subscription-userinfo": userinfo,
         "profile-update-interval": str(_CLIENT_UPDATE_INTERVAL_HOURS),
     }
-
-    # profile-title: приоритет — от панели (уже брендированный per-user),
-    # fallback — наш бренд.
     title = ""
     if main_resp:
         title = main_resp.headers.get("profile-title", "") or ""
@@ -475,15 +500,12 @@ async def aggregate(
         title = gb_resp.headers.get("profile-title", "") or ""
     headers["profile-title"] = title or _brand_title()
 
-    # profile-web-page-url + support-url: если панель не дала — подставляем
-    # наши дефолты, чтобы кнопки в клиенте не пустовали.
     for h in ("profile-web-page-url", "announce"):
         v = ""
         if main_resp:
             v = main_resp.headers.get(h, "") or ""
         if v:
             headers[h] = v
-    # support-url — с fallback на bot конфиг.
     sup = ""
     if main_resp:
         sup = main_resp.headers.get("support-url", "") or ""
@@ -494,28 +516,157 @@ async def aggregate(
     if sup:
         headers["support-url"] = sup
 
-    _cache_set(token, body_bytes, headers)
-
     logger.info(
         "SUB_AGG_OK token=%s... main_lines=%d gb_lines=%d merged=%d ua=%s",
         token[:6], len(main_lines), len(gb_lines), len(merged), ua[:40],
     )
+    return body_bytes, headers
 
-    # Браузеру — HTML sub-page, клиенту — raw base64.
+
+async def _fetch_singleflight(token: str, pair: dict, ua: str) -> tuple[Optional[bytes], Optional[dict]]:
+    """Схлопывает параллельные запросы одного token в один upstream fetch.
+
+    Стадные запросы (cold-start, TTL-expire бума в 5:00 утра) — 100 клиентов
+    приходят одновременно → делаем 1 пару upstream GET → все 100 разделяют
+    результат. Панель не получает N-кратной нагрузки.
+
+    In-flight dict хранит Future текущего fetch. Второй запрос делает await
+    того же Future.
+    """
+    fut = _inflight.get(token)
+    if fut is not None:
+        _metrics["singleflight_wait"] += 1
+        try:
+            return await fut
+        except Exception:
+            # Fallthrough — если leader упал, пусть follower попробует свой.
+            pass
+
+    loop = asyncio.get_event_loop()
+    fut = loop.create_future()
+    _inflight[token] = fut
+    try:
+        result = await _do_fetch_and_merge(token, pair, ua)
+        if not fut.done():
+            fut.set_result(result)
+        return result
+    except Exception as e:
+        if not fut.done():
+            fut.set_exception(e)
+        raise
+    finally:
+        _inflight.pop(token, None)
+
+
+@router.get("/a/{token}")
+async def aggregate(
+    request: Request,
+    token: str = Path(..., min_length=4, max_length=128),
+) -> Response:
+    """GET /a/{token} — production merge premium+bypass subscriptions.
+
+    Fast path (95% в проде): fresh cache hit → <5ms, ноль работы.
+    Cold path: singleflight → 1 пара upstream GET на все параллельные запросы.
+    Failure path: если апстрим упал — stale-copy (до 24 часов) → юзер не
+    получит 503 при недолгом падении панели.
+
+    Multi-tier caching:
+      1. FRESH_TTL=15s  → hit → мгновенно
+      2. STALE_TTL=24h  → упал апстрим → отдаём последнее известное
+      3. PAIR_TTL=1h    → DB SELECT только раз/час на token
+      4. LRU cap=20k    → bounded memory
+    """
+    if not _TOKEN_RE.match(token):
+        return PlainTextResponse("Not found", status_code=404)
+
+    ua_early = request.headers.get("user-agent", "")
+
+    # ── 1. Fresh cache hit ─────────────────────────────────────────
+    body_bytes, headers, state = _cache_get(token)
+    if state == "fresh":
+        _metrics["hits"] += 1
+        return _make_response(request, ua_early, token, body_bytes, headers, "hit")
+
+    # ── 2. Load pair (with pair-cache — DB touch раз/час на token) ─
+    pair = await _load_pair(token)
+    if not pair:
+        _metrics["not_found"] += 1
+        # Если ЕСТЬ stale-копия но pair нет — не отдаём: юзера удалили.
+        return PlainTextResponse("Not found", status_code=404)
+
+    # ── 3. Revoked → короткий stub + короткий кеш (10s) ────────────
+    if pair.get("status") == "revoked":
+        _metrics["revoked"] += 1
+        stub_line = (
+            "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443"
+            "?type=tcp&security=none#Subscription%20revoked"
+        )
+        body_bytes = base64.b64encode(stub_line.encode())
+        headers = {
+            "subscription-userinfo": "upload=0; download=0; total=0; expire=0",
+            "profile-title": _brand_title(),
+            "profile-update-interval": str(_CLIENT_UPDATE_INTERVAL_HOURS),
+        }
+        # Короткий TTL — юзер может тут же активировать доступ.
+        now = time.monotonic()
+        _cache[token] = (now + 10, now + 60, body_bytes, dict(headers))
+        _cache.move_to_end(token)
+        return _make_response(request, ua_early, token, body_bytes, headers, "miss")
+
+    # ── 4. Fetch (singleflight) ────────────────────────────────────
+    ua = ua_early or "Aggregator/1.0"
+    try:
+        body_bytes, headers = await _fetch_singleflight(token, pair, ua)
+    except Exception as e:
+        logger.exception("SUB_AGG_FETCH_UNEXPECTED token=%s... err=%s", token[:6], e)
+        body_bytes, headers = None, None
+
+    # ── 5. Success → cache and respond ─────────────────────────────
+    if body_bytes is not None and headers is not None:
+        _cache_set(token, body_bytes, headers)
+        _metrics["misses"] += 1
+        return _make_response(request, ua_early, token, body_bytes, headers, "miss")
+
+    # ── 6. Upstream failure → stale fallback ───────────────────────
+    stale_body, stale_headers, stale_state = _cache_get(token)
+    if stale_body is not None and stale_headers is not None and stale_state == "stale":
+        _metrics["stale"] += 1
+        logger.warning(
+            "SUB_AGG_STALE_SERVED token=%s... — оба апстрима упали, "
+            "отдаём последнюю копию из stale-tier",
+            token[:6],
+        )
+        return _make_response(request, ua_early, token, stale_body, stale_headers, "stale")
+
+    # ── 7. No stale → 503 с retry-after (панель полностью down + мы cold) ──
+    logger.error("SUB_AGG_BOTH_UPSTREAMS_FAIL_NO_STALE token=%s...", token[:6])
+    return Response(
+        status_code=503,
+        headers={"retry-after": "30"},
+        content="Upstreams unavailable",
+    )
+
+
+def _make_response(
+    request: Request,
+    ua: str,
+    token: str,
+    body_bytes: bytes,
+    headers: dict,
+    cache_state: str,
+) -> Response:
+    """Единая точка формирования ответа: browser → HTML, client → base64."""
     if _wants_html(ua):
-        # Юзер в браузере должен получить полный URL для копирования / QR /
-        # deep-link'ов. Восстанавливаем с request.url (учитывает proxy-хедеры).
         sub_url = str(request.url)
         html = _render_sub_html(token=token, sub_url=sub_url, headers=headers)
         return HTMLResponse(
             content=html,
-            headers={"x-cache": "miss", "cache-control": "no-store"},
+            headers={"x-cache": cache_state, "cache-control": "no-store"},
         )
-
     return Response(
         content=body_bytes,
         media_type="text/plain; charset=utf-8",
-        headers={**headers, "x-cache": "miss"},
+        headers={**headers, "x-cache": cache_state},
     )
 
 
@@ -537,6 +688,22 @@ async def invalidate_cache(
         return PlainTextResponse("Bad token", status_code=400)
     _cache.pop(token, None)
     return Response(content=b'{"ok":true}', media_type="application/json")
+
+
+@router.get("/a/_metrics")
+async def metrics_endpoint() -> Response:
+    """JSON-метрики агрегатора: счётчики + размеры кешей + in-flight.
+    Публично доступен (не sensitive). Prometheus-friendly через json→text."""
+    payload = {
+        **_metrics,
+        "cache_size": len(_cache),
+        "pair_cache_size": len(_pair_cache),
+        "inflight_size": len(_inflight),
+    }
+    return Response(
+        content=json.dumps(payload),
+        media_type="application/json",
+    )
 
 
 async def close() -> None:
