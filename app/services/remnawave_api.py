@@ -462,6 +462,29 @@ async def get_all_users(
     return collected
 
 
+async def _is_premium_entity(numeric_id: int) -> bool:
+    """True если numeric_id принадлежит PREMIUM entity (tg_*_premium в панели).
+
+    Смотрим `subscriptions.remnawave_premium_id`. Cheap SELECT + очень
+    важная defensive-проверка: premium должен ВСЕГДА оставаться
+    trafficLimitBytes=0 (безлимит по ТЗ), любой PATCH с лимитом на
+    premium — баг вышестоящего кода, дропаем.
+    """
+    try:
+        import database
+        pool = await database.get_pool()
+        if pool is None:
+            return False
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM subscriptions WHERE remnawave_premium_id = $1 LIMIT 1",
+                int(numeric_id),
+            )
+        return row is not None
+    except Exception:
+        return False
+
+
 async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, Any]]:
     """PATCH /api/users — обновить поля юзера (3.x canonical).
 
@@ -469,8 +492,12 @@ async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, 
     find_user_by_telegram_id → берём numeric id.
 
     Единицы трафика: только `trafficLimitBytes` (bytes, integer) —
-    каноническое поле 3.3. Раньше зеркалили в Gb/Mb — панель иногда
-    применяла Mb как байты → лимит обнулялся → "трафик истёк".
+    каноническое поле 3.3.
+
+    🔒 SAFETY-GUARD: premium entity ВСЕГДА безлимит (trafficLimitBytes=0
+    по ТЗ). Если кто-то (баг в вышестоящем коде) шлёт trafficLimitBytes
+    для premium → дропаем поле и логируем WARNING. Иначе получаем
+    LIMITED-premium как жаловался клиент.
     """
     resolved = await _resolve_to_int_id(user_id)
     if resolved is None:
@@ -480,6 +507,18 @@ async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, 
     # источник истины для лимита.
     fields.pop("trafficLimitGb", None)
     fields.pop("trafficLimitMb", None)
+    # Premium никогда не должен получать trafficLimitBytes-лимит.
+    if "trafficLimitBytes" in fields and await _is_premium_entity(resolved):
+        logger.warning(
+            "update_user: SAFETY-DROP trafficLimitBytes=%s for PREMIUM entity id=%s "
+            "(premium должен быть безлимит по ТЗ, PATCH мимо-ушёл на premium вместо bypass)",
+            fields.get("trafficLimitBytes"), resolved,
+        )
+        fields.pop("trafficLimitBytes", None)
+        # Пустой PATCH не имеет смысла — если ТОЛЬКО trafficLimitBytes был
+        # в fields, ничего не отправляем.
+        if not fields:
+            return {"id": resolved, "skipped": "premium_traffic_guard"}
     body = {"id": resolved, **fields}
     return await _request("PATCH", "/api/users", json=body)
 

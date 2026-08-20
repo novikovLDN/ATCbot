@@ -108,6 +108,24 @@ export function TrafficAudit() {
       toast.error((e as ApiError)?.detail ?? "Resync упал"),
   });
 
+  const resetPremiumUnlim = useMutation({
+    mutationFn: (dry: boolean) => endpoints.remnawaveResetPremiumUnlimited(dry),
+    onSuccess: (data) => {
+      if (data.dry_run) {
+        toast.success(
+          `Dry-run: нашли ${data.limited} premium с лимитом (из ${data.total}). Нажми ещё раз "Применить" чтобы сбросить.`,
+        );
+      } else {
+        toast.success(
+          `Сброшено: ${data.reset} premium → безлимит (было ограничено: ${data.limited})`,
+        );
+      }
+    },
+    onError: (e: unknown) =>
+      toast.error((e as ApiError)?.detail ?? "Reset упал"),
+  });
+  const [confirmResetPrem, setConfirmResetPrem] = useState(false);
+
   const [confirmAll, setConfirmAll] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [kindFilter, setKindFilter] = useState<Kind | "all">("desync");
@@ -189,6 +207,76 @@ export function TrafficAudit() {
           </button>
         </div>
       </header>
+
+      {/* Emergency: reset all premium entities to unlimited */}
+      <section className="card border-danger/30 bg-danger/5 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-danger">
+              🚨 Сбросить ВСЕ premium → безлимит
+            </div>
+            <p className="mt-0.5 text-xs text-fg-muted">
+              По ТЗ premium — без лимита ГБ. Если бот случайно PATCH-нул
+              trafficLimitBytes на premium (баг), они уходят в LIMITED.
+              Кнопка ставит trafficLimitBytes=0 + status=ACTIVE для всех
+              premium entities разом.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {!confirmResetPrem ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => resetPremiumUnlim.mutate(true)}
+                  disabled={resetPremiumUnlim.isPending}
+                  className="btn-secondary text-xs"
+                >
+                  {resetPremiumUnlim.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : null}
+                  Dry-run
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetPrem(true)}
+                  className="btn-danger text-xs"
+                >
+                  🚨 Применить ко всем
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="text-xs text-fg-muted">
+                  Точно PATCH всех premium → limit=0?
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetPrem(false)}
+                  className="btn-secondary text-xs"
+                  disabled={resetPremiumUnlim.isPending}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetPremiumUnlim.mutate(false, {
+                      onSettled: () => setConfirmResetPrem(false),
+                    });
+                  }}
+                  disabled={resetPremiumUnlim.isPending}
+                  className="btn-danger text-xs"
+                >
+                  {resetPremiumUnlim.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : null}
+                  Да, применить
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </section>
 
       {/* Summary */}
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
