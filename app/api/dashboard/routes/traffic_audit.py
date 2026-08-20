@@ -68,6 +68,9 @@ async def list_audit(
             batch_sleep=0.15,
         )
     except Exception as e:
+        # Логируем полный traceback чтобы диагностировать (в бразуере видна
+        # только detail). Message в detail — уже сжатая инфо для UI.
+        logger.exception("traffic_audit list failed: limit=%s user=%s", limit, user)
         raise HTTPException(500, f"audit_failed: {type(e).__name__}: {e}")
 
     summary = _summarize(results)
