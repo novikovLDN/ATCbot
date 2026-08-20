@@ -148,7 +148,11 @@ async def process_confirmed_payment(
         is_balance_topup = result.get("is_balance_topup", False)
         is_traffic_pack = result.get("is_traffic_pack", False)
 
-        # Notification failure must NOT fail the payment — DB is already committed
+        # Notification failure must NOT fail the payment — DB is already committed.
+        # add_bypass_traffic имеет self-heal → в 99% случаев первый заход успешен.
+        # Если всё-таки упало (сеть/panel outage) — админ увидит алерт и добавит
+        # GB вручную через Traffic Audit dashboard (retry опасен: add_bypass_traffic
+        # НЕ идемпотентен по purchase_id, ретрай = double-add).
         try:
             if is_traffic_pack:
                 await _handle_traffic_pack_confirmation(
@@ -172,6 +176,26 @@ async def process_confirmed_payment(
                     result=result,
                     expires_at=expires_at,
                 )
+        except TransientPaymentError as tpe:
+            # add_bypass_traffic / traffic_pack не смогли положить GB.
+            # Не ронять webhook: retry делает double-add (не идемпотентен).
+            # Алертнуть админа — он добавит через Traffic Audit dashboard.
+            logger.error(
+                f"BYPASS_GB_DELIVERY_STUCK: provider={provider} user={telegram_id} "
+                f"purchase_id={purchase_id} payment_id={payment_id} err={tpe} — "
+                f"нужен ручной add via Traffic Audit dashboard (retry опасен: double-add)"
+            )
+            try:
+                from app.services.admin_alerts import alert_payment_failure
+                await alert_payment_failure(
+                    bot, provider, telegram_id, purchase_id, tpe,
+                    is_transient=False,  # НЕ transient чтобы админ увидел и починил
+                    amount_rubles=amount_rubles,
+                    tariff=result.get("subscription_type") if isinstance(result, dict) else None,
+                    period_days=result.get("period_days") if isinstance(result, dict) else None,
+                )
+            except Exception as _ae:
+                logger.warning("BYPASS_GB_ALERT_FAIL: %s", _ae)
         except Exception as notif_err:
             logger.error(
                 f"PAYMENT_NOTIFICATION_FAILED: provider={provider}, user={telegram_id}, "

@@ -295,33 +295,45 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     Matches the customer's "трафик не сбрасывать" requirement: we read
     the current trafficLimitBytes and PATCH the sum, never reset.
     Returns True on success.
+
+    Self-heal через `get_bypass_entity_safe`: если БД-кеш (remnawave_id
+    или remnawave_uuid) указывает на PREMIUM entity (последствие
+    backfill-корапшена), helper это ловит, чистит кеш, резолвит bypass
+    entity по username=`str(tg)` и записывает правильный id обратно в БД.
+    После этого PATCH идёт на bypass, а не на premium (без SAFETY-DROP).
     """
     if not config.REMNAWAVE_ENABLED or extra_bytes <= 0:
         return False
-    import database  # lazy
-    # Приоритет — numeric bypass id (миграция 078), не путается с premium.
-    bypass_id = await database.get_remnawave_id(telegram_id)
-    cache = await database.get_remnawave_bypass_cache(telegram_id)
-    rmn_uuid = cache.get("remnawave_uuid") if cache else None
-    if not rmn_uuid:
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-    probe: Any = bypass_id if bypass_id is not None else rmn_uuid
-    if probe is None:
+
+    # Резолвим гарантированно bypass entity (self-heal DB pointers).
+    entity = await remnawave_api.get_bypass_entity_safe(telegram_id)
+    if not isinstance(entity, dict):
+        logger.warning(
+            "REMNAWAVE_BYPASS_TOPUP_NO_ENTITY: tg=%s — bypass entity не найден "
+            "в панели (нужно create). +%d bytes не применены.",
+            telegram_id, extra_bytes,
+        )
         return False
-    try:
-        user = await remnawave_api.get_user(probe)
-    except Exception as e:
-        logger.error("REMNAWAVE_BYPASS_TOPUP_GET_FAIL: tg=%s %s", telegram_id, e)
+
+    # Target — numeric id (стабильный fast path 3.x). Fallback на uuid.
+    target: Any = entity.get("id")
+    if target is None:
+        target = entity.get("uuid") or entity.get("vlessUuid")
+    if target is None:
+        logger.error(
+            "REMNAWAVE_BYPASS_TOPUP_NO_TARGET: tg=%s entity_username=%r — "
+            "resolved bypass entity без id/uuid",
+            telegram_id, entity.get("username"),
+        )
         return False
-    if not user:
-        return False
-    current_limit = int(user.get("trafficLimitBytes") or 0)
+
+    current_limit = int(entity.get("trafficLimitBytes") or 0)
     # Юзер оплатил пакет → просто добавляем ровно extra_bytes.
     # current=0 = "трафика нет" (израсходовал / не выдавали), не безлимит.
     new_limit = current_limit + int(extra_bytes)
     try:
         result = await remnawave_api.update_user(
-            probe,
+            target,
             trafficLimitBytes=new_limit,
             status="ACTIVE",
         )
@@ -331,15 +343,19 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     if result is None:
         # update_user вернул None: PATCH не отправлен (network fail ИЛИ
         # safety-drop за попытку PATCH на premium). Не логируем success.
+        # Should NOT happen после get_bypass_entity_safe (username-check
+        # гарантирует что target=bypass, не premium), но если панель
+        # вернула кривой entity — не молчим.
         logger.warning(
-            "REMNAWAVE_BYPASS_TOPUP_NOT_APPLIED: tg=%s probe=%s +%d bytes — "
-            "PATCH дропнут (см. предыдущий SAFETY-DROP WARNING)",
-            telegram_id, str(probe)[:16], extra_bytes,
+            "REMNAWAVE_BYPASS_TOPUP_NOT_APPLIED: tg=%s target=%s username=%r +%d bytes — "
+            "PATCH дропнут (см. предыдущий SAFETY-DROP WARNING). "
+            "get_bypass_entity_safe вернул не-bypass entity?",
+            telegram_id, str(target)[:16], entity.get("username"), extra_bytes,
         )
         return False
     logger.info(
-        "REMNAWAVE_BYPASS_TOPPED_UP: tg=%s probe=%s +%d bytes (new=%d)",
-        telegram_id, str(probe)[:16], extra_bytes, new_limit,
+        "REMNAWAVE_BYPASS_TOPPED_UP: tg=%s target=%s username=%r +%d bytes (new=%d)",
+        telegram_id, str(target)[:16], entity.get("username"), extra_bytes, new_limit,
     )
     return True
 
