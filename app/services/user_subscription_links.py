@@ -47,18 +47,24 @@ _lazy_provision_locks: dict[int, asyncio.Lock] = {}
 
 
 # ── Subscription host rewrite ────────────────────────────────────────
-# All URLs served *by the panel* still point at the legacy host — we do
-# NOT mutate what Remnawave stores.  But whenever a URL is about to be
-# handed to the user (button, copy-key block, deep-link redirect) we
-# swap the host.  Pure string.replace on an HTTPS URL preserves path /
-# query / fragment automatically.
+# Раньше подменяли `sub.atlassecure.ru → subscription.vps-cloud.uk` (RF-фронт).
+# vps-cloud.uk снесли — cert невалиден → Happ орёт «Сертификат недействителен».
+# До возврата на агрегатор (subscription.palantirdns.uk) — no-op rewrite:
+# отдаём URL от панели как есть (у sub.atlassecure.ru cert валидный).
+#
+# Поменять на новый хост позже — правишь _NEW_HOST одной строкой:
+#   _NEW_HOST = "subscription.palantirdns.uk"
+# после того как этот домен запущен и cert выпущен.
 _OLD_HOST = "sub.atlassecure.ru"
-_NEW_HOST = "subscription.vps-cloud.uk"
+_NEW_HOST = "sub.atlassecure.ru"  # no-op — панель сама отдаёт валидный host
 
 
 def _rewrite_sub_host(url: Optional[str]) -> Optional[str]:
-    """Swap the legacy subscription host for the new one on outbound URLs."""
+    """Swap the legacy subscription host for the new one on outbound URLs.
+    No-op пока _NEW_HOST == _OLD_HOST — отдаём URL панели без изменений."""
     if not url:
+        return url
+    if _OLD_HOST == _NEW_HOST:
         return url
     return url.replace(_OLD_HOST, _NEW_HOST)
 
