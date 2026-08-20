@@ -324,27 +324,37 @@ async def provision_subscription(
 
 
 async def sync_renewal_to_remnawave(sync_info: dict) -> None:
-    """Post-commit renewal sync — extend the user's Remnawave entities.
+    """Post-commit renewal sync — продлить ТОЛЬКО premium expireAt.
 
-    Called after a renewal DB commit (grant_access STEP 2 — extending an
-    already-active subscription).  Renews the premium entity's expireAt
-    and tops up the bypass entity; `provision_subscription` is idempotent
-    and handles both, and also creates the entities if the user somehow
-    has none yet (a legacy un-migrated subscriber renewing for the first
-    time after the cut-over).
+    Bypass GB добавляется отдельно в confirmation.py (там знают is_combo
+    и сколько GB именно этой покупки). Раньше здесь звался
+    provision_subscription, который делал double-add: +tariff_gb здесь
+    и потом +combo_gb в confirmation → юзер получал сумму (85 вместо 75
+    для combo, 20 вместо 10 для обычного renewal + случайного combo-фикса).
 
-    `sync_info` is the `renewal_xray_sync_after_commit` payload built by
-    grant_access: telegram_id, subscription_end, tariff, period_days.
-    Raises on Remnawave failure so the caller can signal the webhook to
-    return 5xx and let the payment provider retry.
+    Простая логика: renewal = продлить срок на premium. Всё.
+    Bypass GB — отдельная зона ответственности confirmation.py.
     """
-    await provision_subscription(
-        sync_info["telegram_id"],
-        tariff=sync_info.get("tariff") or "basic",
-        subscription_end=sync_info["subscription_end"],
-        period_days=int(sync_info.get("period_days") or 30),
-        is_trial=False,
-    )
+    from app.services import remnawave_premium
+    tg = int(sync_info["telegram_id"])
+    new_expire = sync_info["subscription_end"]
+    ok = await remnawave_premium.renew_premium_user(tg, new_expire)
+    if not ok:
+        # Premium entity не найден — вызовем полный provision, который
+        # создаст premium (и bypass если нужно) через preflight+adopt.
+        # Это redundancy для legacy юзеров без premium entity в панели.
+        logger.warning(
+            "sync_renewal: renew_premium_user returned False tg=%s — "
+            "falling back to full provision_subscription (creates missing entities)",
+            tg,
+        )
+        await provision_subscription(
+            tg,
+            tariff=sync_info.get("tariff") or "basic",
+            subscription_end=new_expire,
+            period_days=int(sync_info.get("period_days") or 30),
+            is_trial=False,
+        )
 
 
 async def _notify_admin_bypass_failed(

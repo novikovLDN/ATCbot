@@ -508,69 +508,91 @@ async def _send_confirmation(
             f"purchase_id={purchase_id}, subscription_activated=True"
         )
 
-        # Fire-and-forget: create or renew Remnawave bypass user
-        # Skip for combo purchases — combo traffic is managed separately
+        # ── Bypass GB accumulation ─────────────────────────────────────
+        # Единая точка добавления bypass GB (combo и обычная подписка).
+        # sync_renewal_to_remnawave теперь ТОЛЬКО продлевает premium.expireAt
+        # (см. purchase_flow.py) — bypass GB кладём здесь, ровно сколько
+        # положено по тарифу, без дублей.
+        #
+        # Правила:
+        #   combo_basic / combo_plus   → COMBO_TARIFFS[key][period]["gb"] GB
+        #   basic / plus (обычные)     → TRAFFIC_LIMITS[tariff][period] bytes
+        #   trial / telegram_* / biz   → skip (не имеют bypass ГБ по ТЗ)
         is_combo = result.get("is_combo", False)
-        try:
-            from app.services.remnawave_service import renew_remnawave_user_bg
-            if expires_at and subscription_type not in ("trial", "telegram_premium", "telegram_stars") + config.BIZ_TARIFFS and not is_combo:
-                _pd = result.get("period_days", 30) or 30
-                renew_remnawave_user_bg(telegram_id, subscription_type, expires_at, period_days=_pd)
-        except Exception as rmn_err:
-            logger.warning("REMNAWAVE_HOOK_FAIL: provider=%s tg=%s %s", provider, telegram_id, rmn_err)
-
-        # Combo: add bypass traffic (was missing for webhook payments!)
-        if is_combo:
+        _skip_bypass = (
+            not expires_at
+            or subscription_type in ("trial", "telegram_premium", "telegram_stars")
+            or subscription_type in config.BIZ_TARIFFS
+        )
+        if not _skip_bypass:
             _pd = result.get("period_days", 30) or 30
-            combo_key = f"combo_{subscription_type}"
-            combo_info = config.COMBO_TARIFFS.get(combo_key, {}).get(_pd)
-            if not combo_info:
-                logger.error("COMBO_TARIFF_NOT_FOUND: provider=%s user=%s combo_key=%s period=%s",
-                             provider, telegram_id, combo_key, _pd)
-                raise TransientPaymentError(
-                    f"combo tariff config missing: {combo_key}/{_pd}d"
+            gb_to_add = 0
+            tariff_label = subscription_type
+            if is_combo:
+                combo_key = f"combo_{subscription_type}"
+                combo_info = config.COMBO_TARIFFS.get(combo_key, {}).get(_pd)
+                if not combo_info:
+                    logger.error(
+                        "COMBO_TARIFF_NOT_FOUND: provider=%s user=%s combo_key=%s period=%s",
+                        provider, telegram_id, combo_key, _pd,
+                    )
+                    raise TransientPaymentError(
+                        f"combo tariff config missing: {combo_key}/{_pd}d"
+                    )
+                gb_to_add = int(combo_info["gb"])
+                tariff_label = combo_key
+            else:
+                # Обычная basic/plus подписка: TRAFFIC_LIMITS уже в bytes.
+                table = config.TRAFFIC_LIMITS.get(subscription_type, {})
+                if isinstance(table, dict) and _pd in table:
+                    gb_to_add = int(table[_pd]) // (1024 ** 3)
+                elif isinstance(table, dict) and table:
+                    # Ближайший период (для нестандартных pd).
+                    gb_to_add = int(table[max(k for k in table.keys() if k <= _pd)
+                                        if any(k <= _pd for k in table.keys())
+                                        else min(table.keys())]) // (1024 ** 3)
+            if gb_to_add > 0:
+                traffic_bytes = gb_to_add * (1024 ** 3)
+                baseline_bytes = await _get_current_bypass_bytes(telegram_id)
+                # Clean primitive — targeting via numeric bypass id, self-heal.
+                from app.services.remnawave_bypass import add_bypass_traffic as add_bypass_gb
+                ok = await add_bypass_gb(telegram_id, extra_bytes=traffic_bytes)
+                if not ok:
+                    logger.error(
+                        "BYPASS_TRAFFIC_FAIL: provider=%s user=%s gb=%s is_combo=%s — retry",
+                        provider, telegram_id, gb_to_add, is_combo,
+                    )
+                    raise TransientPaymentError(
+                        f"bypass-traffic add failed: user={telegram_id} gb={gb_to_add} combo={is_combo}"
+                    )
+                if is_combo:
+                    # Combo → в traffic_purchases (для Traffic Audit sum).
+                    await database.record_traffic_purchase(telegram_id, gb_to_add, 0)
+                logger.info(
+                    "BYPASS_TRAFFIC_ADDED: provider=%s user=%s gb=%s tariff=%s is_combo=%s",
+                    provider, telegram_id, gb_to_add, tariff_label, is_combo,
                 )
-            combo_gb = combo_info["gb"]
-            traffic_bytes = combo_gb * 1024**3
-            # Baseline для точной верификации diff после add_bypass_traffic.
-            baseline_bytes = await _get_current_bypass_bytes(telegram_id)
-            from app.services.remnawave_service import add_bypass_traffic
-            rmn_ok = await add_bypass_traffic(
-                telegram_id,
-                traffic_bytes,
-                subscription_type=subscription_type,
-                subscription_end=expires_at,
-                period_days=_pd,
-            )
-            if not rmn_ok:
-                logger.error("COMBO_BYPASS_TRAFFIC_FAIL: provider=%s user=%s gb=%s — webhook will retry",
-                             provider, telegram_id, combo_gb)
-                raise TransientPaymentError(
-                    f"combo bypass-traffic add failed: user={telegram_id} gb={combo_gb}"
-                )
-            await database.record_traffic_purchase(telegram_id, combo_gb, 0)
-            logger.info("COMBO_BYPASS_TRAFFIC_ADDED: provider=%s user=%s gb=%s",
-                        provider, telegram_id, combo_gb)
-            # Verify — реально ли применилось в панели. Fire-and-forget.
-            try:
-                from app.services.payments.verify_delivery import (
-                    verify_bypass_delivery, verify_premium_delivery,
-                )
-                asyncio.create_task(verify_bypass_delivery(
-                    telegram_id=telegram_id, provider=provider, kind="combo",
-                    expected_added_bytes=traffic_bytes,
-                    baseline_bytes=baseline_bytes,
-                    purchase_id=str(purchase_id), tariff=combo_key,
-                    period_days=_pd,
-                ))
-                asyncio.create_task(verify_premium_delivery(
-                    telegram_id=telegram_id, provider=provider,
-                    expected_expire_at=expires_at,
-                    purchase_id=str(purchase_id), tariff=combo_key,
-                    period_days=_pd,
-                ))
-            except Exception:
-                pass
+                # Verify реально ли долетело — fire-and-forget.
+                try:
+                    from app.services.payments.verify_delivery import (
+                        verify_bypass_delivery, verify_premium_delivery,
+                    )
+                    asyncio.create_task(verify_bypass_delivery(
+                        telegram_id=telegram_id, provider=provider,
+                        kind="combo" if is_combo else "renewal",
+                        expected_added_bytes=traffic_bytes,
+                        baseline_bytes=baseline_bytes,
+                        purchase_id=str(purchase_id), tariff=tariff_label,
+                        period_days=_pd,
+                    ))
+                    asyncio.create_task(verify_premium_delivery(
+                        telegram_id=telegram_id, provider=provider,
+                        expected_expire_at=expires_at,
+                        purchase_id=str(purchase_id), tariff=tariff_label,
+                        period_days=_pd,
+                    ))
+                except Exception:
+                    pass
 
 
 async def _handle_traffic_pack_confirmation(
