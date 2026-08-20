@@ -121,29 +121,29 @@ async def verify_bypass_delivery(
             )
             return
         actual_bytes = int(traffic.get("trafficLimitBytes") or 0)
-        # Ok-условия:
+        # Ok-условия — алертим ТОЛЬКО на недостачу (юзер заплатил, но GB не долетели).
+        # Излишек (actual > expected) — не проблема: юзер получил больше, чем
+        # ожидалось (обычно потому что baseline_bytes был снят до другого top-up'а,
+        # или entity уже была наполнена сторонним источником). Спам админу не нужен.
+        TOLERANCE = 100 * 1024 * 1024  # 100 MB допуск на округления/race
         if baseline_bytes is not None:
-            # Точное совпадение с допуском 100 MB (округления).
-            # baseline=0 — норма (юзер израсходовал / не выдавали), не
-            # безлимит: expected = 0 + extra = extra.
             expected_total = int(baseline_bytes) + int(expected_added_bytes)
-            diff = actual_bytes - expected_total
-            ok = abs(diff) < 100 * 1024 * 1024
         else:
-            # Только-что созданный entity — просто >= expected.
-            ok = actual_bytes >= int(expected_added_bytes) or actual_bytes == 0
             expected_total = int(expected_added_bytes)
-            diff = actual_bytes - expected_total
+        diff = actual_bytes - expected_total
+        # ok = нет НЕДОСТАЧИ больше tolerance. Излишек любого размера — ок.
+        ok = diff >= -TOLERANCE
 
         if ok:
             logger.info(
-                "BYPASS_VERIFY_OK: tg=%s kind=%s actual=%s expected=%s",
-                telegram_id, kind, actual_bytes, expected_total,
+                "BYPASS_VERIFY_OK: tg=%s kind=%s actual=%s expected=%s diff=%s",
+                telegram_id, kind, actual_bytes, expected_total, diff,
             )
             return
 
+        # diff < -TOLERANCE → реальная недостача, юзер оплатил и не получил GB.
         await _send_admin_alert(
-            "Bypass verify MISMATCH",
+            "Bypass verify MISMATCH — недостача",
             (
                 f"User: <code>tg:{telegram_id}</code>\n"
                 f"Kind: <b>{kind}</b> · Provider: <b>{provider}</b>\n"
@@ -154,8 +154,7 @@ async def verify_bypass_delivery(
                 + (f" (был {_fmt_gb(baseline_bytes)} + {_fmt_gb(expected_added_bytes)})"
                    if baseline_bytes is not None else f" (пакет {_fmt_gb(expected_added_bytes)})") +
                 f"\nВ панели: <b>{_fmt_gb(actual_bytes)}</b>\n"
-                f"Diff: <b>{_fmt_gb(abs(diff))}</b> "
-                f"({'нехватка' if diff < 0 else 'излишек'})\n"
+                f"Недостача: <b>{_fmt_gb(abs(diff))}</b>\n"
                 f"\n"
                 f"Резолв через дашборд Юзеры → карточка."
             ),
