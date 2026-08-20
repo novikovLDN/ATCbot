@@ -1034,6 +1034,23 @@ export const endpoints = {
     }>("/remnawave/backfill/start", { dry_run }),
   remnawaveBackfillStatus: () =>
     api.get<RemnawaveBackfillStatus>("/remnawave/backfill/status"),
+  remnawaveResetPremiumUnlimited: (dry_run: boolean = true) => {
+    const p = new URLSearchParams({ dry_run: String(dry_run) });
+    return api.post<{
+      total: number;
+      checked: number;
+      limited: number;
+      reset: number;
+      errors: number;
+      dry_run: boolean;
+      samples: Array<{
+        telegram_id: number;
+        premium_id: number;
+        before_limit_bytes: number;
+        before_status: string;
+      }>;
+    }>(`/remnawave/reset-premium-unlimited?${p.toString()}`);
+  },
 };
 
 export interface RemnawaveBackfillStatus {
