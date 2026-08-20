@@ -95,7 +95,74 @@ _metrics: Dict[str, int] = {
     # Latency-статистика: сумма ms + count → avg = sum/count.
     # p95/p99 в проде считаются через x-cache=miss логи (в них timestamp).
     "upstream_ms_sum": 0, "upstream_count": 0,
+    "attack_alerts_sent": 0,
 }
+
+
+# ── Attack detector ─────────────────────────────────────────────────
+# Скользящее окно: за последние 60 сек считаем «плохие» события —
+# not_found (флуд случайных tokens) и upstream_fail (панель гасят).
+# При превышении порога → alert админу через send_alert (уважает cooldown).
+#
+# Cost: 2 int в памяти + 1 сравнение на request. Overhead — <1 микросек.
+_attack_window_start: float = 0.0  # начало текущей 60-сек корзины
+_attack_not_found: int = 0
+_attack_upstream_fail: int = 0
+
+# Пороги (per 60 sec). Подобраны так, чтобы норма (даже пиковая) не триггерила.
+ATTACK_NOT_FOUND_THRESHOLD = 300     # >5 rps «not found» = боль
+ATTACK_UPSTREAM_FAIL_THRESHOLD = 60  # >1 rps upstream_fail = панель тупит / сеть
+
+
+def _bump_attack_window(kind: str) -> None:
+    """Тикнуть счётчик 60-сек окна. Возвращает currentcount и total-alert."""
+    global _attack_window_start, _attack_not_found, _attack_upstream_fail
+    now = time.monotonic()
+    if now - _attack_window_start >= 60:
+        _attack_window_start = now
+        _attack_not_found = 0
+        _attack_upstream_fail = 0
+    if kind == "not_found":
+        _attack_not_found += 1
+        if _attack_not_found == ATTACK_NOT_FOUND_THRESHOLD:
+            _fire_attack_alert(kind="not_found", count=_attack_not_found)
+    elif kind == "upstream_fail":
+        _attack_upstream_fail += 1
+        if _attack_upstream_fail == ATTACK_UPSTREAM_FAIL_THRESHOLD:
+            _fire_attack_alert(kind="upstream_fail", count=_attack_upstream_fail)
+
+
+def _fire_attack_alert(*, kind: str, count: int) -> None:
+    """Отправить админу алерт fire-and-forget. Cooldown в send_alert 0 для security."""
+    try:
+        from app.api import telegram_webhook as _tw
+        bot = getattr(_tw, "_bot", None)
+        if bot is None:
+            return
+        _metrics["attack_alerts_sent"] += 1
+        if kind == "not_found":
+            msg = (
+                f"🚨 <b>Sub-aggregator: подозрительный флуд</b>\n\n"
+                f"За последнюю минуту: <b>{count}+</b> запросов с несуществующим "
+                f"token.\n"
+                f"Возможно — random-token DoS.\n\n"
+                f"Проверить: <code>curl https://api.atlassecure.ru/a/_metrics</code>\n"
+                f"Порог: {ATTACK_NOT_FOUND_THRESHOLD}/мин.\n\n"
+                f"Действие: включить Cloudflare proxied:true, если продолжится."
+            )
+        else:
+            msg = (
+                f"🚨 <b>Sub-aggregator: массовые upstream fails</b>\n\n"
+                f"За последнюю минуту: <b>{count}+</b> фейлов запроса к панели.\n"
+                f"Возможно — панель Remnawave тупит / упала / сеть.\n\n"
+                f"Проверить: <code>curl https://rmnw.atlassecure.ru/api/system/stats</code>\n"
+                f"Порог: {ATTACK_UPSTREAM_FAIL_THRESHOLD}/мин.\n\n"
+                f"Мы отдаём stale-cache — юзеры не видят 503 в первые 24 часа."
+            )
+        from app.services.admin_alerts import send_alert
+        asyncio.create_task(send_alert(bot, "security", msg, force=False))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("SUB_AGG_ATTACK_ALERT_FAIL: %s", e)
 
 
 def _cache_get(token: str) -> tuple[Optional[bytes], Optional[dict], str]:
@@ -483,10 +550,12 @@ async def _do_fetch_and_merge(token: str, pair: dict, ua: str) -> tuple[Optional
         _metrics["upstream_ok"] += 1
     else:
         _metrics["upstream_fail"] += 1
+        _bump_attack_window("upstream_fail")
     if gb_ok:
         _metrics["upstream_ok"] += 1
     else:
         _metrics["upstream_fail"] += 1
+        _bump_attack_window("upstream_fail")
 
     main_lines = _decode_body(main_resp) if main_ok else []
     gb_lines = _decode_body(gb_resp) if gb_ok else []
@@ -601,6 +670,8 @@ async def aggregate(
       4. LRU cap=20k    → bounded memory
     """
     if not _TOKEN_RE.match(token):
+        _metrics["not_found"] += 1
+        _bump_attack_window("not_found")
         return PlainTextResponse("Not found", status_code=404)
 
     ua_early = request.headers.get("user-agent", "")
@@ -615,6 +686,7 @@ async def aggregate(
     pair = await _load_pair(token)
     if not pair:
         _metrics["not_found"] += 1
+        _bump_attack_window("not_found")
         # Если ЕСТЬ stale-копия но pair нет — не отдаём: юзера удалили.
         return PlainTextResponse("Not found", status_code=404)
 
