@@ -215,23 +215,27 @@ async def provision_subscription(
             logger.warning("PURCHASE_FLOW: premium url back-fill failed tg=%s %s", telegram_id, e)
 
     # ── Bypass entity ────────────────────────────────────────────────
+    # ⚠️ ПРАВИЛА:
+    #   • TRIAL             → создаём bypass с TRIAL_BYPASS_MB (единственный
+    #                         путь для trial, webhook confirmation НЕ идёт).
+    #   • Fresh paid (нет   → создаём bypass С ФИНАЛЬНЫМ лимитом (combo → 75 ГБ,
+    #     entity)             обычный basic 30d → 10 ГБ). confirmation.py
+    #                         увидит bypass_created_fresh=True в return и
+    #                         SKIP свой top-up → никакого double-add.
+    #   • Renewal (есть     → SKIP полностью. confirmation.py сам всё сделает:
+    #     entity)             top-up на нужную сумму по tariff / combo.
+    #                         Раньше double-add: +tariff здесь + +combo там.
     bypass_bytes = _bypass_bytes_for(tariff, period_days, is_trial, is_combo=is_combo)
     bypass_sub_url: Optional[str] = None
+    bypass_created_fresh = False
 
     existing_bypass_uuid = await database.get_remnawave_uuid(telegram_id)
     if existing_bypass_uuid:
-        # Top-up: ACCUMULATE — never reset, per customer requirement.
-        added = await remnawave_bypass.add_bypass_traffic(telegram_id, extra_bytes=bypass_bytes)
-        if not added:
-            logger.warning(
-                "PURCHASE_FLOW: bypass top-up returned False — falling back to create-flow tg=%s",
-                telegram_id,
-            )
-            existing_bypass_uuid = None
-        else:
-            cache = await database.get_remnawave_bypass_cache(telegram_id)
-            bypass_sub_url = (cache or {}).get("remnawave_bypass_sub_url") or None
+        # Renewal — bypass entity уже есть. Топ-ап делает confirmation.py.
+        cache = await database.get_remnawave_bypass_cache(telegram_id)
+        bypass_sub_url = (cache or {}).get("remnawave_bypass_sub_url") or None
 
+    # Fresh create — только если нет entity вообще И это trial ИЛИ paid.
     if not existing_bypass_uuid:
         bresult = await remnawave_bypass.create_bypass_user_entity(
             telegram_id,
@@ -258,6 +262,7 @@ async def provision_subscription(
                 pass
         else:
             bypass_sub_url = bresult.subscription_url
+            bypass_created_fresh = True
         if bresult.ok:
             try:
                 await database.set_remnawave_bypass_cache(
@@ -304,13 +309,15 @@ async def provision_subscription(
             logger.warning("PURCHASE_FLOW: bypass url back-fill failed tg=%s %s", telegram_id, e)
 
     logger.info(
-        "PURCHASE_FLOW_DONE: tg=%s tariff=%s premium_uuid=%s bypass_uuid=%s "
-        "premium_url=%s bypass_url=%s",
-        telegram_id, tariff,
+        "PURCHASE_FLOW_DONE: tg=%s tariff=%s is_combo=%s premium_uuid=%s bypass_uuid=%s "
+        "premium_url=%s bypass_url=%s bypass_fresh=%s bypass_bytes=%s",
+        telegram_id, tariff, is_combo,
         (premium_panel_uuid or "")[:8],
         ((await database.get_remnawave_uuid(telegram_id)) or "")[:8],
         bool(premium_sub_url),
         bool(bypass_sub_url),
+        bypass_created_fresh,
+        bypass_bytes if bypass_created_fresh else "(untouched)",
     )
 
     return {
@@ -320,6 +327,9 @@ async def provision_subscription(
         "vless_url": premium_sub_url or "",
         "vless_url_plus": bypass_sub_url,
         "subscription_type": tariff or "basic",
+        # NEW: True если мы только что создали bypass entity с ФИНАЛЬНЫМ лимитом.
+        # confirmation.py: если True → НЕ добавлять combo/tariff GB (иначе double).
+        "bypass_created_fresh": bypass_created_fresh,
     }
 
 
@@ -354,6 +364,7 @@ async def sync_renewal_to_remnawave(sync_info: dict) -> None:
             subscription_end=new_expire,
             period_days=int(sync_info.get("period_days") or 30),
             is_trial=False,
+            is_combo=bool(sync_info.get("is_combo", False)),
         )
 
 

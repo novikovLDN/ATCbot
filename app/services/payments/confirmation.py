@@ -148,7 +148,11 @@ async def process_confirmed_payment(
         is_balance_topup = result.get("is_balance_topup", False)
         is_traffic_pack = result.get("is_traffic_pack", False)
 
-        # Notification failure must NOT fail the payment — DB is already committed
+        # Notification failure must NOT fail the payment — DB is already committed.
+        # add_bypass_traffic имеет self-heal → в 99% случаев первый заход успешен.
+        # Если всё-таки упало (сеть/panel outage) — админ увидит алерт и добавит
+        # GB вручную через Traffic Audit dashboard (retry опасен: add_bypass_traffic
+        # НЕ идемпотентен по purchase_id, ретрай = double-add).
         try:
             if is_traffic_pack:
                 await _handle_traffic_pack_confirmation(
@@ -172,6 +176,26 @@ async def process_confirmed_payment(
                     result=result,
                     expires_at=expires_at,
                 )
+        except TransientPaymentError as tpe:
+            # add_bypass_traffic / traffic_pack не смогли положить GB.
+            # Не ронять webhook: retry делает double-add (не идемпотентен).
+            # Алертнуть админа — он добавит через Traffic Audit dashboard.
+            logger.error(
+                f"BYPASS_GB_DELIVERY_STUCK: provider={provider} user={telegram_id} "
+                f"purchase_id={purchase_id} payment_id={payment_id} err={tpe} — "
+                f"нужен ручной add via Traffic Audit dashboard (retry опасен: double-add)"
+            )
+            try:
+                from app.services.admin_alerts import alert_payment_failure
+                await alert_payment_failure(
+                    bot, provider, telegram_id, purchase_id, tpe,
+                    is_transient=False,  # НЕ transient чтобы админ увидел и починил
+                    amount_rubles=amount_rubles,
+                    tariff=result.get("subscription_type") if isinstance(result, dict) else None,
+                    period_days=result.get("period_days") if isinstance(result, dict) else None,
+                )
+            except Exception as _ae:
+                logger.warning("BYPASS_GB_ALERT_FAIL: %s", _ae)
         except Exception as notif_err:
             logger.error(
                 f"PAYMENT_NOTIFICATION_FAILED: provider={provider}, user={telegram_id}, "
@@ -518,12 +542,43 @@ async def _send_confirmation(
         #   combo_basic / combo_plus   → COMBO_TARIFFS[key][period]["gb"] GB
         #   basic / plus (обычные)     → TRAFFIC_LIMITS[tariff][period] bytes
         #   trial / telegram_* / biz   → skip (не имеют bypass ГБ по ТЗ)
+        #
+        # ВАЖНО: если bypass entity ТОЛЬКО ЧТО создан (fresh) — provision уже
+        # выставил ему финальный лимит (75 GB combo или 10 GB basic 30d).
+        # Здесь пропускаем top-up, иначе double-add → 150 GB для fresh combo.
+        # Для renewal (entity уже был) — top-up здесь единственный источник GB.
         is_combo = result.get("is_combo", False)
+        bypass_created_fresh = result.get("bypass_created_fresh", False)
         _skip_bypass = (
             not expires_at
             or subscription_type in ("trial", "telegram_premium", "telegram_stars")
             or subscription_type in config.BIZ_TARIFFS
+            or bypass_created_fresh  # fresh entity → уже с финальным лимитом
         )
+        if bypass_created_fresh and not _skip_bypass:
+            # Не должно случиться (fresh уже в _skip_bypass) — защита от рефакторингов.
+            _skip_bypass = True
+        if bypass_created_fresh:
+            logger.info(
+                "BYPASS_TOPUP_SKIPPED_FRESH_ENTITY: provider=%s user=%s tariff=%s "
+                "is_combo=%s — bypass entity создан с финальным лимитом в provision_subscription",
+                provider, telegram_id, subscription_type, is_combo,
+            )
+            # Для combo всё равно записываем в traffic_purchases (для Traffic Audit).
+            if is_combo:
+                try:
+                    _pd_combo = result.get("period_days", 30) or 30
+                    _combo_key = f"combo_{subscription_type}"
+                    _combo_info = config.COMBO_TARIFFS.get(_combo_key, {}).get(_pd_combo)
+                    if _combo_info:
+                        await database.record_traffic_purchase(
+                            telegram_id, int(_combo_info["gb"]), 0,
+                        )
+                except Exception as _rp_err:
+                    logger.warning(
+                        "record_traffic_purchase (fresh combo) failed user=%s: %s",
+                        telegram_id, _rp_err,
+                    )
         if not _skip_bypass:
             _pd = result.get("period_days", 30) or 30
             gb_to_add = 0
