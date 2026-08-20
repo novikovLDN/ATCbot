@@ -286,11 +286,11 @@ async def renew_remnawave_user(
         if config.REMNAWAVE_SQUAD_UUID:
             squads = user_data.get("activeInternalSquads") or []
             if not squads:
-                await remnawave_api.assign_user_to_squad(api_uuid, config.REMNAWAVE_SQUAD_UUID)
+                await remnawave_api.assign_user_to_squad(api_target, config.REMNAWAVE_SQUAD_UUID)
         await database.reset_traffic_notification_flags(telegram_id)
         logger.info(
-            "REMNAWAVE_RENEWED: tg=%s uuid=%s old_limit=%d new_limit=%d",
-            telegram_id, api_uuid[:8], current_limit, new_limit,
+            "REMNAWAVE_RENEWED: tg=%s target=%s old_limit=%d new_limit=%d",
+            telegram_id, str(api_target)[:16], current_limit, new_limit,
         )
     except Exception as e:
         logger.error("REMNAWAVE_RENEW_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
@@ -435,7 +435,7 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
         if result is not None:
             # Re-enable if disabled
             if user_data.get("status") != "ACTIVE":
-                await remnawave_api.update_user(api_uuid, status="ACTIVE")
+                await remnawave_api.update_user(api_target, status="ACTIVE")
             await database.reset_traffic_notification_flags(telegram_id)
             logger.info(
                 "REMNAWAVE_TRAFFIC_ADDED: tg=%s +%d bytes, current=%d → new=%d",
@@ -443,8 +443,9 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
             )
             return True
         logger.warning(
-            "REMNAWAVE_ADD_TRAFFIC_PATCH_FAILED: tg=%s uuid=%s (update_user returned None)",
-            telegram_id, str(api_uuid)[:16],
+            "REMNAWAVE_ADD_TRAFFIC_PATCH_FAILED: tg=%s target=%s (update_user returned None — "
+            "возможно safety-drop на premium; вышестоящий флоу пусть fallback'нет)",
+            telegram_id, str(api_target)[:16],
         )
         return False
     except Exception as e:

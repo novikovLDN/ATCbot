@@ -11,7 +11,7 @@ Bot-only writes (approve_payment_atomic, grant_access, finalize_purchase,
 mark_trial_used) are intentionally NOT exposed here.
 """
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field, field_validator
@@ -149,15 +149,12 @@ async def _build_bypass_block(telegram_id: int, subscription: Optional[dict]) ->
         "remaining_bytes": 0,
         "status": None,
     }
-    try:
-        uuid = await database.get_remnawave_uuid(telegram_id)
-    except Exception:
-        uuid = None
-    if not uuid:
-        return empty
+    # get_bypass_traffic_safe:
+    #   - Проверяет что resolved entity — реально bypass (username == str(tg)).
+    #   - Self-heal кеша если legacy backfill записал premium's id в bypass col.
     try:
         from app.services import remnawave_api
-        traffic = await remnawave_api.get_user_traffic(uuid)
+        traffic = await remnawave_api.get_bypass_traffic_safe(telegram_id)
     except Exception:
         return {**empty, "has_entity": True}
     if not traffic:
