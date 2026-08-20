@@ -39,7 +39,24 @@ sub_aggregator_admin_router = Router()
 async def cmd_aggregator(message: Message) -> None:
     """Показать/пересоздать aggregator URL для админа. Debug-команда бета-фазы."""
     tg_id = message.from_user.id
+    logger.info(
+        "SUB_AGGREGATOR_CMD_ENTERED tg=%s enabled=%s url=%s admin_only=%s",
+        tg_id, config.SUB_AGGREGATOR_ENABLED, config.SUB_AGGREGATOR_URL,
+        config.SUB_AGGREGATOR_ADMIN_ONLY,
+    )
 
+    try:
+        await _run_aggregator_cmd(message, tg_id)
+    except Exception as e:
+        logger.exception("SUB_AGGREGATOR_CMD_ERROR tg=%s: %s", tg_id, e)
+        await message.answer(
+            f"❌ <b>Внутренняя ошибка</b>\n\n<code>{type(e).__name__}: {str(e)[:400]}</code>\n\n"
+            "Смотри логи Railway — там traceback.",
+            parse_mode="HTML",
+        )
+
+
+async def _run_aggregator_cmd(message: Message, tg_id: int) -> None:
     if not config.SUB_AGGREGATOR_ENABLED:
         await message.answer(
             "❌ <b>SUB_AGGREGATOR_ENABLED=false</b>\n\n"
@@ -112,6 +129,24 @@ async def cb_aggregator_refresh(callback) -> None:
         return
     await callback.answer("Пара обновлена, кеш сброшен ✓", show_alert=True)
     logger.info("SUB_AGGREGATOR_ADMIN_REFRESH tg=%s url=%s", tg_id, url)
+
+
+@sub_aggregator_admin_router.message(lambda m: m.text and m.text.strip().lower().startswith("/aggregator"))
+@admin_only
+async def cmd_aggregator_fallback(message: Message) -> None:
+    """Fallback: если Command('aggregator') не сработал (FSM state / фильтр),
+    ловим по text-startswith и логируем — понятно ли, что message доехал."""
+    logger.warning(
+        "SUB_AGGREGATOR_FALLBACK_HIT tg=%s text=%r — Command filter не сработал, "
+        "видимо активный FSM state. Форсируем.",
+        message.from_user.id, message.text,
+    )
+    # Очищаем state если есть — иначе Command filter продолжит игнориться.
+    try:
+        from aiogram.fsm.context import FSMContext  # type: ignore  # noqa: F401
+    except Exception:
+        pass
+    await cmd_aggregator(message)
 
 
 __all__ = ["sub_aggregator_admin_router"]
