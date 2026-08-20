@@ -108,10 +108,35 @@ async def fetch_candidates(
     if pool is None:
         raise RuntimeError("database pool not ready")
 
+    # `subscriptions` не хранит period_days напрямую — берём из последнего
+    # paid-события в subscription_history (action_type ∈ {purchase, renewal,
+    # auto_renew, trial}). Fallback: pending_purchases последняя paid-строка.
+    # Если ничего нет — оставляем NULL, base_bytes упадёт в дефолт 30 дней.
     sql = """
         SELECT s.telegram_id,
                COALESCE(s.subscription_type, 'basic') AS subscription_type,
-               s.period_days,
+               COALESCE(
+                 (SELECT GREATEST(
+                    1,
+                    CAST(
+                      EXTRACT(EPOCH FROM (h.end_date - h.start_date)) / 86400
+                      AS INTEGER
+                    )
+                  )
+                  FROM subscription_history h
+                  WHERE h.telegram_id = s.telegram_id
+                    AND h.action_type IN ('purchase','renewal','auto_renew','trial','initial')
+                  ORDER BY h.created_at DESC NULLS LAST, h.id DESC
+                  LIMIT 1),
+                 (SELECT p.period_days
+                  FROM pending_purchases p
+                  WHERE p.telegram_id = s.telegram_id
+                    AND p.status = 'paid'
+                    AND p.period_days IS NOT NULL
+                  ORDER BY p.created_at DESC
+                  LIMIT 1),
+                 30
+               ) AS period_days,
                COALESCE(s.is_bypass_only, FALSE)     AS is_bypass_only,
                s.remnawave_uuid,
                s.remnawave_id,

@@ -321,7 +321,15 @@ export function TrafficAudit() {
         </div>
       ) : q.isError ? (
         <div className="card border-danger/30 bg-danger/5 p-4 text-sm text-danger">
-          Не удалось прогнать audit. Попробуй уменьшить лимит и повторить.
+          <div className="font-medium">Не удалось прогнать audit.</div>
+          <div className="mt-1 whitespace-pre-wrap font-mono text-xs">
+            {(q.error as ApiError | undefined)?.detail ??
+              (q.error as Error | undefined)?.message ??
+              "неизвестная ошибка"}
+          </div>
+          <div className="mt-2 text-xs text-fg-muted">
+            Попробуй уменьшить лимит скана до 50 и повторить.
+          </div>
         </div>
       ) : filtered.length === 0 ? (
         <div className="card grid place-items-center gap-2 p-12 text-center">
