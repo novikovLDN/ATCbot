@@ -100,6 +100,8 @@ async def verify_bypass_delivery(
         # Ok-условия:
         if baseline_bytes is not None:
             # Точное совпадение с допуском 100 MB (округления).
+            # baseline=0 — норма (юзер израсходовал / не выдавали), не
+            # безлимит: expected = 0 + extra = extra.
             expected_total = int(baseline_bytes) + int(expected_added_bytes)
             diff = actual_bytes - expected_total
             ok = abs(diff) < 100 * 1024 * 1024

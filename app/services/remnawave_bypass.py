@@ -313,6 +313,8 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     if not user:
         return False
     current_limit = int(user.get("trafficLimitBytes") or 0)
+    # Юзер оплатил пакет → просто добавляем ровно extra_bytes.
+    # current=0 = "трафика нет" (израсходовал / не выдавали), не безлимит.
     new_limit = current_limit + int(extra_bytes)
     try:
         result = await remnawave_api.update_user(

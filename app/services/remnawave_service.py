@@ -413,11 +413,10 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
 
         api_uuid = user_data.get("uuid") or rmn_uuid
         current_limit = int(user_data.get("trafficLimitBytes", 0) or 0)
-        # Unlimited (=0) остаётся unlimited — top-up не имеет смысла.
-        if current_limit == 0:
-            new_limit = 0
-        else:
-            new_limit = current_limit + int(extra_bytes)
+        # Юзер оплатил пакет → просто добавляем ровно extra_bytes.
+        # current=0 означает "нет доступного трафика" (израсходовал или
+        # ещё не было выдано) — не безлимит. Складываем без условий.
+        new_limit = current_limit + int(extra_bytes)
 
         result = await remnawave_api.update_user(api_uuid, trafficLimitBytes=new_limit)
         if result is not None:
