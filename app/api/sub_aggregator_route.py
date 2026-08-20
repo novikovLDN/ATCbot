@@ -335,13 +335,13 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
 <body>
 <div class="wrap">
   <div class="brand">{brand}</div>
-  <p class="lead">Откройте подписку в VPN-клиенте</p>
+  <p class="lead">Откройте подписку в приложении</p>
 
   <a class="btn" href="{happ_href_esc}">Открыть в Happ</a>
   <a class="btn secondary" href="{incy_href_esc}">Открыть в Incy</a>
 
   <div class="footer">
-    <span>{brand} · VPN</span>
+    <span>{brand}</span>
     {support_row}
   </div>
 </div>
