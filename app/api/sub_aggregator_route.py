@@ -285,14 +285,19 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
         chunks = []
         if total > 0:
             chunks.append(
-                f'<span class="stat"><b>{left_str}</b><span class="muted"> из {total_str}</span></span>'
+                f'<span class="stat"><span class="muted">Осталось </span>'
+                f'<b>{left_str}</b><span class="muted"> из {total_str}</span></span>'
             )
         if expire_str:
-            chunks.append(f'<span class="stat">до <b>{html_escape(expire_str)}</b></span>')
+            chunks.append(
+                f'<span class="stat"><span class="muted">Активна до </span>'
+                f'<b>{html_escape(expire_str)}</b></span>'
+            )
         bar = ""
         if total > 0:
             bar = (
-                f'<div class="bar"><div class="fill" style="width:{pct_used}%"></div></div>'
+                f'<div class="bar" title="Использовано {pct_used}%">'
+                f'<div class="fill" style="width:{pct_used}%"></div></div>'
             )
         stats_row = f'<div class="stats">{"".join(chunks)}</div>{bar}'
 
