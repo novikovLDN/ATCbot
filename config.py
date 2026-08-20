@@ -636,31 +636,19 @@ REDIS_URL = env("REDIS_URL", default="")
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Sub-aggregator service (separate process, see sub-aggregator/)
+# Sub-aggregator service — константы (без ENV).
 #
-# Один URL агрегатора вместо двух отдельных ссылок Remnawave (main+gb).
-# Rollout strategy: сначала SUB_AGGREGATOR_ADMIN_ONLY=true — только админ
-# видит агрегатор-ссылку, тестируем; потом флип на false → все юзеры.
+# Меняешь прямо здесь и рестартишь бота. Держим захардкоженным чтобы не
+# плодить переменные окружения в Railway UI.
+#
+# INTERNAL_SECRET должен совпадать с тем, что в .env сервиса-агрегатора
+# (sub-aggregator/.env → INTERNAL_SECRET). Пустая строка → invalidate
+# skip-нётся, кеш обновится через CACHE_TTL (5 мин) автоматически —
+# приемлемо для беты.
 # ─────────────────────────────────────────────────────────────────────────
 
-SUB_AGGREGATOR_ENABLED = env(
-    "SUB_AGGREGATOR_ENABLED", default="false"
-).strip().lower() in {"1", "true", "yes", "on"}
-
-# Base URL публичного домена агрегатора (без trailing slash).
-# Пример: https://sub.atlassecure.io
-SUB_AGGREGATOR_URL = env("SUB_AGGREGATOR_URL", default="").rstrip("/")
-
-# Beta gate: пока true — только ADMIN_TELEGRAM_ID получает aggregator ссылку.
-# Флип на false когда админ подтвердит что все клиенты (Happ/Incy/v2rayTun)
-# корректно съедают склеенную подписку.
-SUB_AGGREGATOR_ADMIN_ONLY = env(
-    "SUB_AGGREGATOR_ADMIN_ONLY", default="true"
-).strip().lower() in {"1", "true", "yes", "on"}
-
-# Shared secret для POST /internal/invalidate/<token> — тот же, что в
-# INTERNAL_SECRET сервиса. Без него бот не сможет чистить кеш после
-# renew/create/revoke — юзер будет ждать CACHE_TTL (5 мин) вместо
-# мгновенного обновления. Обязателен если SUB_AGGREGATOR_ENABLED=true.
-SUB_AGGREGATOR_INTERNAL_SECRET = env("SUB_AGGREGATOR_INTERNAL_SECRET", default="")
+SUB_AGGREGATOR_ENABLED = True
+SUB_AGGREGATOR_URL = "https://subscription.palantirdns.uk"
+SUB_AGGREGATOR_ADMIN_ONLY = True   # beta-gate; флип на False когда протестируем
+SUB_AGGREGATOR_INTERNAL_SECRET = ""  # заполни после генерации в sub-aggregator/.env
 
