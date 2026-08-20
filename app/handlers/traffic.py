@@ -570,11 +570,19 @@ async def show_traffic_info_message(message):
     elif remaining <= 3 * 1024**3:
         warning += "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
 
-    from app.services import happ_crypto, incy_crypto
+    from app.services import happ_crypto, incy_crypto, sub_aggregator
     from app.services.user_subscription_links import _rewrite_sub_host
-    # sub.atlassecure.ru → subscription.vps-cloud.uk (cert для старого хоста
-    # невалиден → Happ показывает "сертификат недействителен").
-    raw_sub_url = _rewrite_sub_host(traffic.get("subscriptionUrl", "") or "") or ""
+    # Aggregator (пока admin-only) → единый ключ вместо только-bypass.
+    # Юзер видит одну ссылку что склеивает и premium и bypass — как в
+    # setup_step2 / setup_manual экранах.
+    agg_url = None
+    if sub_aggregator.is_enabled_for(telegram_id):
+        try:
+            agg_url = await sub_aggregator.ensure_pair(telegram_id)
+        except Exception as e:
+            logger.warning("TRAFFIC_INFO aggregator ensure_pair failed tg=%s: %s", telegram_id, e)
+    # Фолбэк на raw bypass-URL если агрегатор не подключён / вернул None.
+    raw_sub_url = agg_url or (_rewrite_sub_host(traffic.get("subscriptionUrl", "") or "") or "")
     # Happ: pure-Python RSA — синхронно и всегда работает.
     happ_url = happ_crypto.format_for_user(raw_sub_url) or raw_sub_url
     # Incy: async через Node-sidecar (или fallback incy://add/<url>).

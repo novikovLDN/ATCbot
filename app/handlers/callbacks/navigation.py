@@ -608,11 +608,69 @@ async def callback_setup_step2(callback: CallbackQuery):
         if config.REMNAWAVE_ENABLED:
             bypass_url = await get_user_bypass_url(telegram_id) or ""
 
+    # ── Aggregator-branch (пока admin-only, потом флип на всех) ────
+    # Если юзер под гейтом sub_aggregator — отдаём ЕДИНЫЙ ключ (склеенная
+    # подписка) с двумя кнопками Happ/Incy. Никаких "VPN vs Обход" — теперь
+    # это одна ссылка, комбинирующая оба типа серверов внутри.
+    from app.services import sub_aggregator
+    agg_url = None
+    if sub_aggregator.is_enabled_for(telegram_id):
+        try:
+            agg_url = await sub_aggregator.ensure_pair(telegram_id)
+        except Exception as e:
+            logger.warning("SETUP_STEP2 aggregator ensure_pair failed tg=%s: %s", telegram_id, e)
+
+    if agg_url:
+        from urllib.parse import quote, urlparse
+        if config.PUBLIC_BASE_URL:
+            base_url = config.PUBLIC_BASE_URL
+        else:
+            parsed = urlparse(config.WEBHOOK_URL)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+        q = quote(agg_url, safe='')
+        show_incy = platform in ("ios", "android", "macos")
+
+        text = i18n_get_text(language, "setup.key_install_title_agg")
+        buttons = [[InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.btn_add_happ", "📥 Добавить ключ в Happ"),
+            url=f"{base_url}/open/happ?url={q}",
+            style="primary",
+        )]]
+        if show_incy:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.btn_add_incy", "💚 Добавить ключ в Incy"),
+                url=f"{base_url}/open/incy?url={q}",
+                style="success",
+            )])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.btn_done"),
+            callback_data="setup_done",
+            style="danger",
+        )])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.btn_manual_setup", "⚙️ Настроить вручную"),
+            callback_data=f"setup_manual:{platform}",
+            style="primary",
+        )])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.btn_need_help"),
+            url="https://t.me/atlas_suppbot",
+        )])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"setup_step1:{platform}",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
+        )])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+        return
+
     text = i18n_get_text(language, "setup.key_install_title")
 
     buttons = []
 
-    # === Auto-setup deeplinks ===
+    # === Auto-setup deeplinks (legacy dual-key) ===
     # Layout:
     #   [Happ VPN]       [Incy VPN]       — primary | success
     #   [Happ Обход]     [Incy Обход]     — primary | success
@@ -971,6 +1029,55 @@ async def callback_setup_manual(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
+    # ── Aggregator-branch: один ключ (склеенная подписка) → 2 encrypted ссылки
+    from app.services import sub_aggregator
+    agg_url = None
+    if sub_aggregator.is_enabled_for(telegram_id):
+        try:
+            agg_url = await sub_aggregator.ensure_pair(telegram_id)
+        except Exception as e:
+            logger.warning("SETUP_MANUAL aggregator ensure_pair failed tg=%s: %s", telegram_id, e)
+
+    from app.services import happ_crypto, incy_crypto
+    connect_text = i18n_get_text(language, f"setup.connect_{platform}")
+
+    if agg_url:
+        # 1 ссылка агрегатора → 2 encrypted формы (Happ + Incy).
+        # Никаких "VPN vs Обход" — теперь всё в одном ключе.
+        happ_link = happ_crypto.format_for_user(agg_url)
+        keys_section = (
+            "\n" + i18n_get_text(language, "setup.key_happ_label", "🔑 <b>Ключ Happ</b>:") + "\n"
+            f"<blockquote expandable><code>{happ_link}</code></blockquote>"
+        )
+        if platform in ("ios", "android", "macos"):
+            try:
+                incy_link = await incy_crypto.to_incy_link(agg_url)
+                if incy_link:
+                    keys_section += (
+                        "\n" + i18n_get_text(language, "setup.key_incy_label", "💚 <b>Ключ Incy</b>:") + "\n"
+                        f"<blockquote expandable><code>{incy_link}</code></blockquote>"
+                    )
+            except Exception:
+                logger.exception("SETUP_MANUAL incy_crypto failed for agg_url")
+        text = f"{connect_text}\n{keys_section}"
+
+        buttons = [
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.done_button"),
+                callback_data="setup_done",
+                style="primary",
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data=f"setup_step2:{platform}",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
+        ]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+        return
+
     subscription = await database.get_subscription(telegram_id)
     sub_url = None
     bypass_url = None
@@ -986,17 +1093,13 @@ async def callback_setup_manual(callback: CallbackQuery):
         from app.services.user_subscription_links import get_user_bypass_url
         bypass_url = await get_user_bypass_url(telegram_id)
 
-    connect_text = i18n_get_text(language, f"setup.connect_{platform}")
-
-    # Build keys section.
+    # Build keys section (legacy dual-key).
     # — Happ-ключи (sealed crypt4) для всех платформ;
     # — Incy-ключи (crypt1) для iOS/Android/macOS. Windows не показываем:
     #   Incy-клиента под Windows нет, incy://crypt1/... deep-link
     #   там некому обрабатывать.
     # Все ключи в свёрнутой цитате (blockquote expandable) — экран
     # компактный по умолчанию, юзер раскрывает только нужный ключ.
-    from app.services import happ_crypto, incy_crypto
-
     def _happ_key_block(label_key: str, raw_url: str) -> str:
         happ_link = happ_crypto.format_for_user(raw_url)
         return (
