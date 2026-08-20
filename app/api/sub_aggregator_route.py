@@ -20,14 +20,18 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
+from html import escape as html_escape
 from typing import Optional, Tuple
+from urllib.parse import quote as url_quote
 
 import httpx
 from fastapi import APIRouter, Path, Request, Response
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
 import config
 import database
@@ -164,6 +168,319 @@ def _support_url() -> Optional[str]:
     return None
 
 
+# ── User-Agent classification ───────────────────────────────────────
+# Один URL — два ответа. Клиенты (Happ/v2rayNG/…) получают base64
+# подписку, браузеры (Chrome/Safari/Firefox) — HTML-страницу с кнопками
+# «Открыть в Happ» / «Открыть в Incy» / прочих клиентов + копируемый ключ.
+#
+# Правило: только явно распознанный браузер → HTML. Всё остальное (клиенты,
+# curl, боты, unknown UA) → raw base64. Consequences of misclassification:
+# новый клиент неопознанный → получит base64 (работает). Скрапер под
+# Chrome UA → получит HTML (не страшно).
+_CLIENT_UA_RE = re.compile(
+    r"\b(happ|v2rayng|v2raytun|v2box|streisand|shadowrocket|foxray|hiddify|"
+    r"nekoray|nekobox|clash|sing-?box|stash|shadowlink|oneclick)\b",
+    re.IGNORECASE,
+)
+_BROWSER_UA_RE = re.compile(
+    r"\b(mozilla|chrome|safari|firefox|edg|opera|opr/)\b",
+    re.IGNORECASE,
+)
+
+
+def _wants_html(ua: str) -> bool:
+    if not ua:
+        return False
+    if _CLIENT_UA_RE.search(ua):
+        return False
+    if _BROWSER_UA_RE.search(ua):
+        return True
+    return False
+
+
+# ── HTML rendering ──────────────────────────────────────────────────
+# Стиль совпадает с deeplink_redirect.py (light палитра, SF/Inter, минимал)
+# чтобы юзер видел один и тот же язык дизайна во всех бот-страницах.
+
+def _fmt_bytes(n: int) -> str:
+    """1234567890 → '1.15 ГБ'. Компактно для показа юзеру."""
+    if n <= 0:
+        return "0"
+    for unit, div in (("ТБ", 1024**4), ("ГБ", 1024**3), ("МБ", 1024**2), ("КБ", 1024)):
+        if n >= div:
+            return f"{n / div:.2f} {unit}"
+    return f"{n} Б"
+
+
+def _fmt_expire(ts: int) -> Optional[str]:
+    """Unix ts → '15.10.2026' или None."""
+    if not ts or ts <= 0:
+        return None
+    try:
+        dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+        return dt.strftime("%d.%m.%Y")
+    except (ValueError, OSError, OverflowError):
+        return None
+
+
+def _deeplink_base() -> str:
+    """https://api.atlassecure.ru — берём из WEBHOOK_URL. Endpoint /open/{client}
+    делает crypt-sealing для Happ/Incy и редирект в приложение."""
+    webhook = getattr(config, "WEBHOOK_URL", "") or ""
+    if not webhook:
+        return ""
+    m = re.match(r"^(https?://[^/]+)", webhook)
+    return m.group(1) if m else ""
+
+
+def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
+    """Красивая HTML-страница с кнопками и копируемым ключом."""
+    brand = html_escape(_brand_title())
+    support = _support_url() or ""
+    support_esc = html_escape(support, quote=True)
+
+    # Traffic + expire — из subscription-userinfo
+    ui = _parse_userinfo(headers.get("subscription-userinfo", ""))
+    total = int(ui.get("total", 0))
+    used = int(ui.get("upload", 0)) + int(ui.get("download", 0))
+    left = max(0, total - used) if total > 0 else 0
+    left_str = _fmt_bytes(left) if total > 0 else "∞"
+    total_str = _fmt_bytes(total) if total > 0 else ""
+    expire_str = _fmt_expire(int(ui.get("expire", 0)))
+    pct_used = int(used / total * 100) if total > 0 and used < total else 0
+
+    # Deep-links. Happ/Incy — через /open/{client} (crypt-sealing серверный).
+    # Остальные клиенты — прямые схемы, работают без криптования.
+    base = _deeplink_base()
+    q = url_quote(sub_url, safe='')
+    happ_href = f"{base}/open/happ?url={q}" if base else f"happ://add/{url_quote(sub_url, safe='/:?&=@%+')}"
+    incy_href = f"{base}/open/incy?url={q}" if base else f"happ://add/{url_quote(sub_url, safe='/:?&=@%+')}"
+
+    other_clients = [
+        ("v2rayTun",   f"v2raytun://import/{sub_url}"),
+        ("v2rayNG",    f"v2rayng://install-sub?url={q}"),
+        ("Streisand",  f"streisand://import/{sub_url}"),
+        ("Hiddify",    f"hiddify://install-config?url={q}"),
+        ("Shadowrocket", f"sub://{base64.urlsafe_b64encode(sub_url.encode()).decode().rstrip('=')}"),
+    ]
+
+    # Все href идут в HTML → escape. sub_url — в кодоблок и JS-строку.
+    happ_href_esc = html_escape(happ_href, quote=True)
+    incy_href_esc = html_escape(incy_href, quote=True)
+    sub_url_esc = html_escape(sub_url)
+    sub_url_js = json.dumps(sub_url)
+
+    other_html = "".join(
+        f'<a class="chip" href="{html_escape(href, quote=True)}">{html_escape(name)}</a>'
+        for name, href in other_clients
+    )
+
+    support_row = (
+        f'<a class="support" href="{support_esc}" target="_blank" rel="noopener">Поддержка</a>'
+        if support else ""
+    )
+
+    stats_row = ""
+    if total > 0 or expire_str:
+        chunks = []
+        if total > 0:
+            chunks.append(
+                f'<span class="stat"><b>{left_str}</b><span class="muted"> из {total_str}</span></span>'
+            )
+        if expire_str:
+            chunks.append(f'<span class="stat">до <b>{html_escape(expire_str)}</b></span>')
+        bar = ""
+        if total > 0:
+            bar = (
+                f'<div class="bar"><div class="fill" style="width:{pct_used}%"></div></div>'
+            )
+        stats_row = f'<div class="stats">{"".join(chunks)}</div>{bar}'
+
+    return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="theme-color" content="#f6f7f9">
+<meta name="robots" content="noindex,nofollow">
+<title>{brand} — Подписка</title>
+<style>
+  * {{ box-sizing: border-box; }}
+  html, body {{
+    margin: 0; padding: 0;
+    background: #f6f7f9; color: #111;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                 'Inter', 'Helvetica Neue', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }}
+  body {{
+    min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 24px 16px 40px;
+  }}
+  .wrap {{ width: 100%; max-width: 480px; }}
+
+  h1 {{ font-size: 22px; font-weight: 700; letter-spacing: -0.01em;
+        margin: 8px 0 4px; }}
+  p.lead {{ font-size: 14px; line-height: 1.45; color: #666;
+            margin: 0 0 20px; }}
+
+  .stats {{ display: flex; flex-wrap: wrap; gap: 10px 18px;
+            margin-bottom: 8px; font-size: 14px; color: #333; }}
+  .stat {{ display: inline-flex; align-items: baseline; gap: 4px; }}
+  .stat b {{ font-weight: 700; color: #111; }}
+  .muted {{ color: #999; font-weight: 500; }}
+
+  .bar {{ height: 6px; background: #e5e7eb; border-radius: 999px;
+          overflow: hidden; margin: 12px 0 24px; }}
+  .fill {{ height: 100%; background: linear-gradient(90deg, #10B981, #059669);
+          transition: width 400ms ease; }}
+
+  .btn {{
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; padding: 15px 22px;
+    background: #111; color: #fff;
+    border-radius: 12px;
+    text-decoration: none;
+    font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
+    transition: transform 80ms ease, background 80ms ease;
+    border: none; cursor: pointer;
+    margin-bottom: 10px;
+  }}
+  .btn:active {{ transform: scale(0.98); background: #000; }}
+  .btn.secondary {{
+    background: #fff; color: #111;
+    border: 1px solid #e1e4e8;
+  }}
+  .btn.secondary:active {{ background: #f0f2f5; }}
+
+  .section-label {{
+    margin: 26px 0 12px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: #9aa1ab;
+  }}
+  .chips {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+  .chip {{
+    display: inline-flex; align-items: center;
+    padding: 8px 14px;
+    background: #fff; color: #333;
+    border: 1px solid #e1e4e8; border-radius: 999px;
+    font-size: 13px; font-weight: 500;
+    text-decoration: none;
+    transition: background 80ms ease, border-color 80ms ease;
+  }}
+  .chip:hover {{ background: #f0f2f5; border-color: #d1d5db; }}
+  .chip:active {{ background: #e5e7eb; }}
+
+  .keyblock {{
+    margin-top: 14px;
+    background: #eef0f3;
+    border: 1px solid #e1e4e8;
+    border-radius: 10px;
+    padding: 14px 14px 10px;
+    font-family: 'SF Mono', Menlo, Consolas, 'Roboto Mono', monospace;
+    font-size: 12px; line-height: 1.55;
+    color: #1f2328;
+    word-break: break-all;
+    user-select: all;
+    -webkit-user-select: all;
+  }}
+  .copyrow {{ display: flex; justify-content: flex-end; margin-top: 8px; }}
+  .copy {{
+    appearance: none; border: none;
+    background: transparent; color: #555;
+    font-size: 12px; font-weight: 600;
+    padding: 6px 10px; border-radius: 6px;
+    cursor: pointer;
+  }}
+  .copy:hover {{ background: rgba(0,0,0,0.04); color: #111; }}
+  .copy.copied {{ color: #1a7f37; }}
+
+  .footer {{
+    margin-top: 32px;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #9aa1ab;
+  }}
+  .support {{ color: #9aa1ab; text-decoration: none; }}
+  .support:hover {{ color: #111; }}
+
+  @media (prefers-color-scheme: dark) {{
+    html, body {{ background: #0f1720; color: #f5f5f2; }}
+    h1 {{ color: #ffffff; }}
+    p.lead {{ color: #9aa1ab; }}
+    .stat b {{ color: #ffffff; }}
+    .muted {{ color: #6b7280; }}
+    .bar {{ background: #1f2937; }}
+    .btn {{ background: #ffffff; color: #0f1720; }}
+    .btn:active {{ background: #f5f5f2; }}
+    .btn.secondary {{ background: #1f2937; color: #ffffff; border-color: #2a3441; }}
+    .btn.secondary:active {{ background: #2a3441; }}
+    .chip {{ background: #1f2937; color: #d1d5db; border-color: #2a3441; }}
+    .chip:hover {{ background: #2a3441; border-color: #374151; }}
+    .keyblock {{ background: #1f2937; border-color: #2a3441; color: #d1d5db; }}
+    .copy:hover {{ background: rgba(255,255,255,0.06); color: #ffffff; }}
+    .section-label {{ color: #6b7280; }}
+    .footer {{ color: #6b7280; }}
+  }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>{brand}</h1>
+  <p class="lead">Ваша подписка. Выберите клиент — нажмите, чтобы импортировать автоматически.</p>
+
+  {stats_row}
+
+  <a class="btn" href="{happ_href_esc}">Открыть в Happ</a>
+  <a class="btn secondary" href="{incy_href_esc}">Открыть в Incy</a>
+
+  <div class="section-label">Другие клиенты</div>
+  <div class="chips">{other_html}</div>
+
+  <div class="section-label">Ссылка подписки</div>
+  <div class="keyblock" id="link">{sub_url_esc}</div>
+  <div class="copyrow">
+    <button class="copy" id="copybtn" type="button">Скопировать</button>
+  </div>
+
+  <div class="footer">
+    <span>{brand} · VPN</span>
+    {support_row}
+  </div>
+</div>
+
+<script>
+  // Copy-to-clipboard с graceful fallback для WebView без navigator.clipboard.
+  document.getElementById('copybtn').addEventListener('click', function () {{
+    var text = {sub_url_js};
+    var btn = this;
+    var done = function () {{
+      btn.classList.add('copied');
+      btn.innerText = 'Скопировано';
+      setTimeout(function () {{
+        btn.classList.remove('copied');
+        btn.innerText = 'Скопировать';
+      }}, 1500);
+    }};
+    if (navigator.clipboard && window.isSecureContext) {{
+      navigator.clipboard.writeText(text).then(done).catch(fb);
+    }} else {{ fb(); }}
+    function fb() {{
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.top = '-1000px';
+      document.body.appendChild(ta); ta.select();
+      try {{ document.execCommand('copy'); }} catch (e) {{}}
+      document.body.removeChild(ta);
+      done();
+    }}
+  }});
+</script>
+</body>
+</html>"""
+
+
 @router.get("/a/{token}")
 async def aggregate(
     request: Request,
@@ -179,10 +496,19 @@ async def aggregate(
     if not _TOKEN_RE.match(token):
         return PlainTextResponse("Not found", status_code=404)
 
+    ua_early = request.headers.get("user-agent", "")
+
     # Fast path — hit кэша.
     cached = _cache_get(token)
     if cached is not None:
         body_bytes, headers = cached
+        if _wants_html(ua_early):
+            sub_url = str(request.url)
+            html = _render_sub_html(token=token, sub_url=sub_url, headers=headers)
+            return HTMLResponse(
+                content=html,
+                headers={"x-cache": "hit", "cache-control": "no-store"},
+            )
         return Response(
             content=body_bytes,
             media_type="text/plain; charset=utf-8",
@@ -213,7 +539,7 @@ async def aggregate(
             headers={**headers, "x-cache": "miss"},
         )
 
-    ua = request.headers.get("user-agent", "Aggregator/1.0")
+    ua = ua_early or "Aggregator/1.0"
     main_task = asyncio.create_task(_fetch_upstream(pair["main_sub_url"], ua))
     gb_task = asyncio.create_task(_fetch_upstream(pair["gb_sub_url"], ua))
     main_resp, gb_resp = await asyncio.gather(main_task, gb_task)
@@ -296,6 +622,18 @@ async def aggregate(
         "SUB_AGG_OK token=%s... main_lines=%d gb_lines=%d merged=%d ua=%s",
         token[:6], len(main_lines), len(gb_lines), len(merged), ua[:40],
     )
+
+    # Браузеру — HTML sub-page, клиенту — raw base64.
+    if _wants_html(ua):
+        # Юзер в браузере должен получить полный URL для копирования / QR /
+        # deep-link'ов. Восстанавливаем с request.url (учитывает proxy-хедеры).
+        sub_url = str(request.url)
+        html = _render_sub_html(token=token, sub_url=sub_url, headers=headers)
+        return HTMLResponse(
+            content=html,
+            headers={"x-cache": "miss", "cache-control": "no-store"},
+        )
+
     return Response(
         content=body_bytes,
         media_type="text/plain; charset=utf-8",
