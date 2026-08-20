@@ -83,6 +83,17 @@ export const api = {
 };
 
 // ── Endpoint binders ────────────────────────────────────────────────
+export interface PanelEntitySnapshot {
+  source: "by_uuid" | "by_username" | "by_id";
+  panel_id: number | null;
+  vless_uuid: string | null;
+  subscription_url: string | null;
+  traffic_limit_bytes: number;
+  used_traffic_bytes: number;
+  status: string;
+  telegram_id_field: number | null;
+}
+
 export interface StatsOverview {
   total_users?: number;
   active_subscriptions?: number;
@@ -233,6 +244,7 @@ export const endpoints = {
         total: number;
         match: number;
         mismatch: number;
+        desync: number;
         no_entity: number;
         panel_error: number;
         shortfall_total_bytes: number;
@@ -256,15 +268,30 @@ export const endpoints = {
         used_bytes: number;
         shortfall_bytes: number;
         panel_status: string;
-        kind: "match" | "mismatch" | "no_entity" | "panel_error";
+        kind: "match" | "mismatch" | "desync" | "no_entity" | "panel_error";
         note: string;
         expected_gb: number;
         actual_gb: number;
         used_gb: number;
         shortfall_gb: number;
+        db_uuid: string | null;
+        db_id: number | null;
+        db_sub_url: string | null;
+        panel_by_our_ref: PanelEntitySnapshot | null;
+        panel_by_username: PanelEntitySnapshot | null;
+        desync: boolean;
       }>;
     }>(`/traffic-audit${qs}`);
   },
+  trafficAuditResync: (telegram_id: number) =>
+    api.post<{
+      ok: boolean;
+      new_id: number | null;
+      new_uuid: string | null;
+      new_sub_url: string | null;
+      panel_limit_bytes: number;
+      panel_used_bytes: number;
+    }>(`/traffic-audit/resync/${telegram_id}`),
   trafficAuditFixOne: (telegram_id: number) =>
     api.post<{
       ok: boolean;

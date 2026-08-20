@@ -13,7 +13,7 @@ import {
   Wrench,
   XCircle,
 } from "lucide-react";
-import { endpoints, ApiError } from "@/lib/api";
+import { endpoints, ApiError, type PanelEntitySnapshot } from "@/lib/api";
 import { fmtNum } from "@/lib/format";
 import { toast } from "@/store/toast";
 
@@ -32,6 +32,7 @@ const fmtGb = (gb: number | null | undefined): string => {
 const KIND_LABEL = {
   match: "OK",
   mismatch: "Расхождение",
+  desync: "РАССИНХРОН",
   no_entity: "Нет в панели",
   panel_error: "Ошибка API",
 } as const;
@@ -39,6 +40,7 @@ const KIND_LABEL = {
 const KIND_STYLE = {
   match: "text-success bg-success/10 ring-success/25",
   mismatch: "text-warning bg-warning/10 ring-warning/25",
+  desync: "text-danger bg-danger/10 ring-danger/25 font-semibold",
   no_entity: "text-fg-muted bg-bg-elevated ring-border",
   panel_error: "text-danger bg-danger/10 ring-danger/25",
 } as const;
@@ -92,9 +94,23 @@ export function TrafficAudit() {
       toast.error((e as ApiError)?.detail ?? "Массовый fix упал"),
   });
 
+  const resyncOne = useMutation({
+    mutationFn: (tg: number) => endpoints.trafficAuditResync(tg),
+    onSuccess: (data) => {
+      toast.success(
+        `Пересинк: id=${data.new_id ?? "—"}, лимит ${(
+          (data.panel_limit_bytes || 0) / 1024 ** 3
+        ).toFixed(1)} ГБ`,
+      );
+      qc.invalidateQueries({ queryKey: ["traffic-audit"] });
+    },
+    onError: (e: unknown) =>
+      toast.error((e as ApiError)?.detail ?? "Resync упал"),
+  });
+
   const [confirmAll, setConfirmAll] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  const [kindFilter, setKindFilter] = useState<Kind | "all">("mismatch");
+  const [kindFilter, setKindFilter] = useState<Kind | "all">("desync");
 
   const summary = q.data?.summary;
   const filtered = useMemo(() => {
@@ -175,7 +191,7 @@ export function TrafficAudit() {
       </header>
 
       {/* Summary */}
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <SummaryCard
           label="Проверено"
           value={fmtNum(summary?.total ?? 0)}
@@ -188,6 +204,13 @@ export function TrafficAudit() {
           value={fmtNum(summary?.match ?? 0)}
           icon={CheckCircle2}
           tone="success"
+          loading={q.isLoading}
+        />
+        <SummaryCard
+          label="🔴 Рассинхрон"
+          value={fmtNum(summary?.desync ?? 0)}
+          icon={XCircle}
+          tone="danger"
           loading={q.isLoading}
         />
         <SummaryCard
@@ -252,6 +275,8 @@ export function TrafficAudit() {
                 onToggle={() => {}}
                 onFix={() => fixOne.mutate(r.tg)}
                 fixing={fixOne.isPending && fixOne.variables === r.tg}
+                onResync={() => resyncOne.mutate(r.tg)}
+                resyncing={resyncOne.isPending && resyncOne.variables === r.tg}
               />
             ))}
           </div>
@@ -366,6 +391,8 @@ export function TrafficAudit() {
               }
               onFix={() => fixOne.mutate(r.tg)}
               fixing={fixOne.isPending && fixOne.variables === r.tg}
+              onResync={() => resyncOne.mutate(r.tg)}
+              resyncing={resyncOne.isPending && resyncOne.variables === r.tg}
             />
           ))}
         </div>
@@ -386,7 +413,7 @@ function SummaryCard({
   label: string;
   value: string;
   icon: typeof AlertTriangle;
-  tone: "warning" | "success" | "muted";
+  tone: "warning" | "success" | "muted" | "danger";
   loading?: boolean;
 }) {
   const toneClass =
@@ -394,6 +421,8 @@ function SummaryCard({
       ? "text-warning bg-warning/10 ring-warning/30"
       : tone === "success"
       ? "text-success bg-success/10 ring-success/25"
+      : tone === "danger"
+      ? "text-danger bg-danger/10 ring-danger/25"
       : "text-fg-muted bg-bg-subtle ring-border";
   return (
     <div className="card p-4">
@@ -425,11 +454,13 @@ function Filter({
     total: number;
     match: number;
     mismatch: number;
+    desync: number;
     no_entity: number;
     panel_error: number;
   };
 }) {
   const opts: Array<{ key: Kind | "all"; label: string; count: number }> = [
+    { key: "desync", label: "🔴 Рассинхрон", count: summary?.desync ?? 0 },
     { key: "mismatch", label: "Расхождения", count: summary?.mismatch ?? 0 },
     { key: "panel_error", label: "Ошибки API", count: summary?.panel_error ?? 0 },
     { key: "no_entity", label: "Нет в панели", count: summary?.no_entity ?? 0 },
@@ -463,14 +494,19 @@ function ResultRow({
   onToggle,
   onFix,
   fixing,
+  onResync,
+  resyncing,
 }: {
   r: Row;
   expanded: boolean;
   onToggle: () => void;
   onFix: () => void;
   fixing: boolean;
+  onResync: () => void;
+  resyncing: boolean;
 }) {
   const canFix = r.kind === "mismatch" && r.shortfall_bytes > 0;
+  const canResync = r.kind === "desync";
   const tariffBadge = r.is_bypass_only
     ? "bypass-only"
     : `${r.subscription_type}${r.period_days ? ` · ${r.period_days}d` : ""}`;
@@ -534,6 +570,25 @@ function ResultRow({
             )}
           </div>
         </div>
+        {canResync && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onResync();
+            }}
+            disabled={resyncing}
+            className="btn-danger shrink-0 text-xs"
+            title="Обновить remnawave_uuid/id в БД → указать на правильную entity"
+          >
+            {resyncing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            Пересинк
+          </button>
+        )}
         {canFix && (
           <button
             type="button"
@@ -556,6 +611,41 @@ function ResultRow({
 
       {expanded && (
         <div className="border-t border-border bg-bg-subtle/30 p-4">
+          {/* DESYNC-баннер + сравнение entity ─────────────────────────────── */}
+          {r.kind === "desync" && (
+            <div className="mb-4 rounded-xl border border-danger/30 bg-danger/8 p-3">
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-danger">
+                🔴 РАССИНХРОН: бот показывает юзеру не ту entity
+              </div>
+              <p className="text-xs text-fg-muted">
+                Бот резолвит одну entity через сохранённый в БД uuid/id, а под
+                этим username в панели лежит другая entity с реальным трафиком.
+                Юзер получает ссылку на "пустую" entity и видит "трафика нет",
+                хотя купленный лимит есть — просто на другой entity.
+              </p>
+              <p className="mt-2 text-[11px] font-mono text-fg-subtle">{r.note}</p>
+              <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <EntitySnapCard
+                  title="Что бот сейчас показывает (по uuid из БД)"
+                  snap={r.panel_by_our_ref}
+                  tone="warning"
+                />
+                <EntitySnapCard
+                  title="Что реально лежит в панели (по username)"
+                  snap={r.panel_by_username}
+                  tone="success"
+                />
+              </div>
+              <div className="mt-3 flex items-center gap-2 text-xs text-fg-muted">
+                <span>Кнопка «Пересинк» перепишет</span>
+                <code className="rounded bg-bg-subtle px-1 font-mono text-[10px]">
+                  subscriptions.remnawave_{"{uuid,id,bypass_sub_url}"}
+                </code>
+                <span>→ указать на entity по username.</span>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <DetailCard title="В нашей БД" tone="muted">
               <KV label="subscription" value={tariffBadge} />
@@ -707,6 +797,66 @@ function KV({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between gap-3 text-xs">
       <dt className="text-fg-muted">{label}</dt>
       <dd className="truncate font-mono text-fg">{value}</dd>
+    </div>
+  );
+}
+
+function EntitySnapCard({
+  title,
+  snap,
+  tone,
+}: {
+  title: string;
+  snap: PanelEntitySnapshot | null;
+  tone: "warning" | "success";
+}) {
+  const cls =
+    tone === "success"
+      ? "border-success/30 bg-success/8"
+      : "border-warning/30 bg-warning/8";
+  if (!snap) {
+    return (
+      <div className={`rounded-xl border ${cls} p-3`}>
+        <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+          {title}
+        </div>
+        <div className="mt-2 text-xs italic text-fg-subtle">не найдена</div>
+      </div>
+    );
+  }
+  const limitGb = snap.traffic_limit_bytes / 1024 ** 3;
+  const usedGb = snap.used_traffic_bytes / 1024 ** 3;
+  return (
+    <div className={`rounded-xl border ${cls} p-3`}>
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+        {title}
+      </div>
+      <dl className="mt-2 space-y-1.5">
+        <KV label="id" value={String(snap.panel_id ?? "—")} />
+        <KV
+          label="vlessUuid"
+          value={snap.vless_uuid ? snap.vless_uuid.slice(0, 8) + "…" : "—"}
+        />
+        <KV
+          label="лимит"
+          value={
+            snap.traffic_limit_bytes === 0
+              ? "0 (∞)"
+              : `${limitGb.toFixed(2)} ГБ`
+          }
+        />
+        <KV label="used" value={`${usedGb.toFixed(2)} ГБ`} />
+        <KV label="status" value={snap.status} />
+        <KV
+          label="telegramId"
+          value={String(snap.telegram_id_field ?? "—")}
+        />
+      </dl>
+      {snap.subscription_url && (
+        <div className="mt-2 truncate text-[10px] font-mono text-fg-subtle" title={snap.subscription_url}>
+          {snap.subscription_url}
+        </div>
+      )}
     </div>
   );
 }
