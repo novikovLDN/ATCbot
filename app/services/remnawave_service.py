@@ -413,8 +413,15 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
 
         api_uuid = user_data.get("uuid") or rmn_uuid
         current_limit = int(user_data.get("trafficLimitBytes", 0) or 0)
-        # Unlimited (=0) остаётся unlimited — top-up не имеет смысла.
+        # Unlimited (=0) остаётся unlimited — top-up не имеет смысла
+        # (∞ + N = ∞). verify_bypass_delivery отдельно шлёт info-alert
+        # админу что оплата на безлимитный entity — no-op.
         if current_limit == 0:
+            logger.info(
+                "REMNAWAVE_ADD_TRAFFIC_UNLIMITED_NOOP: tg=%s "
+                "extra=%d bytes — entity уже безлимитный (∞), top-up no-op",
+                telegram_id, extra_bytes,
+            )
             new_limit = 0
         else:
             new_limit = current_limit + int(extra_bytes)
