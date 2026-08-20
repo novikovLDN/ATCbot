@@ -61,3 +61,10 @@ vpn_keys.txt
 # Node.js sidecar — installed via `npm install` in Docker / dev shell
 node_modules/
 
+# Dashboard PNG icons генерятся `scripts/generate-icons.mjs` из
+# dashboard/public/icon.svg + icon-mono.svg на каждом билде (prebuild).
+dashboard/public/apple-touch-icon.png
+dashboard/public/icon-192.png
+dashboard/public/icon-512.png
+dashboard/public/icon-mask-512.png
+

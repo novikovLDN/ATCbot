@@ -58,6 +58,72 @@ MY_SUBSCRIPTION_PHOTO_FILE_ID = "AgACAgQAAxkBAAF_0btqfhnsntISOSSa4HeiUMBkOoaLeQA
 _TG_CAPTION_LIMIT = 1024
 
 
+def _fmt_bytes_pretty(b: int) -> str:
+    """Human-readable bytes → 'X ГБ' / 'X МБ' / 'X КБ' / '0'. Стабильная точность."""
+    b = max(0, int(b or 0))
+    if b == 0:
+        return "0"
+    if b >= 1024 ** 3:
+        gb = b / 1024 ** 3
+        return f"{gb:.2f} ГБ" if gb < 10 else f"{gb:.1f} ГБ"
+    if b >= 1024 ** 2:
+        mb = b / 1024 ** 2
+        return f"{mb:.1f} МБ" if mb < 10 else f"{mb:.0f} МБ"
+    kb = b / 1024
+    return f"{kb:.0f} КБ"
+
+
+async def _render_bypass_line(
+    telegram_id: int,
+    language: str,
+    *,
+    none_key: str = "main.my_sub_bypass_none",
+    left_key: str = "main.my_sub_bypass_left",
+    none_default: str = "Трафик обхода: —",
+    left_default: str = "Трафик обхода: {remaining} из {limit}",
+) -> str:
+    """Единый рендер строки «Трафик обхода» для profile и my_subscription.
+
+    Берём bypass entity из панели через remnawave_uuid, показываем:
+      • «Трафик обхода: —»                — нет entity в БД / панели.
+      • «Трафик обхода: X ГБ из Y ГБ»     — юзер купил Y ГБ, потратил Y-X.
+      • «Трафик обхода: безлимит»         — trafficLimitBytes=0 (админ-гифт).
+
+    Форматирование `_fmt_bytes_pretty` — стабильные единицы (ГБ / МБ / КБ),
+    remaining и limit всегда в единицах наибольшего (см. `_fmt`).
+    """
+    if not config.REMNAWAVE_ENABLED:
+        return i18n_get_text(language, none_key, none_default)
+    try:
+        # get_bypass_traffic_safe гарантированно возвращает BYPASS entity
+        # (проверяет username=str(tg)). Если DB-кеш указывает на premium
+        # из-за legacy backfill-бага — self-heal чинит DB и re-resolve
+        # через username.
+        from app.services import remnawave_api
+        traffic = await remnawave_api.get_bypass_traffic_safe(telegram_id)
+        if not traffic:
+            return i18n_get_text(language, none_key, none_default)
+        used = int(traffic.get("usedTrafficBytes") or 0)
+        limit_bytes = int(traffic.get("trafficLimitBytes") or 0)
+        # trafficLimitBytes=0 в Remnawave = БЕЗЛИМИТ. Bypass с безлимитом
+        # — редкий admin-gift кейс; показываем "безлимит" вместо
+        # некорректного "0 КБ из 0 КБ".
+        if limit_bytes == 0:
+            return i18n_get_text(
+                language, "main.my_sub_bypass_unlimited",
+                "Трафик обхода: безлимит",
+            )
+        remaining = max(0, limit_bytes - used)
+        return i18n_get_text(
+            language, left_key, left_default,
+            remaining=_fmt_bytes_pretty(remaining),
+            limit=_fmt_bytes_pretty(limit_bytes),
+        )
+    except Exception as e:
+        logger.warning("bypass_line fetch failed for %s: %s", telegram_id, e)
+        return i18n_get_text(language, none_key, none_default)
+
+
 async def _send_screen_photo(
     bot,
     chat_id: int,
@@ -460,33 +526,15 @@ async def show_profile(message_or_query, language: str):
             info_lines.append(i18n_get_text(language, "profile.info_inactive", "📆 Подписка: не активна"))
             info_lines.append(i18n_get_text(language, "profile.info_tariff_none", "⭐️ Тариф: —"))
 
-        # Трафик обхода — сразу в инфо-блок (цифрой, без прогресс-бара)
-        bypass_line = i18n_get_text(language, "profile.info_bypass_none", "💎 Трафик обхода: —")
-        if config.REMNAWAVE_ENABLED:
-            try:
-                rmn_uuid_check = await database.get_remnawave_uuid(telegram_id)
-                if rmn_uuid_check:
-                    from app.services import remnawave_api
-                    traffic = await remnawave_api.get_user_traffic(rmn_uuid_check)
-                    if traffic:
-                        used = traffic["usedTrafficBytes"]
-                        limit_bytes = traffic["trafficLimitBytes"]
-                        remaining = max(0, limit_bytes - used)
-
-                        def _fmt(b):
-                            if b >= 1024**3:
-                                return f"{b / 1024**3:.1f} ГБ"
-                            if b >= 1024**2:
-                                return f"{b / 1024**2:.0f} МБ"
-                            return f"{b / 1024:.0f} КБ"
-
-                        bypass_line = i18n_get_text(
-                            language, "profile.info_bypass_left",
-                            "💎 Трафик обхода: {remaining} из {limit}",
-                            remaining=_fmt(remaining), limit=_fmt(limit_bytes),
-                        )
-            except Exception as e:
-                logger.warning(f"profile: bypass traffic fetch failed for {telegram_id}: {e}")
+        # Трафик обхода — единый helper (правильно обрабатывает безлимит,
+        # согласованные единицы, кейсы missing entity).
+        bypass_line = await _render_bypass_line(
+            telegram_id, language,
+            none_key="profile.info_bypass_none",
+            left_key="profile.info_bypass_left",
+            none_default="💎 Трафик обхода: —",
+            left_default="💎 Трафик обхода: {remaining} из {limit}",
+        )
         info_lines.append(bypass_line)
 
         # Автопродление
@@ -527,7 +575,15 @@ async def show_profile(message_or_query, language: str):
                 _rmn_svc._fire_and_forget(_rmn_svc.ensure_squad(telegram_id))
             elif has_active_subscription and expires_at and sub_type in ("basic", "plus", "trial"):
                 from app.services import remnawave_service as _rmn_svc
-                override = 5 * 1024**3 if is_trial else 10 * 1024**3
+                # Trial → TRIAL_BYPASS_MB (default 500 MB, per ТЗ),
+                # paid → 10 GB старт-пак. Раньше был баг: trial=5GB —
+                # profile.show fallback выдавал в 10× больше, чем
+                # provision_subscription при первичной активации.
+                if is_trial:
+                    trial_mb = int(getattr(config, "TRIAL_BYPASS_MB", 500)) or 500
+                    override = trial_mb * (1024 ** 2)
+                else:
+                    override = 10 * 1024**3
                 _rmn_svc._fire_and_forget(
                     _rmn_svc.create_remnawave_user(
                         telegram_id, sub_type, expires_at,
@@ -784,33 +840,14 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
         tariff_label = "—"
         active_line = i18n_get_text(language, "main.my_sub_active_until_none", "Активна до: —")
 
-    # Трафик обхода (остаток / лимит)
-    bypass_line = i18n_get_text(language, "main.my_sub_bypass_none", "Трафик обхода: —")
-    if config.REMNAWAVE_ENABLED:
-        try:
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if rmn_uuid:
-                from app.services import remnawave_api
-                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-                if traffic:
-                    used = int(traffic.get("usedTrafficBytes") or 0)
-                    limit_bytes = int(traffic.get("trafficLimitBytes") or 0)
-                    remaining = max(0, limit_bytes - used)
-
-                    def _fmt(b):
-                        if b >= 1024**3:
-                            return f"{b / 1024**3:.1f} ГБ"
-                        if b >= 1024**2:
-                            return f"{b / 1024**2:.0f} МБ"
-                        return f"{b / 1024:.0f} КБ"
-
-                    bypass_line = i18n_get_text(
-                        language, "main.my_sub_bypass_left",
-                        "Трафик обхода: {remaining} из {limit}",
-                        remaining=_fmt(remaining), limit=_fmt(limit_bytes),
-                    )
-        except Exception as e:
-            logger.warning(f"my_subscription: bypass traffic fetch failed for {telegram_id}: {e}")
+    # Трафик обхода (остаток / лимит) — единый helper.
+    bypass_line = await _render_bypass_line(
+        telegram_id, language,
+        none_key="main.my_sub_bypass_none",
+        left_key="main.my_sub_bypass_left",
+        none_default="Трафик обхода: —",
+        left_default="Трафик обхода: {remaining} из {limit}",
+    )
 
     _title = i18n_get_text(language, "main.my_sub_title", "<b>Информация о подписке</b>")
     _tariff_line = i18n_get_text(language, "profile.info_tariff", "⭐️ Тариф: {tariff}", tariff=tariff_label)

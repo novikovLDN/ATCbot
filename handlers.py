@@ -1014,7 +1014,10 @@ async def show_payment_method_selection(
     # СБП — обратно через Platega (revert Wata-миграции по просьбе).
     btn_sbp = InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp"), callback_data="pay:sbp")
     btn_card = InlineKeyboardButton(text=i18n_get_text(language, "payment.card"), callback_data="pay:card")
-    btn_lava = InlineKeyboardButton(text=i18n_get_text(language, "payment.lava"), callback_data="pay:lava")
+    # Lava-кнопка подменена на Wata: та же надпись "payment.lava" в UI,
+    # но callback уходит в Wata-хендлер (pay:wata). Код lava_service не
+    # удаляем — только UI-роутинг.
+    btn_lava = InlineKeyboardButton(text=i18n_get_text(language, "payment.lava"), callback_data="pay:wata")
     btn_intl = InlineKeyboardButton(text=i18n_get_text(language, "payment.intl_pl"), callback_data="pay:intl_pl")
     btn_stars = InlineKeyboardButton(text=i18n_get_text(language, "payment.stars"), callback_data="pay:stars")
     btn_crypto = InlineKeyboardButton(text=i18n_get_text(language, "payment.crypto"), callback_data="pay:crypto")

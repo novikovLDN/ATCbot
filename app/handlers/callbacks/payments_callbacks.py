@@ -211,11 +211,13 @@ async def callback_topup_amount(callback: CallbackQuery):
         callback_data=f"topup_stars:{amount}",
         style="primary",
     )])
+    # Lava-кнопка подменена на Wata: callback уходит в топап-Wata.
+    # Код lava_service не удаляем — оставляем условие видимости.
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.lava"),
-            callback_data=f"topup_lava:{amount}",
+            callback_data=f"topup_wata:{amount}",
             style="primary",
         )])
     buttons.append([InlineKeyboardButton(
@@ -1355,15 +1357,23 @@ async def callback_pay_intl_pl(callback: CallbackQuery, state: FSMContext):
 
 @payments_router.callback_query(F.data == "pay:sbp")
 async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
-    """Оплата через СБП (Platega.io, +11% наценка)
+    """Оплата через СБП. Провайдер (Platega / Wata) выбирается через
+    runtime-настройку в дашборде (см. app.services.sbp_router).
 
     КРИТИЧНО:
     - Работает ТОЛЬКО в состоянии choose_payment_method
-    - Создает pending_purchase с ценой +11%
-    - Создает транзакцию через Platega API
+    - Создает pending_purchase с ценой (+11% при Platega SBP)
+    - Создает транзакцию у выбранного провайдера
     - Отправляет payment URL пользователю
     """
     telegram_id = callback.from_user.id
+
+    # Живой выбор провайдера — прозрачно для пользователя.
+    from app.services import sbp_router
+    provider = await sbp_router.resolve_provider(telegram_id)
+    if provider == "wata":
+        logger.info(f"sbp_router: user {telegram_id} → wata (pay:sbp)")
+        return await callback_pay_wata(callback, state)
 
     # Rate limiting
     is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
@@ -2253,11 +2263,26 @@ async def callback_pay_wata_check(callback: CallbackQuery):
 
 @payments_router.callback_query(F.data.startswith("topup_sbp:"))
 async def callback_topup_sbp(callback: CallbackQuery):
-    """Пополнение баланса через СБП (Platega.io, +11%)"""
+    """Пополнение баланса через СБП. Провайдер (Platega / Wata) выбирается
+    через runtime-настройку в дашборде (см. app.services.sbp_router)."""
     if not await ensure_db_ready_callback(callback):
         return
 
     telegram_id = callback.from_user.id
+
+    # Живой выбор провайдера — прозрачно для пользователя.
+    from app.services import sbp_router
+    provider = await sbp_router.resolve_provider(telegram_id)
+    if provider == "wata":
+        logger.info(f"sbp_router: user {telegram_id} → wata (topup_sbp)")
+        # topup_wata: ожидает те же данные из callback_data — подменяем
+        # префикс через immutable-copy (CallbackQuery frozen).
+        try:
+            amount_part = callback.data.split(":", 1)[1]
+        except IndexError:
+            amount_part = "0"
+        cb_wata = callback.model_copy(update={"data": f"topup_wata:{amount_part}"})
+        return await callback_topup_wata(cb_wata)
 
     is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:

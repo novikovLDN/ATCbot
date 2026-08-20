@@ -94,28 +94,66 @@ class PremiumCreateResult:
     short_uuid: Optional[str] = None  # panel-assigned shortUuid (used to
                                        # rebuild subscription URLs if the
                                        # cached value goes stale).
+    panel_id: Optional[int] = None    # numeric id from Remnawave 3.x
+                                       # (обязателен для /api/users/{id}
+                                       # actions/* и delete/).
+
+
+def _extract_id(user: dict) -> Optional[int]:
+    """Извлечь numeric .id из panel entity (3.x). None если нет."""
+    v = user.get("id") if isinstance(user, dict) else None
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_panel_uuid(payload: dict) -> Optional[str]:
+    """Вернуть UUID entity для сохранения в subscriptions.remnawave_premium_uuid.
+
+    3.x panel POST/GET-response больше не отдаёт `uuid` — только `vlessUuid`
+    (VLESS-UUID клиента, тоже уникальный per-user). Fallback гарантирует,
+    что колонка `remnawave_premium_uuid` никогда не остаётся NULL при
+    успешном создании — иначе downstream-код (profile show_traffic,
+    verify_delivery, lazy-provision) видит пусто и либо прячет UI, либо
+    создаёт дубль-entity через preflight+adopt и перетирает трафик.
+    """
+    if not isinstance(payload, dict):
+        return None
+    v = payload.get("uuid") or payload.get("vlessUuid")
+    return str(v) if v else None
 
 
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
     """Decide whether a panel entity originated from this bot's migration.
 
-    True if either:
-      - telegramId matches (Remnawave returns it as either `telegramId` or
-        `telegram_id` depending on version), OR
-      - description contains our import marker.
+    Priorities (fail-safe против takeover):
+      1. Если panel.telegramId явно указан — решаем СТРОГО по нему:
+         match → True, mismatch → False. Никакие другие маркеры
+         (username / description) не могут перезаписать явный owner.
+      2. panel.telegramId отсутствует (legacy 2.7.4 не проставлялся) —
+         адоптим по нашему username-паттерну `tg_{tg}_premium` или
+         маркеру описания.
     """
     if not isinstance(user, dict):
         return False
     tg_field = user.get("telegramId")
     if tg_field is None:
         tg_field = user.get("telegram_id")
-    try:
-        if tg_field is not None and int(tg_field) == int(telegram_id):
-            return True
-    except (TypeError, ValueError):
-        pass
+    if tg_field is not None:
+        # Явный владелец в панели — строгое решение по нему.
+        try:
+            return int(tg_field) == int(telegram_id)
+        except (TypeError, ValueError):
+            return False
+    # panel.telegramId пусто → fallback на маркеры (только для legacy).
     desc = (user.get("description") or "").lower()
-    if "samopis" in desc or "imported from samopis" in desc:
+    if "samopis" in desc or "imported from samopis" in desc or "premium via bot" in desc:
+        return True
+    uname = (user.get("username") or "").strip()
+    if uname == f"tg_{int(telegram_id)}_premium":
         return True
     return False
 
@@ -124,13 +162,14 @@ def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResul
     """Build a `recovered=True` PremiumCreateResult from an already-existing entity."""
     return PremiumCreateResult(
         ok=True,
-        panel_uuid=user.get("uuid"),
+        panel_uuid=_extract_panel_uuid(user),
         forced_uuid_accepted=False,
         subscription_url=user.get("subscriptionUrl") or None,
         status=http_status,
         error=None,
         recovered=True,
         short_uuid=user.get("shortUuid"),
+        panel_id=_extract_id(user),
     )
 
 
@@ -276,7 +315,7 @@ async def create_premium_user_entity(
         )
         return PremiumCreateResult(
             ok=False,
-            panel_uuid=existing.get("uuid"),
+            panel_uuid=_extract_panel_uuid(existing),
             forced_uuid_accepted=False,
             subscription_url=None,
             status=409,
@@ -290,7 +329,7 @@ async def create_premium_user_entity(
 
     if raw and raw.get("ok"):
         response = raw.get("response") or {}
-        panel_uuid = response.get("uuid")
+        panel_uuid = _extract_panel_uuid(response)
         # Acceptance is decided by `vlessUuid` — `uuid` is always panel-assigned.
         accepted_vless = response.get("vlessUuid")
         accepted = bool(force_uuid) and (accepted_vless == requested_uuid)
@@ -308,6 +347,7 @@ async def create_premium_user_entity(
             error=None,
             recovered=False,
             short_uuid=response.get("shortUuid"),
+            panel_id=_extract_id(response),
         )
 
     first_status = int((raw or {}).get("status") or 0)
@@ -348,13 +388,14 @@ async def create_premium_user_entity(
             response = raw2.get("response") or {}
             return PremiumCreateResult(
                 ok=True,
-                panel_uuid=response.get("uuid"),
+                panel_uuid=_extract_panel_uuid(response),
                 forced_uuid_accepted=False,
                 subscription_url=response.get("subscriptionUrl"),
                 status=int(raw2.get("status") or 0),
                 error=None,
                 recovered=False,
                 short_uuid=response.get("shortUuid"),
+                panel_id=_extract_id(response),
             )
         raw = raw2
 

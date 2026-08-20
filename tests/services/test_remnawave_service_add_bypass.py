@@ -6,7 +6,7 @@ Repro scenario (production incident, user 6214188086, 2026-08-12):
   2. Remnawave panel still holds the bypass entity with username=str(telegram_id)
   3. New traffic-pack purchase → add_bypass_traffic
   4. add_traffic() returns False (no uuid in DB)
-  5. create_remnawave_user() → POST /api/users → HTTP 400 errorCode A019
+  5. create_remnawave_user() → POST /api/users/create → HTTP 400 errorCode A019
      "User username already exists"
   6. User sees "⏳ Настраиваем обход блокировок... Нажмите 🔄"
 

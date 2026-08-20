@@ -360,12 +360,23 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     "EXPIRY_DB_UPDATE_SUCCESS",
                     extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
                 )
-                # Disable Remnawave bypass (fire-and-forget) — no remnawave_uuid means safe to disable
+                # Disable Remnawave — ОБА entity: bypass (по трафику) + premium.
+                # Panel-side auto-expiry по expireAt тоже сработал бы,
+                # но explicit disable гарантирует что subscriptionUrl
+                # немедленно инвалидируется даже если DB.expires_at
+                # разошёлся с panel.expireAt (см. audit bucket
+                # `panel_ahead_of_paid` в admin/audit_subs).
                 try:
                     from app.services.remnawave_service import disable_remnawave_user_bg
                     disable_remnawave_user_bg(telegram_id)
                 except Exception as rmn_err:
                     logger.warning("REMNAWAVE_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
+                try:
+                    import asyncio as _aio
+                    from app.services import remnawave_premium
+                    _aio.create_task(remnawave_premium.disable_premium_user(telegram_id))
+                except Exception as rmn_err:
+                    logger.warning("REMNAWAVE_PREMIUM_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
 
                 # Создаем спецпредложение -15% на 3 дня для пользователей с оплаченной подпиской
                 sub_source = subscription.get("source", "")
@@ -952,31 +963,25 @@ async def reissue_subscription_key(subscription_id: int) -> "Tuple[str, str]":
         logger.error(f"reissue_subscription_key: {error_msg}")
         raise ValueError(error_msg)
     
+    # 3.x: samopis-мастер мёртв, vpn_utils.reissue_vpn_access — no-op
+    # (возвращает пустой vless_link → VPNAPIError). Делегируем в
+    # atomic-версию, которая работает через
+    # remnawave_premium.reissue_premium_user_entity.
     try:
-        new_uuid, vless_url = await vpn_utils.reissue_vpn_access(
-            old_uuid=old_uuid,
-            telegram_id=telegram_id,
-            subscription_end=expires_at
-        )
+        new_uuid, vless_url = await reissue_vpn_key_atomic(telegram_id)
     except Exception as e:
         logger.error(
-            f"reissue_subscription_key: VPN_API_FAILED [subscription_id={subscription_id}, "
-            f"telegram_id={telegram_id}, error={str(e)}]"
+            f"reissue_subscription_key: REMNAWAVE_REISSUE_FAILED "
+            f"[subscription_id={subscription_id}, telegram_id={telegram_id}, "
+            f"error={str(e)}]"
         )
         raise
+    if not new_uuid or not vless_url:
+        raise ValueError(
+            f"reissue_vpn_key_atomic returned empty result "
+            f"(new_uuid={new_uuid!r}, vless_url_present={bool(vless_url)})"
+        )
 
-    # 3. Обновляем UUID и vpn_key в БД (vless_url from API — single source of truth)
-    try:
-        await update_subscription_uuid(subscription_id, new_uuid, vpn_key=vless_url)
-    except Exception as e:
-        logger.error(
-            f"reissue_subscription_key: DB_UPDATE_FAILED [subscription_id={subscription_id}, "
-            f"telegram_id={telegram_id}, new_uuid={new_uuid[:8]}..., error={str(e)}]"
-        )
-        # КРИТИЧНО: UUID в VPN API уже обновлён, но БД не обновлена
-        # Это несоответствие, но мы не можем откатить VPN API
-        raise
-    
     new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
     logger.info(
         f"reissue_subscription_key: SUCCESS [subscription_id={subscription_id}, "
@@ -4557,12 +4562,17 @@ async def finalize_purchase(
                         subscription_end=subscription_end_pre,
                         period_days=period_days,
                         is_trial=False,  # finalize_purchase is paid flow only
+                        is_combo=is_combo_purchase,  # 🆕 fresh combo → bypass с 75 GB
                     )
                     pre_provisioned_uuid = {
                         "uuid": vless_result["uuid"].strip(),
                         "vless_url": vless_result["vless_url"],
                         "vless_url_plus": vless_result.get("vless_url_plus"),
                         "subscription_type": vless_result.get("subscription_type") or tariff_type or "basic",
+                        # 🆕 True if we just created the bypass entity — confirmation
+                        # SHOULD NOT top-up again (иначе double-add: 75+75=150 для combo,
+                        # 10+10=20 для обычной basic 30d).
+                        "bypass_created_fresh": bool(vless_result.get("bypass_created_fresh", False)),
                     }
                     uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                     logger.info(
@@ -4970,6 +4980,7 @@ async def finalize_purchase(
                         "is_renewal": False,
                         "is_combo": is_combo_purchase,
                         "period_days": period_days,
+                        "bypass_created_fresh": bool(pre_provisioned_uuid.get("bypass_created_fresh")) if pre_provisioned_uuid else False,
                     }
                 else:
                     # Получаем VPN ключ для нормальной активации
@@ -5091,6 +5102,9 @@ async def finalize_purchase(
                         "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
                         "is_combo": is_combo_purchase,
                         "period_days": period_days,
+                        # 🆕 Fresh bypass — уже создан с ФИНАЛЬНЫМ лимитом (75 GB для combo,
+                        # 10 GB для basic). confirmation.py: skip top-up → no double-add.
+                        "bypass_created_fresh": bool(pre_provisioned_uuid.get("bypass_created_fresh")) if pre_provisioned_uuid else False,
                     }
         except Exception as tx_err:
             # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray

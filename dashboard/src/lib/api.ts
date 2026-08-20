@@ -83,6 +83,17 @@ export const api = {
 };
 
 // ── Endpoint binders ────────────────────────────────────────────────
+export interface PanelEntitySnapshot {
+  source: "by_uuid" | "by_username" | "by_id";
+  panel_id: number | null;
+  vless_uuid: string | null;
+  subscription_url: string | null;
+  traffic_limit_bytes: number;
+  used_traffic_bytes: number;
+  status: string;
+  telegram_id_field: number | null;
+}
+
 export interface StatsOverview {
   total_users?: number;
   active_subscriptions?: number;
@@ -98,10 +109,27 @@ export interface RevenueStats {
   avg_ltv_rubles: number;
 }
 
+export interface PremiumState {
+  has_entity: boolean;
+  is_active: boolean;
+  expires_at: string | null;
+  subscription_type?: string | null;
+}
+
+export interface BypassState {
+  has_entity: boolean;
+  used_bytes: number;
+  limit_bytes: number;
+  remaining_bytes: number;
+  status: string | null;
+}
+
 export interface UserDetail {
   user: Record<string, unknown>;
   balance_rubles: number;
   subscription: Record<string, unknown> | null;
+  premium: PremiumState;
+  bypass: BypassState;
   trial: Record<string, unknown> | null;
   discount: Record<string, unknown> | null;
   traffic_discount: Record<string, unknown> | null;
@@ -202,6 +230,103 @@ export const endpoints = {
         reason?: string;
       }>;
     }>("/bypass-audit/fix-all"),
+  // ── Traffic audit: DB (subscription base + traffic_purchases) vs
+  //    Remnawave panel (trafficLimitBytes). Найти юзеров у которых
+  //    в панели меньше трафика чем оплачено.
+  trafficAuditList: (opts?: { limit?: number; user?: number; concurrent?: number }) => {
+    const p = new URLSearchParams();
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    if (opts?.user != null) p.set("user", String(opts.user));
+    if (opts?.concurrent != null) p.set("concurrent", String(opts.concurrent));
+    const qs = p.toString() ? `?${p.toString()}` : "";
+    return api.get<{
+      summary: {
+        total: number;
+        match: number;
+        mismatch: number;
+        desync: number;
+        no_entity: number;
+        panel_error: number;
+        shortfall_total_bytes: number;
+        shortfall_total_gb: number;
+      };
+      results: Array<{
+        tg: number;
+        subscription_type: string;
+        period_days: number | null;
+        is_bypass_only: boolean;
+        traffic_purchases_gb: number;
+        traffic_purchases: Array<{
+          id: number;
+          gb_amount: number;
+          price_rub: number;
+          payment_method: string | null;
+          created_at: string | null;
+        }>;
+        expected_bytes: number;
+        actual_bytes: number;
+        used_bytes: number;
+        shortfall_bytes: number;
+        panel_status: string;
+        kind: "match" | "mismatch" | "desync" | "no_entity" | "panel_error";
+        note: string;
+        expected_gb: number;
+        actual_gb: number;
+        used_gb: number;
+        shortfall_gb: number;
+        db_uuid: string | null;
+        db_id: number | null;
+        db_sub_url: string | null;
+        panel_by_our_ref: PanelEntitySnapshot | null;
+        panel_by_username: PanelEntitySnapshot | null;
+        desync: boolean;
+      }>;
+    }>(`/traffic-audit${qs}`);
+  },
+  trafficAuditResync: (telegram_id: number) =>
+    api.post<{
+      ok: boolean;
+      new_id: number | null;
+      new_uuid: string | null;
+      new_sub_url: string | null;
+      panel_limit_bytes: number;
+      panel_used_bytes: number;
+    }>(`/traffic-audit/resync/${telegram_id}`),
+  trafficAuditFixOne: (telegram_id: number) =>
+    api.post<{
+      ok: boolean;
+      before_bytes?: number;
+      after_bytes?: number;
+      used_bytes?: number;
+      expected_bytes?: number;
+      audit: Record<string, unknown>;
+      reason?: string;
+    }>(`/traffic-audit/fix/${telegram_id}`),
+  trafficAuditFixAll: (opts?: { limit?: number; concurrent?: number }) => {
+    const p = new URLSearchParams();
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    if (opts?.concurrent != null) p.set("concurrent", String(opts.concurrent));
+    const qs = p.toString() ? `?${p.toString()}` : "";
+    return api.post<{
+      audit_summary: {
+        total: number;
+        match: number;
+        mismatch: number;
+        shortfall_total_gb: number;
+      };
+      fixed: number;
+      failed: number;
+      results: Array<{
+        telegram_id: number;
+        ok: boolean;
+        reason?: string;
+        before_bytes: number;
+        after_bytes: number | null;
+        used_bytes: number;
+        expected_bytes: number;
+      }>;
+    }>(`/traffic-audit/fix-all${qs}`);
+  },
   statsDaily: (days = 30) =>
     api.get<{
       days: number;
@@ -457,6 +582,16 @@ export const endpoints = {
   }) => api.post<Record<string, unknown>>("/bgift", body),
   bgiftDelete: (id: number) => api.del<{ ok: boolean }>(`/bgift/${id}`),
 
+  // ── Beta-testing applications ──────────────────────────────────────
+  betaAppsSummary: (program = "vpn_innovator") =>
+    api.get<{ program: string; total: number }>(
+      `/beta-applications/summary?program=${encodeURIComponent(program)}`,
+    ),
+  betaAppsList: (page = 0, page_size = 50, program = "vpn_innovator") =>
+    api.get<Array<Record<string, unknown>>>(
+      `/beta-applications/list?program=${encodeURIComponent(program)}&page=${page}&page_size=${page_size}`,
+    ),
+
   userDelete: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}`),
 
   // ── Marketing links: stats + promo ─────────────────────────────────
@@ -625,6 +760,16 @@ export const endpoints = {
   settingsTestNotifications: () =>
     api.post<{ ok: boolean; count: number; delay_seconds: number }>(
       "/settings/notifications/test",
+    ),
+
+  settingsSbpRouterGet: () =>
+    api.get<{ mode: "platega" | "wata" | "split"; wata_percent: number }>(
+      "/settings/sbp-router",
+    ),
+  settingsSbpRouterPatch: (mode: "platega" | "wata" | "split", wata_percent: number) =>
+    api.post<{ mode: "platega" | "wata" | "split"; wata_percent: number }>(
+      "/settings/sbp-router",
+      { mode, wata_percent },
     ),
 
   // ── Reconciliation («Сверка») ─────────────────────────────────────
@@ -880,7 +1025,49 @@ export const endpoints = {
   }) => api.put<{ ok: boolean; percent: number }>("/pricing/global-discount", body),
   pricingClearGlobalDiscount: () =>
     api.del<{ ok: boolean; cleared: boolean }>("/pricing/global-discount"),
+
+  remnawaveBackfillStart: (dry_run: boolean) =>
+    api.post<{
+      ok: boolean;
+      error?: string;
+      status: RemnawaveBackfillStatus;
+    }>("/remnawave/backfill/start", { dry_run }),
+  remnawaveBackfillStatus: () =>
+    api.get<RemnawaveBackfillStatus>("/remnawave/backfill/status"),
+  remnawaveResetPremiumUnlimited: (dry_run: boolean = true) => {
+    const p = new URLSearchParams({ dry_run: String(dry_run) });
+    return api.post<{
+      total: number;
+      checked: number;
+      limited: number;
+      reset: number;
+      errors: number;
+      dry_run: boolean;
+      samples: Array<{
+        telegram_id: number;
+        premium_id: number;
+        before_limit_bytes: number;
+        before_status: string;
+      }>;
+    }>(`/remnawave/reset-premium-unlimited?${p.toString()}`);
+  },
 };
+
+export interface RemnawaveBackfillStatus {
+  running: boolean;
+  started_at: number | null;
+  finished_at: number | null;
+  dry_run: boolean;
+  total: number;
+  processed: number;
+  already_set: number;
+  id_backfilled: number;
+  tg_backfilled: number;
+  missing: number;
+  errors: number;
+  last_error: string | null;
+  elapsed_sec: number;
+}
 
 // Auth-aware CSV download via fetch + blob. Returns nothing; triggers
 // a browser download. We can't use a plain <a href="..."> because the

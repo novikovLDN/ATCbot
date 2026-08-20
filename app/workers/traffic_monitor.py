@@ -112,8 +112,10 @@ async def traffic_monitor_iteration(bot: Bot) -> None:
 
     for user in users:
         telegram_id = user["telegram_id"]
-        rmn_uuid = user["remnawave_uuid"]
-        await _check_user_traffic(bot, telegram_id, rmn_uuid)
+        # Prefer numeric id (3.x fast-path без UUID→id auto-resolve).
+        # Fallback на uuid для legacy юзеров без забэкфильнутого id.
+        panel_ref = user.get("remnawave_id") or user["remnawave_uuid"]
+        await _check_user_traffic(bot, telegram_id, panel_ref)
         await asyncio.sleep(0.2)  # Rate limit API calls
 
 

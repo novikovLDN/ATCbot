@@ -545,9 +545,11 @@ async def cb_payment_methods(callback: CallbackQuery, state: FSMContext):
             callback_data=f"spotify_pay:card:{plan}:{months}",
             style="primary",
         )])
+    # Lava-кнопка подменена на Wata (spotify_pay:lava → spotify_pay:wata).
+    # Код lava_service не удаляем — только UI-роутинг.
     rows.append([InlineKeyboardButton(
         text="📱 СБП 3%",
-        callback_data=f"spotify_pay:lava:{plan}:{months}",
+        callback_data=f"spotify_pay:wata:{plan}:{months}",
         style="primary",
     )])
     # СБП в shop-магазине оставляем Platega (Wata на магазин не ставим)

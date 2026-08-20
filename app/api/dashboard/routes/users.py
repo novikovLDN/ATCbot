@@ -11,7 +11,7 @@ Bot-only writes (approve_payment_atomic, grant_access, finalize_purchase,
 mark_trial_used) are intentionally NOT exposed here.
 """
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field, field_validator
@@ -62,7 +62,17 @@ async def users_search(
 
 @router.get("/{telegram_id}")
 async def user_detail(telegram_id: int = Path(..., gt=0)):
-    """Full card — user, balance, subscription, discount, vip, trial."""
+    """Full card — user, balance, subscription, discount, vip, trial.
+
+    Отдельно возвращает:
+      - `premium` — премиум-подписка (когда истекает, активна ли),
+        источник — subscriptions.expires_at при наличии
+        remnawave_premium_uuid.
+      - `bypass` — обход блокировок: сколько ГБ потрачено / всего /
+        осталось. Байты живут только в Remnawave, тянем live.
+    Наличие ключа в подписке ещё не значит, что фича активна —
+    смотрим is_bypass_only / remnawave_premium_uuid.
+    """
     try:
         user = await database.get_user(telegram_id)
         if not user:
@@ -75,10 +85,16 @@ async def user_detail(telegram_id: int = Path(..., gt=0)):
         is_vip = await database.is_vip_user(telegram_id)
         cashback_fixed = await database.get_cashback_fixed_percent(telegram_id)
         cashback_effective = await database.get_effective_cashback_percent(telegram_id)
+
+        premium_block = await _build_premium_block(subscription)
+        bypass_block = await _build_bypass_block(telegram_id, subscription)
+
         return {
             "user": user,
             "balance_rubles": balance,
             "subscription": subscription,
+            "premium": premium_block,
+            "bypass": bypass_block,
             "trial": trial,
             "discount": discount,
             "traffic_discount": traffic_discount,
@@ -90,6 +106,69 @@ async def user_detail(telegram_id: int = Path(..., gt=0)):
         raise
     except Exception as e:
         raise HTTPException(500, f"user_detail_failed: {e}")
+
+
+async def _build_premium_block(subscription: Optional[dict]) -> dict:
+    """Признаки активности премиум-подписки.
+
+    `has_entity` = у юзера есть remnawave_premium_uuid в БД.
+    `is_active` = has_entity AND expires_at в будущем AND НЕ bypass-only.
+    """
+    if not subscription:
+        return {"has_entity": False, "is_active": False, "expires_at": None}
+    has_premium = bool(subscription.get("remnawave_premium_uuid"))
+    is_bypass_only = bool(subscription.get("is_bypass_only"))
+    expires_at = subscription.get("expires_at")
+    is_active = False
+    if has_premium and not is_bypass_only and expires_at:
+        try:
+            exp = expires_at if isinstance(expires_at, datetime) else datetime.fromisoformat(str(expires_at))
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            is_active = exp > datetime.now(timezone.utc)
+        except Exception:
+            is_active = False
+    return {
+        "has_entity": has_premium,
+        "is_active": is_active,
+        "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else expires_at,
+        "subscription_type": subscription.get("subscription_type"),
+    }
+
+
+async def _build_bypass_block(telegram_id: int, subscription: Optional[dict]) -> dict:
+    """Live-выгрузка ГБ-остатка через Remnawave API.
+
+    Байты живут ТОЛЬКО в Remnawave — bot-DB не миррорит usage.
+    Если API упал / uuid отсутствует — возвращаем has_entity=False.
+    """
+    empty = {
+        "has_entity": False,
+        "used_bytes": 0,
+        "limit_bytes": 0,
+        "remaining_bytes": 0,
+        "status": None,
+    }
+    # get_bypass_traffic_safe:
+    #   - Проверяет что resolved entity — реально bypass (username == str(tg)).
+    #   - Self-heal кеша если legacy backfill записал premium's id в bypass col.
+    try:
+        from app.services import remnawave_api
+        traffic = await remnawave_api.get_bypass_traffic_safe(telegram_id)
+    except Exception:
+        return {**empty, "has_entity": True}
+    if not traffic:
+        return {**empty, "has_entity": True}
+    used = int(traffic.get("usedTrafficBytes") or 0)
+    limit = int(traffic.get("trafficLimitBytes") or 0)
+    remaining = max(0, limit - used) if limit > 0 else 0
+    return {
+        "has_entity": True,
+        "used_bytes": used,
+        "limit_bytes": limit,
+        "remaining_bytes": remaining,
+        "status": traffic.get("status"),
+    }
 
 
 @router.get("/{telegram_id}/history")

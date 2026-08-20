@@ -63,6 +63,12 @@ def _rewrite_sub_host(url: Optional[str]) -> Optional[str]:
     return url.replace(_OLD_HOST, _NEW_HOST)
 
 
+# Публичный alias — низкоуровневые сервисы (remnawave_api) применяют
+# этот rewrite централизованно, чтобы raw URL из панели никогда не
+# уходил юзеру с невалидным cert-хостом.
+rewrite_sub_host = _rewrite_sub_host
+
+
 def _legacy_sub_url(telegram_id: int) -> str:
     """Fallback to the existing samopis-style URL. Sync so it always works."""
     from vpn_utils import build_sub_url
@@ -204,6 +210,8 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
                             presult.subscription_url,
                             short_uuid=presult.short_uuid,
                         )
+                        if presult.panel_id is not None:
+                            await database.set_remnawave_premium_id(telegram_id, presult.panel_id)
                         out["created_premium"] = True
                         logger.info(
                             "LAZY_PROVISION_PREMIUM_DONE: tg=%s uuid=%s recovered=%s trial=%s",
@@ -248,6 +256,8 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
                             bresult.subscription_url,
                             bresult.short_uuid,
                         )
+                        if bresult.panel_id is not None:
+                            await database.set_remnawave_id(telegram_id, bresult.panel_id)
                         out["created_bypass"] = True
                         logger.info(
                             "LAZY_PROVISION_BYPASS_DONE: tg=%s uuid=%s bytes=%d trial=%s",

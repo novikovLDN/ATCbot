@@ -11,6 +11,7 @@ Implements the sync protocol per TZ:
 All requests require X-Bot-Api-Key header.
 """
 import logging
+import time
 from typing import Optional, Dict, Any, List
 
 import httpx
@@ -22,10 +23,32 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = 15.0  # seconds
 
+# Circuit-breaker: когда сайт отвечает 503 bot_sync_disabled — админ
+# явно выключил sync. Кешируем "выключено" на N сек, чтобы не спамить
+# ERROR-логами и не долбить бесполезными запросами при каждом /profile.
+_DISABLED_TTL_SEC = 300  # 5 минут
+_disabled_until_ts: float = 0.0
+
+
+def _mark_disabled_by_admin() -> None:
+    global _disabled_until_ts
+    _disabled_until_ts = time.time() + _DISABLED_TTL_SEC
+
+
+def _is_temporarily_disabled() -> bool:
+    return time.time() < _disabled_until_ts
+
 
 def is_enabled() -> bool:
-    """Check if site sync is configured."""
-    return bool(config.SITE_API_URL and config.SITE_BOT_API_KEY)
+    """Синхронизация с сайтом ОТКЛЮЧЕНА глобально по требованию клиента.
+
+    Все callers (`sync_balance`, `sync_referrals`, `full_sync_after_payment`,
+    `notify_subscription_extend`, `site_sync_worker_task`) уже проверяют
+    `is_enabled()` перед вызовом — им достаточно False, чтобы стать no-op'ом.
+    Оставили функции и модуль как заглушку на случай если сайт снова
+    появится: снять эту заглушку → вернуть проверку конфига.
+    """
+    return False
 
 
 def _headers() -> Dict[str, str]:
@@ -34,6 +57,20 @@ def _headers() -> Dict[str, str]:
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+
+
+def _classify_and_log(endpoint: str, status: int, body: str) -> None:
+    """Отличить admin-выключение (503+code) от реальных ошибок сайта.
+    Первый случай — INFO + circuit-breaker; остальное — ERROR как раньше.
+    """
+    if status == 503 and "bot_sync_disabled" in (body or ""):
+        _mark_disabled_by_admin()
+        logger.info(
+            "SITE_SYNC_DISABLED_BY_ADMIN: %s — silencing for %ds",
+            endpoint, _DISABLED_TTL_SEC,
+        )
+        return
+    logger.error("SITE_SYNC_ERROR: %s status=%d body=%s", endpoint, status, body[:300])
 
 
 async def _post(endpoint: str, data: dict) -> Optional[dict]:
@@ -45,7 +82,7 @@ async def _post(endpoint: str, data: dict) -> Optional[dict]:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(url, json=data, headers=_headers())
             if resp.status_code != 200:
-                logger.error("SITE_SYNC_ERROR: %s status=%d body=%s", endpoint, resp.status_code, resp.text[:300])
+                _classify_and_log(endpoint, resp.status_code, resp.text)
                 return None
             result = resp.json()
             if not result.get("success"):
@@ -66,7 +103,7 @@ async def _get(endpoint: str, params: dict = None) -> Optional[dict]:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(url, params=params, headers=_headers())
             if resp.status_code != 200:
-                logger.error("SITE_SYNC_ERROR: %s status=%d body=%s", endpoint, resp.status_code, resp.text[:300])
+                _classify_and_log(endpoint, resp.status_code, resp.text)
                 return None
             result = resp.json()
             if not result.get("success"):

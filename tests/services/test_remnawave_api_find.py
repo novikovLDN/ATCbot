@@ -1,11 +1,9 @@
-"""
-Unit tests for remnawave_api.find_user_by_username on Remnawave v2.7.4.
+"""Unit tests for remnawave_api.find_* on Remnawave Panel 3.x.
 
-The deployment exposes a dedicated `GET /api/users/by-username/{name}`
-endpoint that returns the entity on 200 and errorCode "A063" on 404 when
-the username is free.  The fallback list pagination path that earlier
-revisions of this module carried has been removed; these tests pin the
-remaining behaviour so a future regression is loud.
+В 3.x поиск по username — не stream-фильтр (username там не работает),
+а POST /api/users/resolve body {username|shortUuid|id|email|tag}.
+Поиск по telegram_id — через /api/users/stream?telegramId=X (это
+единственный из наших полей, который в списке stream-фильтров ТЗ).
 """
 from unittest.mock import AsyncMock, patch
 
@@ -14,76 +12,76 @@ import pytest
 from app.services import remnawave_api
 
 
-def _raw(status: int, *, response=None, body=None, ok=None):
-    if ok is None:
-        ok = status < 400
-    return {"ok": ok, "status": status, "response": response, "body": body}
+def _stream(users):
+    return {"users": list(users), "total": len(users), "nextCursor": None}
 
 
 @pytest.mark.asyncio
-async def test_find_user_returns_entity_on_200():
+async def test_find_user_by_username_uses_resolve():
     user = {
-        "uuid": "panel-uuid",
-        "vlessUuid": "vless-uuid",
+        "id": 382,
         "shortUuid": "short123",
         "username": "tg_42_premium",
         "telegramId": 42,
-        "subscriptionUrl": "https://rmnw.atlassecure.ru/api/sub/short123",
     }
-    raw_mock = AsyncMock(return_value=_raw(200, response=user))
-    with patch.object(remnawave_api, "_request_raw", raw_mock):
+    req_mock = AsyncMock(return_value=user)
+    with patch.object(remnawave_api, "_request", req_mock):
         out = await remnawave_api.find_user_by_username("tg_42_premium")
     assert out == user
-    raw_mock.assert_awaited_once()
-    method, path = raw_mock.call_args.args[0], raw_mock.call_args.args[1]
-    assert method == "GET"
-    assert path == "/api/users/by-username/tg_42_premium"
+    method, path = req_mock.call_args.args[0], req_mock.call_args.args[1]
+    assert method == "POST"
+    assert path == "/api/users/resolve"
+    kwargs = req_mock.call_args.kwargs
+    assert kwargs["json"] == {"username": "tg_42_premium"}
 
 
 @pytest.mark.asyncio
-async def test_find_user_returns_none_on_404():
-    """404 with errorCode A063 → username is free."""
-    body = {
-        "timestamp": "2026-05-12T19:19:58.895Z",
-        "path": "/api/users/by-username/test_nonexistent_xxx",
-        "message": "User with specified params not found",
-        "errorCode": "A063",
-    }
-    raw_mock = AsyncMock(return_value=_raw(404, body=body))
-    with patch.object(remnawave_api, "_request_raw", raw_mock):
-        out = await remnawave_api.find_user_by_username("tg_42_premium")
-    assert out is None
-    raw_mock.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_find_user_returns_none_on_5xx_without_claiming_username_free():
-    """Transient panel errors → return None and let the caller decide.
-
-    The caller (create_premium_user_entity) treats None as "username
-    might or might not be free, just try the POST" which is the safest
-    behaviour for a hiccup-during-preflight.
-    """
-    raw_mock = AsyncMock(return_value=_raw(503, body="panel down"))
-    with patch.object(remnawave_api, "_request_raw", raw_mock):
+async def test_find_user_by_username_returns_none_on_404():
+    req_mock = AsyncMock(return_value=None)
+    with patch.object(remnawave_api, "_request", req_mock):
         out = await remnawave_api.find_user_by_username("tg_42_premium")
     assert out is None
 
 
 @pytest.mark.asyncio
 async def test_find_user_empty_username_short_circuits():
-    raw_mock = AsyncMock()
-    with patch.object(remnawave_api, "_request_raw", raw_mock):
+    req_mock = AsyncMock()
+    with patch.object(remnawave_api, "_request", req_mock):
         out = await remnawave_api.find_user_by_username("")
     assert out is None
-    raw_mock.assert_not_called()
+    req_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_find_user_quotes_unsafe_username_chars():
-    """Pathological usernames must not break the path."""
-    raw_mock = AsyncMock(return_value=_raw(404))
-    with patch.object(remnawave_api, "_request_raw", raw_mock):
-        await remnawave_api.find_user_by_username("tg/42 weird?name")
-    path = raw_mock.call_args.args[1]
-    assert "tg%2F42%20weird%3Fname" in path
+async def test_find_user_by_telegram_id_uses_stream():
+    """find_user_by_telegram_id: /api/users/stream?telegramId=X (единственный
+    из наших поисков, у которого stream-filter существует по ТЗ)."""
+    user = {"id": 382, "username": "681274560", "telegramId": 681274560}
+    req_mock = AsyncMock(return_value=_stream([user]))
+    with patch.object(remnawave_api, "_request", req_mock):
+        out = await remnawave_api.find_user_by_telegram_id(681274560)
+    assert out == user
+    path = req_mock.call_args.args[1]
+    assert path == "/api/users/stream?telegramId=681274560"
+
+
+@pytest.mark.asyncio
+async def test_find_user_by_short_uuid_uses_resolve():
+    user = {"id": 382, "shortUuid": "short123"}
+    req_mock = AsyncMock(return_value=user)
+    with patch.object(remnawave_api, "_request", req_mock):
+        out = await remnawave_api.find_user_by_short_uuid("short123")
+    assert out == user
+    path = req_mock.call_args.args[1]
+    assert path == "/api/users/resolve"
+    assert req_mock.call_args.kwargs["json"] == {"shortUuid": "short123"}
+
+
+@pytest.mark.asyncio
+async def test_find_user_unwraps_response_user_key():
+    """Панель может обернуть в {user: {...}} — расспаковываем."""
+    user = {"id": 382, "username": "tg_42_premium"}
+    req_mock = AsyncMock(return_value={"user": user})
+    with patch.object(remnawave_api, "_request", req_mock):
+        out = await remnawave_api.find_user_by_username("tg_42_premium")
+    assert out == user

@@ -252,12 +252,14 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
             style="primary",
         )])
 
-    # Lava (card) — если настроен
+    # Lava-кнопка подменена на Wata: та же надпись, но callback уходит
+    # в подарочный Wata-хендлер. Код lava_service не удаляем — оставляем
+    # гейт видимости.
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.lava", "📱 СБП 3%"),
-            callback_data="gift_pay:lava",
+            callback_data="gift_pay:wata",
             style="primary",
         )])
     # СБП — обратно через Platega (revert Wata-миграции).
@@ -685,8 +687,17 @@ async def callback_gift_pay_lava(callback: CallbackQuery, state: FSMContext):
 
 @gift_router.callback_query(F.data == "gift_pay:sbp", GiftState.choose_payment_method)
 async def callback_gift_pay_sbp(callback: CallbackQuery, state: FSMContext):
-    """Оплата подарка через СБП (Platega)."""
+    """Оплата подарка через СБП. Провайдер (Platega / Wata) выбирается
+    через runtime-настройку в дашборде (см. app.services.sbp_router)."""
     telegram_id = callback.from_user.id
+
+    # Живой выбор провайдера — прозрачно для пользователя.
+    from app.services import sbp_router
+    provider = await sbp_router.resolve_provider(telegram_id)
+    if provider == "wata":
+        logger.info(f"sbp_router: user {telegram_id} → wata (gift_pay:sbp)")
+        return await callback_gift_pay_wata(callback, state)
+
     language = await resolve_user_language(telegram_id)
     fsm_data = await state.get_data()
     tariff = fsm_data.get("gift_tariff")

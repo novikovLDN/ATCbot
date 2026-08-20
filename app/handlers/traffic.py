@@ -234,11 +234,13 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
             style="primary",
         )])
 
+    # Lava-кнопка подменена на Wata: bypass_pay_lava → bypass_pay_wata.
+    # Код lava_service не удаляем — оставляем гейт видимости.
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.lava"),
-            callback_data=f"bypass_pay_lava:{gb}",
+            callback_data=f"bypass_pay_wata:{gb}",
             style="primary",
         )])
 
@@ -310,10 +312,17 @@ async def callback_traffic_info(callback: CallbackQuery):
 
     rmn_uuid = await database.get_remnawave_uuid(telegram_id)
     if not rmn_uuid:
-        # Auto-provision in background, show "provisioning" screen
+        # Auto-provision in background, show "provisioning" screen.
+        # Trial → TRIAL_BYPASS_MB (default 500 MB), paid → 10 GB.
+        # Раньше был баг: trial=5 GB — profile.show fallback выдавал в 10×
+        # больше, чем provision_subscription при первичной активации.
         expires_at = subscription.get("expires_at")
         if expires_at and config.REMNAWAVE_ENABLED:
-            override = 5 * 1024**3 if is_trial else 10 * 1024**3
+            if is_trial:
+                trial_mb = int(getattr(config, "TRIAL_BYPASS_MB", 500)) or 500
+                override = trial_mb * (1024 ** 2)
+            else:
+                override = 10 * 1024**3
             remnawave_service._fire_and_forget(
                 remnawave_service.create_remnawave_user(
                     telegram_id, sub_type, expires_at,
@@ -350,8 +359,9 @@ async def callback_traffic_info(callback: CallbackQuery):
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
         return
 
-    # Fetch traffic from Remnawave
-    traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+    # Fetch traffic from Remnawave (safe = гарантированно BYPASS entity,
+    # с self-heal кеша если legacy backfill записал premium's id).
+    traffic = await remnawave_api.get_bypass_traffic_safe(telegram_id)
     if not traffic:
         text = i18n_get_text(language, "traffic.fetch_error")
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -389,7 +399,10 @@ async def callback_traffic_info(callback: CallbackQuery):
     #   Incy → incy://crypt1/<payload> (AES-256-GCM via Node sidecar;
     #          при недоступности sidecar'а fallback на incy://add/<url>).
     from app.services import happ_crypto, incy_crypto
-    raw_sub_url = traffic.get("subscriptionUrl", "") or ""
+    from app.services.user_subscription_links import _rewrite_sub_host
+    # sub.atlassecure.ru → subscription.vps-cloud.uk (cert для старого хоста
+    # невалиден → Happ показывает "сертификат недействителен").
+    raw_sub_url = _rewrite_sub_host(traffic.get("subscriptionUrl", "") or "") or ""
     happ_url = happ_crypto.format_for_user(raw_sub_url) or raw_sub_url
     try:
         incy_url = await incy_crypto.to_incy_link(raw_sub_url) or raw_sub_url
@@ -558,7 +571,10 @@ async def show_traffic_info_message(message):
         warning += "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
 
     from app.services import happ_crypto, incy_crypto
-    raw_sub_url = traffic.get("subscriptionUrl", "") or ""
+    from app.services.user_subscription_links import _rewrite_sub_host
+    # sub.atlassecure.ru → subscription.vps-cloud.uk (cert для старого хоста
+    # невалиден → Happ показывает "сертификат недействителен").
+    raw_sub_url = _rewrite_sub_host(traffic.get("subscriptionUrl", "") or "") or ""
     # Happ: pure-Python RSA — синхронно и всегда работает.
     happ_url = happ_crypto.format_for_user(raw_sub_url) or raw_sub_url
     # Incy: async через Node-sidecar (или fallback incy://add/<url>).
@@ -816,12 +832,13 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
             style="success",
         )])
 
-    # Lava (card) button
+    # Lava-кнопка подменена на Wata: traffic_pay_lava → traffic_pay_wata.
+    # Код lava_service не удаляем — оставляем гейт видимости.
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.pay_lava", price=price),
-            callback_data=f"traffic_pay_lava:{gb}",
+            callback_data=f"traffic_pay_wata:{gb}",
             icon_custom_emoji_id=CE["buy"],
             style="success",
         )])

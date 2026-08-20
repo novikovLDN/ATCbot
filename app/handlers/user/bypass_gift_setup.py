@@ -245,11 +245,14 @@ async def _fetch_subscription_url(telegram_id: int) -> str:
         return ""
     try:
         from app.services import remnawave_api
+        from app.services.user_subscription_links import _rewrite_sub_host
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
             return ""
         traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-        return ((traffic or {}).get("subscriptionUrl") or "").strip()
+        raw = ((traffic or {}).get("subscriptionUrl") or "").strip()
+        # sub.atlassecure.ru → subscription.vps-cloud.uk (cert-fix).
+        return _rewrite_sub_host(raw) or ""
     except Exception as e:
         logger.warning("BGIFT_FETCH_SUB_URL_FAIL user=%s err=%s", telegram_id, e)
         return ""

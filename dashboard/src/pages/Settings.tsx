@@ -9,6 +9,7 @@ import {
   Send,
   Smartphone,
   Trash2,
+  Repeat,
 } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
 import { Spinner } from "@/components/Spinner";
@@ -151,6 +152,8 @@ export function Settings() {
         )}
       </section>
 
+      <SbpRouterSection />
+
       <PushSection />
 
       <section className="card p-5">
@@ -185,6 +188,151 @@ export function Settings() {
         </button>
       </section>
     </div>
+  );
+}
+
+function SbpRouterSection() {
+  const qc = useQueryClient();
+
+  const cfg = useQuery({
+    queryKey: ["settings", "sbp-router"],
+    queryFn: endpoints.settingsSbpRouterGet,
+  });
+
+  const [pendingPct, setPendingPct] = useState<number | null>(null);
+
+  const save = useMutation({
+    mutationFn: (v: { mode: "platega" | "wata" | "split"; wata_percent: number }) =>
+      endpoints.settingsSbpRouterPatch(v.mode, v.wata_percent),
+    onSuccess: (data) => {
+      qc.setQueryData(["settings", "sbp-router"], data);
+      setPendingPct(null);
+      const label =
+        data.mode === "platega"
+          ? "Platega"
+          : data.mode === "wata"
+            ? "Wata"
+            : `Split ${data.wata_percent}% Wata / ${100 - data.wata_percent}% Platega`;
+      toast.success(`СБП-провайдер: ${label}`);
+    },
+    onError: (e: unknown) =>
+      toast.error((e as ApiError)?.detail ?? "Не удалось сохранить"),
+  });
+
+  const mode = cfg.data?.mode ?? "platega";
+  const wataPct = pendingPct ?? cfg.data?.wata_percent ?? 50;
+
+  return (
+    <section className="card p-5">
+      <div className="mb-4 flex items-center gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
+          <Repeat className="h-4 w-4" />
+        </div>
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+            Платежи
+          </div>
+          <h2 className="text-lg font-semibold text-fg">
+            СБП-провайдер (live-switch)
+          </h2>
+        </div>
+      </div>
+
+      <p className="mb-4 text-sm text-fg-muted">
+        Куда уходит кнопка «📱 СБП» в боте: Platega, Wata или 50/50 (случай-но
+        распределяется по <code className="font-mono text-xs">telegram_id</code>,
+        один юзер всегда попадает к одному провайдеру). Переключение —
+        мгновенное, без рестарта. Другие процессы бота подхватят через ≤30 сек
+        (кэш).
+      </p>
+
+      {cfg.isLoading ? (
+        <div className="flex items-center gap-2 text-sm text-fg-muted">
+          <Spinner /> Загружаю...
+        </div>
+      ) : (
+        <>
+          <div className="mb-4 grid grid-cols-3 gap-2">
+            {(
+              [
+                { key: "platega", label: "Platega", sub: "все → Platega" },
+                { key: "wata", label: "Wata", sub: "все → Wata" },
+                { key: "split", label: "50/50", sub: "случай-но" },
+              ] as const
+            ).map((opt) => {
+              const active = mode === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  disabled={save.isPending}
+                  onClick={() =>
+                    save.mutate({
+                      mode: opt.key,
+                      wata_percent:
+                        opt.key === "split" ? wataPct : cfg.data?.wata_percent ?? 50,
+                    })
+                  }
+                  className={
+                    "flex flex-col items-center justify-center gap-1 rounded-xl border px-3 py-3 text-sm font-medium transition-all disabled:opacity-50 " +
+                    (active
+                      ? "border-accent bg-accent/15 text-accent shadow-glow-sm"
+                      : "border-border bg-bg-card text-fg hover:border-fg-subtle")
+                  }
+                >
+                  <span>{opt.label}</span>
+                  <span className="text-[10px] font-normal text-fg-subtle">
+                    {opt.sub}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {mode === "split" && (
+            <div className="rounded-xl border border-border bg-bg-elevated/40 p-4">
+              <div className="mb-2 flex items-center justify-between text-sm">
+                <span className="font-medium text-fg">Процент на Wata</span>
+                <span className="font-mono text-fg-muted">
+                  {wataPct}% Wata · {100 - wataPct}% Platega
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={wataPct}
+                onChange={(e) => setPendingPct(Number(e.target.value))}
+                className="w-full accent-accent"
+              />
+              <div className="mt-3 flex items-center justify-between">
+                <div className="text-[11px] text-fg-subtle">
+                  Юзеры с <code className="font-mono">telegram_id % 100 &lt; {wataPct}</code> идут в Wata.
+                  Один и тот же юзер всегда попадает к одному провайдеру.
+                </div>
+                {pendingPct !== null &&
+                  pendingPct !== (cfg.data?.wata_percent ?? 50) && (
+                    <button
+                      type="button"
+                      disabled={save.isPending}
+                      onClick={() =>
+                        save.mutate({
+                          mode: "split",
+                          wata_percent: pendingPct,
+                        })
+                      }
+                      className="btn-primary"
+                    >
+                      Сохранить {pendingPct}%
+                    </button>
+                  )}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

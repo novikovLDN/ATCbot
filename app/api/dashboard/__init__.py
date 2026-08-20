@@ -28,10 +28,13 @@ from app.api.dashboard.routes import payments as _payments
 from app.api.dashboard.routes import settings as _settings
 from app.api.dashboard.routes import activations as _activations
 from app.api.dashboard.routes import bypass_audit as _bypass_audit
+from app.api.dashboard.routes import traffic_audit as _traffic_audit
 from app.api.dashboard.routes import reconciliation as _reconciliation
 from app.api.dashboard.routes import links as _links
 from app.api.dashboard.routes import automated_notifications as _autonotif
 from app.api.dashboard.routes import pricing as _pricing
+from app.api.dashboard.routes import beta_applications as _beta_apps
+from app.api.dashboard.routes import remnawave as _remnawave
 from app.api.dashboard import auth as _auth
 from app.api.dashboard import ws as _ws
 
@@ -51,10 +54,13 @@ router.include_router(_payments.router, prefix="/payments", tags=["payments"])
 router.include_router(_activations.router, prefix="/activations", tags=["activations"])
 router.include_router(_settings.router, prefix="/settings", tags=["settings"])
 router.include_router(_bypass_audit.router, prefix="/bypass-audit", tags=["bypass-audit"])
+router.include_router(_traffic_audit.router, prefix="/traffic-audit", tags=["traffic-audit"])
 router.include_router(_reconciliation.router, prefix="/reconciliation", tags=["reconciliation"])
 router.include_router(_links.router, prefix="/links", tags=["links"])
 router.include_router(_autonotif.router, prefix="/automated-notifications", tags=["automated-notifications"])
 router.include_router(_pricing.router, prefix="/pricing", tags=["pricing"])
+router.include_router(_beta_apps.router, prefix="/beta-applications", tags=["beta-applications"])
+router.include_router(_remnawave.router, prefix="/remnawave", tags=["remnawave"])
 
 # Separate router for the WebSocket endpoint — FastAPI requires WS
 # routes to be on a router (or app) that hasn't had a `prefix` applied
