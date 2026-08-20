@@ -1308,6 +1308,7 @@ LANG = {
     'main.my_sub_active_until_none': "Active until: —",
     'main.my_sub_bypass_none': "Bypass traffic: —",
     'main.my_sub_bypass_left': "Bypass traffic: {remaining} of {limit}",
+    'main.my_sub_bypass_unlimited': "Bypass traffic: unlimited",
     'main.my_sub_btn_connect': "Connect VPN",
     'main.my_sub_btn_renew': "Renew subscription",
     'main.my_sub_btn_buy_vpn': "Buy VPN",
