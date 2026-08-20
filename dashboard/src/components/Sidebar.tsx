@@ -13,6 +13,7 @@ import {
   Tag,
   Wrench,
   Stethoscope,
+  Gauge,
   CreditCard,
   Bell,
   BarChart3,
@@ -65,6 +66,7 @@ const sections: Section[] = [
     items: [
       { to: "/audit", label: "Аудит", icon: ScrollText },
       { to: "/bypass-audit", label: "Bypass Audit", icon: Stethoscope },
+      { to: "/traffic-audit", label: "Traffic Audit", icon: Gauge },
       { to: "/service", label: "Сервис", icon: Wrench },
       { to: "/settings", label: "Настройки", icon: SettingsIcon },
     ],
