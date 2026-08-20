@@ -397,35 +397,41 @@ def delete_remnawave_user_bg(telegram_id: int) -> None:
 async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
     """Add purchased traffic to current limit. Returns True on success.
 
-    Safe против overwrite unlimited: если у entity уже trafficLimitBytes=0
-    (безлимит), сохраняем 0 — иначе +extra превратил бы безлимит в лимит.
+    ⚠️ УСТАРЕВШИЙ helper — использует get_bypass_entity_safe для резолва
+    правильной bypass entity (не premium). Ранее слепо использовал
+    remnawave_id из БД, который у скорапченных юзеров указывал на premium
+    → SAFETY-DROP → трафик молча терялся.
+
+    Для новых мест предпочтительнее использовать
+    remnawave_bypass.add_bypass_traffic (та же логика через тот же helper).
     """
     if not config.REMNAWAVE_ENABLED:
         logger.warning("REMNAWAVE_ADD_TRAFFIC_DISABLED: tg=%s", telegram_id)
         return False
     try:
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if not rmn_uuid:
-            logger.info("REMNAWAVE_ADD_TRAFFIC_NO_UUID: tg=%s (need recovery)", telegram_id)
-            return False
-
-        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
-        if not user_data:
-            logger.warning(
-                "REMNAWAVE_ADD_TRAFFIC_NO_USER: tg=%s uuid=%s (get_user returned None)",
-                telegram_id, str(rmn_uuid)[:8],
+        # Резолвим гарантированно bypass entity через self-heal helper.
+        # Он: проверяет username, чистит кривой remnawave_id (premium),
+        # резолвит через username=str(tg), backfillит правильный id.
+        entity = await remnawave_api.get_bypass_entity_safe(telegram_id)
+        if not isinstance(entity, dict):
+            logger.info(
+                "REMNAWAVE_ADD_TRAFFIC_NO_ENTITY: tg=%s (bypass entity не найден в панели, "
+                "нужна recovery через add_bypass_traffic)",
+                telegram_id,
             )
             return False
 
-        # Резолвим цель через numeric bypass id из БД (миграция 078).
-        # НЕ через user_data.get("uuid") — тот резолв через telegram_id
-        # stream возвращал ПЕРВУЮ entity (часто premium) → safety-drop
-        # → трафик не добавлялся, а логировался как SUCCESS.
-        bypass_id = await database.get_remnawave_id(telegram_id)
-        api_target: Any = bypass_id if bypass_id is not None else (
-            user_data.get("uuid") or rmn_uuid
-        )
-        current_limit = int(user_data.get("trafficLimitBytes", 0) or 0)
+        api_target: Any = entity.get("id")
+        if api_target is None:
+            api_target = entity.get("uuid") or entity.get("vlessUuid")
+        if api_target is None:
+            logger.warning(
+                "REMNAWAVE_ADD_TRAFFIC_NO_TARGET: tg=%s username=%r — resolved bypass без id/uuid",
+                telegram_id, entity.get("username"),
+            )
+            return False
+
+        current_limit = int(entity.get("trafficLimitBytes", 0) or 0)
         # Юзер оплатил пакет → просто добавляем ровно extra_bytes.
         # current=0 означает "нет доступного трафика" (израсходовал или
         # ещё не было выдано) — не безлимит. Складываем без условий.
@@ -434,18 +440,19 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
         result = await remnawave_api.update_user(api_target, trafficLimitBytes=new_limit)
         if result is not None:
             # Re-enable if disabled
-            if user_data.get("status") != "ACTIVE":
+            if entity.get("status") != "ACTIVE":
                 await remnawave_api.update_user(api_target, status="ACTIVE")
             await database.reset_traffic_notification_flags(telegram_id)
             logger.info(
-                "REMNAWAVE_TRAFFIC_ADDED: tg=%s +%d bytes, current=%d → new=%d",
-                telegram_id, extra_bytes, current_limit, new_limit,
+                "REMNAWAVE_TRAFFIC_ADDED: tg=%s target=%s username=%r +%d bytes, current=%d → new=%d",
+                telegram_id, str(api_target)[:16], entity.get("username"),
+                extra_bytes, current_limit, new_limit,
             )
             return True
         logger.warning(
-            "REMNAWAVE_ADD_TRAFFIC_PATCH_FAILED: tg=%s target=%s (update_user returned None — "
-            "возможно safety-drop на premium; вышестоящий флоу пусть fallback'нет)",
-            telegram_id, str(api_target)[:16],
+            "REMNAWAVE_ADD_TRAFFIC_PATCH_FAILED: tg=%s target=%s username=%r "
+            "(update_user returned None — вышестоящий флоу пусть fallback'нет)",
+            telegram_id, str(api_target)[:16], entity.get("username"),
         )
         return False
     except Exception as e:
