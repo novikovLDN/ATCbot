@@ -69,6 +69,29 @@ async def verify_bypass_delivery(
         import database
         from app.services import remnawave_api
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        # Self-heal: если DB пусто (Phase-1 write мог не долететь до
+        # `subscriptions` row) — резолвим bypass entity по username=str(tg_id)
+        # напрямую из панели, пишем uuid/id обратно в БД, продолжаем verify.
+        if not rmn_uuid:
+            try:
+                by_name = await remnawave_api.find_user_by_username(str(telegram_id))
+                if by_name and isinstance(by_name, dict):
+                    api_uuid = by_name.get("uuid") or by_name.get("vlessUuid")
+                    api_id = by_name.get("id")
+                    if api_uuid:
+                        await database.set_remnawave_uuid(telegram_id, str(api_uuid))
+                        rmn_uuid = str(api_uuid)
+                    if api_id is not None:
+                        try:
+                            await database.set_remnawave_id(telegram_id, int(api_id))
+                        except (TypeError, ValueError):
+                            pass
+                    logger.info(
+                        "BYPASS_VERIFY_SELFHEAL: tg=%s resolved by username → uuid=%s id=%s",
+                        telegram_id, str(api_uuid or "")[:8], api_id,
+                    )
+            except Exception as e:
+                logger.warning("bypass verify self-heal failed tg=%s: %s", telegram_id, e)
         if not rmn_uuid:
             await _send_admin_alert(
                 "Bypass verify FAIL: no remnawave_uuid",
@@ -78,8 +101,9 @@ async def verify_bypass_delivery(
                     f"Tariff: <b>{tariff}</b>{f' · {period_days}d' if period_days else ''}\n"
                     f"Purchase: <code>{purchase_id}</code>\n"
                     f"Expected +{_fmt_gb(expected_added_bytes)} bypass\n"
-                    "В subscriptions.remnawave_uuid пусто — bypass "
-                    "entity не создался. Проверить логи PURCHASE_FLOW."
+                    "В subscriptions.remnawave_uuid пусто И по username в панели "
+                    "тоже entity нет — bypass не создался. Проверить логи "
+                    "PURCHASE_FLOW."
                 ),
             )
             return
@@ -160,6 +184,32 @@ async def verify_premium_delivery(
         import database
         from app.services import remnawave_api
         rmn_uuid = await database.get_remnawave_premium_uuid(telegram_id)
+        # Self-heal: если DB пусто — резолвим premium entity по username=
+        # tg_{tg_id}_premium из панели, пишем uuid/id в БД, продолжаем.
+        if not rmn_uuid:
+            try:
+                from app.services.remnawave_premium import build_premium_username
+                pname = build_premium_username(telegram_id)
+                by_name = await remnawave_api.find_user_by_username(pname)
+                if by_name and isinstance(by_name, dict):
+                    api_uuid = by_name.get("uuid") or by_name.get("vlessUuid")
+                    api_id = by_name.get("id")
+                    if api_uuid:
+                        await database.set_remnawave_premium_uuid(
+                            telegram_id, str(api_uuid), mark_migrated=False,
+                        )
+                        rmn_uuid = str(api_uuid)
+                    if api_id is not None:
+                        try:
+                            await database.set_remnawave_premium_id(telegram_id, int(api_id))
+                        except (TypeError, ValueError):
+                            pass
+                    logger.info(
+                        "PREMIUM_VERIFY_SELFHEAL: tg=%s resolved by username=%s → uuid=%s id=%s",
+                        telegram_id, pname, str(api_uuid or "")[:8], api_id,
+                    )
+            except Exception as e:
+                logger.warning("premium verify self-heal failed tg=%s: %s", telegram_id, e)
         if not rmn_uuid:
             await _send_admin_alert(
                 "Premium verify FAIL: no premium_uuid",
@@ -168,8 +218,9 @@ async def verify_premium_delivery(
                     f"Provider: <b>{provider}</b> · Tariff: <b>{tariff}</b>"
                     f"{f' · {period_days}d' if period_days else ''}\n"
                     f"Purchase: <code>{purchase_id}</code>\n"
-                    "В subscriptions.remnawave_premium_uuid пусто — "
-                    "premium entity не создался. Проверить логи PURCHASE_FLOW."
+                    "В subscriptions.remnawave_premium_uuid пусто И по username "
+                    "в панели тоже entity нет — premium не создался. Проверить "
+                    "логи PURCHASE_FLOW."
                 ),
             )
             return

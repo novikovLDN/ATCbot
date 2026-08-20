@@ -39,7 +39,7 @@ async def set_remnawave_uuid(telegram_id: int, uuid: str) -> None:
         return
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE subscriptions SET remnawave_uuid = $1 WHERE telegram_id = $2 AND status = 'active'",
+            "UPDATE subscriptions SET remnawave_uuid = $1 WHERE telegram_id = $2",
             uuid, telegram_id,
         )
 
@@ -54,7 +54,7 @@ async def set_remnawave_id(telegram_id: int, numeric_id: int) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE subscriptions SET remnawave_id = $1 "
-            "WHERE telegram_id = $2 AND status = 'active'",
+            "WHERE telegram_id = $2",
             int(numeric_id), telegram_id,
         )
 
@@ -85,7 +85,7 @@ async def set_remnawave_premium_id(telegram_id: int, numeric_id: int) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE subscriptions SET remnawave_premium_id = $1 "
-            "WHERE telegram_id = $2 AND status = 'active'",
+            "WHERE telegram_id = $2",
             int(numeric_id), telegram_id,
         )
 
@@ -152,13 +152,13 @@ async def set_remnawave_premium_uuid(
             await conn.execute(
                 "UPDATE subscriptions "
                 "SET remnawave_premium_uuid = $1, samopis_migrated_at = NOW() "
-                "WHERE telegram_id = $2 AND status = 'active'",
+                "WHERE telegram_id = $2",
                 uuid, telegram_id,
             )
         else:
             await conn.execute(
                 "UPDATE subscriptions SET remnawave_premium_uuid = $1 "
-                "WHERE telegram_id = $2 AND status = 'active'",
+                "WHERE telegram_id = $2",
                 uuid, telegram_id,
             )
 
@@ -192,7 +192,7 @@ async def set_remnawave_premium_uuid_and_url(
                 "    remnawave_premium_sub_url = $2, "
                 "    remnawave_premium_short_uuid = $3, "
                 "    samopis_migrated_at = NOW() "
-                "WHERE telegram_id = $4 AND status = 'active'",
+                "WHERE telegram_id = $4",
                 uuid, sub_url, short_uuid, telegram_id,
             )
         else:
@@ -201,7 +201,7 @@ async def set_remnawave_premium_uuid_and_url(
                 "SET remnawave_premium_uuid = $1, "
                 "    remnawave_premium_sub_url = $2, "
                 "    remnawave_premium_short_uuid = $3 "
-                "WHERE telegram_id = $4 AND status = 'active'",
+                "WHERE telegram_id = $4",
                 uuid, sub_url, short_uuid, telegram_id,
             )
 
@@ -230,7 +230,7 @@ async def set_remnawave_bypass_cache(
             "SET remnawave_uuid = COALESCE($1, remnawave_uuid), "
             "    remnawave_bypass_sub_url = COALESCE($2, remnawave_bypass_sub_url), "
             "    remnawave_bypass_short_uuid = COALESCE($3, remnawave_bypass_short_uuid) "
-            "WHERE telegram_id = $4 AND status = 'active'",
+            "WHERE telegram_id = $4",
             uuid, sub_url, short_uuid, telegram_id,
         )
 
@@ -265,7 +265,7 @@ async def set_remnawave_premium_sub_url(telegram_id: int, sub_url: str) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE subscriptions SET remnawave_premium_sub_url = $1 "
-            "WHERE telegram_id = $2 AND status = 'active'",
+            "WHERE telegram_id = $2",
             sub_url, telegram_id,
         )
 
