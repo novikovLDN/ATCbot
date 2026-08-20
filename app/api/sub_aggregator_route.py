@@ -92,6 +92,9 @@ _metrics: Dict[str, int] = {
     "upstream_ok": 0, "upstream_fail": 0,
     "singleflight_wait": 0,
     "not_found": 0, "revoked": 0,
+    # Latency-статистика: сумма ms + count → avg = sum/count.
+    # p95/p99 в проде считаются через x-cache=miss логи (в них timestamp).
+    "upstream_ms_sum": 0, "upstream_count": 0,
 }
 
 
@@ -168,22 +171,43 @@ _CLIENT_UPDATE_INTERVAL_HOURS = 1
 
 
 def _get_client() -> httpx.AsyncClient:
+    """Общий httpx клиент с keep-alive пулом.
+
+    Лимиты рассчитаны на пик ~10k активных подписок:
+    - client refresh раз/час → avg ~3 rps, каждый = 2 upstream GET
+    - burst до 800 юзеров в минуту → ~13 rps × 2 = 26 upstream rps
+    - safety-margin ×4 → 100 connections покрывают даже single-second бурсты
+    max_keepalive_connections=50 держит warm-pool чтобы новый запрос не
+    ждал TCP+TLS handshake.
+    """
     global _client
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
             timeout=UPSTREAM_TIMEOUT,
             follow_redirects=True,
-            limits=httpx.Limits(max_keepalive_connections=20, max_connections=40),
+            http2=False,  # панель на nginx + может не иметь HTTP/2 → false безопаснее
+            limits=httpx.Limits(
+                max_keepalive_connections=50,
+                max_connections=100,
+                keepalive_expiry=30.0,
+            ),
         )
     return _client
 
 
 async def _fetch_upstream(url: str, user_agent: str) -> Optional[httpx.Response]:
-    """Единичный GET апстрима с форвардом UA. None при таймауте/ошибке."""
+    """Единичный GET апстрима с форвардом UA. None при таймауте/ошибке.
+    Пишет latency в метрики для мониторинга."""
+    t0 = time.monotonic()
     try:
         client = _get_client()
-        return await client.get(url, headers={"User-Agent": user_agent})
+        resp = await client.get(url, headers={"User-Agent": user_agent})
+        _metrics["upstream_ms_sum"] += int((time.monotonic() - t0) * 1000)
+        _metrics["upstream_count"] += 1
+        return resp
     except Exception as e:
+        _metrics["upstream_ms_sum"] += int((time.monotonic() - t0) * 1000)
+        _metrics["upstream_count"] += 1
         logger.warning("SUB_AGG_UPSTREAM_FAIL url=%s err=%s", url[:60], e)
         return None
 
@@ -692,13 +716,21 @@ async def invalidate_cache(
 
 @router.get("/a/_metrics")
 async def metrics_endpoint() -> Response:
-    """JSON-метрики агрегатора: счётчики + размеры кешей + in-flight.
+    """JSON-метрики агрегатора: счётчики + размеры кешей + средний latency.
     Публично доступен (не sensitive). Prometheus-friendly через json→text."""
+    total = _metrics["hits"] + _metrics["misses"] + _metrics["stale"]
+    hit_ratio = round(_metrics["hits"] / total, 4) if total > 0 else 0
+    avg_upstream_ms = (
+        round(_metrics["upstream_ms_sum"] / _metrics["upstream_count"], 1)
+        if _metrics["upstream_count"] > 0 else 0
+    )
     payload = {
         **_metrics,
         "cache_size": len(_cache),
         "pair_cache_size": len(_pair_cache),
         "inflight_size": len(_inflight),
+        "hit_ratio": hit_ratio,
+        "avg_upstream_ms": avg_upstream_ms,
     }
     return Response(
         content=json.dumps(payload),
