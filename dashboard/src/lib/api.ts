@@ -244,6 +244,13 @@ export const endpoints = {
         period_days: number | null;
         is_bypass_only: boolean;
         traffic_purchases_gb: number;
+        traffic_purchases: Array<{
+          id: number;
+          gb_amount: number;
+          price_rub: number;
+          payment_method: string | null;
+          created_at: string | null;
+        }>;
         expected_bytes: number;
         actual_bytes: number;
         used_bytes: number;

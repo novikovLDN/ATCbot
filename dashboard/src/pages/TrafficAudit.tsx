@@ -598,6 +598,79 @@ function ResultRow({
               )}
             </DetailCard>
           </div>
+
+          {/* Детализация покупок трафика — только в single-user mode
+              (при разовой проверке), иначе массив пустой. Показывает
+              откуда взялась сумма Σ traffic_purchases: реальные строки
+              из БД (id / GB / RUB / метод / дата). */}
+          {r.traffic_purchases && r.traffic_purchases.length > 0 && (
+            <div className="mt-4 rounded-xl border border-border bg-bg-card p-3">
+              <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+                История покупок трафика · {r.traffic_purchases.length} шт.
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-fg-subtle">
+                      <th className="px-2 py-1.5 text-left text-[10px] font-medium uppercase tracking-wider">
+                        Когда
+                      </th>
+                      <th className="px-2 py-1.5 text-right text-[10px] font-medium uppercase tracking-wider">
+                        ГБ
+                      </th>
+                      <th className="px-2 py-1.5 text-right text-[10px] font-medium uppercase tracking-wider">
+                        ₽
+                      </th>
+                      <th className="px-2 py-1.5 text-left text-[10px] font-medium uppercase tracking-wider">
+                        Метод
+                      </th>
+                      <th className="px-2 py-1.5 text-right text-[10px] font-medium uppercase tracking-wider">
+                        id
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/40">
+                    {r.traffic_purchases.map((tp) => (
+                      <tr key={tp.id}>
+                        <td className="px-2 py-2 text-xs text-fg">
+                          {tp.created_at
+                            ? new Date(tp.created_at).toLocaleString("ru-RU", {
+                                day: "2-digit",
+                                month: "2-digit",
+                                year: "2-digit",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
+                            : "—"}
+                        </td>
+                        <td className="px-2 py-2 text-right font-semibold tabular-nums text-fg">
+                          {fmtNum(tp.gb_amount)}
+                        </td>
+                        <td className="px-2 py-2 text-right tabular-nums text-fg-muted">
+                          {fmtNum(tp.price_rub)}
+                        </td>
+                        <td className="px-2 py-2 text-xs text-fg-muted">
+                          {tp.payment_method ?? "—"}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-[10px] text-fg-subtle tabular-nums">
+                          {tp.id}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="border-t-2 border-border">
+                      <td className="px-2 py-2 text-[11px] font-semibold uppercase text-fg-subtle">
+                        Σ
+                      </td>
+                      <td className="px-2 py-2 text-right text-sm font-bold tabular-nums text-fg">
+                        {fmtNum(r.traffic_purchases_gb)}
+                      </td>
+                      <td colSpan={3} />
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </article>

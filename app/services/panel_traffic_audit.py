@@ -45,12 +45,22 @@ class UserRow:
 
 
 @dataclass
+class TrafficPurchaseDetail:
+    id: int
+    gb_amount: int
+    price_rub: int
+    payment_method: Optional[str]
+    created_at: Optional[str]
+
+
+@dataclass
 class AuditResult:
     tg: int
     subscription_type: str
     period_days: Optional[int]
     is_bypass_only: bool
     traffic_purchases_gb: int
+    traffic_purchases: list[TrafficPurchaseDetail]   # empty в bulk-mode
     expected_bytes: int
     actual_bytes: int
     used_bytes: int
@@ -178,10 +188,43 @@ def compute_expected_bytes(row: UserRow) -> int:
     return base + int(row.traffic_purchases_gb) * (1024 ** 3)
 
 
-async def audit_one(row: UserRow) -> AuditResult:
-    """Один юзер — сравнить expected vs panel."""
+async def _fetch_traffic_purchase_details(telegram_id: int) -> list[TrafficPurchaseDetail]:
+    """Отдельные строки traffic_purchases для одного юзера — для detail-view."""
+    pool = await database.get_pool()
+    if pool is None:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT id, gb_amount, price_rub, payment_method, created_at
+                     FROM traffic_purchases
+                    WHERE telegram_id = $1
+                    ORDER BY created_at DESC NULLS LAST, id DESC""",
+                int(telegram_id),
+            )
+        return [
+            TrafficPurchaseDetail(
+                id=int(r["id"]),
+                gb_amount=int(r["gb_amount"] or 0),
+                price_rub=int(r["price_rub"] or 0),
+                payment_method=(r["payment_method"] or None),
+                created_at=r["created_at"].isoformat() if r["created_at"] else None,
+            )
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
+async def audit_one(row: UserRow, *, include_details: bool = False) -> AuditResult:
+    """Один юзер — сравнить expected vs panel.
+
+    include_details=True → подтянуть отдельные строки traffic_purchases
+    (тяжело — в bulk-mode всегда False).
+    """
     expected = compute_expected_bytes(row)
     probe = row.remnawave_id if row.remnawave_id is not None else row.remnawave_uuid
+    details = await _fetch_traffic_purchase_details(row.telegram_id) if include_details else []
 
     def _make(kind: str, actual: int, used: int, status: str, note: str = "") -> AuditResult:
         return AuditResult(
@@ -190,6 +233,7 @@ async def audit_one(row: UserRow) -> AuditResult:
             period_days=row.period_days,
             is_bypass_only=row.is_bypass_only,
             traffic_purchases_gb=row.traffic_purchases_gb,
+            traffic_purchases=details,
             expected_bytes=expected,
             actual_bytes=actual,
             used_bytes=used,
@@ -237,7 +281,8 @@ async def run_audit(
 ) -> list[AuditResult]:
     """Собрать candidates + прогнать audit_one с rate-limit.
 
-    progress_cb(done, total) вызывается после каждого батча.
+    Если only_tg задан → include_details=True (single-user detail-view).
+    Bulk-mode → без детализации (performance).
     """
     concurrent = max(1, min(20, int(concurrent)))
     batch_sleep = max(0.0, float(batch_sleep))
@@ -246,12 +291,13 @@ async def run_audit(
     if not candidates:
         return []
 
+    include_details = only_tg is not None
     results: list[AuditResult] = []
     batch_size = concurrent * 4
     for i in range(0, len(candidates), batch_size):
         batch = candidates[i:i + batch_size]
         batch_results = await _bounded_gather(
-            [audit_one(row) for row in batch],
+            [audit_one(row, include_details=include_details) for row in batch],
             concurrency=concurrent,
         )
         results.extend(batch_results)
