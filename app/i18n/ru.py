@@ -1117,6 +1117,7 @@ LANG = {
     'traffic.buy_subscription': "📈 Купить подписку",
     'traffic.buy_traffic_btn': "💳 Купить трафик",
     'traffic.install_insy_btn': "📥 Установить в Incy",
+    'traffic.install_incy_btn': "📥 Установить в Incy",
     'traffic.install_happ_btn': "📥 Установить в Happ",
     'traffic.buy_gb_btn': "📈 Докупить ГБ обхода",
     'traffic.main_menu_btn': "🏠 Главное меню",
