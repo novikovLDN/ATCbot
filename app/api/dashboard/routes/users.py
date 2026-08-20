@@ -11,7 +11,7 @@ Bot-only writes (approve_payment_atomic, grant_access, finalize_purchase,
 mark_trial_used) are intentionally NOT exposed here.
 """
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field, field_validator
@@ -149,15 +149,27 @@ async def _build_bypass_block(telegram_id: int, subscription: Optional[dict]) ->
         "remaining_bytes": 0,
         "status": None,
     }
+    # Приоритет — numeric bypass id (миграция 078), чтобы гарантированно
+    # target BYPASS entity, а не premium через stream-fallback в
+    # _resolve_to_int_id. Иначе dashboard показывал бы "∞ безлимит" для
+    # premium (у которого лимит=0 по ТЗ) вместо реальных ГБ bypass.
     try:
-        uuid = await database.get_remnawave_uuid(telegram_id)
+        bypass_id = await database.get_remnawave_id(telegram_id)
     except Exception:
-        uuid = None
-    if not uuid:
+        bypass_id = None
+    if bypass_id is None:
+        try:
+            uuid = await database.get_remnawave_uuid(telegram_id)
+        except Exception:
+            uuid = None
+        probe: Any = uuid
+    else:
+        probe = bypass_id
+    if probe is None:
         return empty
     try:
         from app.services import remnawave_api
-        traffic = await remnawave_api.get_user_traffic(uuid)
+        traffic = await remnawave_api.get_user_traffic(probe)
     except Exception:
         return {**empty, "has_entity": True}
     if not traffic:
