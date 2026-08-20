@@ -103,17 +103,21 @@ async def verify_bypass_delivery(
             )
             return
         actual_bytes = int(traffic.get("trafficLimitBytes") or 0)
+        used_bytes = int(traffic.get("usedTrafficBytes") or 0)
         # Ok-условия:
         if baseline_bytes is not None:
-            # trafficLimitBytes=0 в панели = БЕЗЛИМИТ (semantic infinity).
-            # Если entity был безлимитным ДО операции → top-up не имеет
-            # смысла (∞ + N = ∞). Отдельный INFO-alert админу: юзер
-            # заплатил, но functionally получил то же самое (безлимит),
-            # admin решает refund/notify. Не ERROR — bot всё сделал верно.
             if int(baseline_bytes) == 0:
-                if actual_bytes == 0:
+                # Baseline=0 = БЕЗЛИМИТ до операции. add_traffic сейчас
+                # конвертирует безлимит в limited=used+extra, поэтому:
+                #   ok если panel = used + extra_bytes (± 100 MB).
+                # Дополнительно шлём INFO-alert админу — на случай если
+                # безлимит был admin-gift'ом (нужно восстановить).
+                expected_total = used_bytes + int(expected_added_bytes)
+                diff = actual_bytes - expected_total
+                converted_ok = abs(diff) < 100 * 1024 * 1024
+                if converted_ok:
                     await _send_admin_alert(
-                        "Bypass top-up: entity уже был безлимит",
+                        "Bypass top-up: entity конвертирован из безлимита",
                         (
                             f"User: <code>tg:{telegram_id}</code>\n"
                             f"Kind: <b>{kind}</b> · Provider: <b>{provider}</b>\n"
@@ -121,26 +125,24 @@ async def verify_bypass_delivery(
                             f"Purchase: <code>{purchase_id}</code>\n"
                             f"\n"
                             f"Пакет: <b>+{_fmt_gb(expected_added_bytes)}</b>\n"
-                            f"Baseline: <b>∞</b> (безлимит)\n"
-                            f"В панели: <b>∞</b> (без изменений — top-up "
-                            f"безлимитного entity — no-op)\n"
+                            f"Baseline: <b>∞</b> (безлимит), used: "
+                            f"<b>{_fmt_gb(used_bytes)}</b>\n"
+                            f"В панели: <b>{_fmt_gb(actual_bytes)}</b> "
+                            f"(limited: used + пакет)\n"
                             f"\n"
-                            f"Юзер уже имеет ∞ трафика — оплата фактически "
-                            f"не изменила состояние. Проверьте: refund / "
-                            f"признание как gift / игнор."
+                            f"Юзер получил ровно {_fmt_gb(expected_added_bytes)} "
+                            f"remaining. Если это был admin-gift безлимит — "
+                            f"откатите trafficLimitBytes → 0 в панели вручную."
                         ),
                         tag="topup-unlimited",
                     )
                     logger.info(
-                        "BYPASS_VERIFY_UNLIMITED_TOPUP: tg=%s kind=%s "
-                        "extra=%s (already unlimited)",
-                        telegram_id, kind, expected_added_bytes,
+                        "BYPASS_VERIFY_UNLIMITED_CONVERTED_OK: tg=%s kind=%s "
+                        "used=%d + extra=%d = %d (panel=%d)",
+                        telegram_id, kind, used_bytes,
+                        expected_added_bytes, expected_total, actual_bytes,
                     )
                     return
-                # Baseline=0, но panel != 0 → кто-то PATCH-нул лимит.
-                # Пусть остальной flow отработает как обычный mismatch.
-                expected_total = int(expected_added_bytes)
-                diff = actual_bytes - expected_total
                 ok = False
             else:
                 # Точное совпадение с допуском 100 MB (округления).
