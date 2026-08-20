@@ -167,22 +167,17 @@ async def create_user(
     Response содержит числовой `id` (новый идентификатор) и `vlessUuid`.
     Наш high-level код обязан сохранить `id` в remnawave_id колонке БД.
     """
-    # Единицы трафика: панель 3.x поддерживает разные поля в UI (MB / GiB).
-    # Шлём три варианта чтобы применилось правильное — панель молча
-    # игнорирует лишние поля. Все значения из одного источника (bytes),
-    # чтобы никогда не разошлись:
-    #   trafficLimitBytes — базовое поле (bytes, точное)
-    #   trafficLimitGb    — гибибайты (integer, N GiB)
-    #   trafficLimitMb    — мегабайты (integer, N MiB)
+    # Единицы трафика 3.x: каноническое поле — trafficLimitBytes (bytes,
+    # integer). Раньше шли три варианта (Bytes+Gb+Mb) в надежде что панель
+    # выберет правильное — но 3.3 обрабатывает их непредсказуемо (иногда
+    # Mb=15360 интерпретировалось как байты → лимит 15 KB → мгновенно
+    # "трафик истёк"). Оставляем только Bytes — 3.3 схема принимает bytes
+    # напрямую, никакой ambiguity.
     _bytes = int(traffic_limit_bytes)
-    _gib = _bytes // (1024 ** 3)   # округление вниз до целого GiB
-    _mib = _bytes // (1024 ** 2)   # округление вниз до целого MiB
     body: Dict[str, Any] = {
         "username": username,
         "shortUuid": short_uuid,
         "trafficLimitBytes": _bytes,
-        "trafficLimitGb": _gib,
-        "trafficLimitMb": _mib,
         "trafficLimitStrategy": traffic_limit_strategy,
         "status": "ACTIVE",
         "expireAt": expire_at,
@@ -473,20 +468,18 @@ async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, 
     Body содержит `id` (integer). UUID резолвится через нашу БД →
     find_user_by_telegram_id → берём numeric id.
 
-    Единицы трафика: если передан trafficLimitBytes — параллельно
-    заполняем trafficLimitGb + trafficLimitMb из того же значения
-    (см. create_user). Панель применит то поле которое знает.
+    Единицы трафика: только `trafficLimitBytes` (bytes, integer) —
+    каноническое поле 3.3. Раньше зеркалили в Gb/Mb — панель иногда
+    применяла Mb как байты → лимит обнулялся → "трафик истёк".
     """
     resolved = await _resolve_to_int_id(user_id)
     if resolved is None:
         logger.warning("update_user: cannot resolve id from %s", str(user_id)[:16])
         return None
-    # Traffic unit-mirror: если в fields есть trafficLimitBytes и НЕТ
-    # trafficLimitGb/Mb — добавляем расчёты из bytes.
-    if "trafficLimitBytes" in fields:
-        _bytes = int(fields["trafficLimitBytes"])
-        fields.setdefault("trafficLimitGb", _bytes // (1024 ** 3))
-        fields.setdefault("trafficLimitMb", _bytes // (1024 ** 2))
+    # Явно чистим Gb/Mb-mirror если случайно передали — Bytes единственный
+    # источник истины для лимита.
+    fields.pop("trafficLimitGb", None)
+    fields.pop("trafficLimitMb", None)
     body = {"id": resolved, **fields}
     return await _request("PATCH", "/api/users", json=body)
 

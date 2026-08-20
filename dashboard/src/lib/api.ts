@@ -219,6 +219,80 @@ export const endpoints = {
         reason?: string;
       }>;
     }>("/bypass-audit/fix-all"),
+  // ── Traffic audit: DB (subscription base + traffic_purchases) vs
+  //    Remnawave panel (trafficLimitBytes). Найти юзеров у которых
+  //    в панели меньше трафика чем оплачено.
+  trafficAuditList: (opts?: { limit?: number; user?: number; concurrent?: number }) => {
+    const p = new URLSearchParams();
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    if (opts?.user != null) p.set("user", String(opts.user));
+    if (opts?.concurrent != null) p.set("concurrent", String(opts.concurrent));
+    const qs = p.toString() ? `?${p.toString()}` : "";
+    return api.get<{
+      summary: {
+        total: number;
+        match: number;
+        mismatch: number;
+        no_entity: number;
+        panel_error: number;
+        shortfall_total_bytes: number;
+        shortfall_total_gb: number;
+      };
+      results: Array<{
+        tg: number;
+        subscription_type: string;
+        period_days: number | null;
+        is_bypass_only: boolean;
+        traffic_purchases_gb: number;
+        expected_bytes: number;
+        actual_bytes: number;
+        used_bytes: number;
+        shortfall_bytes: number;
+        panel_status: string;
+        kind: "match" | "mismatch" | "no_entity" | "panel_error";
+        note: string;
+        expected_gb: number;
+        actual_gb: number;
+        used_gb: number;
+        shortfall_gb: number;
+      }>;
+    }>(`/traffic-audit${qs}`);
+  },
+  trafficAuditFixOne: (telegram_id: number) =>
+    api.post<{
+      ok: boolean;
+      before_bytes?: number;
+      after_bytes?: number;
+      used_bytes?: number;
+      expected_bytes?: number;
+      audit: Record<string, unknown>;
+      reason?: string;
+    }>(`/traffic-audit/fix/${telegram_id}`),
+  trafficAuditFixAll: (opts?: { limit?: number; concurrent?: number }) => {
+    const p = new URLSearchParams();
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    if (opts?.concurrent != null) p.set("concurrent", String(opts.concurrent));
+    const qs = p.toString() ? `?${p.toString()}` : "";
+    return api.post<{
+      audit_summary: {
+        total: number;
+        match: number;
+        mismatch: number;
+        shortfall_total_gb: number;
+      };
+      fixed: number;
+      failed: number;
+      results: Array<{
+        telegram_id: number;
+        ok: boolean;
+        reason?: string;
+        before_bytes: number;
+        after_bytes: number | null;
+        used_bytes: number;
+        expected_bytes: number;
+      }>;
+    }>(`/traffic-audit/fix-all${qs}`);
+  },
   statsDaily: (days = 30) =>
     api.get<{
       days: number;
