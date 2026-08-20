@@ -55,8 +55,18 @@ UPSTREAM_TIMEOUT = 5.0  # сек
 # этого dict через POST /a/_invalidate/{token} с internal-secret.
 # Локальный dict — один Railway worker, синхронизация не нужна; при
 # масштабировании на N воркеров перейдём на Redis.
-_CACHE_TTL = 60
+_CACHE_TTL = 15  # 15 сек: клиент дёрнул подписку → бэкенд свежий; при mutation
+                 # invalidate() чистит эту ячейку мгновенно (in-process).
 _cache: dict[str, tuple[float, bytes, dict[str, str]]] = {}
+
+
+def clear_cache(token: Optional[str] = None) -> None:
+    """Прямой in-process сброс кеша по token — без HTTP round-trip.
+    None → полный wipe (админский рычаг). Экспортится для sub_aggregator.py:invalidate."""
+    if token is None:
+        _cache.clear()
+        return
+    _cache.pop(token, None)
 
 # Клиенты подписываются с интервалом. profile-update-interval — часы;
 # Happ/v2rayTun/Streisand дёргают апстрим раз в N часов. 1 час = свежие
@@ -539,4 +549,4 @@ async def close() -> None:
             _client = None
 
 
-__all__ = ["router", "close"]
+__all__ = ["router", "close", "clear_cache"]

@@ -196,44 +196,24 @@ async def revoke(telegram_id: int) -> None:
 
 
 async def invalidate(token: str) -> bool:
-    """Сбросить 60-сек кеш агрегатора для этого токена.
+    """Мгновенный in-process сброс кеша агрегатора для этого токена.
 
-    Embedded FastAPI-endpoint /a/{token} держит in-memory dict-кеш; после
-    mutation'ов (renew premium, +ГБ bypass, combo) бот зовёт этот метод —
-    endpoint через /a/_invalidate/{token} чистит запись → следующий GET
-    от клиента = fresh данные из панели.
+    Раньше слал POST на loopback URL (WEBHOOK_URL → сам себе) — это шло
+    через public internet, TLS handshake, и могло фейлить (Railway
+    proxy retries, cold start). Теперь — прямой вызов clear_cache()
+    в том же процессе: 0ms, без сети.
 
-    Локальный POST в тот же процесс — по внутреннему loopback URL из
-    WEBHOOK_URL (тот же host). Без секрета, если SUB_AGGREGATOR_INTERNAL_SECRET
-    пусто (беты хватает).
+    Следствие: после /aggregator, покупки, продления кеш чистится
+    МГНОВЕННО. Следующий GET клиента дёргает fresh данные из панели.
+    Cache TTL 15 сек → даже если invalidate почему-то не позвали,
+    stale-окно очень маленькое.
     """
     if not token:
         return True
-    base = getattr(config, "WEBHOOK_URL", "") or ""
-    if not base:
-        return True
-    # WEBHOOK_URL = https://api.atlassecure.ru/telegram/webhook
-    # Нужен базовый host — обрезаем всё после третьего "/".
     try:
-        from urllib.parse import urlparse
-        p = urlparse(base)
-        origin = f"{p.scheme}://{p.netloc}"
-    except Exception:
+        from app.api.sub_aggregator_route import clear_cache
+        clear_cache(token)
         return True
-    url = f"{origin}/a/_invalidate/{token}"
-    headers = {}
-    if config.SUB_AGGREGATOR_INTERNAL_SECRET:
-        headers["x-internal-secret"] = config.SUB_AGGREGATOR_INTERNAL_SECRET
-    try:
-        client = _get_client()
-        resp = await client.post(url, headers=headers)
-        if resp.status_code == 200:
-            return True
-        logger.warning(
-            "SUB_AGG_INVALIDATE_BAD_STATUS token=%s… status=%s body=%s",
-            token[:6], resp.status_code, resp.text[:120],
-        )
-        return False
     except Exception as e:
         logger.warning("SUB_AGG_INVALIDATE_FAIL token=%s… err=%s", token[:6], str(e)[:120])
         return False
