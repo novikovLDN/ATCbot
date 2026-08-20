@@ -45,19 +45,52 @@ class UserRow:
 
 
 @dataclass
+class TrafficPurchaseDetail:
+    id: int
+    gb_amount: int
+    price_rub: int
+    payment_method: Optional[str]
+    created_at: Optional[str]
+
+
+@dataclass
+class PanelEntitySnapshot:
+    """Снимок entity из панели для diagnostic-вывода."""
+    source: str                    # "by_uuid" | "by_username" | "by_id"
+    panel_id: Optional[int]
+    vless_uuid: Optional[str]
+    subscription_url: Optional[str]
+    traffic_limit_bytes: int
+    used_traffic_bytes: int
+    status: str
+    telegram_id_field: Optional[int]
+
+
+@dataclass
 class AuditResult:
     tg: int
     subscription_type: str
     period_days: Optional[int]
     is_bypass_only: bool
     traffic_purchases_gb: int
+    traffic_purchases: list[TrafficPurchaseDetail]   # empty в bulk-mode
     expected_bytes: int
     actual_bytes: int
     used_bytes: int
     shortfall_bytes: int
     panel_status: str
-    kind: str                   # "match" | "mismatch" | "no_entity" | "panel_error"
+    kind: str                   # "match" | "mismatch" | "no_entity" | "panel_error" | "desync"
     note: str = ""
+    # Diagnostic: что бот сохранил в БД (для single-user detail-view).
+    db_uuid: Optional[str] = None
+    db_id: Optional[int] = None
+    db_sub_url: Optional[str] = None
+    # Diagnostic: entity в панели по username (find_user_by_username).
+    # Если mismatch с тем, что бот резолвит через uuid/id — DESYNC:
+    # бот отдаёт юзеру ссылку "empty entity", а реальный трафик на другой.
+    panel_by_username: Optional[PanelEntitySnapshot] = None
+    panel_by_our_ref: Optional[PanelEntitySnapshot] = None
+    desync: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -178,18 +211,72 @@ def compute_expected_bytes(row: UserRow) -> int:
     return base + int(row.traffic_purchases_gb) * (1024 ** 3)
 
 
-async def audit_one(row: UserRow) -> AuditResult:
-    """Один юзер — сравнить expected vs panel."""
+async def _fetch_traffic_purchase_details(telegram_id: int) -> list[TrafficPurchaseDetail]:
+    """Отдельные строки traffic_purchases для одного юзера — для detail-view."""
+    pool = await database.get_pool()
+    if pool is None:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT id, gb_amount, price_rub, payment_method, created_at
+                     FROM traffic_purchases
+                    WHERE telegram_id = $1
+                    ORDER BY created_at DESC NULLS LAST, id DESC""",
+                int(telegram_id),
+            )
+        return [
+            TrafficPurchaseDetail(
+                id=int(r["id"]),
+                gb_amount=int(r["gb_amount"] or 0),
+                price_rub=int(r["price_rub"] or 0),
+                payment_method=(r["payment_method"] or None),
+                created_at=r["created_at"].isoformat() if r["created_at"] else None,
+            )
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
+def _snapshot(entity: dict, *, source: str) -> PanelEntitySnapshot:
+    return PanelEntitySnapshot(
+        source=source,
+        panel_id=int(entity["id"]) if entity.get("id") is not None else None,
+        vless_uuid=entity.get("uuid") or entity.get("vlessUuid") or None,
+        subscription_url=entity.get("subscriptionUrl") or None,
+        traffic_limit_bytes=int(entity.get("trafficLimitBytes") or 0),
+        used_traffic_bytes=int(entity.get("usedTrafficBytes") or 0),
+        status=str(entity.get("status") or "?"),
+        telegram_id_field=(
+            int(entity["telegramId"]) if entity.get("telegramId") is not None else None
+        ),
+    )
+
+
+async def audit_one(row: UserRow, *, include_details: bool = False) -> AuditResult:
+    """Один юзер — сравнить expected vs panel.
+
+    include_details=True → подтянуть отдельные строки traffic_purchases
+    + entity по username (для diagnostic DESYNC-check).
+    """
     expected = compute_expected_bytes(row)
     probe = row.remnawave_id if row.remnawave_id is not None else row.remnawave_uuid
+    details = await _fetch_traffic_purchase_details(row.telegram_id) if include_details else []
 
-    def _make(kind: str, actual: int, used: int, status: str, note: str = "") -> AuditResult:
+    def _make(
+        kind: str, actual: int, used: int, status: str, note: str = "",
+        panel_by_our_ref: Optional[PanelEntitySnapshot] = None,
+        panel_by_username: Optional[PanelEntitySnapshot] = None,
+        desync: bool = False,
+    ) -> AuditResult:
         return AuditResult(
             tg=row.telegram_id,
             subscription_type=row.subscription_type,
             period_days=row.period_days,
             is_bypass_only=row.is_bypass_only,
             traffic_purchases_gb=row.traffic_purchases_gb,
+            traffic_purchases=details,
             expected_bytes=expected,
             actual_bytes=actual,
             used_bytes=used,
@@ -197,9 +284,35 @@ async def audit_one(row: UserRow) -> AuditResult:
             panel_status=status,
             kind=kind,
             note=note,
+            db_uuid=row.remnawave_uuid,
+            db_id=row.remnawave_id,
+            db_sub_url=None,   # заполняется в endpoint из cache
+            panel_by_our_ref=panel_by_our_ref,
+            panel_by_username=panel_by_username,
+            desync=desync,
         )
 
+    # Всегда пытаемся достать entity по username (bypass=str(tg_id)) —
+    # для DESYNC-detection: если бот резолвит одну entity, а реальная
+    # bypass под этим username — другая, юзер видит "трафика нет".
+    panel_by_username: Optional[PanelEntitySnapshot] = None
+    if include_details:
+        try:
+            by_name = await remnawave_api.find_user_by_username(str(row.telegram_id))
+            if by_name and isinstance(by_name, dict):
+                panel_by_username = _snapshot(by_name, source="by_username")
+        except Exception:
+            panel_by_username = None
+
     if probe is None:
+        # DB пусто — но, может, в панели есть entity под этим username.
+        # Тогда DESYNC: у бота нет ссылки на существующую entity.
+        if panel_by_username is not None:
+            return _make(
+                "desync", 0, 0, "—",
+                note="в БД нет uuid/id, но в панели есть entity под username",
+                panel_by_username=panel_by_username, desync=True,
+            )
         return _make("no_entity", 0, 0, "—", "no remnawave_uuid AND no remnawave_id")
 
     try:
@@ -207,14 +320,49 @@ async def audit_one(row: UserRow) -> AuditResult:
     except Exception as e:
         return _make("panel_error", 0, 0, "—", f"{type(e).__name__}: {str(e)[:120]}")
     if not entity:
+        # Наш uuid/id ведёт в никуда. Если по username что-то есть — DESYNC.
+        if panel_by_username is not None:
+            return _make(
+                "desync", 0, 0, "—",
+                note="бот резолвит несуществующую entity, а по username есть другая",
+                panel_by_username=panel_by_username, desync=True,
+            )
         return _make("no_entity", 0, 0, "—", "get_user returned None")
+
+    panel_by_our_ref = _snapshot(entity, source="by_id" if str(probe).isdigit() else "by_uuid")
+
+    # DESYNC: бот читает entity A, но по username лежит entity B с иным id.
+    desync = False
+    desync_note = ""
+    if panel_by_username is not None and panel_by_our_ref.panel_id is not None:
+        if (panel_by_username.panel_id is not None
+                and panel_by_username.panel_id != panel_by_our_ref.panel_id):
+            desync = True
+            desync_note = (
+                f"бот резолвит id={panel_by_our_ref.panel_id} "
+                f"(limit={panel_by_our_ref.traffic_limit_bytes // (1024**3)} ГБ), "
+                f"но по username={row.telegram_id} лежит id={panel_by_username.panel_id} "
+                f"(limit={panel_by_username.traffic_limit_bytes // (1024**3)} ГБ)"
+            )
 
     actual = int(entity.get("trafficLimitBytes") or 0)
     used = int(entity.get("usedTrafficBytes") or 0)
     status = str(entity.get("status") or "?")
     shortfall = max(0, expected - actual)
     is_mismatch = shortfall > SHORTFALL_TOLERANCE_BYTES and expected > 0
-    return _make("mismatch" if is_mismatch else "match", actual, used, status)
+
+    if desync:
+        return _make(
+            "desync", actual, used, status, note=desync_note,
+            panel_by_our_ref=panel_by_our_ref,
+            panel_by_username=panel_by_username, desync=True,
+        )
+    return _make(
+        "mismatch" if is_mismatch else "match",
+        actual, used, status,
+        panel_by_our_ref=panel_by_our_ref,
+        panel_by_username=panel_by_username,
+    )
 
 
 async def _bounded_gather(coros, concurrency: int):
@@ -237,7 +385,8 @@ async def run_audit(
 ) -> list[AuditResult]:
     """Собрать candidates + прогнать audit_one с rate-limit.
 
-    progress_cb(done, total) вызывается после каждого батча.
+    Если only_tg задан → include_details=True (single-user detail-view).
+    Bulk-mode → без детализации (performance).
     """
     concurrent = max(1, min(20, int(concurrent)))
     batch_sleep = max(0.0, float(batch_sleep))
@@ -246,12 +395,13 @@ async def run_audit(
     if not candidates:
         return []
 
+    include_details = only_tg is not None
     results: list[AuditResult] = []
     batch_size = concurrent * 4
     for i in range(0, len(candidates), batch_size):
         batch = candidates[i:i + batch_size]
         batch_results = await _bounded_gather(
-            [audit_one(row) for row in batch],
+            [audit_one(row, include_details=include_details) for row in batch],
             concurrency=concurrent,
         )
         results.extend(batch_results)

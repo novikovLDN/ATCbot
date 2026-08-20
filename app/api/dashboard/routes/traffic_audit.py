@@ -39,11 +39,13 @@ def _summarize(results: list[pta.AuditResult]) -> dict[str, Any]:
     mismatches = [r for r in results if r.kind == "mismatch"]
     no_entity = [r for r in results if r.kind == "no_entity"]
     errors = [r for r in results if r.kind == "panel_error"]
+    desyncs = [r for r in results if r.kind == "desync"]
     total_short = sum(r.shortfall_bytes for r in mismatches)
     return {
         "total": len(results),
         "match": len(matches),
         "mismatch": len(mismatches),
+        "desync": len(desyncs),
         "no_entity": len(no_entity),
         "panel_error": len(errors),
         "shortfall_total_bytes": total_short,
@@ -76,20 +78,92 @@ async def list_audit(
     summary = _summarize(results)
     return {
         "summary": summary,
-        # Сортируем: mismatches сверху (по shortfall desc), потом всё остальное
+        # Сортируем: DESYNC → mismatches → errors → no_entity → match
         "results": [
             _serialize_result(r)
             for r in sorted(
                 results,
                 key=lambda x: (
-                    0 if x.kind == "mismatch" else
-                    (1 if x.kind == "panel_error" else
-                     (2 if x.kind == "no_entity" else 3)),
+                    0 if x.kind == "desync" else
+                    (1 if x.kind == "mismatch" else
+                     (2 if x.kind == "panel_error" else
+                      (3 if x.kind == "no_entity" else 4))),
                     -x.shortfall_bytes,
                     x.tg,
                 ),
             )
         ],
+    }
+
+
+@router.post("/resync/{telegram_id}")
+async def resync_one(
+    telegram_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+) -> dict[str, Any]:
+    """DESYNC-fix: обновить subscriptions.remnawave_uuid / remnawave_id /
+    remnawave_bypass_sub_url в БД, чтобы бот резолвил ПРАВИЛЬНУЮ bypass
+    entity в панели (найденную по username=str(tg_id)).
+
+    Используется когда audit нашёл DESYNC: у бота ссылка на "empty" entity,
+    а реальный трафик на другой entity с тем же username.
+    """
+    import database
+    from app.services import remnawave_api
+
+    try:
+        entity = await remnawave_api.find_user_by_username(str(telegram_id))
+    except Exception as e:
+        raise HTTPException(500, f"find_by_username_failed: {e}")
+    if not entity or not isinstance(entity, dict):
+        raise HTTPException(404, "no_entity_by_username_in_panel")
+
+    new_id = entity.get("id")
+    new_uuid = entity.get("uuid") or entity.get("vlessUuid")
+    new_sub_url = entity.get("subscriptionUrl")
+    new_short = entity.get("shortUuid")
+
+    if new_id is None and not new_uuid:
+        raise HTTPException(400, "panel_entity_missing_both_id_and_uuid")
+
+    # Пишем в obе колонки: bypass — набор {remnawave_uuid, remnawave_id,
+    # remnawave_bypass_sub_url, remnawave_bypass_short_uuid}.
+    try:
+        if new_uuid:
+            await database.set_remnawave_uuid(telegram_id, str(new_uuid))
+        if new_id is not None:
+            try:
+                await database.set_remnawave_id(telegram_id, int(new_id))
+            except (TypeError, ValueError):
+                pass
+        if new_sub_url or new_short or new_uuid:
+            await database.set_remnawave_bypass_cache(
+                telegram_id,
+                str(new_uuid) if new_uuid else None,
+                str(new_sub_url) if new_sub_url else None,
+                str(new_short) if new_short else None,
+            )
+    except Exception as e:
+        raise HTTPException(500, f"db_update_failed: {e}")
+
+    logger.info(
+        "TRAFFIC_AUDIT_RESYNC tg=%s admin=%s → id=%s uuid=%s",
+        telegram_id, admin.get("sub"), new_id, str(new_uuid or "")[:8],
+    )
+    bus.publish({
+        "type": "traffic_audit:resynced",
+        "telegram_id": telegram_id,
+        "by": admin.get("sub"),
+        "new_id": new_id,
+        "new_uuid": str(new_uuid or ""),
+    })
+    return {
+        "ok": True,
+        "new_id": new_id,
+        "new_uuid": new_uuid,
+        "new_sub_url": new_sub_url,
+        "panel_limit_bytes": int(entity.get("trafficLimitBytes") or 0),
+        "panel_used_bytes": int(entity.get("usedTrafficBytes") or 0),
     }
 
 
