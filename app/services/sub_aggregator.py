@@ -59,8 +59,13 @@ def is_enabled_for(telegram_id: int) -> bool:
 
 
 def build_public_url(token: str) -> str:
-    """https://<SUB_DOMAIN>/<token> — то, что мы отдаём клиенту."""
-    return f"{config.SUB_AGGREGATOR_URL}/{token}"
+    """Публичная ссылка на агрегатор.
+
+    Формат: https://subscription.palantirdns.uk/a/{token}
+    - RF-1 nginx reverse-proxies /a/{token} → https://api.atlassecure.ru/a/{token}
+    - Бот embedded-endpoint app/api/sub_aggregator_route.py делает merge и отдаёт.
+    """
+    return f"{config.SUB_AGGREGATOR_URL}/a/{token}"
 
 
 def _generate_token() -> str:
@@ -191,32 +196,46 @@ async def revoke(telegram_id: int) -> None:
 
 
 async def invalidate(token: str) -> bool:
-    """POST /internal/invalidate/<token> — fire-and-forget best-effort.
-    Returns True on success, False on any error (log-warn, don't raise —
-    aggregator will refresh naturally after CACHE_TTL anyway)."""
-    if not config.SUB_AGGREGATOR_URL or not config.SUB_AGGREGATOR_INTERNAL_SECRET:
-        return False
+    """Сбросить 60-сек кеш агрегатора для этого токена.
+
+    Embedded FastAPI-endpoint /a/{token} держит in-memory dict-кеш; после
+    mutation'ов (renew premium, +ГБ bypass, combo) бот зовёт этот метод —
+    endpoint через /a/_invalidate/{token} чистит запись → следующий GET
+    от клиента = fresh данные из панели.
+
+    Локальный POST в тот же процесс — по внутреннему loopback URL из
+    WEBHOOK_URL (тот же host). Без секрета, если SUB_AGGREGATOR_INTERNAL_SECRET
+    пусто (беты хватает).
+    """
     if not token:
-        return False
-    url = f"{config.SUB_AGGREGATOR_URL}/internal/invalidate/{token}"
+        return True
+    base = getattr(config, "WEBHOOK_URL", "") or ""
+    if not base:
+        return True
+    # WEBHOOK_URL = https://api.atlassecure.ru/telegram/webhook
+    # Нужен базовый host — обрезаем всё после третьего "/".
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(base)
+        origin = f"{p.scheme}://{p.netloc}"
+    except Exception:
+        return True
+    url = f"{origin}/a/_invalidate/{token}"
+    headers = {}
+    if config.SUB_AGGREGATOR_INTERNAL_SECRET:
+        headers["x-internal-secret"] = config.SUB_AGGREGATOR_INTERNAL_SECRET
     try:
         client = _get_client()
-        resp = await client.post(
-            url,
-            headers={"x-internal-secret": config.SUB_AGGREGATOR_INTERNAL_SECRET},
-        )
+        resp = await client.post(url, headers=headers)
         if resp.status_code == 200:
             return True
         logger.warning(
-            "SUB_AGGREGATOR_INVALIDATE_BAD_STATUS token=%s… status=%s body=%s",
+            "SUB_AGG_INVALIDATE_BAD_STATUS token=%s… status=%s body=%s",
             token[:6], resp.status_code, resp.text[:120],
         )
         return False
     except Exception as e:
-        logger.warning(
-            "SUB_AGGREGATOR_INVALIDATE_FAIL token=%s… err=%s",
-            token[:6], str(e)[:120],
-        )
+        logger.warning("SUB_AGG_INVALIDATE_FAIL token=%s… err=%s", token[:6], str(e)[:120])
         return False
 
 
