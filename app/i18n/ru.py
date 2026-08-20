@@ -1298,6 +1298,7 @@ LANG = {
     'main.my_sub_active_until_none': "Активна до: —",
     'main.my_sub_bypass_none': "Трафик обхода: —",
     'main.my_sub_bypass_left': "Трафик обхода: {remaining} из {limit}",
+    'main.my_sub_bypass_unlimited': "Трафик обхода: безлимит",
     'main.my_sub_btn_connect': "Подключить VPN",
     'main.my_sub_btn_renew': "Продлить подписку",
     'main.my_sub_btn_buy_vpn': "Купить VPN",

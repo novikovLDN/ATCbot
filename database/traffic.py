@@ -26,7 +26,7 @@ async def get_remnawave_uuid(telegram_id: int) -> Optional[str]:
         return None
     async with pool.acquire() as conn:
         return await conn.fetchval(
-            "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
+            "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1",
             telegram_id,
         )
 
@@ -69,7 +69,7 @@ async def get_remnawave_id(telegram_id: int) -> Optional[int]:
     async with pool.acquire() as conn:
         val = await conn.fetchval(
             "SELECT remnawave_id FROM subscriptions "
-            "WHERE telegram_id = $1 AND status = 'active'",
+            "WHERE telegram_id = $1",
             telegram_id,
         )
         return int(val) if val is not None else None
@@ -99,7 +99,7 @@ async def get_remnawave_premium_id(telegram_id: int) -> Optional[int]:
     async with pool.acquire() as conn:
         val = await conn.fetchval(
             "SELECT remnawave_premium_id FROM subscriptions "
-            "WHERE telegram_id = $1 AND status = 'active'",
+            "WHERE telegram_id = $1",
             telegram_id,
         )
         return int(val) if val is not None else None
@@ -130,7 +130,7 @@ async def get_remnawave_premium_uuid(telegram_id: int) -> Optional[str]:
     async with pool.acquire() as conn:
         return await conn.fetchval(
             "SELECT remnawave_premium_uuid FROM subscriptions "
-            "WHERE telegram_id = $1 AND status = 'active'",
+            "WHERE telegram_id = $1",
             telegram_id,
         )
 
@@ -245,7 +245,7 @@ async def get_remnawave_bypass_cache(telegram_id: int) -> Optional[Dict[str, Any
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT remnawave_uuid, remnawave_bypass_sub_url, remnawave_bypass_short_uuid "
-            "FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
+            "FROM subscriptions WHERE telegram_id = $1",
             telegram_id,
         )
         return dict(row) if row else None
