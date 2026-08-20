@@ -91,13 +91,17 @@ async def _process_one(
     import database
 
     try:
-        # 1. Найти entity в панели. Сначала по telegram_id (для тех, у кого
-        # уже есть), затем fallback на username (наш формат = str(tg) для
-        # bypass, tg_{tg}_premium для premium).
-        entity = await remnawave_api.find_user_by_telegram_id(tg)
-        if entity is None:
-            uname = f"tg_{tg}_premium" if kind == "premium" else str(tg)
-            entity = await remnawave_api.find_user_by_username(uname)
+        # 1. Найти entity в панели ПО USERNAME (единственный
+        # unambiguous путь для разделения bypass/premium):
+        #   bypass  → username = str(tg)
+        #   premium → username = tg_{tg}_premium
+        # Раньше сначала пробовали find_user_by_telegram_id — этот вызов
+        # через stream возвращает ПЕРВУЮ entity, часто premium даже когда
+        # kind='bypass'. В итоге bypass.remnawave_id получал premium's
+        # numeric id → бот читал premium вместо bypass → показывал
+        # "безлимит" вместо реальных ГБ.
+        uname = f"tg_{tg}_premium" if kind == "premium" else str(tg)
+        entity = await remnawave_api.find_user_by_username(uname)
         if entity is None:
             _status.missing += 1
             return

@@ -749,6 +749,107 @@ async def find_user_by_short_uuid(short_uuid: str) -> Optional[Dict[str, Any]]:
 
 # ── Convenience ───────────────────────────────────────────────────────
 
+async def get_bypass_entity_safe(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Read bypass entity with self-heal on DB corruption.
+
+    Проблема: legacy backfill писал в subscriptions.remnawave_id
+    numeric id premium entity (не bypass) для тех юзеров, у кого
+    stream по telegramId возвращал первым premium. Бот потом читал
+    premium вместо bypass → "безлимит" вместо реальных ГБ.
+
+    Fix: этот helper явно проверяет что resolved entity — bypass
+    (`username == str(tg)`). Если mismatch — clear-cache, re-resolve
+    через username, писать правильный id/uuid обратно в БД.
+
+    Возвращает entity dict или None если нет.
+    """
+    import database
+    expected_username = str(telegram_id)
+
+    async def _looks_like_bypass(ent: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(ent, dict):
+            return False
+        return str(ent.get("username") or "").strip() == expected_username
+
+    # 1) Быстрый путь — по кешу numeric id.
+    try:
+        bypass_id = await database.get_remnawave_id(telegram_id)
+    except Exception:
+        bypass_id = None
+    if bypass_id is not None:
+        try:
+            ent = await get_user(int(bypass_id))
+        except Exception:
+            ent = None
+        if await _looks_like_bypass(ent):
+            return ent
+        # Mismatch — cached_id указывает на premium (или другого юзера).
+        # Чистим bypass-id, ниже перерезолвим через username.
+        try:
+            logger.warning(
+                "get_bypass_entity_safe: cached remnawave_id=%s для tg=%s "
+                "указывает на entity username=%r (ожидалось %r) — "
+                "clearing cache, self-heal via username",
+                bypass_id, telegram_id,
+                (ent or {}).get("username"), expected_username,
+            )
+        except Exception:
+            pass
+
+    # 2) Fallback — username resolve. Гарантированно bypass (или None).
+    try:
+        ent = await find_user_by_username(expected_username)
+    except Exception:
+        ent = None
+    if not isinstance(ent, dict):
+        return None
+
+    # 3) Self-heal: backfill correct id + uuid в БД.
+    try:
+        api_id = ent.get("id")
+        api_uuid = ent.get("uuid") or ent.get("vlessUuid")
+        if api_id is not None:
+            try:
+                await database.set_remnawave_id(telegram_id, int(api_id))
+            except (TypeError, ValueError):
+                pass
+        if api_uuid:
+            await database.set_remnawave_uuid(telegram_id, str(api_uuid))
+    except Exception as e:
+        logger.warning(
+            "get_bypass_entity_safe: DB backfill failed tg=%s: %s",
+            telegram_id, e,
+        )
+    return ent
+
+
+async def get_bypass_traffic_safe(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Same as get_user_traffic, но гарантированно возвращает bypass
+    (не premium). Self-heal DB кеш если поломан. Все bot-flow отображения
+    трафика обхода должны использовать этот helper вместо
+    get_user_traffic(remnawave_uuid).
+    """
+    entity = await get_bypass_entity_safe(telegram_id)
+    if not isinstance(entity, dict):
+        return None
+    user_traffic = entity.get("userTraffic") or {}
+    raw_sub_url = entity.get("subscriptionUrl", "") or ""
+    try:
+        from app.services.user_subscription_links import rewrite_sub_host
+        sub_url = rewrite_sub_host(raw_sub_url) or raw_sub_url
+    except Exception:
+        sub_url = raw_sub_url
+    return {
+        "usedTrafficBytes": user_traffic.get("usedTrafficBytes", entity.get("usedTrafficBytes", 0)),
+        "trafficLimitBytes": entity.get("trafficLimitBytes", 0),
+        "deviceLimit": entity.get("hwidDeviceLimit", entity.get("deviceLimit", 0)),
+        "onlineDevices": entity.get("onlineDevices", 0),
+        "status": entity.get("status", "UNKNOWN"),
+        "subscriptionUrl": sub_url,
+        "happ_url": f"happ://add/{sub_url}" if sub_url else "",
+    }
+
+
 async def get_user_traffic(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
     """Return traffic info including subscriptionUrl and happ_url, or None.
 

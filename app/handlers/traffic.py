@@ -359,8 +359,9 @@ async def callback_traffic_info(callback: CallbackQuery):
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
         return
 
-    # Fetch traffic from Remnawave
-    traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+    # Fetch traffic from Remnawave (safe = гарантированно BYPASS entity,
+    # с self-heal кеша если legacy backfill записал premium's id).
+    traffic = await remnawave_api.get_bypass_traffic_safe(telegram_id)
     if not traffic:
         text = i18n_get_text(language, "traffic.fetch_error")
         kb = InlineKeyboardMarkup(inline_keyboard=[
