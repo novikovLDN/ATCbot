@@ -23,7 +23,7 @@ import logging
 import uuid as uuid_lib
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 import config
 from app.services import remnawave_api
@@ -299,14 +299,17 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     if not config.REMNAWAVE_ENABLED or extra_bytes <= 0:
         return False
     import database  # lazy
+    # Приоритет — numeric bypass id (миграция 078), не путается с premium.
+    bypass_id = await database.get_remnawave_id(telegram_id)
     cache = await database.get_remnawave_bypass_cache(telegram_id)
     rmn_uuid = cache.get("remnawave_uuid") if cache else None
     if not rmn_uuid:
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-    if not rmn_uuid:
+    probe: Any = bypass_id if bypass_id is not None else rmn_uuid
+    if probe is None:
         return False
     try:
-        user = await remnawave_api.get_user(rmn_uuid)
+        user = await remnawave_api.get_user(probe)
     except Exception as e:
         logger.error("REMNAWAVE_BYPASS_TOPUP_GET_FAIL: tg=%s %s", telegram_id, e)
         return False
@@ -318,7 +321,7 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     new_limit = current_limit + int(extra_bytes)
     try:
         result = await remnawave_api.update_user(
-            rmn_uuid,
+            probe,
             trafficLimitBytes=new_limit,
             status="ACTIVE",
         )
@@ -326,10 +329,17 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
         logger.error("REMNAWAVE_BYPASS_TOPUP_PATCH_FAIL: tg=%s %s", telegram_id, e)
         return False
     if result is None:
+        # update_user вернул None: PATCH не отправлен (network fail ИЛИ
+        # safety-drop за попытку PATCH на premium). Не логируем success.
+        logger.warning(
+            "REMNAWAVE_BYPASS_TOPUP_NOT_APPLIED: tg=%s probe=%s +%d bytes — "
+            "PATCH дропнут (см. предыдущий SAFETY-DROP WARNING)",
+            telegram_id, str(probe)[:16], extra_bytes,
+        )
         return False
     logger.info(
-        "REMNAWAVE_BYPASS_TOPPED_UP: tg=%s uuid=%s +%d bytes (new=%d)",
-        telegram_id, rmn_uuid[:8], extra_bytes, new_limit,
+        "REMNAWAVE_BYPASS_TOPPED_UP: tg=%s probe=%s +%d bytes (new=%d)",
+        telegram_id, str(probe)[:16], extra_bytes, new_limit,
     )
     return True
 

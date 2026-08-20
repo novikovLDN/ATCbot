@@ -10,7 +10,7 @@ import asyncio
 import logging
 import uuid as uuid_lib
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 import config
 import database
@@ -257,7 +257,13 @@ async def renew_remnawave_user(
             await create_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days)
             return
 
-        api_uuid = user_data.get("uuid") or rmn_uuid
+        # Резолвим цель через numeric bypass id из БД — не через
+        # user_data.get("uuid"), чтобы гарантированно попасть в bypass
+        # entity, а не в premium (safety-drop иначе тихо теряет PATCH).
+        bypass_id = await database.get_remnawave_id(telegram_id)
+        api_target: Any = bypass_id if bypass_id is not None else (
+            user_data.get("uuid") or rmn_uuid
+        )
         current_limit = user_data.get("trafficLimitBytes", 0)
         new_limit = current_limit + traffic_add
         # Bypass works by traffic (GB), not by date — keep expireAt far future
@@ -266,7 +272,7 @@ async def renew_remnawave_user(
         expire_str = far_future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         await remnawave_api.update_user(
-            api_uuid,
+            api_target,
             trafficLimitBytes=new_limit,
             expireAt=expire_str,
             # 3.x: hwidDeviceLimit — новое имя. Шлём оба для совместимости.
@@ -275,7 +281,7 @@ async def renew_remnawave_user(
         )
         # Re-enable if disabled
         if user_data.get("status") != "ACTIVE":
-            await remnawave_api.update_user(api_uuid, status="ACTIVE")
+            await remnawave_api.update_user(api_target, status="ACTIVE")
         # Ensure squad assigned (skip if already has one)
         if config.REMNAWAVE_SQUAD_UUID:
             squads = user_data.get("activeInternalSquads") or []
@@ -411,14 +417,21 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
             )
             return False
 
-        api_uuid = user_data.get("uuid") or rmn_uuid
+        # Резолвим цель через numeric bypass id из БД (миграция 078).
+        # НЕ через user_data.get("uuid") — тот резолв через telegram_id
+        # stream возвращал ПЕРВУЮ entity (часто premium) → safety-drop
+        # → трафик не добавлялся, а логировался как SUCCESS.
+        bypass_id = await database.get_remnawave_id(telegram_id)
+        api_target: Any = bypass_id if bypass_id is not None else (
+            user_data.get("uuid") or rmn_uuid
+        )
         current_limit = int(user_data.get("trafficLimitBytes", 0) or 0)
         # Юзер оплатил пакет → просто добавляем ровно extra_bytes.
         # current=0 означает "нет доступного трафика" (израсходовал или
         # ещё не было выдано) — не безлимит. Складываем без условий.
         new_limit = current_limit + int(extra_bytes)
 
-        result = await remnawave_api.update_user(api_uuid, trafficLimitBytes=new_limit)
+        result = await remnawave_api.update_user(api_target, trafficLimitBytes=new_limit)
         if result is not None:
             # Re-enable if disabled
             if user_data.get("status") != "ACTIVE":

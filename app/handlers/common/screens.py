@@ -95,11 +95,15 @@ async def _render_bypass_line(
     if not config.REMNAWAVE_ENABLED:
         return i18n_get_text(language, none_key, none_default)
     try:
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if not rmn_uuid:
+        # Приоритет — numeric bypass id (миграция 078): гарантированно
+        # target BYPASS entity, а не premium через stream-fallback.
+        bypass_id = await database.get_remnawave_id(telegram_id)
+        probe = bypass_id if bypass_id is not None else \
+            await database.get_remnawave_uuid(telegram_id)
+        if probe is None:
             return i18n_get_text(language, none_key, none_default)
         from app.services import remnawave_api
-        traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+        traffic = await remnawave_api.get_user_traffic(probe)
         if not traffic:
             return i18n_get_text(language, none_key, none_default)
         used = int(traffic.get("usedTrafficBytes") or 0)

@@ -511,14 +511,14 @@ async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, 
     if "trafficLimitBytes" in fields and await _is_premium_entity(resolved):
         logger.warning(
             "update_user: SAFETY-DROP trafficLimitBytes=%s for PREMIUM entity id=%s "
-            "(premium должен быть безлимит по ТЗ, PATCH мимо-ушёл на premium вместо bypass)",
+            "(premium должен быть безлимит по ТЗ, PATCH мимо-ушёл на premium вместо bypass) — "
+            "возвращаем None, вышестоящий код обязан обработать как fail",
             fields.get("trafficLimitBytes"), resolved,
         )
-        fields.pop("trafficLimitBytes", None)
-        # Пустой PATCH не имеет смысла — если ТОЛЬКО trafficLimitBytes был
-        # в fields, ничего не отправляем.
-        if not fields:
-            return {"id": resolved, "skipped": "premium_traffic_guard"}
+        # Возвращаем None — сигнал "PATCH не отправлен, considered failure".
+        # Иначе callers (add_traffic и т.п.) видят truthy dict и ложно
+        # логируют SUCCESS, а трафик так и не добавлен.
+        return None
     body = {"id": resolved, **fields}
     return await _request("PATCH", "/api/users", json=body)
 
