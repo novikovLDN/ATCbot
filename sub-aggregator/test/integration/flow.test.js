@@ -278,6 +278,52 @@ test('(6b) malformed token → 404 without DB hit', async () => {
   assert.equal(dbRows.size, before);
 });
 
+test('(8) browser UA → HTML page; client UA → base64 (same URL)', async () => {
+  seedPair('tok8');
+  panelServe('main', {
+    body: 'vless://main-8\n',
+    userinfo: 'upload=0; download=0; total=0; expire=1735689600',
+    extraHeaders: { 'profile-title': 'Atlas-8' },
+  });
+  panelServe('gb', {
+    body: 'vless://gb-8\n',
+    userinfo: 'upload=100; download=200; total=1073741824; expire=0',
+  });
+
+  const client = await app.inject({
+    method: 'GET', url: '/tok8',
+    headers: { 'user-agent': 'Happ/1.7.0 CFNetwork' },
+  });
+  assert.equal(client.statusCode, 200);
+  assert.equal(client.headers['content-type'], 'text/plain; charset=utf-8');
+  assert.ok(fromB64(client.body).startsWith('vless://main-8'));
+
+  const browser = await app.inject({
+    method: 'GET', url: '/tok8',
+    headers: { 'user-agent': 'Mozilla/5.0 (iPhone) Safari/605.1.15' },
+  });
+  assert.equal(browser.statusCode, 200);
+  assert.match(browser.headers['content-type'], /^text\/html/);
+  assert.ok(browser.body.includes('<!doctype html>'));
+  // URL для one-click в клиенте
+  assert.ok(browser.body.includes('happ://add/'));
+  // Тайтл из upstream profile-title попал в HTML
+  assert.ok(browser.body.includes('Atlas-8'));
+});
+
+test('(9) browser hits revoked → HTML with "Подписка отозвана"', async () => {
+  seedPair('tok9', { status: 'revoked' });
+  const res = await app.inject({
+    method: 'GET', url: '/tok9',
+    headers: { 'user-agent': 'Mozilla/5.0 (Macintosh) Chrome/120' },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['x-cache'], 'stub');
+  assert.match(res.headers['content-type'], /^text\/html/);
+  assert.ok(res.body.includes('Подписка отозвана'));
+  assert.ok(!res.body.includes('happ://add/'));  // no install buttons on revoked
+});
+
 test('(7) revoked → 200 + single-line stub, x-cache=stub', async () => {
   seedPair('tok7', { status: 'revoked' });
   const res = await app.inject({ method: 'GET', url: '/tok7' });

@@ -40,4 +40,20 @@ export const config = {
 
   // Metrics network — comma-separated CIDRs (used only by nginx `origin.conf`).
   metricsAllowedCidr: envStr('METRICS_ALLOWED_CIDR', '10.0.0.0/8'),
+
+  // ── HTML sub-page branding ─────────────────────────────────────────
+  // When a browser requests /:token we render an HTML landing page with
+  // QR + install buttons. Same URL as clients get; UA detection routes
+  // them apart (src/ua.js).
+  //
+  // Every branding string here goes through HTML-escaping in html.js —
+  // safe to configure via ENV without XSS risk.
+  brandName:          envStr('BRAND_NAME', 'Atlas Secure'),
+  brandSlogan:        envStr('BRAND_SLOGAN', 'Защищённое подключение'),
+  brandPrimaryColor:  envStr('BRAND_PRIMARY_COLOR', '#2563EB'),
+  brandBgLight:       envStr('BRAND_BG_LIGHT', '#FBFBF9'),
+  brandBgDark:        envStr('BRAND_BG_DARK', '#0F1720'),
+  brandLogoSvg:       envStr('BRAND_LOGO_SVG', ''),  // inline SVG string; empty → no logo
+  supportUrl:         envStr('SUPPORT_URL', ''),
+  botUrl:             envStr('BOT_URL', ''),
 };

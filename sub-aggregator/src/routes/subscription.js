@@ -23,6 +23,8 @@ import { mergeUpstreams, mergeFallback } from '../aggregator.js';
 import { buildStub } from '../stub.js';
 import { singleflight } from '../singleflight.js';
 import { requestsTotal } from '../metrics.js';
+import { wantsHtml } from '../ua.js';
+import { renderSubPage } from '../html.js';
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{4,128}$/;
 
@@ -118,8 +120,19 @@ export async function handleSubscription(req, reply) {
     return reply.code(404).header('content-type', 'text/plain').send('Not found');
   }
 
+  // Browser UA → HTML page. Клиенты (Happ, v2rayNG, ...) → сырое base64.
+  // Unknown UA (curl без -A, боты) → сырое (safe default, не «сюрприз»).
+  const wantHtml = wantsHtml(req.headers['user-agent']);
+  const publicUrl = buildPublicUrl(req, token);
+
   if (row.status === 'revoked') {
     requestsTotal.inc({ result: 'stub' });
+    if (wantHtml) {
+      reply.header('x-cache', 'stub');
+      return reply.type('text/html; charset=utf-8').send(
+        renderSubPage({ publicUrl, subUserinfo: '', isRevoked: true }),
+      );
+    }
     const stub = buildStub();
     for (const [k, v] of Object.entries(stub.headers)) reply.header(k, v);
     reply.header('x-cache', 'stub');
@@ -133,13 +146,13 @@ export async function handleSubscription(req, reply) {
 
   if (fresh) {
     requestsTotal.inc({ result: 'hit' });
-    return respondCached(reply, fresh, 'hit');
+    return respondCached(reply, fresh, 'hit', { wantHtml, publicUrl });
   }
   const stale = await jsonGet(keyStale(token));
   if (stale) {
     requestsTotal.inc({ result: 'stale' });
     refreshInBackground(token, row, opts);
-    return respondCached(reply, stale, 'stale');
+    return respondCached(reply, stale, 'stale', { wantHtml, publicUrl });
   }
 
   // Miss — synchronous, singleflighted per token.
@@ -155,7 +168,7 @@ export async function handleSubscription(req, reply) {
       return b;
     });
     requestsTotal.inc({ result: 'miss' });
-    return respondCached(reply, built, 'miss');
+    return respondCached(reply, built, 'miss', { wantHtml, publicUrl });
   } catch (err) {
     if (err && err.message === 'both_upstreams_failed') {
       requestsTotal.inc({ result: 'error' });
@@ -174,10 +187,35 @@ export async function handleSubscription(req, reply) {
   }
 }
 
-function respondCached(reply, cached, cacheState) {
+function respondCached(reply, cached, cacheState, htmlCtx) {
+  // Browser branch: render HTML with the merged subscription's metadata.
+  // Body is still cached as base64 — we just present it differently.
+  if (htmlCtx && htmlCtx.wantHtml) {
+    const headers = cached.headers || {};
+    const html = renderSubPage({
+      publicUrl: htmlCtx.publicUrl,
+      subUserinfo: headers['subscription-userinfo'] || '',
+      profileTitle: headers['profile-title'] || null,
+      isRevoked: false,
+    });
+    reply.header('x-cache', cacheState);
+    return reply.type('text/html; charset=utf-8').send(html);
+  }
+  // Client branch: raw subscription body + upstream headers.
   for (const [k, v] of Object.entries(cached.headers || {})) reply.header(k, v);
   reply.header('x-cache', cacheState);
   return reply.send(cached.body);
+}
+
+/**
+ * Absolute public URL to embed into HTML/QR. Reads `x-forwarded-proto`
+ * (set by nginx origin.conf) and falls back to `https` — clients never
+ * hit us over plaintext HTTP in prod.
+ */
+function buildPublicUrl(req, token) {
+  const proto = req.headers['x-forwarded-proto'] || 'https';
+  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
+  return `${proto}://${host}/${token}`;
 }
 
 /**

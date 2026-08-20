@@ -357,6 +357,13 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
         "REMNAWAVE_BYPASS_TOPPED_UP: tg=%s target=%s username=%r +%d bytes (new=%d)",
         telegram_id, str(target)[:16], entity.get("username"), extra_bytes, new_limit,
     )
+    # Sub-aggregator hook: bypass GB изменился → сбросить кеш агрегатора,
+    # чтобы клиент сразу увидел новый лимит в userinfo. Fire-and-forget.
+    try:
+        from app.services import sub_aggregator
+        sub_aggregator.invalidate_bg(telegram_id)
+    except Exception:
+        pass
     return True
 
 
