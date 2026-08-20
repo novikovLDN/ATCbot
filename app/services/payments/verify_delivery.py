@@ -24,20 +24,14 @@ def _fmt_gb(byte_val: int) -> str:
 
 
 async def _send_admin_alert(title: str, body: str, tag: str = "delivery") -> None:
-    """DM админу. Fail-safe, не бросает.
-
-    tag определяет severity emoji: warning/error → ⚠️, info → ℹ️.
-    """
+    """DM админу. Fail-safe, не бросает."""
     try:
         from aiogram import Bot
         from app.api import telegram_webhook
         bot: Optional[Bot] = getattr(telegram_webhook, "_bot", None)
         if bot is None or not getattr(config, "ADMIN_TELEGRAM_ID", 0):
             return
-        # Info-теги (не ошибка, а информационное уведомление).
-        _info_tags = {"topup-unlimited"}
-        emoji = "ℹ️" if tag in _info_tags else "⚠️"
-        text = f"{emoji} <b>{title}</b>\n{body}"
+        text = f"⚠️ <b>{title}</b>\n{body}"
         await bot.send_message(
             chat_id=config.ADMIN_TELEGRAM_ID,
             text=text[:4000],
@@ -103,52 +97,14 @@ async def verify_bypass_delivery(
             )
             return
         actual_bytes = int(traffic.get("trafficLimitBytes") or 0)
-        used_bytes = int(traffic.get("usedTrafficBytes") or 0)
         # Ok-условия:
         if baseline_bytes is not None:
-            if int(baseline_bytes) == 0:
-                # Baseline=0 = БЕЗЛИМИТ до операции. add_traffic сейчас
-                # конвертирует безлимит в limited=used+extra, поэтому:
-                #   ok если panel = used + extra_bytes (± 100 MB).
-                # Дополнительно шлём INFO-alert админу — на случай если
-                # безлимит был admin-gift'ом (нужно восстановить).
-                expected_total = used_bytes + int(expected_added_bytes)
-                diff = actual_bytes - expected_total
-                converted_ok = abs(diff) < 100 * 1024 * 1024
-                if converted_ok:
-                    await _send_admin_alert(
-                        "Bypass top-up: entity конвертирован из безлимита",
-                        (
-                            f"User: <code>tg:{telegram_id}</code>\n"
-                            f"Kind: <b>{kind}</b> · Provider: <b>{provider}</b>\n"
-                            f"Tariff: <b>{tariff}</b>{f' · {period_days}d' if period_days else ''}\n"
-                            f"Purchase: <code>{purchase_id}</code>\n"
-                            f"\n"
-                            f"Пакет: <b>+{_fmt_gb(expected_added_bytes)}</b>\n"
-                            f"Baseline: <b>∞</b> (безлимит), used: "
-                            f"<b>{_fmt_gb(used_bytes)}</b>\n"
-                            f"В панели: <b>{_fmt_gb(actual_bytes)}</b> "
-                            f"(limited: used + пакет)\n"
-                            f"\n"
-                            f"Юзер получил ровно {_fmt_gb(expected_added_bytes)} "
-                            f"remaining. Если это был admin-gift безлимит — "
-                            f"откатите trafficLimitBytes → 0 в панели вручную."
-                        ),
-                        tag="topup-unlimited",
-                    )
-                    logger.info(
-                        "BYPASS_VERIFY_UNLIMITED_CONVERTED_OK: tg=%s kind=%s "
-                        "used=%d + extra=%d = %d (panel=%d)",
-                        telegram_id, kind, used_bytes,
-                        expected_added_bytes, expected_total, actual_bytes,
-                    )
-                    return
-                ok = False
-            else:
-                # Точное совпадение с допуском 100 MB (округления).
-                expected_total = int(baseline_bytes) + int(expected_added_bytes)
-                diff = actual_bytes - expected_total
-                ok = abs(diff) < 100 * 1024 * 1024
+            # Точное совпадение с допуском 100 MB (округления).
+            # baseline=0 — норма (юзер израсходовал / не выдавали), не
+            # безлимит: expected = 0 + extra = extra.
+            expected_total = int(baseline_bytes) + int(expected_added_bytes)
+            diff = actual_bytes - expected_total
+            ok = abs(diff) < 100 * 1024 * 1024
         else:
             # Только-что созданный entity — просто >= expected.
             ok = actual_bytes >= int(expected_added_bytes) or actual_bytes == 0

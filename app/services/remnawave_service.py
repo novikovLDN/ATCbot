@@ -413,25 +413,10 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
 
         api_uuid = user_data.get("uuid") or rmn_uuid
         current_limit = int(user_data.get("trafficLimitBytes", 0) or 0)
-        # trafficLimitBytes=0 в панели = БЕЗЛИМИТ. Юзер явно оплатил
-        # пакет — обязаны выдать ровно extra_bytes remaining. Конвертим
-        # безлимит в limited = usedBytes + extra_bytes:
-        #   • used история не теряется (счётчик уже накопил usedBytes),
-        #   • remaining = new_limit - used = extra_bytes — ровно то, что купил,
-        #   • gift-безлимит помечается в логах, чтобы admin мог откатить.
-        # Без этой конвертации add_traffic отвечал True но panel оставался
-        # на 0 → юзер платил и не получал GB (обнаружено на tg=8343902286).
-        used_bytes = int(user_data.get("usedTrafficBytes", 0) or 0)
-        if current_limit == 0:
-            new_limit = used_bytes + int(extra_bytes)
-            logger.warning(
-                "REMNAWAVE_ADD_TRAFFIC_UNLIMITED_CONVERTED: tg=%s "
-                "was unlimited(∞), used=%d → new_limit=%d (used+extra=%d), "
-                "extra=%d — если это был admin-gift безлимит, восстановить вручную",
-                telegram_id, used_bytes, new_limit, new_limit, extra_bytes,
-            )
-        else:
-            new_limit = current_limit + int(extra_bytes)
+        # Юзер оплатил пакет → просто добавляем ровно extra_bytes.
+        # current=0 означает "нет доступного трафика" (израсходовал или
+        # ещё не было выдано) — не безлимит. Складываем без условий.
+        new_limit = current_limit + int(extra_bytes)
 
         result = await remnawave_api.update_user(api_uuid, trafficLimitBytes=new_limit)
         if result is not None:

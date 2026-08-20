@@ -313,20 +313,9 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     if not user:
         return False
     current_limit = int(user.get("trafficLimitBytes") or 0)
-    used_bytes = int(user.get("usedTrafficBytes") or 0)
-    # trafficLimitBytes=0 = БЕЗЛИМИТ. Юзер оплатил extra_bytes — обязаны
-    # выдать ровно столько remaining. Конвертим ∞ → used+extra:
-    # remaining = new_limit - used = extra_bytes, used история не теряется.
-    # Без этого add_traffic отвечал True но 15 GB не добавлялись.
-    if current_limit == 0:
-        new_limit = used_bytes + int(extra_bytes)
-        logger.warning(
-            "REMNAWAVE_BYPASS_UNLIMITED_CONVERTED: tg=%s was ∞, "
-            "used=%d → new=%d (+%d requested)",
-            telegram_id, used_bytes, new_limit, extra_bytes,
-        )
-    else:
-        new_limit = current_limit + int(extra_bytes)
+    # Юзер оплатил пакет → просто добавляем ровно extra_bytes.
+    # current=0 = "трафика нет" (израсходовал / не выдавали), не безлимит.
+    new_limit = current_limit + int(extra_bytes)
     try:
         result = await remnawave_api.update_user(
             rmn_uuid,
