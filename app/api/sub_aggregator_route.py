@@ -26,6 +26,7 @@ import re
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
+from functools import lru_cache
 from html import escape as html_escape
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import quote as url_quote
@@ -466,6 +467,35 @@ _STORE_BTN_LABELS = {
 }
 
 
+@lru_cache(maxsize=512)
+def _qr_svg(url: str) -> str:
+    """Server-side QR как inline-SVG (без CDN — работает в РФ без прокси).
+
+    Для десктопа: сканируешь телефоном → та же страница открывается на
+    телефоне → одна кнопка «Установить подписку». Кешируем per-URL —
+    генерация ~2мс, а URL стабилен для token.
+
+    Возвращает пустую строку, если qrcode-либа недоступна (тогда блок
+    просто не показывается — graceful degrade).
+    """
+    try:
+        import qrcode
+        import qrcode.image.svg
+        img = qrcode.make(
+            url,
+            image_factory=qrcode.image.svg.SvgPathImage,
+            box_size=10,
+            border=1,
+        )
+        raw = img.to_string().decode()
+        # Стилизация: фиксированный размер через CSS-класс, path — тёмный.
+        raw = raw.replace("<svg", '<svg class="qr-svg"', 1)
+        return raw
+    except Exception as e:  # noqa: BLE001
+        logger.warning("SUB_AGG_QR_FAIL: %s", e)
+        return ""
+
+
 def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     """Onboarding-страница подписки (референс — Remnawave sub-page, наш стиль).
 
@@ -602,6 +632,21 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     # Панели содержат placeholder {{SUB_URL_ESC}} (f-string внутри цикла не
     # видит sub_url_esc чисто, плюс так URL не эскейпится дважды).
     panels_html = panels_html.replace("{SUB_URL_ESC}", sub_url_esc)
+
+    # QR для десктопа — сканируешь телефоном, та же страница открывается
+    # на мобиле, дальше одна кнопка. Блок скрыт на мобильных (JS).
+    qr_svg = _qr_svg(sub_url)
+    qr_block = f"""
+  <div class="qr-card" id="qrCard" hidden>
+    <div class="qr-box">{qr_svg}</div>
+    <div class="qr-info">
+      <div class="qr-title">Быстрее с телефона</div>
+      <p class="qr-text">Наведите камеру — страница откроется на телефоне, установка займёт меньше минуты.</p>
+    </div>
+  </div>""" if qr_svg else ""
+
+    # JS-мапа deep-links для sticky-CTA (href меняется при смене клиента).
+    deeplinks_js = json.dumps(deeplinks)
 
     return f"""<!DOCTYPE html>
 <html lang="ru">
@@ -832,6 +877,48 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   .copy-btn:active {{ background: #f0f2f5; }}
   .copy-btn.copied {{ color: #10B981; border-color: #10B981; }}
 
+  /* ── QR для десктопа ── */
+  .qr-card {{
+    display: flex; align-items: center; gap: 18px;
+    background: #fff;
+    border: 1px solid #e1e4e8; border-radius: 16px;
+    padding: 18px;
+    margin: 4px 0 26px;
+  }}
+  .qr-box {{
+    flex: 0 0 128px;
+    background: #fff; border-radius: 12px;
+    padding: 8px;
+    border: 1px solid #eef0f3;
+  }}
+  .qr-svg {{ width: 112px; height: 112px; display: block; }}
+  .qr-title {{ font-size: 15px; font-weight: 700; margin-bottom: 6px; }}
+  .qr-text {{ font-size: 13px; line-height: 1.5; color: #6b7280; margin: 0; }}
+
+  /* ── Sticky CTA (мобила) ── */
+  .sticky-bar {{
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(180deg, rgba(246,247,249,0), rgba(246,247,249,.92) 30%, #f6f7f9);
+    display: flex; justify-content: center;
+    z-index: 50;
+  }}
+  .sticky-bar .btn.accent {{ max-width: 460px; }}
+  body.has-sticky {{ padding-bottom: 96px; }}
+
+  /* ── Появление панели (spring) ── */
+  .panel.appear {{
+    animation: rise 320ms cubic-bezier(.34, 1.3, .64, 1) both;
+  }}
+  @keyframes rise {{
+    from {{ opacity: 0; transform: translateY(10px); }}
+    to   {{ opacity: 1; transform: none; }}
+  }}
+  @media (prefers-reduced-motion: reduce) {{
+    .panel.appear {{ animation: none; }}
+    .fill, .chev, .btn {{ transition: none; }}
+  }}
+
   .footer {{
     margin-top: 36px;
     display: flex; align-items: center; justify-content: space-between;
@@ -875,6 +962,14 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     .copy-btn {{ background: #1f2937; color: #fff; border-color: #2a3441; }}
     .copy-btn:active {{ background: #2a3441; }}
     .copy-btn.copied {{ color: #34d399; border-color: #34d399; }}
+    /* QR остаётся на белой подложке — иначе не сканируется */
+    .qr-card {{ background: #16202b; border-color: #2a3441; }}
+    .qr-box {{ background: #fff; border-color: #fff; }}
+    .qr-title {{ color: #fff; }}
+    .qr-text {{ color: #9aa1ab; }}
+    .sticky-bar {{
+      background: linear-gradient(180deg, rgba(15,23,32,0), rgba(15,23,32,.92) 30%, #0f1720);
+    }}
     .footer {{ color: #6b7280; }}
   }}
 </style>
@@ -924,7 +1019,7 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   </div>
 
   {panels_html}
-
+{qr_block}
   <div class="section-head" style="margin-top:10px">
     <div class="section-title" style="font-size:17px">Ключ подписки</div>
   </div>
@@ -939,10 +1034,19 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   </div>
 </div>
 
+<!-- Sticky CTA (мобила): кнопка установки всегда под пальцем -->
+<div class="sticky-bar" id="stickyBar" hidden>
+  <a class="btn accent" id="stickyCta" href="#">
+    <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+    <span id="stickyCtaLabel">Установить подписку в Happ</span>
+  </a>
+</div>
+
 <script>
 (function () {{
   var plat = 'ios';
   var client = 'happ';
+  var DEEPLINKS = {deeplinks_js};
 
   // Авто-детект платформы по UA.
   var ua = navigator.userAgent || '';
@@ -955,13 +1059,25 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   var platBtns = document.querySelectorAll('[data-plat-btn]');
   var clientBtns = document.querySelectorAll('[data-client-btn]');
   var clientTabs = document.getElementById('clientTabs');
+  var stickyBar = document.getElementById('stickyBar');
+  var stickyCta = document.getElementById('stickyCta');
+  var stickyLabel = document.getElementById('stickyCtaLabel');
+  var qrCard = document.getElementById('qrCard');
+  var isMobile = (plat === 'ios' || plat === 'android');
+  var clientNames = {{happ: 'Happ', incy: 'Incy'}};
 
   function render() {{
     // Windows — только Happ.
     if (plat === 'windows') {{ client = 'happ'; clientTabs.style.display = 'none'; }}
     else {{ clientTabs.style.display = ''; }}
     panels.forEach(function (p) {{
-      p.hidden = !(p.dataset.plat === plat && p.dataset.client === client);
+      var show = (p.dataset.plat === plat && p.dataset.client === client);
+      if (show && p.hidden) {{
+        p.hidden = false;
+        p.classList.remove('appear');
+        void p.offsetWidth;  // reflow → restart animation
+        p.classList.add('appear');
+      }} else if (!show) {{ p.hidden = true; }}
     }});
     platBtns.forEach(function (b) {{
       b.classList.toggle('active', b.dataset.platBtn === plat);
@@ -969,6 +1085,17 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     clientBtns.forEach(function (b) {{
       b.classList.toggle('active', b.dataset.clientBtn === client);
     }});
+    // Sticky CTA — только мобила; href/label следуют выбранному клиенту.
+    if (stickyBar) {{
+      stickyBar.hidden = !isMobile;
+      if (isMobile) {{
+        stickyCta.href = DEEPLINKS[client];
+        stickyLabel.textContent = 'Установить подписку в ' + clientNames[client];
+        document.body.classList.add('has-sticky');
+      }}
+    }}
+    // QR — только десктоп (на мобиле бессмысленно сканировать самого себя).
+    if (qrCard) qrCard.hidden = isMobile;
   }}
 
   platBtns.forEach(function (b) {{
@@ -978,6 +1105,23 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     b.addEventListener('click', function () {{ client = b.dataset.clientBtn; render(); }});
   }});
   render();
+
+  // Smart-fallback: нажал «Установить подписку», приложение не перехватило
+  // переход за 3 сек (мы всё ещё видимы) → авто-раскрываем «Установить
+  // вручную» на активной панели и мягко подводим к ней.
+  function armFallback() {{
+    setTimeout(function () {{
+      if (document.visibilityState !== 'visible') return;  // ушли в приложение — ок
+      var active = document.querySelector('.panel:not([hidden]) details.manual');
+      if (active && !active.open) {{
+        active.open = true;
+        try {{ active.scrollIntoView({{behavior: 'smooth', block: 'center'}}); }} catch (e) {{}}
+      }}
+    }}, 3000);
+  }}
+  document.querySelectorAll('.btn.accent').forEach(function (b) {{
+    b.addEventListener('click', armFallback);
+  }});
 
   // Copy-to-clipboard — на каждой панели своя кнопка (.copy-btn),
   // fallback через textarea для старых WebView без navigator.clipboard.
