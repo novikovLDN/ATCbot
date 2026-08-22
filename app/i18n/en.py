@@ -1049,6 +1049,7 @@ LANG = {
     'setup.key_install_title_agg': "⚡️ <b>Connect in one tap</b>\n\nTap <b>«Add key»</b> for your app — the subscription will be imported automatically.\n\nIf it didn't open — tap <b>«Manual setup»</b> below.",
     'setup.btn_add_happ': "📥 Add key to Happ",
     'setup.btn_add_incy': "💚 Add key to Incy",
+    'setup.btn_add_v2raytun': "🚀 Add key to V2RayTun",
     'setup.btn_manual_setup': "⚙️ Manual setup",
     'setup.key_happ_label': "🔑 <b>Happ key</b> (copy and paste into the app):",
     'setup.key_incy_label': "💚 <b>Incy key</b> (copy and paste into the app):",
