@@ -100,22 +100,21 @@ _metrics: Dict[str, int] = {
 
 
 # ── Attack detector ─────────────────────────────────────────────────
-# Скользящее окно: за последние 60 сек считаем «плохие» события —
-# not_found (флуд случайных tokens) и upstream_fail (панель гасят).
-# При превышении порога → alert админу через send_alert (уважает cooldown).
-#
-# Cost: 2 int в памяти + 1 сравнение на request. Overhead — <1 микросек.
-_attack_window_start: float = 0.0  # начало текущей 60-сек корзины
+# Скользящее 60-сек окно считает «плохие» события: not_found (флуд
+# случайных tokens) и upstream_fail (панель гасят / упала). При пробитии
+# порога — разовый Telegram-алерт админу через send_alert (security).
+# Cost: инкремент int + сравнение на request — микросекунды.
+_attack_window_start: float = 0.0
 _attack_not_found: int = 0
 _attack_upstream_fail: int = 0
 
-# Пороги (per 60 sec). Подобраны так, чтобы норма (даже пиковая) не триггерила.
-ATTACK_NOT_FOUND_THRESHOLD = 300     # >5 rps «not found» = боль
-ATTACK_UPSTREAM_FAIL_THRESHOLD = 60  # >1 rps upstream_fail = панель тупит / сеть
+# Пороги per 60 sec — норма (даже пиковая) не должна триггерить.
+ATTACK_NOT_FOUND_THRESHOLD = 300     # >5 rps not-found = random-token DoS
+ATTACK_UPSTREAM_FAIL_THRESHOLD = 60  # >1 rps upstream fail = панель тупит
 
 
 def _bump_attack_window(kind: str) -> None:
-    """Тикнуть счётчик 60-сек окна. Возвращает currentcount и total-alert."""
+    """Тик счётчика 60-сек окна; на пробитии порога — разовый алерт."""
     global _attack_window_start, _attack_not_found, _attack_upstream_fail
     now = time.monotonic()
     if now - _attack_window_start >= 60:
@@ -133,7 +132,8 @@ def _bump_attack_window(kind: str) -> None:
 
 
 def _fire_attack_alert(*, kind: str, count: int) -> None:
-    """Отправить админу алерт fire-and-forget. Cooldown в send_alert 0 для security."""
+    """Fire-and-forget алерт админу. Триггерится РОВНО раз на окно
+    (== вместо >= в caller'е); поверх — cooldown send_alert('security')."""
     try:
         from app.api import telegram_webhook as _tw
         bot = getattr(_tw, "_bot", None)
@@ -143,8 +143,7 @@ def _fire_attack_alert(*, kind: str, count: int) -> None:
         if kind == "not_found":
             msg = (
                 f"🚨 <b>Sub-aggregator: подозрительный флуд</b>\n\n"
-                f"За последнюю минуту: <b>{count}+</b> запросов с несуществующим "
-                f"token.\n"
+                f"За последнюю минуту: <b>{count}+</b> запросов с несуществующим token.\n"
                 f"Возможно — random-token DoS.\n\n"
                 f"Проверить: <code>curl https://api.atlassecure.ru/a/_metrics</code>\n"
                 f"Порог: {ATTACK_NOT_FOUND_THRESHOLD}/мин.\n\n"
@@ -155,9 +154,8 @@ def _fire_attack_alert(*, kind: str, count: int) -> None:
                 f"🚨 <b>Sub-aggregator: массовые upstream fails</b>\n\n"
                 f"За последнюю минуту: <b>{count}+</b> фейлов запроса к панели.\n"
                 f"Возможно — панель Remnawave тупит / упала / сеть.\n\n"
-                f"Проверить: <code>curl https://rmnw.atlassecure.ru/api/system/stats</code>\n"
                 f"Порог: {ATTACK_UPSTREAM_FAIL_THRESHOLD}/мин.\n\n"
-                f"Мы отдаём stale-cache — юзеры не видят 503 в первые 24 часа."
+                f"Юзеры получают stale-cache — 503 не видят первые 24 часа."
             )
         from app.services.admin_alerts import send_alert
         asyncio.create_task(send_alert(bot, "security", msg, force=False))
@@ -419,31 +417,155 @@ def _deeplink_base() -> str:
     return m.group(1) if m else ""
 
 
-def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
-    """Минимальная splash-страница: бренд + 2 кнопки Happ/Incy.
+# ── Onboarding page: per-device install links ───────────────────────
+# Happ iOS — НЕ-РФ регион (глобальный App Store) по решению владельца:
+# RU-стор версия нестабильна, global — основная. Рядом даём ссылку на
+# видео «Как сменить регион» (t.me/atlas_secure/75).
+_REGION_HELP_URL = "https://t.me/atlas_secure/75"
 
-    Никакой статистики трафика / expire / других клиентов — юзеру не нужно
-    видеть детали подписки в браузере (это может ввести в заблуждение:
-    какая именно подписка? актуально ли?). Клик по кнопке → deep-link →
-    приложение импортирует агрегатор-ссылку и всё сразу видно там.
+_STORE_LINKS: dict[str, dict[str, str]] = {
+    "ios": {
+        "happ": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215",
+        "incy": "https://apps.apple.com/ru/app/incy/id6756943388?l=en-GB",
+    },
+    "android": {
+        "happ": "https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
+        "incy": "https://play.google.com/store/apps/details?id=llc.itdev.incy&hl=en_IE",
+    },
+    "macos": {
+        "happ": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
+        "incy": "https://apps.apple.com/ru/app/incy/id6756943388?l=en-GB",
+    },
+    "windows": {
+        "happ": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
+    },
+}
+
+_PLATFORM_LABELS = [
+    ("ios", "iOS"),
+    ("android", "Android"),
+    ("macos", "macOS"),
+    ("windows", "Windows"),
+]
+
+_CLIENT_LABELS = {"happ": "Happ", "incy": "Incy"}
+
+# Текст «установите приложение» per platform (store = куда ведёт кнопка).
+_INSTALL_HINTS = {
+    "ios": "Откройте страницу в App Store и установите приложение. Запустите его, в окне разрешения конфигурации нажмите «Разрешить» и введите код-пароль.",
+    "android": "Установите приложение из Google Play и запустите его.",
+    "macos": "Установите приложение из App Store и запустите его.",
+    "windows": "Скачайте установщик, запустите его и завершите установку.",
+}
+
+_STORE_BTN_LABELS = {
+    "ios": "Открыть в App Store",
+    "android": "Открыть в Google Play",
+    "macos": "Открыть в App Store",
+    "windows": "Скачать для Windows",
+}
+
+
+def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
+    """Onboarding-страница подписки (референс — Remnawave sub-page, наш стиль).
+
+    Блоки:
+      1. Карточка подписки — статус, дата окончания, остаток трафика
+         (из hybrid subscription-userinfo).
+      2. «Установка»: селектор устройства (iOS/Android/macOS/Windows,
+         авто-детект по UA) + табы клиента (Happ / Incy; Windows — только Happ).
+      3. Пошаговая инструкция: установить приложение (стор-ссылка,
+         для iOS Happ + видео «Как сменить регион») → добавить подписку
+         (deep-link через /open/{client}, crypt-sealed) → подключиться.
+      4. Ссылка подписки + «Скопировать».
+
+    Клиенты (Happ/v2rayNG/…) сюда не попадают — UA-split отдаёт им raw
+    base64 (_wants_html). Страница — только для браузеров.
     """
     brand = html_escape(_brand_title())
     support = _support_url() or ""
     support_esc = html_escape(support, quote=True)
 
-    # Deep-links. Happ/Incy — через /open/{client} (crypt-sealing серверный).
+    # ── Данные подписки из hybrid userinfo ─────────────────────────
+    ui = _parse_userinfo(headers.get("subscription-userinfo", ""))
+    total = int(ui.get("total", 0))
+    used = int(ui.get("upload", 0)) + int(ui.get("download", 0))
+    left = max(0, total - used) if total > 0 else 0
+    traffic_str = (
+        f"{_fmt_bytes(left)} <span class=\"dim\">из {_fmt_bytes(total)}</span>"
+        if total > 0 else "∞"
+    )
+    expire_str = _fmt_expire(int(ui.get("expire", 0))) or "—"
+
+    # ── Deep-links (crypt-sealed через /open/{client}) ─────────────
     base = _deeplink_base()
     q = url_quote(sub_url, safe='')
-    happ_href = f"{base}/open/happ?url={q}" if base else f"happ://add/{url_quote(sub_url, safe='/:?&=@%+')}"
-    incy_href = f"{base}/open/incy?url={q}" if base else f"happ://add/{url_quote(sub_url, safe='/:?&=@%+')}"
+    deeplinks = {
+        "happ": f"{base}/open/happ?url={q}" if base else f"happ://add/{url_quote(sub_url, safe='/:?&=@%+')}",
+        "incy": f"{base}/open/incy?url={q}" if base else f"happ://add/{url_quote(sub_url, safe='/:?&=@%+')}",
+    }
 
-    happ_href_esc = html_escape(happ_href, quote=True)
-    incy_href_esc = html_escape(incy_href, quote=True)
+    # ── Пер-платформенные панели (статичный HTML, JS только переключает) ──
+    panels: list[str] = []
+    for plat, _plat_label in _PLATFORM_LABELS:
+        clients = ["happ", "incy"] if plat != "windows" else ["happ"]
+        for client in clients:
+            store_url = _STORE_LINKS.get(plat, {}).get(client, "")
+            if not store_url:
+                continue
+            store_esc = html_escape(store_url, quote=True)
+            deep_esc = html_escape(deeplinks[client], quote=True)
+            client_name = _CLIENT_LABELS[client]
+            install_hint = html_escape(_INSTALL_HINTS[plat])
+            store_btn = html_escape(_STORE_BTN_LABELS[plat])
+            region_row = ""
+            if plat == "ios" and client == "happ":
+                region_row = (
+                    f'<a class="ghost-btn" href="{html_escape(_REGION_HELP_URL, quote=True)}" '
+                    f'target="_blank" rel="noopener">Как сменить регион аккаунта</a>'
+                )
+            panels.append(f"""
+  <div class="panel" data-plat="{plat}" data-client="{client}" hidden>
+    <div class="step">
+      <div class="step-dot">1</div>
+      <div class="step-body">
+        <div class="step-title">Установите и откройте {client_name}</div>
+        <p class="step-text">{install_hint}</p>
+        <a class="ghost-btn" href="{store_esc}" target="_blank" rel="noopener">{store_btn}</a>
+        {region_row}
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-dot">2</div>
+      <div class="step-body">
+        <div class="step-title">Добавьте подписку</div>
+        <p class="step-text">Нажмите кнопку ниже — приложение откроется, и подписка добавится автоматически.</p>
+        <a class="btn" href="{deep_esc}">Добавить подписку</a>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-dot done">3</div>
+      <div class="step-body">
+        <div class="step-title">Подключите и используйте</div>
+        <p class="step-text">В главном разделе нажмите большую кнопку включения в центре. При необходимости выберите другой сервер из списка.</p>
+      </div>
+    </div>
+  </div>""")
+
+    panels_html = "".join(panels)
+
+    plat_tabs = "".join(
+        f'<button class="seg" data-plat-btn="{plat}" type="button">{label}</button>'
+        for plat, label in _PLATFORM_LABELS
+    )
 
     support_row = (
         f'<a class="support" href="{support_esc}" target="_blank" rel="noopener">Поддержка</a>'
         if support else ""
     )
+
+    sub_url_esc = html_escape(sub_url)
+    sub_url_js = json.dumps(sub_url)
 
     return f"""<!DOCTYPE html>
 <html lang="ru">
@@ -465,55 +587,170 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   body {{
     min-height: 100vh;
     display: flex; flex-direction: column; align-items: center;
-    justify-content: center;
-    padding: 40px 20px;
+    padding: 28px 16px 48px;
   }}
-  .wrap {{ width: 100%; max-width: 400px; text-align: center; }}
+  .wrap {{ width: 100%; max-width: 460px; }}
 
   .brand {{
-    font-size: 28px; font-weight: 700; letter-spacing: -0.02em;
-    margin: 0 0 8px;
+    font-size: 24px; font-weight: 700; letter-spacing: -0.02em;
+    margin: 0 0 18px;
   }}
-  p.lead {{ font-size: 14px; line-height: 1.45; color: #666;
-            margin: 0 0 32px; }}
+
+  /* ── Карточка подписки ── */
+  .card {{
+    background: #fff;
+    border: 1px solid #e1e4e8; border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 28px;
+  }}
+  .card-head {{
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 14px;
+  }}
+  .status-ico {{
+    width: 40px; height: 40px; border-radius: 12px;
+    background: rgba(16,185,129,.12); color: #10B981;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 700;
+  }}
+  .card-title {{ font-size: 16px; font-weight: 700; }}
+  .card-sub {{ font-size: 13px; color: #6b7280; }}
+  .card-grid {{
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  }}
+  .cell {{
+    background: #f6f7f9; border-radius: 12px; padding: 12px 14px;
+  }}
+  .cell-label {{ font-size: 11px; text-transform: uppercase;
+                letter-spacing: .06em; color: #9aa1ab; margin-bottom: 4px; }}
+  .cell-value {{ font-size: 15px; font-weight: 700; }}
+  .dim {{ color: #9aa1ab; font-weight: 500; }}
+
+  /* ── Установка: заголовок + сегменты ── */
+  .section-head {{
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+  }}
+  .section-title {{ font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }}
+
+  .segs {{
+    display: flex; gap: 6px; flex-wrap: wrap;
+    margin-bottom: 14px;
+  }}
+  .seg {{
+    appearance: none; border: 1px solid #e1e4e8; background: #fff;
+    color: #4b5563; border-radius: 999px;
+    padding: 8px 16px; font-size: 13px; font-weight: 600;
+    cursor: pointer;
+    transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+  }}
+  .seg.active {{ background: #111; color: #fff; border-color: #111; }}
+
+  .client-tabs {{
+    display: flex; gap: 8px; margin-bottom: 22px;
+  }}
+  .ctab {{
+    flex: 1;
+    appearance: none; border: 1px solid #e1e4e8; background: #fff;
+    color: #4b5563; border-radius: 12px;
+    padding: 12px 0; font-size: 14px; font-weight: 700;
+    cursor: pointer;
+    transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+  }}
+  .ctab.active {{ border-color: #111; color: #111; box-shadow: inset 0 0 0 1px #111; }}
+
+  /* ── Timeline шагов ── */
+  .panel {{ position: relative; }}
+  .step {{
+    display: flex; gap: 14px;
+    position: relative;
+    padding-bottom: 26px;
+  }}
+  .step:not(:last-child)::before {{
+    content: "";
+    position: absolute; left: 15px; top: 34px; bottom: 0;
+    width: 2px; background: #e1e4e8;
+  }}
+  .step-dot {{
+    flex: 0 0 32px; height: 32px; border-radius: 50%;
+    background: #10B981; color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700;
+    z-index: 1;
+  }}
+  .step-dot.done {{ background: #e1e4e8; color: #6b7280; }}
+  .step-body {{ flex: 1; padding-top: 4px; }}
+  .step-title {{ font-size: 16px; font-weight: 700; margin-bottom: 6px; }}
+  .step-text {{ font-size: 14px; line-height: 1.5; color: #4b5563; margin: 0 0 12px; }}
 
   .btn {{
-    display: flex; align-items: center; justify-content: center;
-    width: 100%; padding: 16px 22px;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 13px 24px;
     background: #111; color: #fff;
     border-radius: 12px;
     text-decoration: none;
-    font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
+    font-size: 14px; font-weight: 600;
     transition: transform 80ms ease, background 80ms ease;
-    border: none; cursor: pointer;
-    margin-bottom: 12px;
   }}
   .btn:active {{ transform: scale(0.98); background: #000; }}
-  .btn.secondary {{
+  .ghost-btn {{
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 11px 18px;
     background: #fff; color: #111;
-    border: 1px solid #e1e4e8;
+    border: 1px solid #e1e4e8; border-radius: 12px;
+    text-decoration: none;
+    font-size: 13px; font-weight: 600;
+    margin-right: 8px; margin-bottom: 8px;
+    transition: background 80ms ease;
   }}
-  .btn.secondary:active {{ background: #f0f2f5; }}
+  .ghost-btn:active {{ background: #f0f2f5; }}
+
+  /* ── Ссылка подписки ── */
+  .keyblock {{
+    margin-top: 6px;
+    background: #eef0f3;
+    border: 1px solid #e1e4e8;
+    border-radius: 12px;
+    padding: 14px;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 1.5;
+    word-break: break-all;
+    user-select: all; -webkit-user-select: all;
+  }}
+  .copyrow {{ display: flex; justify-content: flex-end; margin-top: 8px; }}
+  .copy {{
+    appearance: none; border: none; background: transparent;
+    color: #555; font-size: 12px; font-weight: 600;
+    padding: 6px 10px; border-radius: 6px; cursor: pointer;
+  }}
+  .copy.copied {{ color: #1a7f37; }}
 
   .footer {{
-    margin-top: 40px;
-    display: flex; align-items: center; justify-content: center;
-    gap: 16px;
+    margin-top: 36px;
+    display: flex; align-items: center; justify-content: space-between;
     font-size: 11px; letter-spacing: 0.06em;
     text-transform: uppercase;
     color: #9aa1ab;
   }}
   .support {{ color: #9aa1ab; text-decoration: none; }}
-  .support:hover {{ color: #111; }}
 
   @media (prefers-color-scheme: dark) {{
     html, body {{ background: #0f1720; color: #f5f5f2; }}
-    .brand {{ color: #ffffff; }}
-    p.lead {{ color: #9aa1ab; }}
-    .btn {{ background: #ffffff; color: #0f1720; }}
+    .brand, .section-title, .card-title, .step-title, .cell-value {{ color: #fff; }}
+    .card {{ background: #16202b; border-color: #2a3441; }}
+    .cell {{ background: #1f2937; }}
+    .card-sub, .step-text {{ color: #9aa1ab; }}
+    .seg {{ background: #1f2937; color: #9aa1ab; border-color: #2a3441; }}
+    .seg.active {{ background: #fff; color: #0f1720; border-color: #fff; }}
+    .ctab {{ background: #1f2937; color: #9aa1ab; border-color: #2a3441; }}
+    .ctab.active {{ color: #fff; border-color: #fff; box-shadow: inset 0 0 0 1px #fff; }}
+    .step:not(:last-child)::before {{ background: #2a3441; }}
+    .step-dot.done {{ background: #2a3441; color: #6b7280; }}
+    .btn {{ background: #fff; color: #0f1720; }}
     .btn:active {{ background: #f5f5f2; }}
-    .btn.secondary {{ background: #1f2937; color: #ffffff; border-color: #2a3441; }}
-    .btn.secondary:active {{ background: #2a3441; }}
+    .ghost-btn {{ background: #1f2937; color: #fff; border-color: #2a3441; }}
+    .ghost-btn:active {{ background: #2a3441; }}
+    .keyblock {{ background: #1f2937; border-color: #2a3441; color: #d1d5db; }}
     .footer {{ color: #6b7280; }}
   }}
 </style>
@@ -521,16 +758,120 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
 <body>
 <div class="wrap">
   <div class="brand">{brand}</div>
-  <p class="lead">Откройте подписку в приложении</p>
 
-  <a class="btn" href="{happ_href_esc}">Открыть в Happ</a>
-  <a class="btn secondary" href="{incy_href_esc}">Открыть в Incy</a>
+  <div class="card">
+    <div class="card-head">
+      <div class="status-ico">✓</div>
+      <div>
+        <div class="card-title">Подписка активна</div>
+        <div class="card-sub">Истекает {html_escape(expire_str)}</div>
+      </div>
+    </div>
+    <div class="card-grid">
+      <div class="cell">
+        <div class="cell-label">Истекает</div>
+        <div class="cell-value">{html_escape(expire_str)}</div>
+      </div>
+      <div class="cell">
+        <div class="cell-label">Трафик</div>
+        <div class="cell-value">{traffic_str}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-head">
+    <div class="section-title">Установка</div>
+  </div>
+
+  <div class="segs" id="platSegs">{plat_tabs}</div>
+
+  <div class="client-tabs" id="clientTabs">
+    <button class="ctab" data-client-btn="happ" type="button">Happ</button>
+    <button class="ctab" data-client-btn="incy" type="button">Incy</button>
+  </div>
+
+  {panels_html}
+
+  <div class="section-head" style="margin-top:8px">
+    <div class="section-title" style="font-size:16px">Ссылка подписки</div>
+  </div>
+  <div class="keyblock" id="link">{sub_url_esc}</div>
+  <div class="copyrow">
+    <button class="copy" id="copybtn" type="button">Скопировать</button>
+  </div>
 
   <div class="footer">
     <span>{brand}</span>
     {support_row}
   </div>
 </div>
+
+<script>
+(function () {{
+  var plat = 'ios';
+  var client = 'happ';
+
+  // Авто-детект платформы по UA.
+  var ua = navigator.userAgent || '';
+  if (/android/i.test(ua)) plat = 'android';
+  else if (/iphone|ipad|ipod/i.test(ua)) plat = 'ios';
+  else if (/macintosh|mac os x/i.test(ua)) plat = 'macos';
+  else if (/windows/i.test(ua)) plat = 'windows';
+
+  var panels = document.querySelectorAll('.panel');
+  var platBtns = document.querySelectorAll('[data-plat-btn]');
+  var clientBtns = document.querySelectorAll('[data-client-btn]');
+  var clientTabs = document.getElementById('clientTabs');
+
+  function render() {{
+    // Windows — только Happ.
+    if (plat === 'windows') {{ client = 'happ'; clientTabs.style.display = 'none'; }}
+    else {{ clientTabs.style.display = ''; }}
+    panels.forEach(function (p) {{
+      p.hidden = !(p.dataset.plat === plat && p.dataset.client === client);
+    }});
+    platBtns.forEach(function (b) {{
+      b.classList.toggle('active', b.dataset.platBtn === plat);
+    }});
+    clientBtns.forEach(function (b) {{
+      b.classList.toggle('active', b.dataset.clientBtn === client);
+    }});
+  }}
+
+  platBtns.forEach(function (b) {{
+    b.addEventListener('click', function () {{ plat = b.dataset.platBtn; render(); }});
+  }});
+  clientBtns.forEach(function (b) {{
+    b.addEventListener('click', function () {{ client = b.dataset.clientBtn; render(); }});
+  }});
+  render();
+
+  // Copy-to-clipboard с fallback для старых WebView.
+  document.getElementById('copybtn').addEventListener('click', function () {{
+    var text = {sub_url_js};
+    var btn = this;
+    var done = function () {{
+      btn.classList.add('copied');
+      btn.innerText = 'Скопировано';
+      setTimeout(function () {{
+        btn.classList.remove('copied');
+        btn.innerText = 'Скопировать';
+      }}, 1500);
+    }};
+    if (navigator.clipboard && window.isSecureContext) {{
+      navigator.clipboard.writeText(text).then(done).catch(fb);
+    }} else {{ fb(); }}
+    function fb() {{
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.top = '-1000px';
+      document.body.appendChild(ta); ta.select();
+      try {{ document.execCommand('copy'); }} catch (e) {{}}
+      document.body.removeChild(ta);
+      done();
+    }}
+  }});
+}})();
+</script>
 </body>
 </html>"""
 
