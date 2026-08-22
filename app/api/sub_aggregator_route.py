@@ -505,6 +505,22 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
         "incy": f"{base}/open/incy?url={q}" if base else f"happ://add/{url_quote(sub_url, safe='/:?&=@%+')}",
     }
 
+    # Инструкция ручного импорта — своя на каждый клиент (совпадает с
+    # текстами traffic.info в боте, чтобы юзер везде видел одно и то же).
+    manual_steps = {
+        "happ": (
+            "<b>1.</b> Скопируйте ссылку кнопкой ниже\n"
+            "<b>2.</b> Откройте Happ → вкладка «Главная»\n"
+            "<b>3.</b> Нажмите <b>+</b> в правом верхнем углу\n"
+            "<b>4.</b> Выберите «Вставить из буфера» — подписка добавится"
+        ),
+        "incy": (
+            "<b>1.</b> Скопируйте ссылку кнопкой ниже\n"
+            "<b>2.</b> Откройте Incy → «Настройки»\n"
+            "<b>3.</b> Нажмите «Импорт» → «Из буфера» — подписка добавится"
+        ),
+    }
+
     # ── Пер-платформенные панели (статичный HTML, JS только переключает) ──
     panels: list[str] = []
     for plat, _plat_label in _PLATFORM_LABELS:
@@ -522,8 +538,9 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
             if plat == "ios" and client == "happ":
                 region_row = (
                     f'<a class="ghost-btn" href="{html_escape(_REGION_HELP_URL, quote=True)}" '
-                    f'target="_blank" rel="noopener">Как сменить регион аккаунта</a>'
+                    f'target="_blank" rel="noopener">🎬 Как сменить регион аккаунта</a>'
                 )
+            manual_html = manual_steps[client].replace("\n", "<br>")
             panels.append(f"""
   <div class="panel" data-plat="{plat}" data-client="{client}" hidden>
     <div class="step">
@@ -538,9 +555,23 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     <div class="step">
       <div class="step-dot">2</div>
       <div class="step-body">
-        <div class="step-title">Добавьте подписку</div>
-        <p class="step-text">Нажмите кнопку ниже — приложение откроется, и подписка добавится автоматически.</p>
-        <a class="btn" href="{deep_esc}">Добавить подписку</a>
+        <div class="step-title">Установите подписку</div>
+        <p class="step-text">Нажмите кнопку — {client_name} откроется сам, и подписка установится автоматически. Разрешите переход в приложение, если браузер спросит.</p>
+        <a class="btn accent" href="{deep_esc}">
+          <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          Установить подписку в {client_name}
+        </a>
+        <details class="manual">
+          <summary>
+            <span>Не открылось? Установить вручную</span>
+            <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </summary>
+          <div class="manual-body">
+            <p class="manual-text">{manual_html}</p>
+            <div class="keyblock">{{SUB_URL_ESC}}</div>
+            <button class="copy-btn" type="button">Скопировать ссылку</button>
+          </div>
+        </details>
       </div>
     </div>
     <div class="step">
@@ -566,6 +597,9 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
 
     sub_url_esc = html_escape(sub_url)
     sub_url_js = json.dumps(sub_url)
+    # Панели содержат placeholder {{SUB_URL_ESC}} (f-string внутри цикла не
+    # видит sub_url_esc чисто, плюс так URL не эскейпится дважды).
+    panels_html = panels_html.replace("{SUB_URL_ESC}", sub_url_esc)
 
     return f"""<!DOCTYPE html>
 <html lang="ru">
@@ -685,14 +719,30 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
 
   .btn {{
     display: inline-flex; align-items: center; justify-content: center;
+    gap: 8px;
     padding: 13px 24px;
     background: #111; color: #fff;
     border-radius: 12px;
     text-decoration: none;
     font-size: 14px; font-weight: 600;
-    transition: transform 80ms ease, background 80ms ease;
+    transition: transform 80ms ease, background 80ms ease, box-shadow 120ms ease;
   }}
   .btn:active {{ transform: scale(0.98); background: #000; }}
+  /* Акцентная кнопка «Установить подписку» — главный CTA страницы */
+  .btn.accent {{
+    width: 100%;
+    padding: 15px 24px;
+    background: linear-gradient(135deg, #2563EB, #1d4ed8);
+    box-shadow: 0 6px 18px rgba(37, 99, 235, .28);
+    border-radius: 14px;
+    font-size: 15px;
+  }}
+  .btn.accent:active {{
+    transform: scale(0.98);
+    background: linear-gradient(135deg, #1d4ed8, #1e40af);
+    box-shadow: 0 3px 10px rgba(37, 99, 235, .22);
+  }}
+  .btn-ico {{ width: 18px; height: 18px; flex: 0 0 18px; }}
   .ghost-btn {{
     display: inline-flex; align-items: center; justify-content: center;
     padding: 11px 18px;
@@ -705,25 +755,56 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   }}
   .ghost-btn:active {{ background: #f0f2f5; }}
 
-  /* ── Ссылка подписки ── */
+  /* ── «Установить вручную» — разворачивающаяся плашка ── */
+  .manual {{
+    margin-top: 12px;
+    border: 1px dashed #d1d5db;
+    border-radius: 12px;
+    background: rgba(255,255,255,.55);
+    overflow: hidden;
+  }}
+  .manual summary {{
+    list-style: none;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px;
+    font-size: 13px; font-weight: 600; color: #4b5563;
+    cursor: pointer;
+    user-select: none; -webkit-user-select: none;
+  }}
+  .manual summary::-webkit-details-marker {{ display: none; }}
+  .manual .chev {{
+    width: 16px; height: 16px; color: #9aa1ab;
+    transition: transform 180ms ease;
+  }}
+  .manual[open] .chev {{ transform: rotate(180deg); }}
+  .manual[open] summary {{ border-bottom: 1px dashed #e1e4e8; }}
+  .manual-body {{ padding: 14px 16px 16px; }}
+  .manual-text {{
+    font-size: 13px; line-height: 1.7; color: #4b5563;
+    margin: 0 0 12px;
+  }}
+  .manual-text b {{ color: #111; }}
+
   .keyblock {{
-    margin-top: 6px;
     background: #eef0f3;
     border: 1px solid #e1e4e8;
-    border-radius: 12px;
-    padding: 14px;
+    border-radius: 10px;
+    padding: 12px;
     font-family: 'SF Mono', Menlo, Consolas, monospace;
-    font-size: 12px; line-height: 1.5;
+    font-size: 11.5px; line-height: 1.5;
     word-break: break-all;
     user-select: all; -webkit-user-select: all;
+    margin-bottom: 10px;
   }}
-  .copyrow {{ display: flex; justify-content: flex-end; margin-top: 8px; }}
-  .copy {{
-    appearance: none; border: none; background: transparent;
-    color: #555; font-size: 12px; font-weight: 600;
-    padding: 6px 10px; border-radius: 6px; cursor: pointer;
+  .copy-btn {{
+    appearance: none; width: 100%;
+    border: 1px solid #e1e4e8; background: #fff;
+    color: #111; font-size: 13px; font-weight: 600;
+    padding: 11px 0; border-radius: 10px; cursor: pointer;
+    transition: background 80ms ease, color 120ms ease;
   }}
-  .copy.copied {{ color: #1a7f37; }}
+  .copy-btn:active {{ background: #f0f2f5; }}
+  .copy-btn.copied {{ color: #10B981; border-color: #10B981; }}
 
   .footer {{
     margin-top: 36px;
@@ -748,9 +829,23 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     .step-dot.done {{ background: #2a3441; color: #6b7280; }}
     .btn {{ background: #fff; color: #0f1720; }}
     .btn:active {{ background: #f5f5f2; }}
+    .btn.accent {{
+      background: linear-gradient(135deg, #3b82f6, #2563EB);
+      color: #fff;
+      box-shadow: 0 6px 18px rgba(37, 99, 235, .35);
+    }}
+    .btn.accent:active {{ background: linear-gradient(135deg, #2563EB, #1d4ed8); }}
     .ghost-btn {{ background: #1f2937; color: #fff; border-color: #2a3441; }}
     .ghost-btn:active {{ background: #2a3441; }}
+    .manual {{ background: rgba(31,41,55,.45); border-color: #374151; }}
+    .manual summary {{ color: #9aa1ab; }}
+    .manual[open] summary {{ border-bottom-color: #374151; }}
+    .manual-text {{ color: #9aa1ab; }}
+    .manual-text b {{ color: #fff; }}
     .keyblock {{ background: #1f2937; border-color: #2a3441; color: #d1d5db; }}
+    .copy-btn {{ background: #1f2937; color: #fff; border-color: #2a3441; }}
+    .copy-btn:active {{ background: #2a3441; }}
+    .copy-btn.copied {{ color: #34d399; border-color: #34d399; }}
     .footer {{ color: #6b7280; }}
   }}
 </style>
@@ -791,14 +886,6 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   </div>
 
   {panels_html}
-
-  <div class="section-head" style="margin-top:8px">
-    <div class="section-title" style="font-size:16px">Ссылка подписки</div>
-  </div>
-  <div class="keyblock" id="link">{sub_url_esc}</div>
-  <div class="copyrow">
-    <button class="copy" id="copybtn" type="button">Скопировать</button>
-  </div>
 
   <div class="footer">
     <span>{brand}</span>
@@ -846,29 +933,31 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   }});
   render();
 
-  // Copy-to-clipboard с fallback для старых WebView.
-  document.getElementById('copybtn').addEventListener('click', function () {{
-    var text = {sub_url_js};
-    var btn = this;
-    var done = function () {{
-      btn.classList.add('copied');
-      btn.innerText = 'Скопировано';
-      setTimeout(function () {{
-        btn.classList.remove('copied');
-        btn.innerText = 'Скопировать';
-      }}, 1500);
-    }};
-    if (navigator.clipboard && window.isSecureContext) {{
-      navigator.clipboard.writeText(text).then(done).catch(fb);
-    }} else {{ fb(); }}
-    function fb() {{
-      var ta = document.createElement('textarea');
-      ta.value = text; ta.style.position = 'fixed'; ta.style.top = '-1000px';
-      document.body.appendChild(ta); ta.select();
-      try {{ document.execCommand('copy'); }} catch (e) {{}}
-      document.body.removeChild(ta);
-      done();
-    }}
+  // Copy-to-clipboard — на каждой панели своя кнопка (.copy-btn),
+  // fallback через textarea для старых WebView без navigator.clipboard.
+  var subUrl = {sub_url_js};
+  document.querySelectorAll('.copy-btn').forEach(function (btn) {{
+    btn.addEventListener('click', function () {{
+      var done = function () {{
+        btn.classList.add('copied');
+        btn.innerText = 'Скопировано ✓';
+        setTimeout(function () {{
+          btn.classList.remove('copied');
+          btn.innerText = 'Скопировать ссылку';
+        }}, 1500);
+      }};
+      var fb = function () {{
+        var ta = document.createElement('textarea');
+        ta.value = subUrl; ta.style.position = 'fixed'; ta.style.top = '-1000px';
+        document.body.appendChild(ta); ta.select();
+        try {{ document.execCommand('copy'); }} catch (e) {{}}
+        document.body.removeChild(ta);
+        done();
+      }};
+      if (navigator.clipboard && window.isSecureContext) {{
+        navigator.clipboard.writeText(subUrl).then(done).catch(fb);
+      }} else {{ fb(); }}
+    }});
   }});
 }})();
 </script>
