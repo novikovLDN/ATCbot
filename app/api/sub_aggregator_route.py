@@ -272,29 +272,36 @@ def _get_client() -> httpx.AsyncClient:
 
 
 def _normalize_upstream_url(url: str) -> str:
-    """Принудительно бить в ЖИВОЙ host панели (config.SUB_AGGREGATOR_UPSTREAM_HOST),
-    что бы ни лежало в БД. Причина: у юзеров в remnawave_*_sub_url бывают
-    мёртвые хосты (subscription.vps-cloud.uk — снесённый RF-фронт, старый
-    rewrite и т.п.) → fetch падает → пустая склейка → 503 → клиент пишет
-    «неизвестный тип контента».
+    """Нормализовать сохранённый sub-URL под ТЕКУЩИЙ формат панели.
 
-    Ссылка остаётся ПЛЕЙН (без шифрования) — агрегатор качает её напрямую;
-    юзеру на выход /open/{client} отдаётся уже одна зашифрованная ссылка.
+    Две беды в БД (remnawave_premium_sub_url / remnawave_bypass_sub_url):
+      1. Мёртвый host (subscription.vps-cloud.uk — снесённый RF-фронт) →
+         принудительно бьём в config.SUB_AGGREGATOR_UPSTREAM_HOST.
+      2. Устаревший путь `/api/sub/<id>` (старая версия панели) — сейчас
+         панель отдаёт `/<shortuuid>` без префикса → старый путь = HTTP 502.
+         Срезаем `/api/sub/` → `/`.
 
-    Пустой config → не трогаем (качаем URL как есть)."""
+    Без этого fetch падает → пустая склейка → 503 → клиент пишет
+    «неизвестный тип контента». Ссылка остаётся ПЛЕЙН — агрегатор качает
+    напрямую; юзеру на выход /open/{client} — одна зашифрованная.
+
+    Пустой host-config → host не трогаем (path-нормализация всё равно идёт)."""
     if not url:
         return url
+    # (2) Устаревший префикс пути.
+    if "/api/sub/" in url:
+        url = url.replace("/api/sub/", "/")
+    # (1) Принудительный живой host.
     host = getattr(config, "SUB_AGGREGATOR_UPSTREAM_HOST", "") or ""
-    if not host:
-        return url
-    try:
-        from urllib.parse import urlparse, urlunparse
-        p = urlparse(url)
-        if not p.netloc or p.netloc == host:
-            return url
-        return urlunparse(p._replace(netloc=host))
-    except Exception:
-        return url
+    if host:
+        try:
+            from urllib.parse import urlparse, urlunparse
+            p = urlparse(url)
+            if p.netloc and p.netloc != host:
+                url = urlunparse(p._replace(netloc=host))
+        except Exception:
+            pass
+    return url
 
 
 async def _fetch_upstream(url: str, user_agent: str) -> Optional[httpx.Response]:

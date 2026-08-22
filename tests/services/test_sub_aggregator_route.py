@@ -138,6 +138,23 @@ def test_normalize_upstream_empty_config_notouch(monkeypatch):
     url = "https://whatever.example/abc"
     assert m._normalize_upstream_url(url) == url
 
+def test_normalize_upstream_strips_api_sub_prefix(monkeypatch):
+    # Старый формат панели /api/sub/<id> → /<id> (иначе 502)
+    monkeypatch.setattr(m.config, "SUB_AGGREGATOR_UPSTREAM_HOST", "sub.atlassecure.ru", raising=False)
+    assert m._normalize_upstream_url("https://sub.atlassecure.ru/api/sub/02ecc-abc") \
+        == "https://sub.atlassecure.ru/02ecc-abc"
+
+def test_normalize_upstream_new_format_untouched(monkeypatch):
+    monkeypatch.setattr(m.config, "SUB_AGGREGATOR_UPSTREAM_HOST", "sub.atlassecure.ru", raising=False)
+    ok = "https://sub.atlassecure.ru/cec89ff6-344"
+    assert m._normalize_upstream_url(ok) == ok
+
+def test_normalize_upstream_dead_host_and_prefix(monkeypatch):
+    # Обе беды сразу: мёртвый host + /api/sub/
+    monkeypatch.setattr(m.config, "SUB_AGGREGATOR_UPSTREAM_HOST", "sub.atlassecure.ru", raising=False)
+    assert m._normalize_upstream_url("https://subscription.vps-cloud.uk/api/sub/xyz") \
+        == "https://sub.atlassecure.ru/xyz"
+
 def test_normalize_upstream_empty():
     assert m._normalize_upstream_url("") == ""
 
