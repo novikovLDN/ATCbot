@@ -466,21 +466,44 @@ _STORE_BTN_LABELS = {
     "windows": "Скачать для Windows",
 }
 
-# Иконки сторов — эмодзи (без внешних ассетов, читаются везде).
-_STORE_ICONS = {
-    "ios": "",
-    "android": "▶",
-    "macos": "",
-    "windows": "⬇",
+# ── Кастомные line-иконки (inline SVG, currentColor, без стоковых эмодзи) ──
+# Все 24×24, stroke-based — рисуются в цвет текста, масштабируются без потерь,
+# ноль внешних ассетов. Узнаваемые силуэты для сканирования глазом.
+_PLATFORM_ICONS = {
+    # iPhone — скруглённый корпус + кнопка
+    "ios": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="7" y="2.5" width="10" height="19" rx="2.6"/><path d="M10.5 18.5h3"/></svg>',
+    # Android — робот: голова, антенны, глаза
+    "android": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9h11v7.5a1.8 1.8 0 0 1-1.8 1.8H8.3a1.8 1.8 0 0 1-1.8-1.8Z"/><path d="M8 9 6.6 6.4M16 9l1.4-2.6"/><circle cx="10" cy="12.5" r=".7" fill="currentColor" stroke="none"/><circle cx="14" cy="12.5" r=".7" fill="currentColor" stroke="none"/></svg>',
+    # macOS — ноутбук
+    "macos": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="10" rx="1.6"/><path d="M2.5 18.5h19"/></svg>',
+    # Windows — четыре плитки
+    "windows": '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M3.5 6 11 4.9V11H3.5Zm8.6-1.2L20.5 3.5V11h-8.4ZM3.5 13H11v6.1L3.5 18ZM12.1 13h8.4v7.5l-8.4-1.2Z"/></svg>',
 }
 
-# Эмодзи платформ для сегмент-контрола.
-_PLATFORM_ICONS = {
-    "ios": "📱",
-    "android": "🤖",
-    "macos": "💻",
-    "windows": "🖥",
+# Иконка стора — стрелка-загрузка в лоток (единая для всех платформ).
+_STORE_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="m8 11 4 4 4-4"/><path d="M5 19.5h14"/></svg>'
+# Совместимость: старое имя ссылается на glyph (используется в шаблоне store-btn).
+_STORE_ICONS = {p: _STORE_GLYPH for p in ("ios", "android", "macos", "windows")}
+
+# Иконки шагов установки.
+_STEP_ICONS = {
+    # Шаг 1 — скачать/установить
+    "install": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="m8 11 4 4 4-4"/><path d="M5 19.5h14"/></svg>',
+    # Шаг 2 — добавить подписку (молния = мгновенно)
+    "add": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3 5 13h6l-1 8 8-10h-6z"/></svg>',
+    # Шаг 3 — подключиться (power)
+    "connect": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v8"/><path d="M7 6.5a7 7 0 1 0 10 0"/></svg>',
 }
+
+# Клиентские бренд-глифы для карточек выбора.
+_CLIENT_GLYPHS = {
+    # Happ — звезда (рекомендуем)
+    "happ": '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2.6l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 20.4 6.4 19.7l1.4-6.3L3 9.1l6.4-.6z"/></svg>',
+    # Incy — щит
+    "incy": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5.5c0 4.4 3 7.6 7 9 4-1.4 7-4.6 7-9V6z"/><path d="m9.5 12 1.8 1.8 3.4-3.6"/></svg>',
+}
+_ARROW_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>'
+_BACK_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg>'
 
 
 @lru_cache(maxsize=512)
@@ -513,17 +536,16 @@ def _qr_svg(url: str) -> str:
 
 
 def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
-    """Onboarding-страница подписки (референс — Remnawave sub-page, наш стиль).
+    """Экранная onboarding-страница подписки (браузерный UA).
 
-    Блоки:
-      1. Карточка подписки — статус, дата окончания, остаток трафика
-         (из hybrid subscription-userinfo).
-      2. «Установка»: селектор устройства (iOS/Android/macOS/Windows,
-         авто-детект по UA) + табы клиента (Happ / Incy; Windows — только Happ).
-      3. Пошаговая инструкция: установить приложение (стор-ссылка,
-         для iOS Happ + видео «Как сменить регион») → добавить подписку
-         (deep-link через /open/{client}, crypt-sealed) → подключиться.
-      4. Ссылка подписки + «Скопировать».
+    Архитектура «веду пользователя» (маркетинг-first, сканирование не чтение):
+      • Экран 0 «Домой» — hero-карточка подписки + выбор приложения
+        (две крупные карточки: Happ «рекомендуем» / Incy).
+      • Экран Happ / Экран Incy — настройка ТОЛЬКО под выбранный клиент:
+        селектор платформы (кастомные SVG-иконки, авто-детект) + 3 шага
+        с verb-first заголовками и большими кнопками, плашка «вручную»,
+        ключ подписки.
+      • Слайд-переходы между экранами (transform/opacity — GPU, без jank).
 
     Клиенты (Happ/v2rayNG/…) сюда не попадают — UA-split отдаёт им raw
     base64 (_wants_html). Страница — только для браузеров.
@@ -542,7 +564,6 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     used_str = _fmt_bytes(used) if used > 0 else "0"
     pct_used = min(100, int(used / total * 100)) if total > 0 else 0
     expire_str = _fmt_expire(int(ui.get("expire", 0))) or "—"
-    # Название подписки — profile-title от панели (или бренд).
     sub_title = html_escape(headers.get("profile-title", "") or _brand_title())
 
     # ── Deep-links (crypt-sealed через /open/{client}) ─────────────
@@ -553,544 +574,424 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
         "incy": f"{base}/open/incy?url={q}" if base else f"happ://add/{url_quote(sub_url, safe='/:?&=@%+')}",
     }
 
-    # Инструкция ручного импорта — своя на каждый клиент (совпадает с
-    # текстами traffic.info в боте, чтобы юзер везде видел одно и то же).
+    sub_url_esc = html_escape(sub_url)
+    sub_url_js = json.dumps(sub_url)
+    deeplinks_js = json.dumps(deeplinks)
+
+    # Ручной импорт — своя инструкция на клиент (совпадает с traffic.info в боте).
     manual_steps = {
         "happ": (
-            "<b>1.</b> Скопируйте ссылку кнопкой ниже\n"
-            "<b>2.</b> Откройте Happ → вкладка «Главная»\n"
-            "<b>3.</b> Нажмите <b>+</b> в правом верхнем углу\n"
-            "<b>4.</b> Выберите «Вставить из буфера» — подписка добавится"
+            "<b>1.</b> Скопируйте ссылку кнопкой ниже<br>"
+            "<b>2.</b> Откройте Happ → вкладка «Главная»<br>"
+            "<b>3.</b> Нажмите <b>+</b> в правом верхнем углу<br>"
+            "<b>4.</b> «Вставить из буфера» — подписка добавится"
         ),
         "incy": (
-            "<b>1.</b> Скопируйте ссылку кнопкой ниже\n"
-            "<b>2.</b> Откройте Incy → «Настройки»\n"
-            "<b>3.</b> Нажмите «Импорт» → «Из буфера» — подписка добавится"
+            "<b>1.</b> Скопируйте ссылку кнопкой ниже<br>"
+            "<b>2.</b> Откройте Incy → «Настройки»<br>"
+            "<b>3.</b> «Импорт» → «Из буфера» — подписка добавится"
         ),
     }
 
-    # ── Пер-платформенные панели (статичный HTML, JS только переключает) ──
-    panels: list[str] = []
-    for plat, _plat_label in _PLATFORM_LABELS:
-        clients = ["happ", "incy"] if plat != "windows" else ["happ"]
-        for client in clients:
-            store_url = _STORE_LINKS.get(plat, {}).get(client, "")
-            if not store_url:
-                continue
-            store_esc = html_escape(store_url, quote=True)
-            deep_esc = html_escape(deeplinks[client], quote=True)
-            client_name = _CLIENT_LABELS[client]
-            install_hint = html_escape(_INSTALL_HINTS[plat])
-            store_btn = html_escape(_STORE_BTN_LABELS[plat])
-            region_row = ""
-            if plat == "ios" and client == "happ":
-                region_row = (
-                    f'<a class="ghost-btn" href="{html_escape(_REGION_HELP_URL, quote=True)}" '
-                    f'target="_blank" rel="noopener">🎬 Как сменить регион аккаунта</a>'
-                )
-            manual_html = manual_steps[client].replace("\n", "<br>")
-            panels.append(f"""
-  <div class="panel" data-plat="{plat}" data-client="{client}" hidden>
-    <div class="step">
-      <div class="step-dot">1</div>
-      <div class="step-body">
-        <div class="step-title">Установите и откройте {client_name}</div>
-        <p class="step-text">{install_hint}</p>
-        <a class="store-btn" href="{store_esc}" target="_blank" rel="noopener">
-          <span class="store-ico">{_STORE_ICONS[plat]}</span>
-          <span>{store_btn}</span>
-          <svg class="arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
-        </a>
-        {region_row}
-      </div>
-    </div>
-    <div class="step">
-      <div class="step-dot">2</div>
-      <div class="step-body">
-        <div class="step-title">Установите подписку</div>
-        <p class="step-text">Нажмите кнопку — {client_name} откроется сам, и подписка установится автоматически. Разрешите переход в приложение, если браузер спросит.</p>
-        <a class="btn accent" href="{deep_esc}">
-          <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
-          Установить подписку в {client_name}
-        </a>
-        <details class="manual">
-          <summary>
-            <span>Не открылось? Установить вручную</span>
-            <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-          </summary>
-          <div class="manual-body">
-            <p class="manual-text">{manual_html}</p>
-            <div class="keyblock">{{SUB_URL_ESC}}</div>
-            <button class="copy-btn" type="button">Скопировать ссылку</button>
-          </div>
-        </details>
-      </div>
-    </div>
-    <div class="step">
-      <div class="step-dot done">3</div>
-      <div class="step-body">
-        <div class="step-title">Подключите и используйте</div>
-        <p class="step-text">В главном разделе нажмите большую кнопку включения в центре. При необходимости выберите другой сервер из списка.</p>
-      </div>
-    </div>
-  </div>""")
+    def _build_platform_panel(plat: str, client: str) -> str:
+        store_url = _STORE_LINKS.get(plat, {}).get(client, "")
+        if not store_url:
+            return ""
+        store_esc = html_escape(store_url, quote=True)
+        deep_esc = html_escape(deeplinks[client], quote=True)
+        client_name = _CLIENT_LABELS[client]
+        install_hint = html_escape(_INSTALL_HINTS[plat])
+        store_btn = html_escape(_STORE_BTN_LABELS[plat])
+        region_row = ""
+        if plat == "ios" and client == "happ":
+            region_row = (
+                f'<a class="link-row" href="{html_escape(_REGION_HELP_URL, quote=True)}" '
+                f'target="_blank" rel="noopener">'
+                f'<span class="lr-play"></span>Видео: как сменить регион аккаунта</a>'
+            )
+        return f"""
+      <div class="panel" data-plat="{plat}" hidden>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-ico i-install">{_STEP_ICONS['install']}</div>
+            <div class="step-main">
+              <div class="step-eyebrow">Шаг 1</div>
+              <div class="step-title">Установить {client_name}</div>
+              <p class="step-text">{install_hint}</p>
+              <a class="store-btn" href="{store_esc}" target="_blank" rel="noopener">
+                <span class="store-ico">{_STORE_GLYPH}</span>
+                <span class="store-lbl">{store_btn}</span>
+                <span class="store-arr">{_ARROW_GLYPH}</span>
+              </a>
+              {region_row}
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-ico i-add">{_STEP_ICONS['add']}</div>
+            <div class="step-main">
+              <div class="step-eyebrow">Шаг 2</div>
+              <div class="step-title">Добавить подписку</div>
+              <p class="step-text">Откроется {client_name} — просто подтвердите. Всё настроится само.</p>
+              <a class="cta" href="{deep_esc}">
+                <span class="cta-ico">{_STEP_ICONS['add']}</span>
+                <span>Добавить в {client_name}</span>
+                <span class="cta-arr">{_ARROW_GLYPH}</span>
+              </a>
+              <details class="manual">
+                <summary>
+                  <span>Не открылось? Добавить вручную</span>
+                  <span class="chev">{_BACK_GLYPH}</span>
+                </summary>
+                <div class="manual-body">
+                  <p class="manual-text">{manual_steps[client]}</p>
+                  <div class="keyblock">{sub_url_esc}</div>
+                  <button class="copy-btn" type="button">Скопировать ссылку</button>
+                </div>
+              </details>
+            </div>
+          </li>
+          <li class="step last">
+            <div class="step-ico i-connect">{_STEP_ICONS['connect']}</div>
+            <div class="step-main">
+              <div class="step-eyebrow">Шаг 3</div>
+              <div class="step-title">Подключиться</div>
+              <p class="step-text">Большая кнопка в центре — и вы под защитой. Сервер можно сменить в списке.</p>
+            </div>
+          </li>
+        </ol>
+      </div>"""
 
-    panels_html = "".join(panels)
+    def _build_client_screen(client: str) -> str:
+        client_name = _CLIENT_LABELS[client]
+        plats = [p for p, _ in _PLATFORM_LABELS if _STORE_LINKS.get(p, {}).get(client)]
+        seg_html = "".join(
+            f'<button class="seg" data-plat-btn="{p}" type="button">'
+            f'<span class="seg-ico">{_PLATFORM_ICONS[p]}</span>'
+            f'<span>{dict(_PLATFORM_LABELS)[p]}</span></button>'
+            for p in plats
+        )
+        panels = "".join(_build_platform_panel(p, client) for p in plats)
+        glyph = _CLIENT_GLYPHS[client]
+        return f"""
+  <section class="screen" data-screen="{client}" data-plats='{json.dumps(plats)}' hidden>
+    <button class="back-btn" data-nav="home" type="button">
+      <span class="back-ico">{_BACK_GLYPH}</span>Другое приложение
+    </button>
+    <div class="scr-head {client}">
+      <div class="scr-glyph">{glyph}</div>
+      <div>
+        <div class="scr-title">{client_name}</div>
+        <div class="scr-sub">Настройка за 3 шага</div>
+      </div>
+    </div>
+    <div class="segs">{seg_html}</div>
+    {panels}
+    <div class="keycard">
+      <div class="keycard-label">Ключ подписки</div>
+      <div class="keyblock">{sub_url_esc}</div>
+      <button class="copy-btn" type="button">Скопировать ссылку</button>
+    </div>
+  </section>"""
 
-    plat_tabs = "".join(
-        f'<button class="seg" data-plat-btn="{plat}" type="button">'
-        f'<span class="seg-ico">{_PLATFORM_ICONS.get(plat, "")}</span>{label}</button>'
-        for plat, label in _PLATFORM_LABELS
-    )
+    screen_happ = _build_client_screen("happ")
+    screen_incy = _build_client_screen("incy")
+
+    # QR — только для десктопа (на «домашнем» экране).
+    qr_svg = _qr_svg(sub_url)
+    qr_block = f"""
+    <div class="qr-card" id="qrCard" hidden>
+      <div class="qr-box">{qr_svg}</div>
+      <div class="qr-info">
+        <div class="qr-title">Быстрее с телефона</div>
+        <p class="qr-text">Наведите камеру — эта страница откроется на телефоне.</p>
+      </div>
+    </div>""" if qr_svg else ""
 
     support_row = (
         f'<a class="support" href="{support_esc}" target="_blank" rel="noopener">Поддержка</a>'
         if support else ""
     )
-
-    sub_url_esc = html_escape(sub_url)
-    sub_url_js = json.dumps(sub_url)
-    # Панели содержат placeholder {{SUB_URL_ESC}} (f-string внутри цикла не
-    # видит sub_url_esc чисто, плюс так URL не эскейпится дважды).
-    panels_html = panels_html.replace("{SUB_URL_ESC}", sub_url_esc)
-
-    # QR для десктопа — сканируешь телефоном, та же страница открывается
-    # на мобиле, дальше одна кнопка. Блок скрыт на мобильных (JS).
-    qr_svg = _qr_svg(sub_url)
-    qr_block = f"""
-  <div class="qr-card" id="qrCard" hidden>
-    <div class="qr-box">{qr_svg}</div>
-    <div class="qr-info">
-      <div class="qr-title">Быстрее с телефона</div>
-      <p class="qr-text">Наведите камеру — страница откроется на телефоне, установка займёт меньше минуты.</p>
-    </div>
-  </div>""" if qr_svg else ""
-
-    # JS-мапа deep-links для sticky-CTA (href меняется при смене клиента).
-    deeplinks_js = json.dumps(deeplinks)
+    traffic_row = (
+        f'<span class="row-value">{left_str}<span class="dim"> из {total_str}</span></span>'
+        if total > 0 else '<span class="row-value">∞</span>'
+    )
+    bar_block = (
+        f'''<div class="bar-wrap">
+          <div class="bar-meta"><span>Использовано {pct_used}%</span><span>{total_str}</span></div>
+          <div class="bar"><div class="fill" data-w="{pct_used}"></div></div>
+        </div>''' if total > 0 else ""
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#f6f7f9">
 <meta name="robots" content="noindex,nofollow">
 <title>{brand}</title>
 <style>
   * {{ box-sizing: border-box; }}
+  :root {{
+    --blue: #2563EB; --violet: #6d28d9; --green: #10B981;
+    --ink: #0f1720; --muted: #6b7280;
+    --bg: #f6f7f9; --card: #fff; --line: #e6e8ec;
+    --spring: cubic-bezier(.34, 1.28, .5, 1);
+  }}
   html, body {{
-    margin: 0; padding: 0;
-    background: #f6f7f9; color: #111;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-                 'Inter', 'Helvetica Neue', sans-serif;
-    -webkit-font-smoothing: antialiased;
+    margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
   }}
   body {{
-    min-height: 100vh;
+    min-height: 100vh; padding: 26px 16px 44px;
     display: flex; flex-direction: column; align-items: center;
-    padding: 28px 16px 48px;
-    position: relative;
-    overflow-x: hidden;
+    position: relative; overflow-x: hidden;
   }}
-  /* Aurora-фон: два мягких цветных blob'а за контентом */
+  /* Aurora-фон — два размытых blob'а, статичны (0 нагрузки на скролл) */
   body::before, body::after {{
-    content: "";
-    position: fixed; z-index: -1;
-    border-radius: 50%;
-    filter: blur(90px);
-    pointer-events: none;
+    content: ""; position: fixed; z-index: -1; border-radius: 50%;
+    filter: blur(100px); pointer-events: none;
   }}
-  body::before {{
-    width: 480px; height: 480px;
-    top: -180px; right: -140px;
-    background: radial-gradient(circle, rgba(37,99,235,.16), transparent 65%);
-  }}
-  body::after {{
-    width: 420px; height: 420px;
-    bottom: -160px; left: -160px;
-    background: radial-gradient(circle, rgba(124,58,237,.12), transparent 65%);
-  }}
+  body::before {{ width: 460px; height: 460px; top: -190px; right: -150px;
+    background: radial-gradient(circle, rgba(37,99,235,.16), transparent 65%); }}
+  body::after {{ width: 420px; height: 420px; bottom: -170px; left: -170px;
+    background: radial-gradient(circle, rgba(124,58,237,.13), transparent 65%); }}
   .wrap {{ width: 100%; max-width: 460px; }}
 
   .brand {{
-    font-size: 26px; font-weight: 800; letter-spacing: -0.03em;
-    margin: 0 0 18px;
-    background: linear-gradient(100deg, #111 30%, #2563EB 75%, #7C3AED);
-    -webkit-background-clip: text; background-clip: text;
-    -webkit-text-fill-color: transparent;
+    font-size: 27px; font-weight: 800; letter-spacing: -0.03em; margin: 0 0 18px;
+    background: linear-gradient(100deg, var(--ink) 28%, var(--blue) 72%, var(--violet));
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    opacity: 0; animation: fadeUp .5s var(--spring) .05s forwards;
   }}
 
-  /* ── Hero-карточка подписки: градиент, белый текст в обеих темах ── */
-  .card {{
-    background: #fff;
-    border: 1px solid #e1e4e8; border-radius: 20px;
-    padding: 18px;
-    margin-bottom: 28px;
-  }}
-  .card.hero {{
-    background: linear-gradient(140deg, #1e3a8a 0%, #2563EB 45%, #6d28d9 100%);
-    border: none;
-    color: #fff;
-    padding: 22px 20px 20px;
-    box-shadow: 0 16px 40px rgba(37, 99, 235, .30);
+  /* ── Hero-карточка подписки ── */
+  .hero {{
+    border-radius: 22px; padding: 22px 20px 20px; margin-bottom: 26px;
+    background: linear-gradient(140deg, #1e3a8a 0%, #2563EB 46%, #6d28d9 100%);
+    color: #fff; box-shadow: 0 18px 44px rgba(37,99,235,.30);
     position: relative; overflow: hidden;
+    opacity: 0; animation: fadeUp .55s var(--spring) .12s forwards;
   }}
-  /* Блик на hero — стеклянный отсвет сверху */
-  .card.hero::before {{
-    content: "";
-    position: absolute; inset: 0;
-    background: radial-gradient(120% 60% at 20% -10%, rgba(255,255,255,.22), transparent 55%);
-    pointer-events: none;
-  }}
-  .card-head {{
-    display: flex; align-items: center; gap: 12px;
-    margin-bottom: 16px;
-    position: relative;
-  }}
-  .status-ico {{
-    width: 44px; height: 44px; border-radius: 14px;
-    background: rgba(255,255,255,.18);
-    backdrop-filter: blur(4px);
-    color: #fff;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 21px;
-    flex: 0 0 44px;
-  }}
-  .card-title {{ font-size: 17px; font-weight: 800; color: #fff; letter-spacing: -0.01em; }}
-  .card-sub {{ font-size: 13px; color: rgba(255,255,255,.65); }}
-  .badge {{
-    margin-left: auto;
-    padding: 6px 13px; border-radius: 999px;
-    background: rgba(52,211,153,.25); color: #d1fae5;
-    border: 1px solid rgba(52,211,153,.45);
-    font-size: 12px; font-weight: 700;
-    white-space: nowrap;
-  }}
-  /* Строки-детали key-value */
+  .hero::before {{ content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(120% 60% at 18% -12%, rgba(255,255,255,.24), transparent 55%); }}
+  .hero-head {{ display: flex; align-items: center; gap: 12px; margin-bottom: 15px; position: relative; }}
+  .hero-ico {{ width: 44px; height: 44px; border-radius: 14px; flex: 0 0 44px;
+    background: rgba(255,255,255,.18); display: flex; align-items: center; justify-content: center; }}
+  .hero-ico svg {{ width: 24px; height: 24px; color: #fff; }}
+  .hero-title {{ font-size: 17px; font-weight: 800; letter-spacing: -0.01em; }}
+  .hero-sub {{ font-size: 13px; color: rgba(255,255,255,.66); }}
+  .badge {{ margin-left: auto; padding: 6px 13px; border-radius: 999px;
+    background: rgba(52,211,153,.25); color: #d1fae5; border: 1px solid rgba(52,211,153,.45);
+    font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; gap: 6px; }}
+  .badge .dot {{ width: 7px; height: 7px; border-radius: 50%; background: #34d399;
+    box-shadow: 0 0 0 0 rgba(52,211,153,.7); animation: pulse 2s infinite; }}
   .rows {{ border-top: 1px solid rgba(255,255,255,.16); position: relative; }}
-  .row {{
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 2px;
-    border-bottom: 1px solid rgba(255,255,255,.16);
-    font-size: 14px;
-  }}
-  .row-label {{ color: rgba(255,255,255,.6); }}
-  .row-value {{ font-weight: 800; color: #fff; font-variant-numeric: tabular-nums; }}
+  .row {{ display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 2px; border-bottom: 1px solid rgba(255,255,255,.16); font-size: 14px; }}
+  .row-label {{ color: rgba(255,255,255,.62); }}
+  .row-value {{ font-weight: 800; font-variant-numeric: tabular-nums; }}
   .dim {{ color: rgba(255,255,255,.55); font-weight: 500; }}
-  /* Прогресс-бар трафика */
   .bar-wrap {{ padding: 14px 2px 4px; position: relative; }}
-  .bar-meta {{
-    display: flex; justify-content: space-between;
-    font-size: 12px; color: rgba(255,255,255,.6); margin-bottom: 7px;
-  }}
-  .bar {{
-    height: 9px; background: rgba(255,255,255,.18); border-radius: 999px; overflow: hidden;
-  }}
-  .fill {{
-    height: 100%; border-radius: 999px;
-    background: linear-gradient(90deg, #34d399, #a7f3d0);
-    transition: width 500ms ease;
-  }}
+  .bar-meta {{ display: flex; justify-content: space-between; font-size: 12px;
+    color: rgba(255,255,255,.62); margin-bottom: 7px; }}
+  .bar {{ height: 9px; background: rgba(255,255,255,.18); border-radius: 999px; overflow: hidden; }}
+  .fill {{ height: 100%; width: 0; border-radius: 999px;
+    background: linear-gradient(90deg, #34d399, #a7f3d0); transition: width 900ms var(--spring); }}
 
-  /* ── Установка: заголовок + сегменты ── */
-  .section-head {{
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 14px;
-  }}
-  .section-title {{ font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }}
+  .section-title {{ font-size: 19px; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 4px; }}
+  .section-sub {{ font-size: 13.5px; color: var(--muted); margin: 0 0 16px; }}
 
-  /* iOS-style segmented control платформ: контейнер-пилюля, активная —
-     белая карточка с тенью */
-  .segs {{
-    display: grid; grid-template-columns: repeat(4, 1fr);
-    gap: 4px;
-    background: #e9ebef;
-    border-radius: 14px;
-    padding: 4px;
-    margin-bottom: 14px;
-  }}
-  .seg {{
-    appearance: none; border: none; background: transparent;
-    color: #6b7280; border-radius: 11px;
-    padding: 10px 4px;
-    font-size: 12.5px; font-weight: 700;
-    display: flex; flex-direction: column; align-items: center; gap: 3px;
-    cursor: pointer; min-height: 52px;
-    transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
-  }}
-  .seg-ico {{ font-size: 17px; line-height: 1; }}
-  .seg.active {{
-    background: #fff; color: #111;
-    box-shadow: 0 2px 8px rgba(15,23,32,.10);
-  }}
+  /* ── Экраны + слайд-переходы ── */
+  .screen {{ animation: slideR .34s var(--spring) both; }}
+  .screen.back {{ animation: slideL .34s var(--spring) both; }}
 
-  /* Клиент-табы: две крупные карточки, Happ со звездой «рекомендуем» */
-  .client-tabs {{
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: 10px; margin-bottom: 24px;
+  /* ── Выбор приложения (домашний экран) ── */
+  .choose {{ display: flex; flex-direction: column; gap: 12px; margin-bottom: 8px; }}
+  .choice {{
+    position: relative; display: flex; align-items: center; gap: 15px;
+    padding: 18px; border-radius: 18px; border: 1.5px solid var(--line); background: var(--card);
+    cursor: pointer; text-align: left; width: 100%; appearance: none;
+    transition: transform .12s var(--spring), box-shadow .2s ease, border-color .2s ease;
   }}
-  .ctab {{
-    position: relative;
-    appearance: none; border: 2px solid #e1e4e8; background: #fff;
-    color: #374151; border-radius: 16px;
-    padding: 16px 0 15px; font-size: 15px; font-weight: 800;
-    display: flex; align-items: center; justify-content: center; gap: 6px;
-    cursor: pointer; min-height: 56px;
-    transition: border-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
-  }}
-  .ctab-star {{ font-size: 14px; }}
-  .ctab-hint {{
-    position: absolute; top: -9px; right: 10px;
-    background: linear-gradient(90deg, #f59e0b, #f97316);
-    color: #fff;
-    font-size: 9.5px; font-weight: 800; letter-spacing: .04em;
-    text-transform: uppercase;
-    padding: 3px 8px; border-radius: 999px;
-    box-shadow: 0 2px 6px rgba(249,115,22,.35);
-  }}
-  .ctab.active {{
-    border-color: #2563EB; color: #111;
-    box-shadow: 0 4px 16px rgba(37,99,235,.16), inset 0 0 0 1px rgba(37,99,235,.3);
-  }}
+  .choice:hover {{ transform: translateY(-2px); box-shadow: 0 12px 28px rgba(15,23,32,.10); }}
+  .choice:active {{ transform: scale(.985); }}
+  .choice.primary {{ border-color: transparent;
+    background: linear-gradient(150deg, rgba(37,99,235,.06), rgba(109,40,217,.06)), var(--card);
+    box-shadow: 0 8px 26px rgba(37,99,235,.14); }}
+  .choice.primary::after {{ content: ""; position: absolute; inset: 0; border-radius: 18px;
+    padding: 1.5px; background: linear-gradient(140deg, var(--blue), var(--violet));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }}
+  .ch-glyph {{ width: 48px; height: 48px; border-radius: 14px; flex: 0 0 48px;
+    display: flex; align-items: center; justify-content: center; }}
+  .ch-glyph svg {{ width: 26px; height: 26px; }}
+  .choice.primary .ch-glyph {{ background: linear-gradient(140deg, var(--blue), var(--violet)); color: #fff; }}
+  .choice.alt .ch-glyph {{ background: rgba(15,23,32,.06); color: var(--ink); }}
+  .ch-body {{ flex: 1; min-width: 0; }}
+  .ch-name {{ font-size: 17px; font-weight: 800; display: flex; align-items: center; gap: 8px; }}
+  .ch-desc {{ font-size: 13px; color: var(--muted); margin-top: 2px; }}
+  .ch-arr {{ color: #c4c9d0; flex: 0 0 22px; }}
+  .ch-arr svg {{ width: 22px; height: 22px; }}
+  .rec {{ font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+    color: #fff; background: linear-gradient(90deg, #f59e0b, #f97316);
+    padding: 3px 8px; border-radius: 999px; box-shadow: 0 2px 6px rgba(249,115,22,.35); }}
 
-  /* ── Timeline шагов ── */
-  .panel {{ position: relative; }}
-  .step {{
-    display: flex; gap: 14px;
-    position: relative;
-    padding-bottom: 26px;
-  }}
-  .step:not(:last-child)::before {{
-    content: "";
-    position: absolute; left: 15px; top: 34px; bottom: 0;
-    width: 2px; background: #e1e4e8;
-  }}
-  .step-dot {{
-    flex: 0 0 32px; height: 32px; border-radius: 50%;
-    background: #10B981; color: #fff;
-    display: flex; align-items: center; justify-content: center;
+  /* ── Клиентский экран: назад + шапка ── */
+  .back-btn {{ appearance: none; border: none; background: none; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 4px; color: var(--muted);
+    font-size: 14px; font-weight: 600; padding: 4px 0; margin-bottom: 14px; }}
+  .back-btn:active {{ opacity: .6; }}
+  .back-ico svg {{ width: 20px; height: 20px; display: block; }}
+  .scr-head {{ display: flex; align-items: center; gap: 13px; margin-bottom: 18px; }}
+  .scr-glyph {{ width: 52px; height: 52px; border-radius: 16px; flex: 0 0 52px;
+    display: flex; align-items: center; justify-content: center; color: #fff; }}
+  .scr-glyph svg {{ width: 28px; height: 28px; }}
+  .scr-head.happ .scr-glyph {{ background: linear-gradient(140deg, #f59e0b, #f97316); }}
+  .scr-head.incy .scr-glyph {{ background: linear-gradient(140deg, var(--blue), var(--violet)); }}
+  .scr-title {{ font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }}
+  .scr-sub {{ font-size: 13.5px; color: var(--muted); }}
+
+  /* ── Segmented control платформ (кастомные SVG) ── */
+  .segs {{ display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px;
+    background: #e9ebef; border-radius: 14px; padding: 4px; margin-bottom: 20px; }}
+  .seg {{ appearance: none; border: none; background: transparent; color: var(--muted);
+    border-radius: 11px; padding: 9px 4px; font-size: 12px; font-weight: 700;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    cursor: pointer; min-height: 54px;
+    transition: background .16s var(--spring), color .16s ease, box-shadow .16s ease; }}
+  .seg-ico svg {{ width: 20px; height: 20px; display: block; }}
+  .seg.active {{ background: #fff; color: var(--ink); box-shadow: 0 2px 8px rgba(15,23,32,.10); }}
+
+  /* ── Шаги ── */
+  .steps {{ list-style: none; margin: 0; padding: 0; }}
+  .step {{ display: flex; gap: 14px; position: relative; padding-bottom: 24px; }}
+  .step:not(.last)::before {{ content: ""; position: absolute; left: 21px; top: 46px; bottom: 2px;
+    width: 2px; background: var(--line); }}
+  .step-ico {{ flex: 0 0 44px; width: 44px; height: 44px; border-radius: 13px;
+    display: flex; align-items: center; justify-content: center; z-index: 1; }}
+  .step-ico svg {{ width: 22px; height: 22px; }}
+  .i-install {{ background: rgba(37,99,235,.12); color: var(--blue); }}
+  .i-add {{ background: linear-gradient(140deg, var(--blue), var(--violet)); color: #fff;
+    box-shadow: 0 6px 16px rgba(37,99,235,.28); }}
+  .i-connect {{ background: rgba(16,185,129,.14); color: var(--green); }}
+  .step-main {{ flex: 1; min-width: 0; padding-top: 2px; }}
+  .step-eyebrow {{ font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+    color: #a5abb5; margin-bottom: 3px; }}
+  .step-title {{ font-size: 17px; font-weight: 800; letter-spacing: -0.01em; margin-bottom: 5px; }}
+  .step-text {{ font-size: 13.5px; line-height: 1.5; color: var(--muted); margin: 0 0 12px; }}
+
+  /* Стор-кнопка */
+  .store-btn {{ display: flex; align-items: center; gap: 12px; width: 100%; min-height: 54px;
+    padding: 12px 14px; background: var(--card); color: var(--ink);
+    border: 1.5px solid var(--line); border-radius: 14px; text-decoration: none;
     font-size: 14px; font-weight: 700;
-    z-index: 1;
-  }}
-  .step-dot.done {{ background: #e1e4e8; color: #6b7280; }}
-  .step-body {{ flex: 1; padding-top: 4px; }}
-  .step-title {{ font-size: 16px; font-weight: 700; margin-bottom: 6px; }}
-  .step-text {{ font-size: 14px; line-height: 1.5; color: #4b5563; margin: 0 0 12px; }}
+    transition: background .12s ease, border-color .12s ease, transform .08s ease; }}
+  .store-btn:active {{ background: #f0f2f5; transform: scale(.99); }}
+  .store-ico {{ width: 36px; height: 36px; flex: 0 0 36px; border-radius: 10px; background: #f0f2f5;
+    display: flex; align-items: center; justify-content: center; color: var(--ink); }}
+  .store-ico svg {{ width: 19px; height: 19px; }}
+  .store-lbl {{ flex: 1; }}
+  .store-arr svg {{ width: 17px; height: 17px; color: #b6bcc6; display: block; }}
 
-  .btn {{
-    display: inline-flex; align-items: center; justify-content: center;
-    gap: 8px;
-    padding: 13px 24px;
-    background: #111; color: #fff;
-    border-radius: 12px;
-    text-decoration: none;
-    font-size: 14px; font-weight: 600;
-    transition: transform 80ms ease, background 80ms ease, box-shadow 120ms ease;
-  }}
-  .btn:active {{ transform: scale(0.98); background: #000; }}
-  /* Акцентная кнопка «Установить подписку» — главный CTA страницы */
-  .btn.accent {{
-    width: 100%;
-    min-height: 56px;
-    padding: 16px 24px;
-    background: linear-gradient(135deg, #2563EB, #6d28d9);
-    box-shadow: 0 8px 24px rgba(37, 99, 235, .35);
-    border-radius: 16px;
+  /* Ссылка-видео региона */
+  .link-row {{ display: inline-flex; align-items: center; gap: 8px; margin-top: 10px;
+    color: var(--blue); font-size: 13.5px; font-weight: 700; text-decoration: none; }}
+  .link-row:active {{ opacity: .6; }}
+  .lr-play {{ width: 20px; height: 20px; border-radius: 6px; flex: 0 0 20px;
+    background: rgba(37,99,235,.12); position: relative; }}
+  .lr-play::before {{ content: ""; position: absolute; top: 50%; left: 54%; transform: translate(-50%,-50%);
+    border-left: 6px solid var(--blue); border-top: 4px solid transparent; border-bottom: 4px solid transparent; }}
+
+  /* Главный CTA */
+  .cta {{ display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%; min-height: 56px;
+    padding: 15px 20px; border-radius: 16px; text-decoration: none;
+    background: linear-gradient(135deg, var(--blue), var(--violet)); color: #fff;
     font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em;
-  }}
-  .btn.accent:active {{
-    transform: scale(0.97);
-    box-shadow: 0 4px 12px rgba(37, 99, 235, .28);
-  }}
-  .btn-ico {{ width: 19px; height: 19px; flex: 0 0 19px; }}
-  /* Стор-кнопка: крупная, полноширинная, иконка + стрелка */
-  .store-btn {{
-    display: flex; align-items: center; gap: 12px;
-    width: 100%; min-height: 52px;
-    padding: 14px 16px;
-    background: #fff; color: #111;
-    border: 1.5px solid #e1e4e8; border-radius: 14px;
-    text-decoration: none;
-    font-size: 14px; font-weight: 700;
-    margin-bottom: 10px;
-    transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
-  }}
-  .store-btn:active {{ background: #f0f2f5; transform: scale(0.99); }}
-  .store-ico {{
-    width: 34px; height: 34px; flex: 0 0 34px;
-    display: flex; align-items: center; justify-content: center;
-    background: #f0f2f5; border-radius: 10px;
-    font-size: 17px;
-  }}
-  .store-btn .arr {{
-    width: 16px; height: 16px; margin-left: auto;
-    color: #9aa1ab; flex: 0 0 16px;
-  }}
-  .ghost-btn {{
-    display: inline-flex; align-items: center; justify-content: center;
-    padding: 11px 18px;
-    background: transparent; color: #2563EB;
-    border: none; border-radius: 12px;
-    text-decoration: none;
-    font-size: 13.5px; font-weight: 700;
-    margin-bottom: 4px;
-    transition: opacity 80ms ease;
-  }}
-  .ghost-btn:active {{ opacity: .6; }}
+    box-shadow: 0 10px 26px rgba(37,99,235,.36);
+    transition: transform .09s ease, box-shadow .2s ease; }}
+  .cta:active {{ transform: scale(.975); box-shadow: 0 5px 14px rgba(37,99,235,.3); }}
+  .cta-ico svg {{ width: 19px; height: 19px; display: block; }}
+  .cta-arr svg {{ width: 18px; height: 18px; display: block; opacity: .85; }}
 
-  /* ── «Установить вручную» — разворачивающаяся плашка ── */
-  .manual {{
-    margin-top: 12px;
-    border: 1px dashed #d1d5db;
-    border-radius: 12px;
-    background: rgba(255,255,255,.55);
-    overflow: hidden;
-  }}
-  .manual summary {{
-    list-style: none;
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px;
-    font-size: 13px; font-weight: 600; color: #4b5563;
-    cursor: pointer;
-    user-select: none; -webkit-user-select: none;
-  }}
+  /* «Вручную» */
+  .manual {{ margin-top: 12px; border: 1px dashed #d1d5db; border-radius: 12px;
+    background: rgba(255,255,255,.5); overflow: hidden; }}
+  .manual summary {{ list-style: none; display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 15px; font-size: 13px; font-weight: 700; color: var(--muted);
+    cursor: pointer; user-select: none; -webkit-user-select: none; }}
   .manual summary::-webkit-details-marker {{ display: none; }}
-  .manual .chev {{
-    width: 16px; height: 16px; color: #9aa1ab;
-    transition: transform 180ms ease;
-  }}
-  .manual[open] .chev {{ transform: rotate(180deg); }}
-  .manual[open] summary {{ border-bottom: 1px dashed #e1e4e8; }}
-  .manual-body {{ padding: 14px 16px 16px; }}
-  .manual-text {{
-    font-size: 13px; line-height: 1.7; color: #4b5563;
-    margin: 0 0 12px;
-  }}
-  .manual-text b {{ color: #111; }}
+  .manual .chev svg {{ width: 15px; height: 15px; color: #9aa1ab; transform: rotate(-90deg);
+    transition: transform .2s var(--spring); display: block; }}
+  .manual[open] .chev svg {{ transform: rotate(90deg); }}
+  .manual[open] summary {{ border-bottom: 1px dashed var(--line); }}
+  .manual-body {{ padding: 14px 15px 16px; animation: fadeUp .28s var(--spring); }}
+  .manual-text {{ font-size: 13px; line-height: 1.75; color: var(--muted); margin: 0 0 12px; }}
+  .manual-text b {{ color: var(--ink); }}
 
-  .keyblock {{
-    background: #eef0f3;
-    border: 1px solid #e1e4e8;
-    border-radius: 10px;
-    padding: 12px;
-    font-family: 'SF Mono', Menlo, Consolas, monospace;
-    font-size: 11.5px; line-height: 1.5;
-    word-break: break-all;
-    user-select: all; -webkit-user-select: all;
-    margin-bottom: 10px;
-  }}
-  .copy-btn {{
-    appearance: none; width: 100%;
-    border: 1px solid #e1e4e8; background: #fff;
-    color: #111; font-size: 13px; font-weight: 600;
-    padding: 11px 0; border-radius: 10px; cursor: pointer;
-    transition: background 80ms ease, color 120ms ease;
-  }}
+  /* Ключ подписки */
+  .keycard {{ margin-top: 14px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; padding: 16px; }}
+  .keycard-label {{ font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+    color: #a5abb5; margin-bottom: 10px; }}
+  .keyblock {{ background: #eef0f3; border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+    font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.5;
+    word-break: break-all; user-select: all; -webkit-user-select: all; margin-bottom: 10px; }}
+  .copy-btn {{ appearance: none; width: 100%; border: 1.5px solid var(--line); background: var(--card);
+    color: var(--ink); font-size: 13.5px; font-weight: 700; padding: 12px 0; border-radius: 11px;
+    cursor: pointer; transition: background .1s ease, color .15s ease, border-color .15s ease; }}
   .copy-btn:active {{ background: #f0f2f5; }}
-  .copy-btn.copied {{ color: #10B981; border-color: #10B981; }}
+  .copy-btn.copied {{ color: var(--green); border-color: var(--green); }}
 
-  /* ── QR для десктопа ── */
-  .qr-card {{
-    display: flex; align-items: center; gap: 18px;
-    background: #fff;
-    border: 1px solid #e1e4e8; border-radius: 16px;
-    padding: 18px;
-    margin: 4px 0 26px;
-  }}
-  .qr-box {{
-    flex: 0 0 128px;
-    background: #fff; border-radius: 12px;
-    padding: 8px;
-    border: 1px solid #eef0f3;
-  }}
-  .qr-svg {{ width: 112px; height: 112px; display: block; }}
-  .qr-title {{ font-size: 15px; font-weight: 700; margin-bottom: 6px; }}
-  .qr-text {{ font-size: 13px; line-height: 1.5; color: #6b7280; margin: 0; }}
+  /* QR десктоп */
+  .qr-card {{ display: flex; align-items: center; gap: 18px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin: 18px 0 4px; }}
+  .qr-box {{ flex: 0 0 120px; background: #fff; border-radius: 12px; padding: 8px; border: 1px solid #eef0f3; }}
+  .qr-svg {{ width: 104px; height: 104px; display: block; }}
+  .qr-title {{ font-size: 15px; font-weight: 800; margin-bottom: 5px; }}
+  .qr-text {{ font-size: 13px; line-height: 1.5; color: var(--muted); margin: 0; }}
 
-  /* ── Sticky CTA (мобила) ── */
-  .sticky-bar {{
-    position: fixed; left: 0; right: 0; bottom: 0;
-    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
-    background: linear-gradient(180deg, rgba(246,247,249,0), rgba(246,247,249,.92) 30%, #f6f7f9);
-    display: flex; justify-content: center;
-    z-index: 50;
-  }}
-  .sticky-bar .btn.accent {{ max-width: 460px; }}
-  body.has-sticky {{ padding-bottom: 96px; }}
+  .footer {{ margin-top: 34px; display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #a5abb5; }}
+  .support {{ color: #a5abb5; text-decoration: none; }}
 
-  /* ── Появление панели (spring) ── */
-  .panel.appear {{
-    animation: rise 320ms cubic-bezier(.34, 1.3, .64, 1) both;
-  }}
-  @keyframes rise {{
-    from {{ opacity: 0; transform: translateY(10px); }}
-    to   {{ opacity: 1; transform: none; }}
-  }}
+  /* ── Keyframes (только transform/opacity — GPU) ── */
+  @keyframes fadeUp {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: none; }} }}
+  @keyframes slideR {{ from {{ opacity: 0; transform: translateX(26px); }} to {{ opacity: 1; transform: none; }} }}
+  @keyframes slideL {{ from {{ opacity: 0; transform: translateX(-26px); }} to {{ opacity: 1; transform: none; }} }}
+  @keyframes pulse {{ 0% {{ box-shadow: 0 0 0 0 rgba(52,211,153,.6); }} 70% {{ box-shadow: 0 0 0 7px rgba(52,211,153,0); }} 100% {{ box-shadow: 0 0 0 0 rgba(52,211,153,0); }} }}
   @media (prefers-reduced-motion: reduce) {{
-    .panel.appear {{ animation: none; }}
-    .fill, .chev, .btn {{ transition: none; }}
+    *, *::before, *::after {{ animation: none !important; transition: none !important; }}
+    .fill {{ transition: none; }}
   }}
-
-  .footer {{
-    margin-top: 36px;
-    display: flex; align-items: center; justify-content: space-between;
-    font-size: 11px; letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: #9aa1ab;
-  }}
-  .support {{ color: #9aa1ab; text-decoration: none; }}
 
   @media (prefers-color-scheme: dark) {{
-    html, body {{ background: #0f1720; color: #f5f5f2; }}
-    .section-title, .step-title {{ color: #fff; }}
-    .brand {{
-      background: linear-gradient(100deg, #fff 30%, #60a5fa 70%, #a78bfa);
-      -webkit-background-clip: text; background-clip: text;
-    }}
-    /* .card.hero НЕ переопределяем — градиент одинаков в обеих темах */
-    .card {{ background: #16202b; border-color: #2a3441; }}
-    .step-text {{ color: #9aa1ab; }}
+    :root {{ --bg: #0f1720; --card: #16202b; --line: #29323f; --ink: #f5f5f2; --muted: #9aa1ab; }}
+    .brand {{ background: linear-gradient(100deg, #fff 28%, #60a5fa 70%, #a78bfa);
+      -webkit-background-clip: text; background-clip: text; }}
+    .section-title {{ color: #fff; }}
+    .choice.alt .ch-glyph {{ background: rgba(255,255,255,.08); color: #fff; }}
+    .ch-arr {{ color: #4b5563; }}
     .segs {{ background: #1a2431; }}
-    .seg {{ color: #6b7280; }}
     .seg.active {{ background: #2a3441; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.4); }}
-    .ctab {{ background: #16202b; color: #9aa1ab; border-color: #2a3441; }}
-    .ctab.active {{
-      border-color: #60a5fa; color: #fff;
-      box-shadow: 0 4px 16px rgba(37,99,235,.25), inset 0 0 0 1px rgba(96,165,250,.35);
-    }}
-    .step:not(:last-child)::before {{ background: #2a3441; }}
-    .step-dot.done {{ background: #2a3441; color: #6b7280; }}
-    .btn {{ background: #fff; color: #0f1720; }}
-    .btn:active {{ background: #f5f5f2; }}
-    .btn.accent {{
-      background: linear-gradient(135deg, #3b82f6, #7c3aed);
-      color: #fff;
-      box-shadow: 0 8px 24px rgba(37, 99, 235, .4);
-    }}
-    .btn.accent:active {{ background: linear-gradient(135deg, #2563EB, #6d28d9); }}
-    .store-btn {{ background: #1f2937; color: #fff; border-color: #2a3441; }}
+    .scr-title, .step-title, .keycard-label, .qr-title {{ color: #fff; }}
+    .step:not(.last)::before {{ background: #29323f; }}
+    .i-install {{ background: rgba(59,130,246,.18); color: #60a5fa; }}
+    .i-connect {{ background: rgba(16,185,129,.18); color: #34d399; }}
+    .store-btn {{ background: #1f2937; color: #fff; border-color: #29323f; }}
     .store-btn:active {{ background: #2a3441; }}
-    .store-ico {{ background: #2a3441; }}
-    .ghost-btn {{ background: transparent; color: #60a5fa; }}
-    .manual {{ background: rgba(31,41,55,.45); border-color: #374151; }}
-    .manual summary {{ color: #9aa1ab; }}
-    .manual[open] summary {{ border-bottom-color: #374151; }}
-    .manual-text {{ color: #9aa1ab; }}
-    .manual-text b {{ color: #fff; }}
-    .keyblock {{ background: #1f2937; border-color: #2a3441; color: #d1d5db; }}
-    .copy-btn {{ background: #1f2937; color: #fff; border-color: #2a3441; }}
-    .copy-btn:active {{ background: #2a3441; }}
-    .copy-btn.copied {{ color: #34d399; border-color: #34d399; }}
-    /* QR остаётся на белой подложке — иначе не сканируется */
-    .qr-card {{ background: #16202b; border-color: #2a3441; }}
-    .qr-box {{ background: #fff; border-color: #fff; }}
-    .qr-title {{ color: #fff; }}
-    .qr-text {{ color: #9aa1ab; }}
-    .sticky-bar {{
-      background: linear-gradient(180deg, rgba(15,23,32,0), rgba(15,23,32,.92) 30%, #0f1720);
-    }}
-    .footer {{ color: #6b7280; }}
+    .store-ico {{ background: #2a3441; color: #fff; }}
+    .link-row {{ color: #60a5fa; }} .lr-play {{ background: rgba(96,165,250,.18); }}
+    .lr-play::before {{ border-left-color: #60a5fa; }}
+    .manual {{ background: rgba(31,41,55,.4); border-color: #374151; }}
+    .manual summary {{ color: #9aa1ab; }} .manual[open] summary {{ border-bottom-color: #374151; }}
+    .manual-text {{ color: #9aa1ab; }} .manual-text b {{ color: #fff; }}
+    .keyblock {{ background: #1f2937; border-color: #29323f; color: #d1d5db; }}
+    .copy-btn {{ background: #1f2937; color: #fff; border-color: #29323f; }}
+    .copy-btn:active {{ background: #2a3441; }} .copy-btn.copied {{ color: #34d399; border-color: #34d399; }}
+    .qr-card {{ background: #16202b; border-color: #29323f; }} .qr-box {{ background: #fff; border-color: #fff; }}
+    .qr-text {{ color: #9aa1ab; }} .footer {{ color: #6b7280; }}
   }}
 </style>
 </head>
@@ -1098,58 +999,49 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
 <div class="wrap">
   <div class="brand">{brand}</div>
 
-  <div class="card hero">
-    <div class="card-head">
-      <div class="status-ico">⚡</div>
+  <div class="hero">
+    <div class="hero-head">
+      <div class="hero-ico">{_STEP_ICONS['connect']}</div>
       <div>
-        <div class="card-title">{sub_title}</div>
-        <div class="card-sub">Ваша подписка</div>
+        <div class="hero-title">{sub_title}</div>
+        <div class="hero-sub">Ваша подписка</div>
       </div>
-      <div class="badge">Активна</div>
+      <div class="badge"><span class="dot"></span>Активна</div>
     </div>
     <div class="rows">
-      <div class="row">
-        <span class="row-label">Осталось</span>
-        <span class="row-value">{left_str}{f' <span class="dim">из {total_str}</span>' if total > 0 else ''}</span>
-      </div>
-      <div class="row">
-        <span class="row-label">Использовано</span>
-        <span class="row-value">{used_str}</span>
-      </div>
-      <div class="row">
-        <span class="row-label">Истекает</span>
-        <span class="row-value">{html_escape(expire_str)}</span>
-      </div>
+      <div class="row"><span class="row-label">Осталось</span>{traffic_row}</div>
+      <div class="row"><span class="row-label">Использовано</span><span class="row-value">{used_str}</span></div>
+      <div class="row"><span class="row-label">Истекает</span><span class="row-value">{html_escape(expire_str)}</span></div>
     </div>
-    {f'''<div class="bar-wrap">
-      <div class="bar-meta"><span>Использовано {pct_used}%</span><span>{total_str}</span></div>
-      <div class="bar"><div class="fill" style="width:{pct_used}%"></div></div>
-    </div>''' if total > 0 else ''}
+    {bar_block}
   </div>
 
-  <div class="section-head">
-    <div class="section-title">Установка</div>
-  </div>
-
-  <div class="segs" id="platSegs">{plat_tabs}</div>
-
-  <div class="client-tabs" id="clientTabs">
-    <button class="ctab" data-client-btn="happ" type="button">
-      <span class="ctab-star">⭐</span>Happ
-      <span class="ctab-hint">рекомендуем</span>
-    </button>
-    <button class="ctab" data-client-btn="incy" type="button">Incy</button>
-  </div>
-
-  {panels_html}
-{qr_block}
-  <div class="section-head" style="margin-top:10px">
-    <div class="section-title" style="font-size:17px">Ключ подписки</div>
-  </div>
-  <div class="card" style="margin-bottom:0">
-    <div class="keyblock" style="margin-bottom:12px">{sub_url_esc}</div>
-    <button class="copy-btn" type="button">Скопировать ссылку</button>
-  </div>
+  <!-- ЭКРАН: выбор приложения -->
+  <section class="screen" data-screen="home">
+    <div class="section-title">Подключение за минуту</div>
+    <p class="section-sub">Выберите приложение — покажем настройку под ваше устройство.</p>
+    <div class="choose">
+      <button class="choice primary" data-nav="happ" type="button">
+        <div class="ch-glyph">{_CLIENT_GLYPHS['happ']}</div>
+        <div class="ch-body">
+          <div class="ch-name">Happ <span class="rec">Рекомендуем</span></div>
+          <div class="ch-desc">Проще всего — подойдёт большинству</div>
+        </div>
+        <span class="ch-arr">{_ARROW_GLYPH}</span>
+      </button>
+      <button class="choice alt" data-nav="incy" type="button">
+        <div class="ch-glyph">{_CLIENT_GLYPHS['incy']}</div>
+        <div class="ch-body">
+          <div class="ch-name">Incy</div>
+          <div class="ch-desc">Альтернатива, если Happ не подошёл</div>
+        </div>
+        <span class="ch-arr">{_ARROW_GLYPH}</span>
+      </button>
+    </div>
+    {qr_block}
+  </section>
+{screen_happ}
+{screen_incy}
 
   <div class="footer">
     <span>{brand}</span>
@@ -1157,119 +1049,94 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   </div>
 </div>
 
-<!-- Sticky CTA (мобила): кнопка установки всегда под пальцем -->
-<div class="sticky-bar" id="stickyBar" hidden>
-  <a class="btn accent" id="stickyCta" href="#">
-    <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
-    <span id="stickyCtaLabel">Установить подписку в Happ</span>
-  </a>
-</div>
-
 <script>
 (function () {{
-  var plat = 'ios';
-  var client = 'happ';
   var DEEPLINKS = {deeplinks_js};
-
-  // Авто-детект платформы по UA.
   var ua = navigator.userAgent || '';
-  if (/android/i.test(ua)) plat = 'android';
-  else if (/iphone|ipad|ipod/i.test(ua)) plat = 'ios';
-  else if (/macintosh|mac os x/i.test(ua)) plat = 'macos';
-  else if (/windows/i.test(ua)) plat = 'windows';
+  var detected = 'ios';
+  if (/android/i.test(ua)) detected = 'android';
+  else if (/iphone|ipad|ipod/i.test(ua)) detected = 'ios';
+  else if (/macintosh|mac os x/i.test(ua)) detected = 'macos';
+  else if (/windows/i.test(ua)) detected = 'windows';
+  var isMobile = (detected === 'ios' || detected === 'android');
 
-  var panels = document.querySelectorAll('.panel');
-  var platBtns = document.querySelectorAll('[data-plat-btn]');
-  var clientBtns = document.querySelectorAll('[data-client-btn]');
-  var clientTabs = document.getElementById('clientTabs');
-  var stickyBar = document.getElementById('stickyBar');
-  var stickyCta = document.getElementById('stickyCta');
-  var stickyLabel = document.getElementById('stickyCtaLabel');
+  var screens = {{}};
+  document.querySelectorAll('.screen').forEach(function (s) {{ screens[s.dataset.screen] = s; }});
   var qrCard = document.getElementById('qrCard');
-  var isMobile = (plat === 'ios' || plat === 'android');
-  var clientNames = {{happ: 'Happ', incy: 'Incy'}};
+  if (qrCard) qrCard.hidden = isMobile;
 
-  function render() {{
-    // Windows — только Happ.
-    if (plat === 'windows') {{ client = 'happ'; clientTabs.style.display = 'none'; }}
-    else {{ clientTabs.style.display = ''; }}
-    panels.forEach(function (p) {{
-      var show = (p.dataset.plat === plat && p.dataset.client === client);
-      if (show && p.hidden) {{
-        p.hidden = false;
-        p.classList.remove('appear');
-        void p.offsetWidth;  // reflow → restart animation
-        p.classList.add('appear');
-      }} else if (!show) {{ p.hidden = true; }}
+  // Навигация между экранами со слайдом.
+  var current = 'home';
+  function go(name, back) {{
+    if (name === current) return;
+    var from = screens[current], to = screens[name];
+    if (!to) return;
+    from.hidden = true;
+    to.hidden = false;
+    to.classList.remove('back'); void to.offsetWidth;
+    if (back) to.classList.add('back');
+    current = name;
+    if (name !== 'home') setupClient(name);
+    try {{ window.scrollTo({{top: 0, behavior: 'smooth'}}); }} catch (e) {{ window.scrollTo(0, 0); }}
+  }}
+  document.querySelectorAll('[data-nav]').forEach(function (b) {{
+    b.addEventListener('click', function () {{
+      var t = b.dataset.nav;
+      go(t, t === 'home');
     }});
-    platBtns.forEach(function (b) {{
-      b.classList.toggle('active', b.dataset.platBtn === plat);
-    }});
-    clientBtns.forEach(function (b) {{
-      b.classList.toggle('active', b.dataset.clientBtn === client);
-    }});
-    // Sticky CTA — только мобила; href/label следуют выбранному клиенту.
-    if (stickyBar) {{
-      stickyBar.hidden = !isMobile;
-      if (isMobile) {{
-        stickyCta.href = DEEPLINKS[client];
-        stickyLabel.textContent = 'Установить подписку в ' + clientNames[client];
-        document.body.classList.add('has-sticky');
-      }}
+  }});
+
+  // Настройка клиентского экрана: платформа + панели.
+  function setupClient(client) {{
+    var scr = screens[client];
+    if (scr.dataset.ready) {{ return; }}
+    var plats = JSON.parse(scr.dataset.plats || '[]');
+    var plat = plats.indexOf(detected) >= 0 ? detected : plats[0];
+    var segBtns = scr.querySelectorAll('[data-plat-btn]');
+    var panels = scr.querySelectorAll('.panel');
+    function renderPlat() {{
+      panels.forEach(function (p) {{
+        var show = p.dataset.plat === plat;
+        if (show && p.hidden) {{ p.hidden = false; p.classList.remove('appear'); void p.offsetWidth; p.classList.add('appear'); }}
+        else if (!show) {{ p.hidden = true; }}
+      }});
+      segBtns.forEach(function (b) {{ b.classList.toggle('active', b.dataset.platBtn === plat); }});
     }}
-    // QR — только десктоп (на мобиле бессмысленно сканировать самого себя).
-    if (qrCard) qrCard.hidden = isMobile;
+    segBtns.forEach(function (b) {{
+      b.addEventListener('click', function () {{ plat = b.dataset.platBtn; renderPlat(); }});
+    }});
+    renderPlat();
+    scr.dataset.ready = '1';
   }}
 
-  platBtns.forEach(function (b) {{
-    b.addEventListener('click', function () {{ plat = b.dataset.platBtn; render(); }});
+  // Анимация прогресс-бара (после первого кадра).
+  requestAnimationFrame(function () {{
+    document.querySelectorAll('.fill').forEach(function (f) {{ f.style.width = (f.dataset.w || 0) + '%'; }});
   }});
-  clientBtns.forEach(function (b) {{
-    b.addEventListener('click', function () {{ client = b.dataset.clientBtn; render(); }});
-  }});
-  render();
 
-  // Smart-fallback: нажал «Установить подписку», приложение не перехватило
-  // переход за 3 сек (мы всё ещё видимы) → авто-раскрываем «Установить
-  // вручную» на активной панели и мягко подводим к ней.
+  // Smart-fallback: нажал CTA, за 3 сек не ушёл в приложение → раскрываем «вручную».
   function armFallback() {{
     setTimeout(function () {{
-      if (document.visibilityState !== 'visible') return;  // ушли в приложение — ок
-      var active = document.querySelector('.panel:not([hidden]) details.manual');
-      if (active && !active.open) {{
-        active.open = true;
-        try {{ active.scrollIntoView({{behavior: 'smooth', block: 'center'}}); }} catch (e) {{}}
-      }}
+      if (document.visibilityState !== 'visible') return;
+      var d = document.querySelector('.screen:not([hidden]) .panel:not([hidden]) details.manual');
+      if (d && !d.open) {{ d.open = true; try {{ d.scrollIntoView({{behavior:'smooth',block:'center'}}); }} catch (e) {{}} }}
     }}, 3000);
   }}
-  document.querySelectorAll('.btn.accent').forEach(function (b) {{
-    b.addEventListener('click', armFallback);
+  document.addEventListener('click', function (e) {{
+    var t = e.target.closest('.cta'); if (t) armFallback();
   }});
 
-  // Copy-to-clipboard — на каждой панели своя кнопка (.copy-btn),
-  // fallback через textarea для старых WebView без navigator.clipboard.
+  // Copy — все .copy-btn.
   var subUrl = {sub_url_js};
   document.querySelectorAll('.copy-btn').forEach(function (btn) {{
     btn.addEventListener('click', function () {{
-      var done = function () {{
-        btn.classList.add('copied');
-        btn.innerText = 'Скопировано ✓';
-        setTimeout(function () {{
-          btn.classList.remove('copied');
-          btn.innerText = 'Скопировать ссылку';
-        }}, 1500);
-      }};
-      var fb = function () {{
-        var ta = document.createElement('textarea');
-        ta.value = subUrl; ta.style.position = 'fixed'; ta.style.top = '-1000px';
-        document.body.appendChild(ta); ta.select();
-        try {{ document.execCommand('copy'); }} catch (e) {{}}
-        document.body.removeChild(ta);
-        done();
-      }};
-      if (navigator.clipboard && window.isSecureContext) {{
-        navigator.clipboard.writeText(subUrl).then(done).catch(fb);
-      }} else {{ fb(); }}
+      var done = function () {{ btn.classList.add('copied'); btn.innerText = 'Скопировано ✓';
+        setTimeout(function () {{ btn.classList.remove('copied'); btn.innerText = 'Скопировать ссылку'; }}, 1500); }};
+      var fb = function () {{ var ta = document.createElement('textarea'); ta.value = subUrl;
+        ta.style.position='fixed'; ta.style.top='-1000px'; document.body.appendChild(ta); ta.select();
+        try {{ document.execCommand('copy'); }} catch (e) {{}} document.body.removeChild(ta); done(); }};
+      if (navigator.clipboard && window.isSecureContext) {{ navigator.clipboard.writeText(subUrl).then(done).catch(fb); }}
+      else {{ fb(); }}
     }});
   }});
 }})();
