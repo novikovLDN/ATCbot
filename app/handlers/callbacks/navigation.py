@@ -670,7 +670,22 @@ async def callback_setup_step2(callback: CallbackQuery):
             style="primary",
         )])
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+        # Отправляем фото + подпись (как legacy-экран), а не edit-text.
+        photo_id = _get_photo_id("install_keys_agg")
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        if photo_id:
+            await callback.bot.send_photo(
+                chat_id=telegram_id, photo=photo_id, caption=text,
+                reply_markup=keyboard, parse_mode="HTML",
+            )
+        else:
+            await callback.bot.send_message(
+                chat_id=telegram_id, text=text,
+                reply_markup=keyboard, parse_mode="HTML",
+            )
         return
 
     text = i18n_get_text(language, "setup.key_install_title")
@@ -790,6 +805,12 @@ _SETUP_PHOTOS = {
     "install_keys": {
         "prod": "AgACAgQAAxkBAAEsTzVp2LGqLrhvY1TRSdQdmp_vmS_tEwAC7AxrG6gtyVLmvPzPSqNEwAEAAwIAA3cAAzsE",
         "stage": "AgACAgQAAxkBAAIeumnZWPxaNMkJApJ3JerkNYLX_kJbAALsDGsbqC3JUlRy7JVisnaVAQADAgADdwADOwQ",
+    },
+    # Экран единого ключа (aggregator-ветка). Aggregator admin-only на
+    # проде → важен prod file_id; stage пусто → упадёт на текст без фото.
+    "install_keys_agg": {
+        "prod": "AgACAgQAAxkBAAGEhSxqiUQ8DQABFD7v3AABNHucV2UyK_njAAIXEGsbmPNJUM160ezW1tu9AQADAgADdwADPQQ",
+        "stage": "",
     },
 }
 
