@@ -122,6 +122,19 @@ def test_decode_body_empty():
     assert m._decode_body(FakeResp(text="")) == []
 
 
+def test_normalize_upstream_dead_host():
+    # Мёртвый vps-cloud host → живой панельный
+    assert m._normalize_upstream_url("https://subscription.vps-cloud.uk/abc123") \
+        == "https://sub.atlassecure.ru/abc123"
+
+def test_normalize_upstream_live_host_untouched():
+    live = "https://sub.atlassecure.ru/abc123"
+    assert m._normalize_upstream_url(live) == live
+
+def test_normalize_upstream_empty():
+    assert m._normalize_upstream_url("") == ""
+
+
 def test_parse_userinfo():
     d = m._parse_userinfo("upload=10; download=20; total=100; expire=1789")
     assert d == {"upload": 10, "download": 20, "total": 100, "expire": 1789}

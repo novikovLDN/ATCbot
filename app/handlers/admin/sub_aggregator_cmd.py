@@ -165,9 +165,26 @@ async def cmd_aggstats(message: Message) -> None:
 
     total = s["hits"] + s["misses"] + s["stale"]
     ratio_pct = round(s["hit_ratio"] * 100, 1)
-    # Здоровье: hit_ratio > 90% и avg_upstream < 400ms.
-    healthy = (s["hit_ratio"] > 0.9 or total < 50) and s["avg_upstream_ms"] < 400
-    head = "🟢 Здоров" if healthy else "🟡 Внимание"
+    # Здоровье считаем только на осмысленной выборке — иначе ложная тревога
+    # на первых запросах (холодный старт: TLS-хендшейк даёт высокий latency,
+    # кеш ещё не прогрет → низкий hit-ratio). Реальные красные флаги:
+    # фейлы upstream, stale-выдача (панель падала). hit/latency учитываем
+    # только когда запросов/upstream-вызовов достаточно.
+    enough_req = total >= 50
+    enough_up = s["upstream_count"] >= 20
+    warmup = not (enough_req or enough_up)
+    healthy = (
+        s["upstream_fail"] == 0
+        and s["stale"] == 0
+        and (not enough_req or s["hit_ratio"] > 0.85)
+        and (not enough_up or s["avg_upstream_ms"] < 500)
+    )
+    if warmup:
+        head = "🟢 Прогрев (мало запросов)"
+    elif healthy:
+        head = "🟢 Здоров"
+    else:
+        head = "🟡 Внимание"
 
     text = (
         f"📊 <b>Sub-Aggregator — метрики</b>  {head}\n\n"
@@ -190,6 +207,77 @@ async def cmd_aggstats(message: Message) -> None:
         f"<i>Норма: hit >90%, задержка &lt;400мс, upstream_fail не растёт.</i>"
     )
     await message.answer(text, parse_mode="HTML")
+
+
+@sub_aggregator_admin_router.message(Command("aggcheck"))
+@admin_only
+async def cmd_aggcheck(message: Message) -> None:
+    """Диагностика «нет серверов»: /aggcheck [tg_id].
+
+    Показывает, где рвётся цепочка для конкретного юзера:
+    есть ли пара → живы ли обе апстрим-ссылки → сколько строк-серверов
+    вернула каждая → сколько в итоговой склейке.
+    """
+    parts = (message.text or "").split()
+    tg = int(parts[1]) if len(parts) > 1 and parts[1].lstrip("-").isdigit() else message.from_user.id
+
+    import database
+    from app.api import sub_aggregator_route as agg
+
+    # 1) sub_pairs строка
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        pair = await conn.fetchrow(
+            "SELECT token, main_sub_url, gb_sub_url, status FROM sub_pairs WHERE telegram_id = $1", tg
+        )
+        subs = await conn.fetchrow(
+            "SELECT remnawave_premium_sub_url AS main, remnawave_bypass_sub_url AS gb "
+            "FROM subscriptions WHERE telegram_id = $1", tg
+        )
+
+    lines = [f"🔎 <b>Aggregator-check</b> tg=<code>{tg}</code>\n"]
+
+    if not pair:
+        lines.append("❌ <b>Пары в sub_pairs НЕТ.</b>")
+        has_main = bool(subs and subs["main"])
+        has_gb = bool(subs and subs["gb"])
+        lines.append(f"subscriptions: premium_url={'✅' if has_main else '—'} bypass_url={'✅' if has_gb else '—'}")
+        if not (has_main and has_gb):
+            lines.append("\n→ Нет ОБЕИХ ссылок → ensure_pair вернёт None → юзер идёт по legacy (2 ключа), не агрегатор. Это ОК для bypass-only/trial.")
+        else:
+            lines.append("\n→ Обе ссылки есть, но пара не создана. Юзер ещё не открывал экран подключения ИЛИ ensure_pair упал. Пусть зайдёт в «Подключить».")
+        await message.answer("\n".join(lines), parse_mode="HTML")
+        return
+
+    lines.append(f"✅ Пара есть. status=<b>{pair['status']}</b> token=<code>{pair['token'][:10]}…</code>")
+    if pair["status"] == "revoked":
+        lines.append("⚠️ status=revoked → отдаётся заглушка, серверов не будет. Проверь, почему revoked.")
+        await message.answer("\n".join(lines), parse_mode="HTML")
+        return
+
+    # 2) Живые апстримы
+    ua = "Happ/diag"
+    main_resp = await agg._fetch_upstream(pair["main_sub_url"], ua)
+    gb_resp = await agg._fetch_upstream(pair["gb_sub_url"], ua)
+
+    def _desc(resp, url):
+        if resp is None:
+            return f"❌ НЕ ОТВЕТИЛ (таймаут/сеть) · {url[:45]}…"
+        n = len(agg._decode_body(resp)) if resp.status_code == 200 else 0
+        return f"{'✅' if resp.status_code == 200 else '⚠️'} HTTP {resp.status_code} · <b>{n}</b> серверов · {url[:40]}…"
+
+    main_n = len(agg._decode_body(main_resp)) if (main_resp and main_resp.status_code == 200) else 0
+    gb_n = len(agg._decode_body(gb_resp)) if (gb_resp and gb_resp.status_code == 200) else 0
+    lines.append(f"\n<b>main (premium):</b>\n{_desc(main_resp, pair['main_sub_url'])}")
+    lines.append(f"\n<b>gb (bypass):</b>\n{_desc(gb_resp, pair['gb_sub_url'])}")
+    lines.append(f"\n<b>Итого серверов в склейке:</b> {main_n + gb_n}")
+
+    if main_n + gb_n == 0:
+        lines.append("\n❌ <b>0 серверов</b> — вот почему у юзера пусто. Смотри выше, какой апстрим не отдал (плохой URL / панель не вернула конфиги).")
+    else:
+        lines.append("\n✅ Склейка не пустая — если у юзера пусто, дело в кеше клиента (пусть обновит подписку в приложении).")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 __all__ = ["sub_aggregator_admin_router"]

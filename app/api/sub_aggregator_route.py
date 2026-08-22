@@ -271,9 +271,32 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
+# Мёртвые/устаревшие хосты в сохранённых sub-URL → живой панельный host.
+# У части юзеров в БД (remnawave_premium_sub_url / remnawave_bypass_sub_url)
+# лежат ссылки на subscription.vps-cloud.uk — RF-фронт, который снесли.
+# Агрегатор нормализует host перед скачиванием, иначе fetch падает →
+# пустая склейка → 503 → клиент пишет «неизвестный тип контента».
+_DEAD_UPSTREAM_HOSTS = {
+    "subscription.vps-cloud.uk": "sub.atlassecure.ru",
+}
+
+
+def _normalize_upstream_url(url: str) -> str:
+    """Подменить мёртвый host на живой панельный. Ссылка остаётся ПЛЕЙН
+    (без шифрования) — агрегатор качает её напрямую, а юзеру на выход
+    /open/{client} отдаёт уже одну зашифрованную ссылку."""
+    if not url:
+        return url
+    for dead, live in _DEAD_UPSTREAM_HOSTS.items():
+        if dead in url:
+            return url.replace(dead, live)
+    return url
+
+
 async def _fetch_upstream(url: str, user_agent: str) -> Optional[httpx.Response]:
     """Единичный GET апстрима с форвардом UA. None при таймауте/ошибке.
     Пишет latency в метрики для мониторинга."""
+    url = _normalize_upstream_url(url)
     t0 = time.monotonic()
     try:
         client = _get_client()
