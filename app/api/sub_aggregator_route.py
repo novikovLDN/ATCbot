@@ -271,26 +271,30 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
-# Мёртвые/устаревшие хосты в сохранённых sub-URL → живой панельный host.
-# У части юзеров в БД (remnawave_premium_sub_url / remnawave_bypass_sub_url)
-# лежат ссылки на subscription.vps-cloud.uk — RF-фронт, который снесли.
-# Агрегатор нормализует host перед скачиванием, иначе fetch падает →
-# пустая склейка → 503 → клиент пишет «неизвестный тип контента».
-_DEAD_UPSTREAM_HOSTS = {
-    "subscription.vps-cloud.uk": "sub.atlassecure.ru",
-}
-
-
 def _normalize_upstream_url(url: str) -> str:
-    """Подменить мёртвый host на живой панельный. Ссылка остаётся ПЛЕЙН
-    (без шифрования) — агрегатор качает её напрямую, а юзеру на выход
-    /open/{client} отдаёт уже одну зашифрованную ссылку."""
+    """Принудительно бить в ЖИВОЙ host панели (config.SUB_AGGREGATOR_UPSTREAM_HOST),
+    что бы ни лежало в БД. Причина: у юзеров в remnawave_*_sub_url бывают
+    мёртвые хосты (subscription.vps-cloud.uk — снесённый RF-фронт, старый
+    rewrite и т.п.) → fetch падает → пустая склейка → 503 → клиент пишет
+    «неизвестный тип контента».
+
+    Ссылка остаётся ПЛЕЙН (без шифрования) — агрегатор качает её напрямую;
+    юзеру на выход /open/{client} отдаётся уже одна зашифрованная ссылка.
+
+    Пустой config → не трогаем (качаем URL как есть)."""
     if not url:
         return url
-    for dead, live in _DEAD_UPSTREAM_HOSTS.items():
-        if dead in url:
-            return url.replace(dead, live)
-    return url
+    host = getattr(config, "SUB_AGGREGATOR_UPSTREAM_HOST", "") or ""
+    if not host:
+        return url
+    try:
+        from urllib.parse import urlparse, urlunparse
+        p = urlparse(url)
+        if not p.netloc or p.netloc == host:
+            return url
+        return urlunparse(p._replace(netloc=host))
+    except Exception:
+        return url
 
 
 async def _fetch_upstream(url: str, user_agent: str) -> Optional[httpx.Response]:
