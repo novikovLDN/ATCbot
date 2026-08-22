@@ -536,6 +536,7 @@ async def callback_setup_step1(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.next_step"),
         callback_data=f"setup_step2:{platform}",
+        style="danger",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
