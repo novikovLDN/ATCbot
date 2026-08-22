@@ -264,13 +264,25 @@ async def cmd_aggcheck(message: Message) -> None:
     main_resp = await agg._fetch_upstream(pair["main_sub_url"], ua)
     gb_resp = await agg._fetch_upstream(pair["gb_sub_url"], ua)
 
+    def _preview(resp):
+        """Первые символы тела — сразу видно JSON ('{') vs base64/vless."""
+        try:
+            raw = (resp.text or "").strip()
+        except Exception:
+            return "?"
+        head = raw[:36].replace("\n", "⏎")
+        kind = "JSON" if raw[:1] in "{[" else ("base64/text" if raw else "пусто")
+        from html import escape
+        return f"{kind}: <code>{escape(head)}…</code>"
+
     def _desc(resp, url):
         if resp is None:
             return f"❌ НЕ ОТВЕТИЛ (таймаут/сеть) · {url[:45]}…"
         n = len(agg._decode_body(resp)) if resp.status_code == 200 else 0
         ct = (resp.headers.get("content-type") or "?")[:24]
         return (f"{'✅' if resp.status_code == 200 else '⚠️'} HTTP {resp.status_code} · "
-                f"<b>{n}</b> серверов · ct=<code>{ct}</code>\n{url[:48]}…")
+                f"<b>{n}</b> серверов · ct=<code>{ct}</code>\n"
+                f"тело: {_preview(resp)}\n{url[:48]}…")
 
     main_n = len(agg._decode_body(main_resp)) if (main_resp and main_resp.status_code == 200) else 0
     gb_n = len(agg._decode_body(gb_resp)) if (gb_resp and gb_resp.status_code == 200) else 0
