@@ -210,16 +210,20 @@ async def cmd_aggstats(message: Message) -> None:
 
 
 @sub_aggregator_admin_router.message(Command("aggcheck"))
-@admin_only
 async def cmd_aggcheck(message: Message) -> None:
-    """Диагностика «нет серверов»: /aggcheck [tg_id].
+    """Диагностика «нет серверов»: /aggcheck [tg_id]. Доступна ВСЕМ.
 
-    Показывает, где рвётся цепочка для конкретного юзера:
-    есть ли пара → живы ли обе апстрим-ссылки → сколько строк-серверов
-    вернула каждая → сколько в итоговой склейке.
+    Обычный юзер проверяет только СЕБЯ (tg_id-аргумент игнорируется —
+    приватность). Админ может проверить любого по /aggcheck <tg_id>.
+    Показывает: есть ли пара → живы ли обе апстрим-ссылки → сколько
+    серверов вернула каждая → итоговая склейка → публичный URL по UA.
     """
+    from app.utils.security import is_admin
+    requester = message.from_user.id
     parts = (message.text or "").split()
-    tg = int(parts[1]) if len(parts) > 1 and parts[1].lstrip("-").isdigit() else message.from_user.id
+    arg = int(parts[1]) if len(parts) > 1 and parts[1].lstrip("-").isdigit() else None
+    # tg_id-аргумент только админу; остальные — только себя.
+    tg = arg if (arg is not None and is_admin(requester)) else requester
 
     import database
     from app.api import sub_aggregator_route as agg
@@ -277,29 +281,30 @@ async def cmd_aggcheck(message: Message) -> None:
     if main_n + gb_n == 0:
         lines.append("\n❌ <b>0 серверов из панели</b> — апстрим не отдал (плохой URL / панель не вернула конфиги). Смотри выше.")
 
-    # 3) End-to-end: реальный GET публичного URL агрегатора (через домен/nginx).
+    # 3) End-to-end: публичный URL с iOS- и Android-UA (панель может
+    #    отдавать РАЗНЫЙ content-type на разные UA — вот источник
+    #    «неизвестный тип контента» на Android).
     public_url = f"{config.SUB_AGGREGATOR_URL}/a/{pair['token']}"
+    _UAS = {
+        "iOS": "Happ/2.0 (iPhone; iOS 17)",
+        "Android": "Happ/2.0 (Android 14)",
+        "v2rayTun-Android": "v2rayTun/1.0 (Android)",
+    }
+    lines.append(f"\n<b>Публичный URL</b> ({config.SUB_AGGREGATOR_URL}):")
     try:
         import httpx
         async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as c:
-            r = await c.get(public_url, headers={"User-Agent": "Happ/diag"})
-        ct = r.headers.get("content-type", "?")
-        xc = r.headers.get("x-cache", "?")
-        # _decode_body берёт только resp.text — передаём заглушку с .text.
-        body_srv = len(agg._decode_body(type("R", (), {"text": r.text})())) if r.status_code == 200 else 0
-        lines.append(
-            f"\n<b>Публичный URL</b> ({config.SUB_AGGREGATOR_URL}):\n"
-            f"{'✅' if r.status_code == 200 else '❌'} HTTP {r.status_code} · "
-            f"ct=<code>{ct[:30]}</code> · x-cache={xc} · <b>{body_srv}</b> серверов"
-        )
-        if r.status_code != 200:
-            lines.append("→ Домен/nginx НЕ отдаёт подписку. Проверь reverse-proxy RF-1 → api.atlassecure.ru/a/{token}.")
-        elif body_srv == 0:
-            lines.append("→ Домен отвечает, но тело пустое (см. апстримы выше).")
-        else:
-            lines.append("→ ✅ Всё живо. Если у юзера пусто — кеш клиента, пусть обновит подписку в приложении.")
+            for label, uas in _UAS.items():
+                # сброс кеша для чистого замера каждого UA
+                agg.clear_cache(pair["token"])
+                r = await c.get(public_url, headers={"User-Agent": uas})
+                ct = (r.headers.get("content-type") or "?")[:28]
+                srv = len(agg._decode_body(type("R", (), {"text": r.text})())) if r.status_code == 200 else 0
+                ok = r.status_code == 200 and srv > 0
+                lines.append(f"• {label}: {'✅' if ok else '❌'} HTTP {r.status_code} · <b>{srv}</b> серв · ct=<code>{ct}</code>")
+        lines.append("→ Если content-type у iOS и Android разный — панель отдаёт разное на UA; агрегатор пробрасывает как есть. Сообщи оба ct.")
     except Exception as e:
-        lines.append(f"\n<b>Публичный URL</b>: ❌ не достучались — {str(e)[:80]}\n→ Домен недоступен из бота (DNS/nginx/сеть).")
+        lines.append(f"❌ не достучались — {str(e)[:80]}\n→ Домен недоступен из бота (DNS/nginx/сеть).")
 
     await message.answer("\n".join(lines), parse_mode="HTML")
 
