@@ -491,11 +491,13 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     total = int(ui.get("total", 0))
     used = int(ui.get("upload", 0)) + int(ui.get("download", 0))
     left = max(0, total - used) if total > 0 else 0
-    traffic_str = (
-        f"{_fmt_bytes(left)} <span class=\"dim\">из {_fmt_bytes(total)}</span>"
-        if total > 0 else "∞"
-    )
+    left_str = _fmt_bytes(left) if total > 0 else "∞"
+    total_str = _fmt_bytes(total) if total > 0 else "∞"
+    used_str = _fmt_bytes(used) if used > 0 else "0"
+    pct_used = min(100, int(used / total * 100)) if total > 0 else 0
     expire_str = _fmt_expire(int(ui.get("expire", 0))) or "—"
+    # Название подписки — profile-title от панели (или бренд).
+    sub_title = html_escape(headers.get("profile-title", "") or _brand_title())
 
     # ── Deep-links (crypt-sealed через /open/{client}) ─────────────
     base = _deeplink_base()
@@ -630,7 +632,7 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     margin: 0 0 18px;
   }}
 
-  /* ── Карточка подписки ── */
+  /* ── Карточка подписки (расширенная, по референсу) ── */
   .card {{
     background: #fff;
     border: 1px solid #e1e4e8; border-radius: 16px;
@@ -639,26 +641,50 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   }}
   .card-head {{
     display: flex; align-items: center; gap: 12px;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
   }}
   .status-ico {{
-    width: 40px; height: 40px; border-radius: 12px;
-    background: rgba(16,185,129,.12); color: #10B981;
+    width: 42px; height: 42px; border-radius: 12px;
+    background: linear-gradient(135deg, rgba(37,99,235,.14), rgba(16,185,129,.14));
+    color: #2563EB;
     display: flex; align-items: center; justify-content: center;
     font-size: 20px; font-weight: 700;
+    flex: 0 0 42px;
   }}
   .card-title {{ font-size: 16px; font-weight: 700; }}
   .card-sub {{ font-size: 13px; color: #6b7280; }}
-  .card-grid {{
-    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  .badge {{
+    margin-left: auto;
+    padding: 5px 12px; border-radius: 999px;
+    background: rgba(16,185,129,.12); color: #059669;
+    font-size: 12px; font-weight: 700;
+    white-space: nowrap;
   }}
-  .cell {{
-    background: #f6f7f9; border-radius: 12px; padding: 12px 14px;
+  /* Строки-детали key-value с разделителями */
+  .rows {{ border-top: 1px solid #eef0f3; }}
+  .row {{
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 2px;
+    border-bottom: 1px solid #eef0f3;
+    font-size: 14px;
   }}
-  .cell-label {{ font-size: 11px; text-transform: uppercase;
-                letter-spacing: .06em; color: #9aa1ab; margin-bottom: 4px; }}
-  .cell-value {{ font-size: 15px; font-weight: 700; }}
+  .row-label {{ color: #6b7280; }}
+  .row-value {{ font-weight: 700; }}
   .dim {{ color: #9aa1ab; font-weight: 500; }}
+  /* Прогресс-бар трафика */
+  .bar-wrap {{ padding: 14px 2px 4px; }}
+  .bar-meta {{
+    display: flex; justify-content: space-between;
+    font-size: 12px; color: #9aa1ab; margin-bottom: 7px;
+  }}
+  .bar {{
+    height: 8px; background: #eef0f3; border-radius: 999px; overflow: hidden;
+  }}
+  .fill {{
+    height: 100%; border-radius: 999px;
+    background: linear-gradient(90deg, #2563EB, #10B981);
+    transition: width 500ms ease;
+  }}
 
   /* ── Установка: заголовок + сегменты ── */
   .section-head {{
@@ -817,10 +843,13 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
 
   @media (prefers-color-scheme: dark) {{
     html, body {{ background: #0f1720; color: #f5f5f2; }}
-    .brand, .section-title, .card-title, .step-title, .cell-value {{ color: #fff; }}
+    .brand, .section-title, .card-title, .step-title, .row-value {{ color: #fff; }}
     .card {{ background: #16202b; border-color: #2a3441; }}
-    .cell {{ background: #1f2937; }}
-    .card-sub, .step-text {{ color: #9aa1ab; }}
+    .card-sub, .step-text, .row-label {{ color: #9aa1ab; }}
+    .rows {{ border-top-color: #2a3441; }}
+    .row {{ border-bottom-color: #2a3441; }}
+    .bar {{ background: #1f2937; }}
+    .badge {{ background: rgba(16,185,129,.16); color: #34d399; }}
     .seg {{ background: #1f2937; color: #9aa1ab; border-color: #2a3441; }}
     .seg.active {{ background: #fff; color: #0f1720; border-color: #fff; }}
     .ctab {{ background: #1f2937; color: #9aa1ab; border-color: #2a3441; }}
@@ -856,22 +885,31 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
 
   <div class="card">
     <div class="card-head">
-      <div class="status-ico">✓</div>
+      <div class="status-ico">⚡</div>
       <div>
-        <div class="card-title">Подписка активна</div>
-        <div class="card-sub">Истекает {html_escape(expire_str)}</div>
+        <div class="card-title">{sub_title}</div>
+        <div class="card-sub">Ваша подписка</div>
+      </div>
+      <div class="badge">Активна</div>
+    </div>
+    <div class="rows">
+      <div class="row">
+        <span class="row-label">Осталось</span>
+        <span class="row-value">{left_str}{f' <span class="dim">из {total_str}</span>' if total > 0 else ''}</span>
+      </div>
+      <div class="row">
+        <span class="row-label">Использовано</span>
+        <span class="row-value">{used_str}</span>
+      </div>
+      <div class="row">
+        <span class="row-label">Истекает</span>
+        <span class="row-value">{html_escape(expire_str)}</span>
       </div>
     </div>
-    <div class="card-grid">
-      <div class="cell">
-        <div class="cell-label">Истекает</div>
-        <div class="cell-value">{html_escape(expire_str)}</div>
-      </div>
-      <div class="cell">
-        <div class="cell-label">Трафик</div>
-        <div class="cell-value">{traffic_str}</div>
-      </div>
-    </div>
+    {f'''<div class="bar-wrap">
+      <div class="bar-meta"><span>Использовано {pct_used}%</span><span>{total_str}</span></div>
+      <div class="bar"><div class="fill" style="width:{pct_used}%"></div></div>
+    </div>''' if total > 0 else ''}
   </div>
 
   <div class="section-head">
@@ -886,6 +924,14 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   </div>
 
   {panels_html}
+
+  <div class="section-head" style="margin-top:10px">
+    <div class="section-title" style="font-size:17px">Ключ подписки</div>
+  </div>
+  <div class="card" style="margin-bottom:0">
+    <div class="keyblock" style="margin-bottom:12px">{sub_url_esc}</div>
+    <button class="copy-btn" type="button">Скопировать ссылку</button>
+  </div>
 
   <div class="footer">
     <span>{brand}</span>
