@@ -649,6 +649,6 @@ REDIS_URL = env("REDIS_URL", default="")
 
 SUB_AGGREGATOR_ENABLED = True
 SUB_AGGREGATOR_URL = "https://subscription.palantirdns.uk"
-SUB_AGGREGATOR_ADMIN_ONLY = True   # beta-gate; флип на False когда протестируем
+SUB_AGGREGATOR_ADMIN_ONLY = False  # РАСКАТАНО НА ВСЕХ (домен готов, протестировано)
 SUB_AGGREGATOR_INTERNAL_SECRET = ""  # заполни после генерации в sub-aggregator/.env
 
