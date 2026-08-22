@@ -13,8 +13,16 @@ Embedded sub-aggregator — GET /a/{token}.
 
 Никаких докеров, стрим-сервисов, WG. RF-1 = TLS + rate-limit + proxy.
 
-Кэша нет (SWR/Redis добавим позже, если понадобится). Сейчас каждый
-запрос идёт в панель — для беты одного админа это нормально.
+Кеш (in-process, один uvicorn-worker):
+  • body-кеш: fresh 15s → hit мгновенно; stale 24h → отдаём при падении
+    панели. LRU-границей MAX_CACHE_ENTRIES ограничена память.
+  • pair-кеш: token→URLs, 1 час, чтобы не бить БД на каждый запрос.
+  • singleflight: параллельные запросы одного token = 1 upstream fetch.
+Обновление подписки: бот после mutation зовёт clear_cache(token) —
+in-process, 0ms → следующий запрос клиента = свежие данные из панели.
+
+Нагрузка (см. tests/services/test_sub_aggregator_load.py): при hit-ratio
+>90% держит тысячи rps; узкое место — не агрегатор, а панель Remnawave.
 """
 from __future__ import annotations
 
@@ -182,14 +190,20 @@ def _cache_get(token: str) -> tuple[Optional[bytes], Optional[dict], str]:
     return None, None, "miss"
 
 
-def _cache_set(token: str, body: bytes, headers: dict) -> None:
-    """Set both fresh + stale copy. LRU-evict если превысили cap."""
+def _cache_put(token: str, body: bytes, headers: dict, fresh_ttl: float, stale_ttl: float) -> None:
+    """Единая запись в кеш с LRU-границей. Используется и для обычных
+    ответов (_cache_set), и для revoked-заглушки — чтобы rev-записи тоже
+    считались в MAX_CACHE_ENTRIES и не текла память."""
     now = time.monotonic()
-    _cache[token] = (now + FRESH_TTL, now + STALE_TTL, body, dict(headers))
+    _cache[token] = (now + fresh_ttl, now + stale_ttl, body, dict(headers))
     _cache.move_to_end(token)
-    # Bound size.
     while len(_cache) > MAX_CACHE_ENTRIES:
         _cache.popitem(last=False)
+
+
+def _cache_set(token: str, body: bytes, headers: dict) -> None:
+    """Обычный ответ: fresh 15s + stale 24h."""
+    _cache_put(token, body, headers, FRESH_TTL, STALE_TTL)
 
 
 def _pair_get(token: str) -> tuple[Optional[dict], bool]:
@@ -449,7 +463,7 @@ async def _fetch_singleflight(token: str, pair: dict, ua: str) -> tuple[Optional
             # Fallthrough — если leader упал, пусть follower попробует свой.
             pass
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     fut = loop.create_future()
     _inflight[token] = fut
     try:
@@ -517,10 +531,9 @@ async def aggregate(
             "profile-title": _brand_title(),
             "profile-update-interval": str(_CLIENT_UPDATE_INTERVAL_HOURS),
         }
-        # Короткий TTL — юзер может тут же активировать доступ.
-        now = time.monotonic()
-        _cache[token] = (now + 10, now + 60, body_bytes, dict(headers))
-        _cache.move_to_end(token)
+        # Короткий TTL — юзер может тут же активировать доступ. Через _cache_put
+        # → тоже под LRU-границей.
+        _cache_put(token, body_bytes, headers, 10, 60)
         return _make_response(request, ua_early, token, body_bytes, headers, "miss")
 
     # ── 4. Fetch (singleflight) ────────────────────────────────────
@@ -591,7 +604,8 @@ async def invalidate_cache(
             return PlainTextResponse("Forbidden", status_code=403)
     if not _TOKEN_RE.match(token):
         return PlainTextResponse("Bad token", status_code=400)
-    _cache.pop(token, None)
+    # Чистим и body-кеш, И pair-кеш (иначе старые sub-URL живут до PAIR_TTL).
+    clear_cache(token)
     return Response(content=b'{"ok":true}', media_type="application/json")
 
 
