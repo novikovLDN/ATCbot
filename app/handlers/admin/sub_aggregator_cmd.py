@@ -165,9 +165,26 @@ async def cmd_aggstats(message: Message) -> None:
 
     total = s["hits"] + s["misses"] + s["stale"]
     ratio_pct = round(s["hit_ratio"] * 100, 1)
-    # Здоровье: hit_ratio > 90% и avg_upstream < 400ms.
-    healthy = (s["hit_ratio"] > 0.9 or total < 50) and s["avg_upstream_ms"] < 400
-    head = "🟢 Здоров" if healthy else "🟡 Внимание"
+    # Здоровье считаем только на осмысленной выборке — иначе ложная тревога
+    # на первых запросах (холодный старт: TLS-хендшейк даёт высокий latency,
+    # кеш ещё не прогрет → низкий hit-ratio). Реальные красные флаги:
+    # фейлы upstream, stale-выдача (панель падала). hit/latency учитываем
+    # только когда запросов/upstream-вызовов достаточно.
+    enough_req = total >= 50
+    enough_up = s["upstream_count"] >= 20
+    warmup = not (enough_req or enough_up)
+    healthy = (
+        s["upstream_fail"] == 0
+        and s["stale"] == 0
+        and (not enough_req or s["hit_ratio"] > 0.85)
+        and (not enough_up or s["avg_upstream_ms"] < 500)
+    )
+    if warmup:
+        head = "🟢 Прогрев (мало запросов)"
+    elif healthy:
+        head = "🟢 Здоров"
+    else:
+        head = "🟡 Внимание"
 
     text = (
         f"📊 <b>Sub-Aggregator — метрики</b>  {head}\n\n"
