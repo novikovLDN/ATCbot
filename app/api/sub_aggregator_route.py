@@ -609,17 +609,16 @@ async def invalidate_cache(
     return Response(content=b'{"ok":true}', media_type="application/json")
 
 
-@router.get("/a/_metrics")
-async def metrics_endpoint() -> Response:
-    """JSON-метрики агрегатора: счётчики + размеры кешей + средний latency.
-    Публично доступен (не sensitive). Prometheus-friendly через json→text."""
+def get_metrics_snapshot() -> dict:
+    """Снимок метрик — для HTTP-эндпоинта И для бот-команды /aggstats.
+    Считает hit_ratio + avg_upstream_ms поверх сырых счётчиков."""
     total = _metrics["hits"] + _metrics["misses"] + _metrics["stale"]
     hit_ratio = round(_metrics["hits"] / total, 4) if total > 0 else 0
     avg_upstream_ms = (
         round(_metrics["upstream_ms_sum"] / _metrics["upstream_count"], 1)
         if _metrics["upstream_count"] > 0 else 0
     )
-    payload = {
+    return {
         **_metrics,
         "cache_size": len(_cache),
         "pair_cache_size": len(_pair_cache),
@@ -627,8 +626,14 @@ async def metrics_endpoint() -> Response:
         "hit_ratio": hit_ratio,
         "avg_upstream_ms": avg_upstream_ms,
     }
+
+
+@router.get("/a/_metrics")
+async def metrics_endpoint() -> Response:
+    """JSON-метрики агрегатора: счётчики + размеры кешей + средний latency.
+    Публично доступен (не sensitive). Prometheus-friendly через json→text."""
     return Response(
-        content=json.dumps(payload),
+        content=json.dumps(get_metrics_snapshot()),
         media_type="application/json",
     )
 
@@ -643,4 +648,4 @@ async def close() -> None:
             _client = None
 
 
-__all__ = ["router", "close", "clear_cache"]
+__all__ = ["router", "close", "clear_cache", "get_metrics_snapshot"]
