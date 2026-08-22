@@ -466,6 +466,22 @@ _STORE_BTN_LABELS = {
     "windows": "Скачать для Windows",
 }
 
+# Иконки сторов — эмодзи (без внешних ассетов, читаются везде).
+_STORE_ICONS = {
+    "ios": "",
+    "android": "▶",
+    "macos": "",
+    "windows": "⬇",
+}
+
+# Эмодзи платформ для сегмент-контрола.
+_PLATFORM_ICONS = {
+    "ios": "📱",
+    "android": "🤖",
+    "macos": "💻",
+    "windows": "🖥",
+}
+
 
 @lru_cache(maxsize=512)
 def _qr_svg(url: str) -> str:
@@ -580,7 +596,11 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
       <div class="step-body">
         <div class="step-title">Установите и откройте {client_name}</div>
         <p class="step-text">{install_hint}</p>
-        <a class="ghost-btn" href="{store_esc}" target="_blank" rel="noopener">{store_btn}</a>
+        <a class="store-btn" href="{store_esc}" target="_blank" rel="noopener">
+          <span class="store-ico">{_STORE_ICONS[plat]}</span>
+          <span>{store_btn}</span>
+          <svg class="arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
+        </a>
         {region_row}
       </div>
     </div>
@@ -618,7 +638,8 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     panels_html = "".join(panels)
 
     plat_tabs = "".join(
-        f'<button class="seg" data-plat-btn="{plat}" type="button">{label}</button>'
+        f'<button class="seg" data-plat-btn="{plat}" type="button">'
+        f'<span class="seg-ico">{_PLATFORM_ICONS.get(plat, "")}</span>{label}</button>'
         for plat, label in _PLATFORM_LABELS
     )
 
@@ -669,65 +690,106 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
     min-height: 100vh;
     display: flex; flex-direction: column; align-items: center;
     padding: 28px 16px 48px;
+    position: relative;
+    overflow-x: hidden;
+  }}
+  /* Aurora-фон: два мягких цветных blob'а за контентом */
+  body::before, body::after {{
+    content: "";
+    position: fixed; z-index: -1;
+    border-radius: 50%;
+    filter: blur(90px);
+    pointer-events: none;
+  }}
+  body::before {{
+    width: 480px; height: 480px;
+    top: -180px; right: -140px;
+    background: radial-gradient(circle, rgba(37,99,235,.16), transparent 65%);
+  }}
+  body::after {{
+    width: 420px; height: 420px;
+    bottom: -160px; left: -160px;
+    background: radial-gradient(circle, rgba(124,58,237,.12), transparent 65%);
   }}
   .wrap {{ width: 100%; max-width: 460px; }}
 
   .brand {{
-    font-size: 24px; font-weight: 700; letter-spacing: -0.02em;
+    font-size: 26px; font-weight: 800; letter-spacing: -0.03em;
     margin: 0 0 18px;
+    background: linear-gradient(100deg, #111 30%, #2563EB 75%, #7C3AED);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
   }}
 
-  /* ── Карточка подписки (расширенная, по референсу) ── */
+  /* ── Hero-карточка подписки: градиент, белый текст в обеих темах ── */
   .card {{
     background: #fff;
-    border: 1px solid #e1e4e8; border-radius: 16px;
+    border: 1px solid #e1e4e8; border-radius: 20px;
     padding: 18px;
     margin-bottom: 28px;
+  }}
+  .card.hero {{
+    background: linear-gradient(140deg, #1e3a8a 0%, #2563EB 45%, #6d28d9 100%);
+    border: none;
+    color: #fff;
+    padding: 22px 20px 20px;
+    box-shadow: 0 16px 40px rgba(37, 99, 235, .30);
+    position: relative; overflow: hidden;
+  }}
+  /* Блик на hero — стеклянный отсвет сверху */
+  .card.hero::before {{
+    content: "";
+    position: absolute; inset: 0;
+    background: radial-gradient(120% 60% at 20% -10%, rgba(255,255,255,.22), transparent 55%);
+    pointer-events: none;
   }}
   .card-head {{
     display: flex; align-items: center; gap: 12px;
     margin-bottom: 16px;
+    position: relative;
   }}
   .status-ico {{
-    width: 42px; height: 42px; border-radius: 12px;
-    background: linear-gradient(135deg, rgba(37,99,235,.14), rgba(16,185,129,.14));
-    color: #2563EB;
+    width: 44px; height: 44px; border-radius: 14px;
+    background: rgba(255,255,255,.18);
+    backdrop-filter: blur(4px);
+    color: #fff;
     display: flex; align-items: center; justify-content: center;
-    font-size: 20px; font-weight: 700;
-    flex: 0 0 42px;
+    font-size: 21px;
+    flex: 0 0 44px;
   }}
-  .card-title {{ font-size: 16px; font-weight: 700; }}
-  .card-sub {{ font-size: 13px; color: #6b7280; }}
+  .card-title {{ font-size: 17px; font-weight: 800; color: #fff; letter-spacing: -0.01em; }}
+  .card-sub {{ font-size: 13px; color: rgba(255,255,255,.65); }}
   .badge {{
     margin-left: auto;
-    padding: 5px 12px; border-radius: 999px;
-    background: rgba(16,185,129,.12); color: #059669;
+    padding: 6px 13px; border-radius: 999px;
+    background: rgba(52,211,153,.25); color: #d1fae5;
+    border: 1px solid rgba(52,211,153,.45);
     font-size: 12px; font-weight: 700;
     white-space: nowrap;
   }}
-  /* Строки-детали key-value с разделителями */
-  .rows {{ border-top: 1px solid #eef0f3; }}
+  /* Строки-детали key-value */
+  .rows {{ border-top: 1px solid rgba(255,255,255,.16); position: relative; }}
   .row {{
     display: flex; align-items: center; justify-content: space-between;
     padding: 12px 2px;
-    border-bottom: 1px solid #eef0f3;
+    border-bottom: 1px solid rgba(255,255,255,.16);
     font-size: 14px;
   }}
-  .row-label {{ color: #6b7280; }}
-  .row-value {{ font-weight: 700; }}
-  .dim {{ color: #9aa1ab; font-weight: 500; }}
+  .row-label {{ color: rgba(255,255,255,.6); }}
+  .row-value {{ font-weight: 800; color: #fff; font-variant-numeric: tabular-nums; }}
+  .dim {{ color: rgba(255,255,255,.55); font-weight: 500; }}
   /* Прогресс-бар трафика */
-  .bar-wrap {{ padding: 14px 2px 4px; }}
+  .bar-wrap {{ padding: 14px 2px 4px; position: relative; }}
   .bar-meta {{
     display: flex; justify-content: space-between;
-    font-size: 12px; color: #9aa1ab; margin-bottom: 7px;
+    font-size: 12px; color: rgba(255,255,255,.6); margin-bottom: 7px;
   }}
   .bar {{
-    height: 8px; background: #eef0f3; border-radius: 999px; overflow: hidden;
+    height: 9px; background: rgba(255,255,255,.18); border-radius: 999px; overflow: hidden;
   }}
   .fill {{
     height: 100%; border-radius: 999px;
-    background: linear-gradient(90deg, #2563EB, #10B981);
+    background: linear-gradient(90deg, #34d399, #a7f3d0);
     transition: width 500ms ease;
   }}
 
@@ -738,31 +800,59 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   }}
   .section-title {{ font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }}
 
+  /* iOS-style segmented control платформ: контейнер-пилюля, активная —
+     белая карточка с тенью */
   .segs {{
-    display: flex; gap: 6px; flex-wrap: wrap;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    background: #e9ebef;
+    border-radius: 14px;
+    padding: 4px;
     margin-bottom: 14px;
   }}
   .seg {{
-    appearance: none; border: 1px solid #e1e4e8; background: #fff;
-    color: #4b5563; border-radius: 999px;
-    padding: 8px 16px; font-size: 13px; font-weight: 600;
-    cursor: pointer;
-    transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+    appearance: none; border: none; background: transparent;
+    color: #6b7280; border-radius: 11px;
+    padding: 10px 4px;
+    font-size: 12.5px; font-weight: 700;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    cursor: pointer; min-height: 52px;
+    transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
   }}
-  .seg.active {{ background: #111; color: #fff; border-color: #111; }}
+  .seg-ico {{ font-size: 17px; line-height: 1; }}
+  .seg.active {{
+    background: #fff; color: #111;
+    box-shadow: 0 2px 8px rgba(15,23,32,.10);
+  }}
 
+  /* Клиент-табы: две крупные карточки, Happ со звездой «рекомендуем» */
   .client-tabs {{
-    display: flex; gap: 8px; margin-bottom: 22px;
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 10px; margin-bottom: 24px;
   }}
   .ctab {{
-    flex: 1;
-    appearance: none; border: 1px solid #e1e4e8; background: #fff;
-    color: #4b5563; border-radius: 12px;
-    padding: 12px 0; font-size: 14px; font-weight: 700;
-    cursor: pointer;
-    transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+    position: relative;
+    appearance: none; border: 2px solid #e1e4e8; background: #fff;
+    color: #374151; border-radius: 16px;
+    padding: 16px 0 15px; font-size: 15px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    cursor: pointer; min-height: 56px;
+    transition: border-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
   }}
-  .ctab.active {{ border-color: #111; color: #111; box-shadow: inset 0 0 0 1px #111; }}
+  .ctab-star {{ font-size: 14px; }}
+  .ctab-hint {{
+    position: absolute; top: -9px; right: 10px;
+    background: linear-gradient(90deg, #f59e0b, #f97316);
+    color: #fff;
+    font-size: 9.5px; font-weight: 800; letter-spacing: .04em;
+    text-transform: uppercase;
+    padding: 3px 8px; border-radius: 999px;
+    box-shadow: 0 2px 6px rgba(249,115,22,.35);
+  }}
+  .ctab.active {{
+    border-color: #2563EB; color: #111;
+    box-shadow: 0 4px 16px rgba(37,99,235,.16), inset 0 0 0 1px rgba(37,99,235,.3);
+  }}
 
   /* ── Timeline шагов ── */
   .panel {{ position: relative; }}
@@ -802,29 +892,52 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   /* Акцентная кнопка «Установить подписку» — главный CTA страницы */
   .btn.accent {{
     width: 100%;
-    padding: 15px 24px;
-    background: linear-gradient(135deg, #2563EB, #1d4ed8);
-    box-shadow: 0 6px 18px rgba(37, 99, 235, .28);
-    border-radius: 14px;
-    font-size: 15px;
+    min-height: 56px;
+    padding: 16px 24px;
+    background: linear-gradient(135deg, #2563EB, #6d28d9);
+    box-shadow: 0 8px 24px rgba(37, 99, 235, .35);
+    border-radius: 16px;
+    font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em;
   }}
   .btn.accent:active {{
-    transform: scale(0.98);
-    background: linear-gradient(135deg, #1d4ed8, #1e40af);
-    box-shadow: 0 3px 10px rgba(37, 99, 235, .22);
+    transform: scale(0.97);
+    box-shadow: 0 4px 12px rgba(37, 99, 235, .28);
   }}
-  .btn-ico {{ width: 18px; height: 18px; flex: 0 0 18px; }}
+  .btn-ico {{ width: 19px; height: 19px; flex: 0 0 19px; }}
+  /* Стор-кнопка: крупная, полноширинная, иконка + стрелка */
+  .store-btn {{
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; min-height: 52px;
+    padding: 14px 16px;
+    background: #fff; color: #111;
+    border: 1.5px solid #e1e4e8; border-radius: 14px;
+    text-decoration: none;
+    font-size: 14px; font-weight: 700;
+    margin-bottom: 10px;
+    transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
+  }}
+  .store-btn:active {{ background: #f0f2f5; transform: scale(0.99); }}
+  .store-ico {{
+    width: 34px; height: 34px; flex: 0 0 34px;
+    display: flex; align-items: center; justify-content: center;
+    background: #f0f2f5; border-radius: 10px;
+    font-size: 17px;
+  }}
+  .store-btn .arr {{
+    width: 16px; height: 16px; margin-left: auto;
+    color: #9aa1ab; flex: 0 0 16px;
+  }}
   .ghost-btn {{
     display: inline-flex; align-items: center; justify-content: center;
     padding: 11px 18px;
-    background: #fff; color: #111;
-    border: 1px solid #e1e4e8; border-radius: 12px;
+    background: transparent; color: #2563EB;
+    border: none; border-radius: 12px;
     text-decoration: none;
-    font-size: 13px; font-weight: 600;
-    margin-right: 8px; margin-bottom: 8px;
-    transition: background 80ms ease;
+    font-size: 13.5px; font-weight: 700;
+    margin-bottom: 4px;
+    transition: opacity 80ms ease;
   }}
-  .ghost-btn:active {{ background: #f0f2f5; }}
+  .ghost-btn:active {{ opacity: .6; }}
 
   /* ── «Установить вручную» — разворачивающаяся плашка ── */
   .manual {{
@@ -930,29 +1043,36 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
 
   @media (prefers-color-scheme: dark) {{
     html, body {{ background: #0f1720; color: #f5f5f2; }}
-    .brand, .section-title, .card-title, .step-title, .row-value {{ color: #fff; }}
+    .section-title, .step-title {{ color: #fff; }}
+    .brand {{
+      background: linear-gradient(100deg, #fff 30%, #60a5fa 70%, #a78bfa);
+      -webkit-background-clip: text; background-clip: text;
+    }}
+    /* .card.hero НЕ переопределяем — градиент одинаков в обеих темах */
     .card {{ background: #16202b; border-color: #2a3441; }}
-    .card-sub, .step-text, .row-label {{ color: #9aa1ab; }}
-    .rows {{ border-top-color: #2a3441; }}
-    .row {{ border-bottom-color: #2a3441; }}
-    .bar {{ background: #1f2937; }}
-    .badge {{ background: rgba(16,185,129,.16); color: #34d399; }}
-    .seg {{ background: #1f2937; color: #9aa1ab; border-color: #2a3441; }}
-    .seg.active {{ background: #fff; color: #0f1720; border-color: #fff; }}
-    .ctab {{ background: #1f2937; color: #9aa1ab; border-color: #2a3441; }}
-    .ctab.active {{ color: #fff; border-color: #fff; box-shadow: inset 0 0 0 1px #fff; }}
+    .step-text {{ color: #9aa1ab; }}
+    .segs {{ background: #1a2431; }}
+    .seg {{ color: #6b7280; }}
+    .seg.active {{ background: #2a3441; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.4); }}
+    .ctab {{ background: #16202b; color: #9aa1ab; border-color: #2a3441; }}
+    .ctab.active {{
+      border-color: #60a5fa; color: #fff;
+      box-shadow: 0 4px 16px rgba(37,99,235,.25), inset 0 0 0 1px rgba(96,165,250,.35);
+    }}
     .step:not(:last-child)::before {{ background: #2a3441; }}
     .step-dot.done {{ background: #2a3441; color: #6b7280; }}
     .btn {{ background: #fff; color: #0f1720; }}
     .btn:active {{ background: #f5f5f2; }}
     .btn.accent {{
-      background: linear-gradient(135deg, #3b82f6, #2563EB);
+      background: linear-gradient(135deg, #3b82f6, #7c3aed);
       color: #fff;
-      box-shadow: 0 6px 18px rgba(37, 99, 235, .35);
+      box-shadow: 0 8px 24px rgba(37, 99, 235, .4);
     }}
-    .btn.accent:active {{ background: linear-gradient(135deg, #2563EB, #1d4ed8); }}
-    .ghost-btn {{ background: #1f2937; color: #fff; border-color: #2a3441; }}
-    .ghost-btn:active {{ background: #2a3441; }}
+    .btn.accent:active {{ background: linear-gradient(135deg, #2563EB, #6d28d9); }}
+    .store-btn {{ background: #1f2937; color: #fff; border-color: #2a3441; }}
+    .store-btn:active {{ background: #2a3441; }}
+    .store-ico {{ background: #2a3441; }}
+    .ghost-btn {{ background: transparent; color: #60a5fa; }}
     .manual {{ background: rgba(31,41,55,.45); border-color: #374151; }}
     .manual summary {{ color: #9aa1ab; }}
     .manual[open] summary {{ border-bottom-color: #374151; }}
@@ -978,7 +1098,7 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
 <div class="wrap">
   <div class="brand">{brand}</div>
 
-  <div class="card">
+  <div class="card hero">
     <div class="card-head">
       <div class="status-ico">⚡</div>
       <div>
@@ -1014,7 +1134,10 @@ def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
   <div class="segs" id="platSegs">{plat_tabs}</div>
 
   <div class="client-tabs" id="clientTabs">
-    <button class="ctab" data-client-btn="happ" type="button">Happ</button>
+    <button class="ctab" data-client-btn="happ" type="button">
+      <span class="ctab-star">⭐</span>Happ
+      <span class="ctab-hint">рекомендуем</span>
+    </button>
     <button class="ctab" data-client-btn="incy" type="button">Incy</button>
   </div>
 
