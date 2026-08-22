@@ -703,9 +703,10 @@ async def callback_setup_step2(callback: CallbackQuery):
     #   [Назад]
     # Incy-кнопки — на iOS/Android/macOS. Windows не показываем: у Incy
     # нет Windows-клиента, deeplink incy://crypt1/... там не откроется.
-    # Без bypass_url вторая строка отсутствует. Без sub_url — обе строки
-    # отсутствуют (вообще не должно случаться, но safeguard).
-    if sub_url:
+    # Bypass-only юзер (только трафик обхода, без основной подписки) —
+    # sub_url пуст, показываем только ряд «Обход». Раньше `if sub_url`
+    # прятал ОБА ряда → bypass-only оставался без единой кнопки-ключа.
+    if sub_url or bypass_url:
         from urllib.parse import quote, urlparse
         if config.PUBLIC_BASE_URL:
             base_url = config.PUBLIC_BASE_URL
@@ -715,19 +716,20 @@ async def callback_setup_step2(callback: CallbackQuery):
 
         show_incy = platform in ("ios", "android", "macos")
 
-        # Ряд 1: VPN-ключ (Happ + Incy)
-        row_vpn = [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.happ_vpn_label", "Happ VPN"),
-            url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
-            style="primary",
-        )]
-        if show_incy:
-            row_vpn.append(InlineKeyboardButton(
-                text=i18n_get_text(language, "setup.incy_vpn_label", "Incy VPN"),
-                url=f"{base_url}/open/incy?url={quote(sub_url, safe='')}",
-                style="success",
-            ))
-        buttons.append(row_vpn)
+        # Ряд 1: VPN-ключ (Happ + Incy) — только если есть основная подписка.
+        if sub_url:
+            row_vpn = [InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.happ_vpn_label", "Happ VPN"),
+                url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
+                style="primary",
+            )]
+            if show_incy:
+                row_vpn.append(InlineKeyboardButton(
+                    text=i18n_get_text(language, "setup.incy_vpn_label", "Incy VPN"),
+                    url=f"{base_url}/open/incy?url={quote(sub_url, safe='')}",
+                    style="success",
+                ))
+            buttons.append(row_vpn)
 
         # Ряд 2: Обход (Happ + Incy) — только если есть bypass_url
         if bypass_url:

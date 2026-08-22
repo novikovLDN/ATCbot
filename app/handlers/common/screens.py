@@ -849,6 +849,12 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
         left_default="Трафик обхода: {remaining} из {limit}",
     )
 
+    # Есть ли доступ к обходу (bypass entity с трафиком)? Если строка НЕ
+    # «none»-вариант — у юзера есть bypass-ключ, значит есть что подключать
+    # даже без основной подписки.
+    _none_line = i18n_get_text(language, "main.my_sub_bypass_none", "Трафик: —")
+    has_bypass_access = bypass_line != _none_line
+
     _title = i18n_get_text(language, "main.my_sub_title", "<b>Информация о подписке</b>")
     _tariff_line = i18n_get_text(language, "profile.info_tariff", "⭐️ Тариф: {tariff}", tariff=tariff_label)
     text = (
@@ -867,7 +873,9 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
     from app.handlers.common.keyboards import CE
 
     kb_rows = []
-    if has_active_subscription and not is_bypass_only:
+    # Кнопка «Подключить» — если есть основная подписка ИЛИ bypass-трафик.
+    # Bypass-only юзеру (трафик есть, тарифа нет) тоже нужен ключ обхода.
+    if (has_active_subscription and not is_bypass_only) or has_bypass_access:
         kb_rows.append([InlineKeyboardButton(
             text=i18n_get_text(language, "main.my_sub_btn_connect", "Подключить VPN"),
             callback_data="connect_instruction",

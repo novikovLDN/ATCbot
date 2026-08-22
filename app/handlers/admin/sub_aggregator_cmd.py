@@ -152,4 +152,44 @@ async def cmd_aggregator_fallback(message: Message) -> None:
     await cmd_aggregator(message)
 
 
+@sub_aggregator_admin_router.message(Command("aggstats"))
+@admin_only
+async def cmd_aggstats(message: Message) -> None:
+    """Метрики агрегатора прямо в боте: hit-ratio, latency, кеши, атаки."""
+    try:
+        from app.api.sub_aggregator_route import get_metrics_snapshot
+        s = get_metrics_snapshot()
+    except Exception as e:
+        await message.answer(f"❌ Не удалось получить метрики: {e}")
+        return
+
+    total = s["hits"] + s["misses"] + s["stale"]
+    ratio_pct = round(s["hit_ratio"] * 100, 1)
+    # Здоровье: hit_ratio > 90% и avg_upstream < 400ms.
+    healthy = (s["hit_ratio"] > 0.9 or total < 50) and s["avg_upstream_ms"] < 400
+    head = "🟢 Здоров" if healthy else "🟡 Внимание"
+
+    text = (
+        f"📊 <b>Sub-Aggregator — метрики</b>  {head}\n\n"
+        f"<b>Запросы</b> (всего {total}):\n"
+        f"• Из кеша (hit): <b>{s['hits']}</b> — {ratio_pct}%\n"
+        f"• В панель (miss): <b>{s['misses']}</b>\n"
+        f"• Stale (панель упала): <b>{s['stale']}</b>\n"
+        f"• Не найдено (404): <b>{s['not_found']}</b>\n"
+        f"• Revoked-заглушки: <b>{s['revoked']}</b>\n\n"
+        f"<b>Панель Remnawave</b>:\n"
+        f"• Успешных upstream: <b>{s['upstream_ok']}</b>\n"
+        f"• Фейлов upstream: <b>{s['upstream_fail']}</b>\n"
+        f"• Средняя задержка: <b>{s['avg_upstream_ms']} мс</b>\n"
+        f"• Singleflight-схлопов: <b>{s['singleflight_wait']}</b>\n\n"
+        f"<b>Кеши</b>:\n"
+        f"• Body: <b>{s['cache_size']}</b> · Pair: <b>{s['pair_cache_size']}</b> "
+        f"· In-flight: <b>{s['inflight_size']}</b>\n\n"
+        f"<b>Безопасность</b>:\n"
+        f"• Алертов об атаках: <b>{s['attack_alerts_sent']}</b>\n\n"
+        f"<i>Норма: hit >90%, задержка &lt;400мс, upstream_fail не растёт.</i>"
+    )
+    await message.answer(text, parse_mode="HTML")
+
+
 __all__ = ["sub_aggregator_admin_router"]
