@@ -13,8 +13,16 @@ Embedded sub-aggregator — GET /a/{token}.
 
 Никаких докеров, стрим-сервисов, WG. RF-1 = TLS + rate-limit + proxy.
 
-Кэша нет (SWR/Redis добавим позже, если понадобится). Сейчас каждый
-запрос идёт в панель — для беты одного админа это нормально.
+Кеш (in-process, один uvicorn-worker):
+  • body-кеш: fresh 15s → hit мгновенно; stale 24h → отдаём при падении
+    панели. LRU-границей MAX_CACHE_ENTRIES ограничена память.
+  • pair-кеш: token→URLs, 1 час, чтобы не бить БД на каждый запрос.
+  • singleflight: параллельные запросы одного token = 1 upstream fetch.
+Обновление подписки: бот после mutation зовёт clear_cache(token) —
+in-process, 0ms → следующий запрос клиента = свежие данные из панели.
+
+Нагрузка (см. tests/services/test_sub_aggregator_load.py): при hit-ratio
+>90% держит тысячи rps; узкое место — не агрегатор, а панель Remnawave.
 """
 from __future__ import annotations
 
@@ -25,14 +33,11 @@ import logging
 import re
 import time
 from collections import OrderedDict
-from datetime import datetime, timezone
-from html import escape as html_escape
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import quote as url_quote
 
 import httpx
 from fastapi import APIRouter, Path, Request, Response
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
 
 import config
 import database
@@ -95,7 +100,72 @@ _metrics: Dict[str, int] = {
     # Latency-статистика: сумма ms + count → avg = sum/count.
     # p95/p99 в проде считаются через x-cache=miss логи (в них timestamp).
     "upstream_ms_sum": 0, "upstream_count": 0,
+    "attack_alerts_sent": 0,
 }
+
+
+# ── Attack detector ─────────────────────────────────────────────────
+# Скользящее 60-сек окно считает «плохие» события: not_found (флуд
+# случайных tokens) и upstream_fail (панель гасят / упала). При пробитии
+# порога — разовый Telegram-алерт админу через send_alert (security).
+# Cost: инкремент int + сравнение на request — микросекунды.
+_attack_window_start: float = 0.0
+_attack_not_found: int = 0
+_attack_upstream_fail: int = 0
+
+# Пороги per 60 sec — норма (даже пиковая) не должна триггерить.
+ATTACK_NOT_FOUND_THRESHOLD = 300     # >5 rps not-found = random-token DoS
+ATTACK_UPSTREAM_FAIL_THRESHOLD = 60  # >1 rps upstream fail = панель тупит
+
+
+def _bump_attack_window(kind: str) -> None:
+    """Тик счётчика 60-сек окна; на пробитии порога — разовый алерт."""
+    global _attack_window_start, _attack_not_found, _attack_upstream_fail
+    now = time.monotonic()
+    if now - _attack_window_start >= 60:
+        _attack_window_start = now
+        _attack_not_found = 0
+        _attack_upstream_fail = 0
+    if kind == "not_found":
+        _attack_not_found += 1
+        if _attack_not_found == ATTACK_NOT_FOUND_THRESHOLD:
+            _fire_attack_alert(kind="not_found", count=_attack_not_found)
+    elif kind == "upstream_fail":
+        _attack_upstream_fail += 1
+        if _attack_upstream_fail == ATTACK_UPSTREAM_FAIL_THRESHOLD:
+            _fire_attack_alert(kind="upstream_fail", count=_attack_upstream_fail)
+
+
+def _fire_attack_alert(*, kind: str, count: int) -> None:
+    """Fire-and-forget алерт админу. Триггерится РОВНО раз на окно
+    (== вместо >= в caller'е); поверх — cooldown send_alert('security')."""
+    try:
+        from app.api import telegram_webhook as _tw
+        bot = getattr(_tw, "_bot", None)
+        if bot is None:
+            return
+        _metrics["attack_alerts_sent"] += 1
+        if kind == "not_found":
+            msg = (
+                f"🚨 <b>Sub-aggregator: подозрительный флуд</b>\n\n"
+                f"За последнюю минуту: <b>{count}+</b> запросов с несуществующим token.\n"
+                f"Возможно — random-token DoS.\n\n"
+                f"Проверить: <code>curl https://api.atlassecure.ru/a/_metrics</code>\n"
+                f"Порог: {ATTACK_NOT_FOUND_THRESHOLD}/мин.\n\n"
+                f"Действие: включить Cloudflare proxied:true, если продолжится."
+            )
+        else:
+            msg = (
+                f"🚨 <b>Sub-aggregator: массовые upstream fails</b>\n\n"
+                f"За последнюю минуту: <b>{count}+</b> фейлов запроса к панели.\n"
+                f"Возможно — панель Remnawave тупит / упала / сеть.\n\n"
+                f"Порог: {ATTACK_UPSTREAM_FAIL_THRESHOLD}/мин.\n\n"
+                f"Юзеры получают stale-cache — 503 не видят первые 24 часа."
+            )
+        from app.services.admin_alerts import send_alert
+        asyncio.create_task(send_alert(bot, "security", msg, force=False))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("SUB_AGG_ATTACK_ALERT_FAIL: %s", e)
 
 
 def _cache_get(token: str) -> tuple[Optional[bytes], Optional[dict], str]:
@@ -120,14 +190,20 @@ def _cache_get(token: str) -> tuple[Optional[bytes], Optional[dict], str]:
     return None, None, "miss"
 
 
-def _cache_set(token: str, body: bytes, headers: dict) -> None:
-    """Set both fresh + stale copy. LRU-evict если превысили cap."""
+def _cache_put(token: str, body: bytes, headers: dict, fresh_ttl: float, stale_ttl: float) -> None:
+    """Единая запись в кеш с LRU-границей. Используется и для обычных
+    ответов (_cache_set), и для revoked-заглушки — чтобы rev-записи тоже
+    считались в MAX_CACHE_ENTRIES и не текла память."""
     now = time.monotonic()
-    _cache[token] = (now + FRESH_TTL, now + STALE_TTL, body, dict(headers))
+    _cache[token] = (now + fresh_ttl, now + stale_ttl, body, dict(headers))
     _cache.move_to_end(token)
-    # Bound size.
     while len(_cache) > MAX_CACHE_ENTRIES:
         _cache.popitem(last=False)
+
+
+def _cache_set(token: str, body: bytes, headers: dict) -> None:
+    """Обычный ответ: fresh 15s + stale 24h."""
+    _cache_put(token, body, headers, FRESH_TTL, STALE_TTL)
 
 
 def _pair_get(token: str) -> tuple[Optional[dict], bool]:
@@ -287,187 +363,6 @@ def _support_url() -> Optional[str]:
     return None
 
 
-# ── User-Agent classification ───────────────────────────────────────
-# Один URL — два ответа. Клиенты (Happ/v2rayNG/…) получают base64
-# подписку, браузеры (Chrome/Safari/Firefox) — HTML-страницу с кнопками
-# «Открыть в Happ» / «Открыть в Incy» / прочих клиентов + копируемый ключ.
-#
-# Правило: только явно распознанный браузер → HTML. Всё остальное (клиенты,
-# curl, боты, unknown UA) → raw base64. Consequences of misclassification:
-# новый клиент неопознанный → получит base64 (работает). Скрапер под
-# Chrome UA → получит HTML (не страшно).
-_CLIENT_UA_RE = re.compile(
-    r"\b(happ|v2rayng|v2raytun|v2box|streisand|shadowrocket|foxray|hiddify|"
-    r"nekoray|nekobox|clash|sing-?box|stash|shadowlink|oneclick)\b",
-    re.IGNORECASE,
-)
-_BROWSER_UA_RE = re.compile(
-    r"\b(mozilla|chrome|safari|firefox|edg|opera|opr/)\b",
-    re.IGNORECASE,
-)
-
-
-def _wants_html(ua: str) -> bool:
-    if not ua:
-        return False
-    if _CLIENT_UA_RE.search(ua):
-        return False
-    if _BROWSER_UA_RE.search(ua):
-        return True
-    return False
-
-
-# ── HTML rendering ──────────────────────────────────────────────────
-# Стиль совпадает с deeplink_redirect.py (light палитра, SF/Inter, минимал)
-# чтобы юзер видел один и тот же язык дизайна во всех бот-страницах.
-
-def _fmt_bytes(n: int) -> str:
-    """1234567890 → '1.15 ГБ'. Компактно для показа юзеру."""
-    if n <= 0:
-        return "0"
-    for unit, div in (("ТБ", 1024**4), ("ГБ", 1024**3), ("МБ", 1024**2), ("КБ", 1024)):
-        if n >= div:
-            return f"{n / div:.2f} {unit}"
-    return f"{n} Б"
-
-
-def _fmt_expire(ts: int) -> Optional[str]:
-    """Unix ts → '15.10.2026' или None."""
-    if not ts or ts <= 0:
-        return None
-    try:
-        dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
-        return dt.strftime("%d.%m.%Y")
-    except (ValueError, OSError, OverflowError):
-        return None
-
-
-def _deeplink_base() -> str:
-    """https://api.atlassecure.ru — берём из WEBHOOK_URL. Endpoint /open/{client}
-    делает crypt-sealing для Happ/Incy и редирект в приложение."""
-    webhook = getattr(config, "WEBHOOK_URL", "") or ""
-    if not webhook:
-        return ""
-    m = re.match(r"^(https?://[^/]+)", webhook)
-    return m.group(1) if m else ""
-
-
-def _render_sub_html(*, token: str, sub_url: str, headers: dict) -> str:
-    """Минимальная splash-страница: бренд + 2 кнопки Happ/Incy.
-
-    Никакой статистики трафика / expire / других клиентов — юзеру не нужно
-    видеть детали подписки в браузере (это может ввести в заблуждение:
-    какая именно подписка? актуально ли?). Клик по кнопке → deep-link →
-    приложение импортирует агрегатор-ссылку и всё сразу видно там.
-    """
-    brand = html_escape(_brand_title())
-    support = _support_url() or ""
-    support_esc = html_escape(support, quote=True)
-
-    # Deep-links. Happ/Incy — через /open/{client} (crypt-sealing серверный).
-    base = _deeplink_base()
-    q = url_quote(sub_url, safe='')
-    happ_href = f"{base}/open/happ?url={q}" if base else f"happ://add/{url_quote(sub_url, safe='/:?&=@%+')}"
-    incy_href = f"{base}/open/incy?url={q}" if base else f"happ://add/{url_quote(sub_url, safe='/:?&=@%+')}"
-
-    happ_href_esc = html_escape(happ_href, quote=True)
-    incy_href_esc = html_escape(incy_href, quote=True)
-
-    support_row = (
-        f'<a class="support" href="{support_esc}" target="_blank" rel="noopener">Поддержка</a>'
-        if support else ""
-    )
-
-    return f"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<meta name="theme-color" content="#f6f7f9">
-<meta name="robots" content="noindex,nofollow">
-<title>{brand}</title>
-<style>
-  * {{ box-sizing: border-box; }}
-  html, body {{
-    margin: 0; padding: 0;
-    background: #f6f7f9; color: #111;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-                 'Inter', 'Helvetica Neue', sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }}
-  body {{
-    min-height: 100vh;
-    display: flex; flex-direction: column; align-items: center;
-    justify-content: center;
-    padding: 40px 20px;
-  }}
-  .wrap {{ width: 100%; max-width: 400px; text-align: center; }}
-
-  .brand {{
-    font-size: 28px; font-weight: 700; letter-spacing: -0.02em;
-    margin: 0 0 8px;
-  }}
-  p.lead {{ font-size: 14px; line-height: 1.45; color: #666;
-            margin: 0 0 32px; }}
-
-  .btn {{
-    display: flex; align-items: center; justify-content: center;
-    width: 100%; padding: 16px 22px;
-    background: #111; color: #fff;
-    border-radius: 12px;
-    text-decoration: none;
-    font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
-    transition: transform 80ms ease, background 80ms ease;
-    border: none; cursor: pointer;
-    margin-bottom: 12px;
-  }}
-  .btn:active {{ transform: scale(0.98); background: #000; }}
-  .btn.secondary {{
-    background: #fff; color: #111;
-    border: 1px solid #e1e4e8;
-  }}
-  .btn.secondary:active {{ background: #f0f2f5; }}
-
-  .footer {{
-    margin-top: 40px;
-    display: flex; align-items: center; justify-content: center;
-    gap: 16px;
-    font-size: 11px; letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: #9aa1ab;
-  }}
-  .support {{ color: #9aa1ab; text-decoration: none; }}
-  .support:hover {{ color: #111; }}
-
-  @media (prefers-color-scheme: dark) {{
-    html, body {{ background: #0f1720; color: #f5f5f2; }}
-    .brand {{ color: #ffffff; }}
-    p.lead {{ color: #9aa1ab; }}
-    .btn {{ background: #ffffff; color: #0f1720; }}
-    .btn:active {{ background: #f5f5f2; }}
-    .btn.secondary {{ background: #1f2937; color: #ffffff; border-color: #2a3441; }}
-    .btn.secondary:active {{ background: #2a3441; }}
-    .footer {{ color: #6b7280; }}
-  }}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="brand">{brand}</div>
-  <p class="lead">Откройте подписку в приложении</p>
-
-  <a class="btn" href="{happ_href_esc}">Открыть в Happ</a>
-  <a class="btn secondary" href="{incy_href_esc}">Открыть в Incy</a>
-
-  <div class="footer">
-    <span>{brand}</span>
-    {support_row}
-  </div>
-</div>
-</body>
-</html>"""
-
-
 async def _do_fetch_and_merge(token: str, pair: dict, ua: str) -> tuple[Optional[bytes], Optional[dict]]:
     """Реальная работа: 2 параллельных upstream GET → merge → (body, headers).
     Возвращает (None, None) если ОБА апстрима не отдали ни одной строки —
@@ -483,10 +378,12 @@ async def _do_fetch_and_merge(token: str, pair: dict, ua: str) -> tuple[Optional
         _metrics["upstream_ok"] += 1
     else:
         _metrics["upstream_fail"] += 1
+        _bump_attack_window("upstream_fail")
     if gb_ok:
         _metrics["upstream_ok"] += 1
     else:
         _metrics["upstream_fail"] += 1
+        _bump_attack_window("upstream_fail")
 
     main_lines = _decode_body(main_resp) if main_ok else []
     gb_lines = _decode_body(gb_resp) if gb_ok else []
@@ -566,7 +463,7 @@ async def _fetch_singleflight(token: str, pair: dict, ua: str) -> tuple[Optional
             # Fallthrough — если leader упал, пусть follower попробует свой.
             pass
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     fut = loop.create_future()
     _inflight[token] = fut
     try:
@@ -601,6 +498,8 @@ async def aggregate(
       4. LRU cap=20k    → bounded memory
     """
     if not _TOKEN_RE.match(token):
+        _metrics["not_found"] += 1
+        _bump_attack_window("not_found")
         return PlainTextResponse("Not found", status_code=404)
 
     ua_early = request.headers.get("user-agent", "")
@@ -615,6 +514,7 @@ async def aggregate(
     pair = await _load_pair(token)
     if not pair:
         _metrics["not_found"] += 1
+        _bump_attack_window("not_found")
         # Если ЕСТЬ stale-копия но pair нет — не отдаём: юзера удалили.
         return PlainTextResponse("Not found", status_code=404)
 
@@ -631,10 +531,9 @@ async def aggregate(
             "profile-title": _brand_title(),
             "profile-update-interval": str(_CLIENT_UPDATE_INTERVAL_HOURS),
         }
-        # Короткий TTL — юзер может тут же активировать доступ.
-        now = time.monotonic()
-        _cache[token] = (now + 10, now + 60, body_bytes, dict(headers))
-        _cache.move_to_end(token)
+        # Короткий TTL — юзер может тут же активировать доступ. Через _cache_put
+        # → тоже под LRU-границей.
+        _cache_put(token, body_bytes, headers, 10, 60)
         return _make_response(request, ua_early, token, body_bytes, headers, "miss")
 
     # ── 4. Fetch (singleflight) ────────────────────────────────────
@@ -679,14 +578,9 @@ def _make_response(
     headers: dict,
     cache_state: str,
 ) -> Response:
-    """Единая точка формирования ответа: browser → HTML, client → base64."""
-    if _wants_html(ua):
-        sub_url = str(request.url)
-        html = _render_sub_html(token=token, sub_url=sub_url, headers=headers)
-        return HTMLResponse(
-            content=html,
-            headers={"x-cache": cache_state, "cache-control": "no-store"},
-        )
+    """Любой запрос (браузер или VPN-клиент) получает сырую base64-подписку.
+    HTML sub-page убрана по решению владельца — вернулись к поведению до её
+    введения (52860b1 / 6274b21)."""
     return Response(
         content=body_bytes,
         media_type="text/plain; charset=utf-8",
@@ -710,7 +604,8 @@ async def invalidate_cache(
             return PlainTextResponse("Forbidden", status_code=403)
     if not _TOKEN_RE.match(token):
         return PlainTextResponse("Bad token", status_code=400)
-    _cache.pop(token, None)
+    # Чистим и body-кеш, И pair-кеш (иначе старые sub-URL живут до PAIR_TTL).
+    clear_cache(token)
     return Response(content=b'{"ok":true}', media_type="application/json")
 
 

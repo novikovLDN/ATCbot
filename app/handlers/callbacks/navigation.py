@@ -642,6 +642,13 @@ async def callback_setup_step2(callback: CallbackQuery):
                 url=f"{base_url}/open/incy?url={q}",
                 style="success",
             )])
+        # V2RayTun — только iOS/Android (десктоп-схема нестабильна).
+        if platform in ("ios", "android"):
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.btn_add_v2raytun", "🚀 Добавить ключ в V2RayTun"),
+                url=f"{base_url}/open/v2raytun?url={q}",
+                style="primary",
+            )])
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "setup.btn_done"),
             callback_data="setup_done",
