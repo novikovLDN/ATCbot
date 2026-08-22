@@ -54,6 +54,16 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{4,128}$")
 
 UPSTREAM_TIMEOUT = 5.0  # сек
 
+# UA, с которым качаем панель. Remnawave по UA отдаёт РАЗНЫЙ формат:
+# Happ/Incy → application/json (не подписка!), v2rayTun/clash/generic →
+# стандартный base64-список vless. Берём base64-friendly UA, чтобы всегда
+# получать универсальный формат. Override — config.SUB_AGGREGATOR_UPSTREAM_UA.
+_DEFAULT_UPSTREAM_UA = "v2rayTun/2.0 (sub-aggregator)"
+
+
+def _upstream_ua() -> str:
+    return getattr(config, "SUB_AGGREGATOR_UPSTREAM_UA", "") or _DEFAULT_UPSTREAM_UA
+
 # ── Production cache tiers ─────────────────────────────────────────
 # TWO-TIER caching + singleflight + LRU bound.
 #
@@ -400,9 +410,17 @@ def _support_url() -> Optional[str]:
 async def _do_fetch_and_merge(token: str, pair: dict, ua: str) -> tuple[Optional[bytes], Optional[dict]]:
     """Реальная работа: 2 параллельных upstream GET → merge → (body, headers).
     Возвращает (None, None) если ОБА апстрима не отдали ни одной строки —
-    caller решит, отдавать stale или 503."""
-    main_task = asyncio.create_task(_fetch_upstream(pair["main_sub_url"], ua))
-    gb_task = asyncio.create_task(_fetch_upstream(pair["gb_sub_url"], ua))
+    caller решит, отдавать stale или 503.
+
+    ⚠️ КРИТИЧНО: качаем панель с ФИКСИРОВАННЫМ UA (_UPSTREAM_UA), а НЕ с UA
+    клиента. Причина: Remnawave отдаёт разный формат по User-Agent — для
+    Happ/Incy присылает application/json (наш _decode_body его не парсит →
+    мусор → клиент «неизвестный тип контента»), а для v2rayTun-подобного UA
+    отдаёт стандартный base64-список vless. base64 универсален — его едят
+    ВСЕ клиенты, поэтому всегда берём base64-формат."""
+    up_ua = _upstream_ua()
+    main_task = asyncio.create_task(_fetch_upstream(pair["main_sub_url"], up_ua))
+    gb_task = asyncio.create_task(_fetch_upstream(pair["gb_sub_url"], up_ua))
     main_resp, gb_resp = await asyncio.gather(main_task, gb_task)
 
     main_ok = main_resp is not None and main_resp.status_code == 200
@@ -471,18 +489,9 @@ async def _do_fetch_and_merge(token: str, pair: dict, ua: str) -> tuple[Optional
     if sup:
         headers["support-url"] = sup
 
-    # Content-Type / Content-Disposition — как у панели, чтобы для клиента
-    # агрегатор был неотличим от прямой подписки. Берём с рабочего апстрима
-    # (приоритет gb — он у нас чаще 200). Пустой content-type у клиента =
-    # «неизвестный тип контента».
-    src = gb_resp if gb_ok else (main_resp if main_ok else None)
-    if src is not None:
-        ct = (src.headers.get("content-type") or "").strip()
-        if ct:
-            headers["_content_type"] = ct
-        cd = (src.headers.get("content-disposition") or "").strip()
-        if cd:
-            headers["content-disposition"] = cd
+    # Content-Type НЕ пробрасываем: панельный application/json (Happ-UA)
+    # ломает клиента. Мы всегда качаем base64 (фикс-UA _upstream_ua) →
+    # всегда отдаём text/plain (см. _make_response). Универсально.
 
     logger.info(
         "SUB_AGG_OK token=%s... main_lines=%d gb_lines=%d merged=%d ua=%s",
@@ -626,18 +635,14 @@ def _make_response(
     cache_state: str,
 ) -> Response:
     """Любой запрос (браузер или VPN-клиент) получает сырую base64-подписку.
-    Content-Type берём как у панели (headers['_content_type']) — иначе
-    клиент пишет «неизвестный тип контента». Fallback text/plain."""
-    # Копия без приватного ключа _content_type (он не должен уйти в HTTP).
-    ct = "text/plain; charset=utf-8"
-    out = {}
-    for k, v in headers.items():
-        if k == "_content_type":
-            ct = v or ct
-        else:
-            out[k] = v
-    out["x-cache"] = cache_state
-    return Response(content=body_bytes, media_type=ct, headers=out)
+    ВСЕГДА text/plain: мы качаем панель фикс-UA → всегда base64, а base64
+    как text/plain едят все клиенты. Панельный application/json (Happ-UA)
+    сюда не долетает — не пробрасываем."""
+    return Response(
+        content=body_bytes,
+        media_type="text/plain; charset=utf-8",
+        headers={**headers, "x-cache": cache_state},
+    )
 
 
 # ── Internal endpoint для invalidate ────────────────────────────────

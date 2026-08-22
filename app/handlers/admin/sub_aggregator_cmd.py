@@ -260,7 +260,7 @@ async def cmd_aggcheck(message: Message) -> None:
         return
 
     # 2) Живые апстримы
-    ua = "Happ/diag"
+    ua = agg._upstream_ua()  # тот же фикс-UA, что агрегатор в реале (base64)
     main_resp = await agg._fetch_upstream(pair["main_sub_url"], ua)
     gb_resp = await agg._fetch_upstream(pair["gb_sub_url"], ua)
 
