@@ -268,14 +268,36 @@ async def cmd_aggcheck(message: Message) -> None:
 
     main_n = len(agg._decode_body(main_resp)) if (main_resp and main_resp.status_code == 200) else 0
     gb_n = len(agg._decode_body(gb_resp)) if (gb_resp and gb_resp.status_code == 200) else 0
-    lines.append(f"\n<b>main (premium):</b>\n{_desc(main_resp, pair['main_sub_url'])}")
-    lines.append(f"\n<b>gb (bypass):</b>\n{_desc(gb_resp, pair['gb_sub_url'])}")
+    lines.append(f"\n<b>main (premium):</b>\n{_desc(main_resp, agg._normalize_upstream_url(pair['main_sub_url']))}")
+    lines.append(f"\n<b>gb (bypass):</b>\n{_desc(gb_resp, agg._normalize_upstream_url(pair['gb_sub_url']))}")
     lines.append(f"\n<b>Итого серверов в склейке:</b> {main_n + gb_n}")
 
     if main_n + gb_n == 0:
-        lines.append("\n❌ <b>0 серверов</b> — вот почему у юзера пусто. Смотри выше, какой апстрим не отдал (плохой URL / панель не вернула конфиги).")
-    else:
-        lines.append("\n✅ Склейка не пустая — если у юзера пусто, дело в кеше клиента (пусть обновит подписку в приложении).")
+        lines.append("\n❌ <b>0 серверов из панели</b> — апстрим не отдал (плохой URL / панель не вернула конфиги). Смотри выше.")
+
+    # 3) End-to-end: реальный GET публичного URL агрегатора (через домен/nginx).
+    public_url = f"{config.SUB_AGGREGATOR_URL}/a/{pair['token']}"
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as c:
+            r = await c.get(public_url, headers={"User-Agent": "Happ/diag"})
+        ct = r.headers.get("content-type", "?")
+        xc = r.headers.get("x-cache", "?")
+        # _decode_body берёт только resp.text — передаём заглушку с .text.
+        body_srv = len(agg._decode_body(type("R", (), {"text": r.text})())) if r.status_code == 200 else 0
+        lines.append(
+            f"\n<b>Публичный URL</b> ({config.SUB_AGGREGATOR_URL}):\n"
+            f"{'✅' if r.status_code == 200 else '❌'} HTTP {r.status_code} · "
+            f"ct=<code>{ct[:30]}</code> · x-cache={xc} · <b>{body_srv}</b> серверов"
+        )
+        if r.status_code != 200:
+            lines.append("→ Домен/nginx НЕ отдаёт подписку. Проверь reverse-proxy RF-1 → api.atlassecure.ru/a/{token}.")
+        elif body_srv == 0:
+            lines.append("→ Домен отвечает, но тело пустое (см. апстримы выше).")
+        else:
+            lines.append("→ ✅ Всё живо. Если у юзера пусто — кеш клиента, пусть обновит подписку в приложении.")
+    except Exception as e:
+        lines.append(f"\n<b>Публичный URL</b>: ❌ не достучались — {str(e)[:80]}\n→ Домен недоступен из бота (DNS/nginx/сеть).")
 
     await message.answer("\n".join(lines), parse_mode="HTML")
 
