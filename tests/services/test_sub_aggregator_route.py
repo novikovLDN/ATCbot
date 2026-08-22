@@ -122,14 +122,21 @@ def test_decode_body_empty():
     assert m._decode_body(FakeResp(text="")) == []
 
 
-def test_normalize_upstream_dead_host():
-    # Мёртвый vps-cloud host → живой панельный
-    assert m._normalize_upstream_url("https://subscription.vps-cloud.uk/abc123") \
-        == "https://sub.atlassecure.ru/abc123"
+def test_normalize_upstream_forces_canonical_host(monkeypatch):
+    monkeypatch.setattr(m.config, "SUB_AGGREGATOR_UPSTREAM_HOST", "sub.atlassecure.ru", raising=False)
+    # Любой чужой host → канонический, path/query сохраняются
+    assert m._normalize_upstream_url("https://subscription.vps-cloud.uk/abc123?x=1") \
+        == "https://sub.atlassecure.ru/abc123?x=1"
 
-def test_normalize_upstream_live_host_untouched():
+def test_normalize_upstream_live_host_untouched(monkeypatch):
+    monkeypatch.setattr(m.config, "SUB_AGGREGATOR_UPSTREAM_HOST", "sub.atlassecure.ru", raising=False)
     live = "https://sub.atlassecure.ru/abc123"
     assert m._normalize_upstream_url(live) == live
+
+def test_normalize_upstream_empty_config_notouch(monkeypatch):
+    monkeypatch.setattr(m.config, "SUB_AGGREGATOR_UPSTREAM_HOST", "", raising=False)
+    url = "https://whatever.example/abc"
+    assert m._normalize_upstream_url(url) == url
 
 def test_normalize_upstream_empty():
     assert m._normalize_upstream_url("") == ""

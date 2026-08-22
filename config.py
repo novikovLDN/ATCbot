@@ -652,3 +652,12 @@ SUB_AGGREGATOR_URL = "https://subscription.palantirdns.uk"
 SUB_AGGREGATOR_ADMIN_ONLY = False  # РАСКАТАНО НА ВСЕХ (домен готов, протестировано)
 SUB_AGGREGATOR_INTERNAL_SECRET = ""  # заполни после генерации в sub-aggregator/.env
 
+# ЖИВОЙ host панели, откуда агрегатор качает upstream-подписки. Что бы ни
+# лежало в БД (subscription.vps-cloud.uk, старый rewrite, etc.) — агрегатор
+# принудительно бьёт СЮДА. Иначе fetch падает → пустая склейка → 503 →
+# клиент пишет «неизвестный тип контента».
+# ⚠️ Должен совпадать с public-доменом подписок в панели Remnawave.
+# Если панель отдаёт subscriptionUrl на другом хосте — поставь его сюда.
+# Пусто → агрегатор качает URL как есть (без подмены host).
+SUB_AGGREGATOR_UPSTREAM_HOST = "sub.atlassecure.ru"
+
