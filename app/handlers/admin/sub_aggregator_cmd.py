@@ -210,16 +210,20 @@ async def cmd_aggstats(message: Message) -> None:
 
 
 @sub_aggregator_admin_router.message(Command("aggcheck"))
-@admin_only
 async def cmd_aggcheck(message: Message) -> None:
-    """Диагностика «нет серверов»: /aggcheck [tg_id].
+    """Диагностика «нет серверов»: /aggcheck [tg_id]. Доступна ВСЕМ.
 
-    Показывает, где рвётся цепочка для конкретного юзера:
-    есть ли пара → живы ли обе апстрим-ссылки → сколько строк-серверов
-    вернула каждая → сколько в итоговой склейке.
+    Обычный юзер проверяет только СЕБЯ (tg_id-аргумент игнорируется —
+    приватность). Админ может проверить любого по /aggcheck <tg_id>.
+    Показывает: есть ли пара → живы ли обе апстрим-ссылки → сколько
+    серверов вернула каждая → итоговая склейка → публичный URL по UA.
     """
+    from app.utils.security import is_admin
+    requester = message.from_user.id
     parts = (message.text or "").split()
-    tg = int(parts[1]) if len(parts) > 1 and parts[1].lstrip("-").isdigit() else message.from_user.id
+    arg = int(parts[1]) if len(parts) > 1 and parts[1].lstrip("-").isdigit() else None
+    # tg_id-аргумент только админу; остальные — только себя.
+    tg = arg if (arg is not None and is_admin(requester)) else requester
 
     import database
     from app.api import sub_aggregator_route as agg

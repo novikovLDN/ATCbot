@@ -649,7 +649,7 @@ REDIS_URL = env("REDIS_URL", default="")
 
 SUB_AGGREGATOR_ENABLED = True
 SUB_AGGREGATOR_URL = "https://subscription.palantirdns.uk"
-SUB_AGGREGATOR_ADMIN_ONLY = False  # РАСКАТАНО НА ВСЕХ (домен готов, протестировано)
+SUB_AGGREGATOR_ADMIN_ONLY = True   # ⛔ ОТКАТ: массовые «неизвестный тип контента» — вернули всех на legacy, чиним. Флип на False когда /aggcheck зелёный на Android.
 SUB_AGGREGATOR_INTERNAL_SECRET = ""  # заполни после генерации в sub-aggregator/.env
 
 # ЖИВОЙ host панели, откуда агрегатор качает upstream-подписки. Что бы ни
