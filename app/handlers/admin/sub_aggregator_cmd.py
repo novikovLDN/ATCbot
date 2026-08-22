@@ -264,7 +264,9 @@ async def cmd_aggcheck(message: Message) -> None:
         if resp is None:
             return f"❌ НЕ ОТВЕТИЛ (таймаут/сеть) · {url[:45]}…"
         n = len(agg._decode_body(resp)) if resp.status_code == 200 else 0
-        return f"{'✅' if resp.status_code == 200 else '⚠️'} HTTP {resp.status_code} · <b>{n}</b> серверов · {url[:40]}…"
+        ct = (resp.headers.get("content-type") or "?")[:24]
+        return (f"{'✅' if resp.status_code == 200 else '⚠️'} HTTP {resp.status_code} · "
+                f"<b>{n}</b> серверов · ct=<code>{ct}</code>\n{url[:48]}…")
 
     main_n = len(agg._decode_body(main_resp)) if (main_resp and main_resp.status_code == 200) else 0
     gb_n = len(agg._decode_body(gb_resp)) if (gb_resp and gb_resp.status_code == 200) else 0

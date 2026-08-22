@@ -471,6 +471,19 @@ async def _do_fetch_and_merge(token: str, pair: dict, ua: str) -> tuple[Optional
     if sup:
         headers["support-url"] = sup
 
+    # Content-Type / Content-Disposition — как у панели, чтобы для клиента
+    # агрегатор был неотличим от прямой подписки. Берём с рабочего апстрима
+    # (приоритет gb — он у нас чаще 200). Пустой content-type у клиента =
+    # «неизвестный тип контента».
+    src = gb_resp if gb_ok else (main_resp if main_ok else None)
+    if src is not None:
+        ct = (src.headers.get("content-type") or "").strip()
+        if ct:
+            headers["_content_type"] = ct
+        cd = (src.headers.get("content-disposition") or "").strip()
+        if cd:
+            headers["content-disposition"] = cd
+
     logger.info(
         "SUB_AGG_OK token=%s... main_lines=%d gb_lines=%d merged=%d ua=%s",
         token[:6], len(main_lines), len(gb_lines), len(merged), ua[:40],
@@ -613,13 +626,18 @@ def _make_response(
     cache_state: str,
 ) -> Response:
     """Любой запрос (браузер или VPN-клиент) получает сырую base64-подписку.
-    HTML sub-page убрана по решению владельца — вернулись к поведению до её
-    введения (52860b1 / 6274b21)."""
-    return Response(
-        content=body_bytes,
-        media_type="text/plain; charset=utf-8",
-        headers={**headers, "x-cache": cache_state},
-    )
+    Content-Type берём как у панели (headers['_content_type']) — иначе
+    клиент пишет «неизвестный тип контента». Fallback text/plain."""
+    # Копия без приватного ключа _content_type (он не должен уйти в HTTP).
+    ct = "text/plain; charset=utf-8"
+    out = {}
+    for k, v in headers.items():
+        if k == "_content_type":
+            ct = v or ct
+        else:
+            out[k] = v
+    out["x-cache"] = cache_state
+    return Response(content=body_bytes, media_type=ct, headers=out)
 
 
 # ── Internal endpoint для invalidate ────────────────────────────────
