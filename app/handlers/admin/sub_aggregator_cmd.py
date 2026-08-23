@@ -165,26 +165,13 @@ async def cmd_aggstats(message: Message) -> None:
 
     total = s["hits"] + s["misses"] + s["stale"]
     ratio_pct = round(s["hit_ratio"] * 100, 1)
-    # Здоровье считаем только на осмысленной выборке — иначе ложная тревога
-    # на первых запросах (холодный старт: TLS-хендшейк даёт высокий latency,
-    # кеш ещё не прогрет → низкий hit-ratio). Реальные красные флаги:
-    # фейлы upstream, stale-выдача (панель падала). hit/latency учитываем
-    # только когда запросов/upstream-вызовов достаточно.
-    enough_req = total >= 50
-    enough_up = s["upstream_count"] >= 20
-    warmup = not (enough_req or enough_up)
-    healthy = (
-        s["upstream_fail"] == 0
-        and s["stale"] == 0
-        and (not enough_req or s["hit_ratio"] > 0.85)
-        and (not enough_up or s["avg_upstream_ms"] < 500)
-    )
-    if warmup:
-        head = "🟢 Прогрев (мало запросов)"
-    elif healthy:
-        head = "🟢 Здоров"
-    else:
-        head = "🟡 Внимание"
+    # Здоровье НЕ зависит от hit-ratio: он определяется нагрузкой (клиенты
+    # опрашивают раз/час → низкий hit — это норма, а не проблема). Реальные
+    # красные флаги — ДОЛЯ фейлов upstream и stale-выдача (панель падала).
+    up_total = s["upstream_ok"] + s["upstream_fail"]
+    fail_rate = (s["upstream_fail"] / up_total) if up_total else 0
+    healthy = fail_rate < 0.02 and s["stale"] == 0
+    head = "🟢 Здоров" if healthy else "🟡 Внимание"
 
     text = (
         f"📊 <b>Sub-Aggregator — метрики</b>  {head}\n\n"
@@ -204,7 +191,9 @@ async def cmd_aggstats(message: Message) -> None:
         f"· In-flight: <b>{s['inflight_size']}</b>\n\n"
         f"<b>Безопасность</b>:\n"
         f"• Алертов об атаках: <b>{s['attack_alerts_sent']}</b>\n\n"
-        f"<i>Норма: hit >90%, задержка &lt;400мс, upstream_fail не растёт.</i>"
+        f"<i>Здоровье = доля фейлов upstream &lt;2% и stale=0. Hit-ratio и\n"
+        f"задержка — информативно (зависят от нагрузки; hit растёт по мере\n"
+        f"прогрева кеша, TTL 2ч покрывает часовой опрос клиентов).</i>"
     )
     await message.answer(text, parse_mode="HTML")
 
