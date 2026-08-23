@@ -37,6 +37,9 @@ class FakeConn:
     async def fetchrow(self, *a, **k):
         return self._row
 
+    async def execute(self, *a, **k):
+        return "UPDATE 1"
+
 
 class FakeAcquire:
     def __init__(self, conn):
@@ -431,6 +434,37 @@ async def test_singleflight_collapses_concurrent_requests():
     # 2 upstream GET (main+gb) на ВСЕ 50 запросов, а не 100.
     assert calls["n"] == 2
     assert m._metrics["singleflight_wait"] >= 40
+
+
+async def test_aggregate_selfheals_on_reissued_link():
+    """Панель переиздала подписку → main 404 → self-heal берёт свежий URL
+    по uuid, обновляет sub_pairs, переспрашивает → серверы приходят."""
+    row = {
+        "token": "tok12345",
+        "main_sub_url": "https://panel/OLD-main",
+        "gb_sub_url": "https://panel/gb",
+        "status": "active",
+        "main_uuid": "uuid-main-123",
+        "gb_uuid": "uuid-gb-456",
+    }
+
+    async def fetch(url, ua):
+        if url.endswith("/OLD-main"):
+            return FakeResp("", 404)                       # старая ссылка мертва
+        if url.endswith("/NEW-main"):
+            return FakeResp(_b64_sub(["vless://newmain"]), 200,
+                            {"subscription-userinfo": "expire=999"})
+        return FakeResp(_b64_sub(["vless://gb1"]), 200,
+                        {"subscription-userinfo": "total=80; expire=1"})
+
+    fresh = AsyncMock(return_value={"subscriptionUrl": "https://panel/NEW-main"})
+    with patch.object(m, "_fetch_upstream", fetch), \
+         patch.object(m.database, "get_pool", AsyncMock(return_value=FakePool(row))), \
+         patch("app.services.remnawave_api.get_user", fresh):
+        resp = await m.aggregate(FakeRequest(), token="tok12345")
+    assert resp.status_code == 200
+    body = base64.b64decode(resp.body).decode()
+    assert body.splitlines() == ["vless://newmain", "vless://gb1"]  # свежий main подхватился
 
 
 async def test_metrics_endpoint_shape():
