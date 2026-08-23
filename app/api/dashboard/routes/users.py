@@ -311,6 +311,33 @@ async def user_revoke(
     return {"ok": bool(ok)}
 
 
+@router.post("/{telegram_id}/reissue-aggregator")
+async def user_reissue_aggregator(
+    telegram_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+):
+    """Перевыпустить aggregator-ссылку юзера: новый token, старая ссылка
+    сразу перестаёт работать. Затрагивает ТОЛЬКО этого юзера — апстрим-
+    ссылки (main/gb) и другие юзеры не трогаются."""
+    from app.services import sub_aggregator
+    try:
+        new_url = await sub_aggregator.reissue_token(telegram_id)
+    except Exception as e:
+        raise HTTPException(500, f"reissue_failed: {e}")
+    if not new_url:
+        raise HTTPException(
+            404,
+            "no_aggregator_pair: у юзера нет aggregator-пары (нет обеих ссылок "
+            "premium+bypass, либо агрегатор выключен)",
+        )
+    bus.publish({
+        "type": "admin:reissue_aggregator",
+        "telegram_id": telegram_id,
+        "by": admin.get("sub"),
+    })
+    return {"ok": True, "url": new_url}
+
+
 class SwitchTariffRequest(BaseModel):
     tariff: str = Field(...)
 

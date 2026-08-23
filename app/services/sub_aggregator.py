@@ -174,6 +174,42 @@ async def get_url(telegram_id: int) -> Optional[str]:
     return build_public_url(row["token"])
 
 
+async def reissue_token(telegram_id: int) -> Optional[str]:
+    """Перевыпустить aggregator-ссылку юзера: генерим НОВЫЙ token, обновляем
+    его строку в sub_pairs. Старая ссылка (старый token) сразу перестаёт
+    работать (404). Затрагивает ТОЛЬКО этого юзера (WHERE telegram_id).
+
+    Возвращает новый публичный URL или None, если пары нет / выключено.
+    Апстрим-ссылки (main/gb) НЕ трогаем — меняется только сам token.
+    """
+    if not config.SUB_AGGREGATOR_ENABLED:
+        return None
+    pool = await database.get_pool()
+    if pool is None:
+        return None
+    new_token = _generate_token()
+    async with pool.acquire() as conn:
+        old_token = await conn.fetchval(
+            "SELECT token FROM sub_pairs WHERE telegram_id = $1", telegram_id
+        )
+        if not old_token:
+            return None  # у юзера нет пары — нечего перевыпускать
+        await conn.execute(
+            "UPDATE sub_pairs SET token = $1, status = 'active', updated_at = now() "
+            "WHERE telegram_id = $2",
+            new_token, telegram_id,
+        )
+    # Чистим кеш и старого, и нового токена (старый — чтобы 404 сразу).
+    if old_token != new_token:
+        await invalidate(old_token)
+    await invalidate(new_token)
+    logger.info(
+        "SUB_AGGREGATOR_REISSUED tg=%s old=%s… new=%s…",
+        telegram_id, str(old_token or "")[:8], new_token[:8],
+    )
+    return build_public_url(new_token)
+
+
 async def revoke(telegram_id: int) -> None:
     """Mark the user's pair revoked — aggregator will serve the stub link.
     Idempotent, no-op if the row doesn't exist."""
@@ -261,6 +297,7 @@ __all__ = [
     "build_public_url",
     "ensure_pair",
     "get_url",
+    "reissue_token",
     "revoke",
     "invalidate",
     "invalidate_bg",
