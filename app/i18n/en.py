@@ -1046,7 +1046,7 @@ LANG = {
     'setup.key_vpn_incy_label': "💚 <b>VPN key for Incy</b> (regular unlimited servers):",
     'setup.key_bypass_incy_label': "💚 <b>Bypass key for Incy</b> (RU whitelists):",
     'setup.key_install_title': "⚡️ <b>Connect in one tap</b>\n\nTap the buttons below — keys will be added automatically.\nAdd both for full functionality.\n\n<blockquote>🔑 VPN — main servers, all the internet without blocks\n🌐 Bypass — RU whitelists, internet works anywhere in the world</blockquote>",
-    'setup.key_install_title_agg': "⚡️ <b>Connect in one tap</b>\n\nTap <b>«Add key»</b> for your app — the subscription will be imported automatically.\n\nIf it didn't open — tap <b>«Manual setup»</b> below.",
+    'setup.key_install_title_agg': "⚡️ <b>Connect in one tap</b>\n\nTap <b>«Add key»</b> for your app — the subscription will be imported automatically.\n\nIf it didn't open — tap <b>«Manual setup»</b> below.\n\n<blockquote>🌐 Traffic is used <b>only</b> on servers marked <b>LTE</b>.\n🚀 Unlimited servers work without using your GB.</blockquote>",
     'setup.btn_add_happ': "📥 Add key to Happ",
     'setup.btn_add_incy': "💚 Add key to Incy",
     'setup.btn_add_v2raytun': "🚀 Add key to V2RayTun",

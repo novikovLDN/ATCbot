@@ -67,7 +67,15 @@ def _upstream_ua() -> str:
 # ── Production cache tiers ─────────────────────────────────────────
 # TWO-TIER caching + singleflight + LRU bound.
 #
-# FRESH  (15 сек)  — hit → мгновенно из памяти. Не идём в панель.
+# FRESH  (10 мин)  — hit → мгновенно из памяти. Не идём в панель.
+#                    Держим ДОЛГО безопасно: контент подписки между
+#                    мутациями не меняется, а бот при покупке/продлении/+ГБ
+#                    зовёт clear_cache(token) → мгновенно сбрасывает.
+#                    Т.е. свежесть даёт инвалидация, а НЕ короткий TTL.
+#                    Компромисс: показания трафика максимум 10 мин
+#                    устаревшие (клиенты и так опрашивают раз/час).
+#                    Было 15с → hit-ratio 10% (почти всё мимо кеша, лишняя
+#                    нагрузка на панель); 10 мин → hit кратно выше.
 # STALE  (24 часа) — если fresh expired И апстрим упал, отдаём это.
 #                    Панель down → юзер видит последнее известное состояние,
 #                    а не 503. Cover для нестабильной панели.
@@ -82,7 +90,7 @@ def _upstream_ua() -> str:
 # Singleflight (in-flight dict) — параллельные запросы одного token
 # ждут одного и того же upstream fetch. Защищает панель от стадных
 # запросов при cold-start (rest бота, TTL expire всех сразу).
-FRESH_TTL = 15
+FRESH_TTL = 600           # 10 мин (инвалидация мгновенная при мутациях)
 STALE_TTL = 24 * 3600
 PAIR_TTL = 3600
 MAX_CACHE_ENTRIES = 20_000
@@ -385,12 +393,48 @@ async def _load_pair(token: str) -> Optional[dict]:
         return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT token, main_sub_url, gb_sub_url, status FROM sub_pairs WHERE token = $1",
+            "SELECT token, main_sub_url, gb_sub_url, status, "
+            "main_user_uuid::text AS main_uuid, gb_user_uuid::text AS gb_uuid "
+            "FROM sub_pairs WHERE token = $1",
             token,
         )
     pair = dict(row) if row else None
     _pair_set(token, pair)
     return pair
+
+
+async def _resolve_fresh_sub_url(uuid: Optional[str]) -> Optional[str]:
+    """Панель переиздала подписку → старая ссылка 404. По uuid берём
+    ТЕКУЩИЙ subscriptionUrl из панели (нормализованный host/path)."""
+    if not uuid:
+        return None
+    try:
+        from app.services import remnawave_api
+        ent = await remnawave_api.get_user(uuid)
+        url = ((ent or {}).get("subscriptionUrl") or "").strip()
+        return _normalize_upstream_url(url) if url else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("SUB_AGG_RESOLVE_FAIL uuid=%s… %s", str(uuid)[:8], e)
+        return None
+
+
+async def _persist_fresh_url(token: str, which: str, url: str) -> None:
+    """Записать свежий URL в sub_pairs (при переиздании) + сбросить кеши,
+    чтобы следующий запрос читал новый URL."""
+    col = "main_sub_url" if which == "main" else "gb_sub_url"
+    try:
+        pool = await database.get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE sub_pairs SET {col} = $1, updated_at = now() WHERE token = $2",
+                url, token,
+            )
+        clear_cache(token)  # body+pair кеш → следующий load свежий
+        logger.info("SUB_AGG_URL_SELFHEALED token=%s… which=%s", token[:6], which)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("SUB_AGG_PERSIST_FAIL token=%s… %s", token[:6], e)
 
 
 def _brand_title() -> str:
@@ -422,6 +466,24 @@ async def _do_fetch_and_merge(token: str, pair: dict, ua: str) -> tuple[Optional
     main_task = asyncio.create_task(_fetch_upstream(pair["main_sub_url"], up_ua))
     gb_task = asyncio.create_task(_fetch_upstream(pair["gb_sub_url"], up_ua))
     main_resp, gb_resp = await asyncio.gather(main_task, gb_task)
+
+    # Self-heal: панель переиздала подписку (404/410 на старый shortUuid) →
+    # берём свежий subscriptionUrl по uuid, обновляем sub_pairs, переспрашиваем.
+    async def _maybe_selfheal(resp, url_key, uuid_key):
+        if resp is not None and resp.status_code not in (404, 410):
+            return resp
+        which = "main" if url_key == "main_sub_url" else "gb"
+        fresh = await _resolve_fresh_sub_url(pair.get(uuid_key))
+        if fresh and fresh != pair.get(url_key):
+            await _persist_fresh_url(token, which, fresh)
+            pair[url_key] = fresh
+            return await _fetch_upstream(fresh, up_ua)
+        return resp
+
+    if (main_resp is not None and main_resp.status_code in (404, 410)):
+        main_resp = await _maybe_selfheal(main_resp, "main_sub_url", "main_uuid")
+    if (gb_resp is not None and gb_resp.status_code in (404, 410)):
+        gb_resp = await _maybe_selfheal(gb_resp, "gb_sub_url", "gb_uuid")
 
     main_ok = main_resp is not None and main_resp.status_code == 200
     gb_ok = gb_resp is not None and gb_resp.status_code == 200

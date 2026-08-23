@@ -381,6 +381,8 @@ export const endpoints = {
       body,
     ),
   userRevoke: (tg: number) => api.post<{ ok: boolean }>(`/users/${tg}/revoke`),
+  userReissueAggregator: (tg: number) =>
+    api.post<{ ok: boolean; url: string }>(`/users/${tg}/reissue-aggregator`),
   userSwitchTariff: (tg: number, body: { tariff: string }) =>
     api.post<{ ok: boolean; subscription: unknown }>(`/users/${tg}/switch-tariff`, body),
   userDiscountCreate: (

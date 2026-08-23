@@ -871,6 +871,18 @@ function Actions({
     onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
   });
 
+  const reissueAgg = useMutation({
+    mutationFn: () => endpoints.userReissueAggregator(telegramId),
+    onSuccess: (r) => {
+      toast.success("Ссылка перевыпущена — старая больше не работает");
+      try {
+        if (r?.url) navigator.clipboard?.writeText(r.url);
+      } catch { /* clipboard недоступен — не критично */ }
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+
   const vipRevoke = useMutation({
     mutationFn: () => endpoints.userVipRevoke(telegramId),
     onSuccess: () => {
@@ -945,6 +957,19 @@ function Actions({
             <Crown className="h-3.5 w-3.5" /> Выдать VIP
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => {
+            if (confirm("Перевыпустить ссылку агрегатора? Старая перестанет работать, юзеру нужно взять новую в боте."))
+              reissueAgg.mutate();
+          }}
+          className="btn-secondary"
+          disabled={reissueAgg.isPending}
+          title="Новый token агрегатора. Затрагивает только этого юзера, апстрим-ссылки не меняются."
+        >
+          {reissueAgg.isPending ? <Spinner /> : <RefreshCcw className="h-3.5 w-3.5" />}
+          Перевыпустить ссылку
+        </button>
       </div>
 
       <DeleteUserSection telegramId={telegramId} />
