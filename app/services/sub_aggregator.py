@@ -42,14 +42,25 @@ def _get_client() -> httpx.AsyncClient:
 
 
 def is_enabled_for(telegram_id: int) -> bool:
-    """Gate: должен ли этот юзер видеть aggregator-ссылку?
+    """Gate: должен ли этот юзер ВИДЕТЬ/ПОЛУЧИТЬ aggregator-ссылку в боте?
+
+    ⚠️ Это гейт ВЫДАЧИ, НЕ эндпоинта. Эндпоинт /a/{token} монтируется
+    отдельно по SUB_AGGREGATOR_ENABLED (app/api/__init__.py) и продолжает
+    обслуживать уже выданные ссылки даже когда выдача выключена.
 
     Возвращает False если:
-    - SUB_AGGREGATOR_ENABLED=false (глобальный kill switch), или
+    - SUB_AGGREGATOR_ENABLED=false (глобальный kill switch всей системы), или
+    - SUB_AGGREGATOR_ISSUE_ENABLED=false (выдача выключена для всех, но
+      эндпоинт жив → existing links работают), или
     - SUB_AGGREGATOR_URL пуст (не настроен), или
     - SUB_AGGREGATOR_ADMIN_ONLY=true и юзер не админ.
     """
     if not config.SUB_AGGREGATOR_ENABLED:
+        return False
+    # Выдача выключена для всех, но эндпоинт (ENABLED) продолжает отдавать
+    # уже добавленные ссылки. getattr — дефолт True для обратной совместимости
+    # со старым конфигом без этого флага.
+    if not getattr(config, "SUB_AGGREGATOR_ISSUE_ENABLED", True):
         return False
     if not config.SUB_AGGREGATOR_URL:
         return False
