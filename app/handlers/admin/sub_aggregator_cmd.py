@@ -193,7 +193,7 @@ async def cmd_aggstats(message: Message) -> None:
         f"• Алертов об атаках: <b>{s['attack_alerts_sent']}</b>\n\n"
         f"<i>Здоровье = доля фейлов upstream &lt;2% и stale=0. Hit-ratio и\n"
         f"задержка — информативно (зависят от нагрузки; hit растёт по мере\n"
-        f"прогрева кеша, TTL 2ч покрывает часовой опрос клиентов).</i>"
+        f"прогрева кеша; FRESH_TTL 60с → каждый опрос тянет свежее).</i>"
     )
     await message.answer(text, parse_mode="HTML")
 
