@@ -193,9 +193,41 @@ async def cmd_aggstats(message: Message) -> None:
         f"• Алертов об атаках: <b>{s['attack_alerts_sent']}</b>\n\n"
         f"<i>Здоровье = доля фейлов upstream &lt;2% и stale=0. Hit-ratio и\n"
         f"задержка — информативно (зависят от нагрузки; hit растёт по мере\n"
-        f"прогрева кеша, TTL 2ч покрывает часовой опрос клиентов).</i>"
+        f"прогрева кеша; FRESH_TTL 60с → каждый опрос тянет свежее).</i>"
     )
     await message.answer(text, parse_mode="HTML")
+
+
+@sub_aggregator_admin_router.message(Command("aggflush"))
+@admin_only
+async def cmd_aggflush(message: Message) -> None:
+    """Полный сброс кеша агрегатора (body+pair, все токены).
+
+    Нужен когда сервера меняли В ПАНЕЛИ напрямую (добавили/убрали ноду,
+    сменили squad). Такие правки НЕ проходят через бот-мутации → хук
+    invalidate_bg не срабатывает → агрегатор до 2ч отдаёт старый список.
+    После правки в панели зовём /aggflush один раз → все юзеры получают
+    новый список серверов на следующем опросе клиента (в течение часа).
+
+    Точечно один юзер — /aggcheck <tg> (чистит только его токен)."""
+    try:
+        from app.api import sub_aggregator_route as agg
+        s = agg.get_metrics_snapshot()
+        body = int(s.get("cache_size", 0))
+        pair = int(s.get("pair_cache_size", 0))
+        agg.clear_cache(None)  # None → полный wipe (body + pair)
+        logger.info("AGG_FLUSH by admin=%s body=%s pair=%s", message.from_user.id, body, pair)
+        await message.answer(
+            "🧹 <b>Кеш агрегатора сброшен</b>\n"
+            f"• Body-записей выкинуто: <b>{body}</b>\n"
+            f"• Pair-записей выкинуто: <b>{pair}</b>\n\n"
+            "Новый список серверов подтянется у юзеров при следующем "
+            "опросе подписки клиентом (в течение часа). Чтобы проверить "
+            "сразу — <code>/aggcheck &lt;tg&gt;</code>.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await message.answer(f"❌ Не удалось сбросить кеш: {e}")
 
 
 @sub_aggregator_admin_router.message(Command("aggcheck"))
