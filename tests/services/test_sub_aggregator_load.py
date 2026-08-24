@@ -52,8 +52,11 @@ async def _hammer(token_pool, total_requests, concurrency, fetch, row=None):
         return time.perf_counter() - t0
 
 
-async def test_load_hot_cache_throughput():
-    """ГОРЯЧИЙ КЭШ (99% реального трафика): все запросы = fresh hit."""
+async def test_load_hot_cache_throughput(monkeypatch):
+    """ГОРЯЧИЙ КЭШ: перф fresh-hit fast-path. В проде FRESH_TTL=0 (кеша нет,
+    каждый запрос свежий), но механика fresh-tier жива и должна быть быстрой
+    если её включить → тестируем под ttl>0."""
+    monkeypatch.setattr(m, "FRESH_TTL", 60)
     servers = _sub_lines(40)
     headers = {"subscription-userinfo": "upload=1; download=1; total=80; expire=1789603200",
                "profile-title": "Atlas"}
