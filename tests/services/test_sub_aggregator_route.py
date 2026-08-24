@@ -188,9 +188,19 @@ def test_hybrid_userinfo_expire_fallback_to_gb():
 # ── Cache tiers ───────────────────────────────────────────────────────
 
 def test_cache_fresh_hit():
-    m._cache_set("t", b"body", {"h": "1"})
+    # В проде FRESH_TTL=0 (fresh-кеша нет), но сам tier-механизм должен
+    # работать при ttl>0 — тестируем его напрямую через _cache_put.
+    m._cache_put("t", b"body", {"h": "1"}, 60, 3600)
     body, headers, state = m._cache_get("t")
     assert state == "fresh" and body == b"body" and headers["h"] == "1"
+
+def test_cache_set_no_fresh_when_ttl_zero(monkeypatch):
+    # Прод-контракт: FRESH_TTL=0 → _cache_set НЕ даёт fresh-хита, сразу stale
+    # (тело держим только как fallback на случай падения панели).
+    monkeypatch.setattr(m, "FRESH_TTL", 0)
+    m._cache_set("t", b"body", {})
+    _, _, state = m._cache_get("t")
+    assert state == "stale"
 
 def test_cache_miss():
     assert m._cache_get("nope") == (None, None, "miss")
@@ -222,9 +232,9 @@ def test_cache_lru_evicts_oldest(monkeypatch):
 def test_cache_hit_refreshes_lru_position(monkeypatch):
     monkeypatch.setattr(m, "MAX_CACHE_ENTRIES", 3)
     for i in range(3):
-        m._cache_set(f"t{i}", b"x", {})
+        m._cache_put(f"t{i}", b"x", {}, 60, 3600)   # ttl>0 → fresh, чтобы _cache_get дал hit+LRU-touch
     m._cache_get("t0")                  # трогаем t0 → он теперь свежий в LRU
-    m._cache_set("t3", b"x", {})        # выселяет самый старый (t1)
+    m._cache_put("t3", b"x", {}, 60, 3600)          # выселяет самый старый (t1)
     assert "t0" in m._cache and "t1" not in m._cache
 
 
@@ -335,14 +345,18 @@ async def test_aggregate_dedupes():
     body = base64.b64decode(resp.body).decode()
     assert body.splitlines() == ["vless://x", "vless://y"]   # дубль убран
 
-async def test_aggregate_second_call_is_hit():
+async def test_aggregate_second_call_refetches():
+    # Прод-контракт FRESH_TTL=0: каждый опрос (включая ручное обновление в
+    # клиенте) тянет СВЕЖЕЕ из панели — второго "hit" не бывает. Так изменения
+    # серверов доходят до юзера сразу, без ожидания TTL и /aggflush.
     fetch = AsyncMock(side_effect=_patch_fetch())
     with patch.object(m, "_fetch_upstream", fetch), \
          patch.object(m.database, "get_pool", AsyncMock(return_value=FakePool(_pair_row()))):
-        await m.aggregate(FakeRequest(), token="tok12345")
+        resp1 = await m.aggregate(FakeRequest(), token="tok12345")
         resp2 = await m.aggregate(FakeRequest(), token="tok12345")
-    assert resp2.headers["x-cache"] == "hit"
-    assert fetch.await_count == 2        # второй раз в панель НЕ ходили
+    assert resp1.headers["x-cache"] == "miss"
+    assert resp2.headers["x-cache"] == "miss"    # свежий fetch, не hit
+    assert fetch.await_count == 4                 # main+gb дважды (по разу на вызов)
 
 async def test_aggregate_invalid_token_404():
     resp = await m.aggregate(FakeRequest(), token="../x")
