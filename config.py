@@ -647,9 +647,19 @@ REDIS_URL = env("REDIS_URL", default="")
 # приемлемо для беты.
 # ─────────────────────────────────────────────────────────────────────────
 
-SUB_AGGREGATOR_ENABLED = True
+# ── ДВА НЕЗАВИСИМЫХ ПЕРЕКЛЮЧАТЕЛЯ ──────────────────────────────────────
+# SUB_AGGREGATOR_ENABLED — монтирует эндпоинт /a/{token} (обслуживает уже
+#   добавленные пользователями ссылки). ДЕРЖИМ True, иначе у всех, кто уже
+#   добавил единый ключ, он перестанет открываться.
+# SUB_AGGREGATOR_ISSUE_ENABLED — выдаём/показываем ли НОВУЮ единую ссылку в
+#   экранах бота (подключение/профиль). False → фича выключена для всех,
+#   юзеры идут по legacy-флоу (2 отдельных ключа), НО эндпоинт продолжает
+#   отдавать уже выданные ссылки. Так «отключаем агрегатор, но ссылки у всех
+#   работают».
+SUB_AGGREGATOR_ENABLED = True          # эндпоинт /a/{token} живёт (existing links работают)
+SUB_AGGREGATOR_ISSUE_ENABLED = False   # выдача новым/показ в боте ВЫКЛ для всех
 SUB_AGGREGATOR_URL = "https://subscription.palantirdns.uk"
-SUB_AGGREGATOR_ADMIN_ONLY = False  # РАСКАТАНО НА ВСЕХ — фикс UA-based формата панели (фикс-UA → base64) подтверждён, подключается на Happ/Incy iOS+Android.
+SUB_AGGREGATOR_ADMIN_ONLY = False  # (не влияет пока ISSUE_ENABLED=False; при True гейтил бы выдачу только на админа)
 SUB_AGGREGATOR_INTERNAL_SECRET = ""  # заполни после генерации в sub-aggregator/.env
 
 # ЖИВОЙ host панели, откуда агрегатор качает upstream-подписки. Что бы ни

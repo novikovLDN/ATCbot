@@ -96,14 +96,32 @@ Remnawave отдаёт РАЗНЫЙ формат по User-Agent:
 | POST | `/a/_invalidate/{token}` | сброс кеша (внешние вызовы; бот ходит напрямую) |
 | GET | `/a/_metrics` | JSON-метрики |
 
-## Config
+## Config — ДВА независимых переключателя
 ```python
-SUB_AGGREGATOR_ENABLED = True
+SUB_AGGREGATOR_ENABLED = True          # монтирует эндпоинт /a/{token}
+                                       #   (обслуживает УЖЕ выданные ссылки)
+SUB_AGGREGATOR_ISSUE_ENABLED = False   # выдаём/показываем ли НОВУЮ единую
+                                       #   ссылку в боте. False → фича выкл
+                                       #   для всех, юзеры на legacy (2 ключа),
+                                       #   но эндпоинт продолжает отдавать
+                                       #   существующие ссылки
 SUB_AGGREGATOR_URL = "https://subscription.palantirdns.uk"
-SUB_AGGREGATOR_ADMIN_ONLY = False        # beta-gate; True = только админ
+SUB_AGGREGATOR_ADMIN_ONLY = False      # (при ISSUE_ENABLED=True) True = только админ
 SUB_AGGREGATOR_UPSTREAM_HOST = "sub.atlassecure.ru"   # живой sub-host панели
 # SUB_AGGREGATOR_UPSTREAM_UA — override фикс-UA (default v2rayTun/2.0)
 ```
+
+**Матрица состояний:**
+| ENABLED | ISSUE_ENABLED | Эндпоинт (existing links) | Выдача новым |
+|---|---|---|---|
+| True | True  | ✅ работает | ✅ выдаём (с учётом ADMIN_ONLY) |
+| True | False | ✅ работает | ❌ legacy 2 ключа (**текущее**) |
+| False | —     | ❌ не смонтирован | ❌ всё выкл |
+
+Гейт выдачи — `sub_aggregator.is_enabled_for(tg)` (проверяет ENABLED +
+ISSUE_ENABLED + URL + ADMIN_ONLY). Эндпоинт монтируется отдельно по
+ENABLED в `app/api/__init__.py`. Экраны подключения/профиля при
+`is_enabled_for=False` откатываются на legacy: `agg_url or <2 ключа>`.
 
 ## Инструменты (в боте, admin)
 - `/aggstats` — hit-ratio, latency, upstream fails, размеры кешей, 🟢/🟡
@@ -112,8 +130,9 @@ SUB_AGGREGATOR_UPSTREAM_HOST = "sub.atlassecure.ru"   # живой sub-host па
 - Дашборд, карточка юзера → «Перевыпустить ссылку» — новый token, старый мрёт
 
 ## Тесты
-- `tests/services/test_sub_aggregator_route.py` — юниты + интеграция + singleflight + self-heal (46)
+- `tests/services/test_sub_aggregator_route.py` — юниты + интеграция + singleflight + self-heal
 - `tests/services/test_sub_aggregator_load.py` — нагрузка (hot ~76k rps, cold ~4.8k rps)
+- `tests/services/test_sub_aggregator_gate.py` — гейт выдачи is_enabled_for (развязка ENABLED/ISSUE_ENABLED)
 
 ## Нагрузка
 Узкое место — **панель, не агрегатор**. При hit-ratio >90% держит тысячи
@@ -121,5 +140,10 @@ rps; cold-miss ограничен httpx-пулом (100 conn). На 20k/100k ю�
 большой (клиенты опрашивают раз/час вразнобой).
 
 ## Откат
-- `SUB_AGGREGATOR_ADMIN_ONLY=True` → в бету (только админ)
-- `SUB_AGGREGATOR_ENABLED=False` → полностью на legacy (2 отдельные ссылки)
+- `SUB_AGGREGATOR_ISSUE_ENABLED=False` → **отключить выдачу для всех, НЕ ломая
+  уже выданные ссылки** (эндпоинт жив). Рекомендуемый мягкий откат.
+- `SUB_AGGREGATOR_ADMIN_ONLY=True` → сузить выдачу до админа (только если
+  ISSUE_ENABLED=True)
+- `SUB_AGGREGATOR_ENABLED=False` → ⚠️ ЖЁСТКО: снимает и эндпоинт →
+  существующие ссылки у юзеров перестанут открываться. Использовать только
+  если надо погасить всю систему.
