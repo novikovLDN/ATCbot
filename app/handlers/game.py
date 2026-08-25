@@ -55,6 +55,22 @@ PLANT_TYPES = {
 }
 
 
+# Market commission on every harvest — player receives this fraction of the
+# plant's listed reward.  1.0 = full payout (legacy).  Lowered to curb farm
+# passive income: the farm should be an engagement toy, not an income source
+# or a real-cash faucet (balance is withdrawable from 500 ₽).  Single tunable
+# knob — applies to normal harvest, storm early-harvest, and storm offline
+# auto-harvest (pre-applied in the worker), so there is no dodge path.
+# Seeds are still free; this taxes the sale instead.  Set lower (e.g. 0.35)
+# for a harder nerf, or 1.0 to restore the old economy.
+FARM_HARVEST_PAYOUT_FACTOR = 0.5
+
+
+def farm_harvest_payout(reward_kopecks: int) -> int:
+    """Net kopecks credited for a FULL harvest after the market commission."""
+    return int(int(reward_kopecks) * FARM_HARVEST_PAYOUT_FACTOR)
+
+
 # Storm shield price tiers (kopecks) — by plant reward
 # ≤ 25 RUB → 10 RUB,  26–40 RUB → 20 RUB,  > 40 RUB → 30 RUB
 def storm_shield_price_kopecks(plant_reward_kopecks: int) -> int:
@@ -700,7 +716,7 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             if storm_active and not plot.get("storm_shielded"):
                 shield_cost_kopecks = storm_shield_price_kopecks(int(plant.get("reward", 0)))
                 shield_cost_rub = shield_cost_kopecks // 100
-                half_reward_rub = int(plant.get("reward", 0)) // 200  # half of reward, in RUB
+                half_reward_rub = farm_harvest_payout(int(plant.get("reward", 0))) // 200  # 50% of the commissioned payout, in RUB
                 buttons.append([InlineKeyboardButton(
                     text=f"🛡 Накрыть #{i+1} — {shield_cost_rub} ₽",
                     callback_data=f"farm_shield:{i}",
@@ -733,7 +749,7 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             )])
         elif status == "ready":
             buttons.append([InlineKeyboardButton(
-                text=f"🌾 Собрать {plant.get('emoji','')} #{i+1} (+{plant.get('reward',0)//100} ₽)",
+                text=f"🌾 Собрать {plant.get('emoji','')} #{i+1} (+{farm_harvest_payout(plant.get('reward',0))//100} ₽)",
                 callback_data=f"farm_harvest_{i}",
                 style="primary",
             )])
@@ -824,7 +840,7 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
     buttons = []
     for key, plant in PLANT_TYPES.items():
         buttons.append([InlineKeyboardButton(
-            text=f"{plant['emoji']} {plant['name']} — {plant['days']} дн. → +{plant['reward']//100} ₽",
+            text=f"{plant['emoji']} {plant['name']} — {plant['days']} дн. → +{farm_harvest_payout(plant['reward'])//100} ₽",
             callback_data=f"farm_plant_{plot_id}_{key}",
             style="primary",
         )])
@@ -1029,54 +1045,23 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
-    
-    plot = None
-    for p in farm_plots:
-        if p["plot_id"] == plot_id:
-            plot = p
-            break
-    
-    if not plot or plot["status"] != "ready":
-        await callback.answer("Растение не готово к сбору", show_alert=True)
-        return
-    
-    plant_type = plot.get("plant_type")
-    plant = PLANT_TYPES.get(plant_type, {})
-    reward_kopecks = plant.get("reward", 0)
-    reward_rubles = reward_kopecks / 100.0
-    
-    # Add reward to balance
-    success = await database.increase_balance(
-        telegram_id=telegram_id,
-        amount=reward_rubles,
-        source="farm_harvest",
-        description=f"Farm harvest: {plant.get('name', 'unknown')}"
+    # Atomic harvest under advisory lock — credits balance + resets plot in one
+    # transaction so a double-tap can't double-credit (see harvest_plot_atomic).
+    # Payout is commissioned by FARM_HARVEST_PAYOUT_FACTOR inside the atomic.
+    plant_rewards = {k: v["reward"] for k, v in PLANT_TYPES.items()}
+    ok, reason, payout_kopecks = await database.harvest_plot_atomic(
+        telegram_id, plot_id, plant_rewards, FARM_HARVEST_PAYOUT_FACTOR, mode="ready",
     )
-    
-    if not success:
-        await callback.answer("Ошибка при начислении награды", show_alert=True)
+    if not ok:
+        msg = "Растение не готово к сбору" if reason == "wrong_status" else "Не удалось собрать урожай"
+        await callback.answer(msg, show_alert=True)
+        farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
+        await _render_farm(callback, pool, farm_plots, plot_count, balance)
         return
-    
-    # Reset plot
-    plot["status"] = "empty"
-    plot["plant_type"] = None
-    plot["planted_at"] = None
-    plot["ready_at"] = None
-    plot["dead_at"] = None
-    plot["notified_ready"] = False
-    plot["notified_12h"] = False
-    plot["notified_dead"] = False
-    plot["water_used_at"] = None
-    plot["fertilizer_used_at"] = None
-    
-    await database.save_farm_plots(telegram_id, farm_plots)
-    
-    # Refresh balance
+
     farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
-    
-    await callback.answer(f"🌾 Урожай собран! +{reward_rubles:.0f} ₽", show_alert=True)
+    await callback.answer(f"🌾 Урожай собран! +{payout_kopecks/100:.0f} ₽", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("farm_remove_"))
@@ -1548,46 +1533,26 @@ async def callback_farm_early_harvest(callback: CallbackQuery):
     plot_id = _parse_plot_id(callback.data, "farm_early")
     if plot_id < 0:
         return
-    farm_plots, plot_count, balance, plot = await _find_growing_plot(telegram_id, plot_id)
-    if plot is None:
-        await callback.answer("Грядка больше не растёт.", show_alert=True)
-        return
 
-    plant = PLANT_TYPES.get(plot.get("plant_type"), {})
-    half_reward_kopecks = int(plant.get("reward", 0)) // 2
-    if half_reward_kopecks <= 0:
-        await callback.answer("Ранний сбор недоступен для этого растения.", show_alert=True)
-        return
-
-    # Credit balance and reset plot to empty (mirrors normal harvest cleanup).
-    ok = await database.increase_balance(
-        telegram_id=telegram_id,
-        amount=half_reward_kopecks / 100.0,
-        source="farm_early_harvest",
-        description=f"Early harvest plot {plot_id} ({plant.get('name','')})",
+    # Atomic early-harvest under advisory lock (mode="early" → 50% of the
+    # commissioned payout, requires status 'growing'). No double-credit.
+    plant_rewards = {k: v["reward"] for k, v in PLANT_TYPES.items()}
+    ok, reason, payout_kopecks = await database.harvest_plot_atomic(
+        telegram_id, plot_id, plant_rewards, FARM_HARVEST_PAYOUT_FACTOR, mode="early",
     )
     if not ok:
-        await callback.answer("Не удалось зачислить награду.", show_alert=True)
+        if reason == "no_reward":
+            await callback.answer("Ранний сбор недоступен для этого растения.", show_alert=True)
+        elif reason == "wrong_status":
+            await callback.answer("Грядка больше не растёт.", show_alert=True)
+        else:
+            await callback.answer("Не удалось зачислить награду.", show_alert=True)
+        pool = await database.get_pool()
+        await _render_farm(callback, pool)
         return
 
-    for p in farm_plots:
-        if int(p.get("plot_id", -1)) == plot_id:
-            p["status"] = "empty"
-            p["plant_type"] = None
-            p["planted_at"] = None
-            p["ready_at"] = None
-            p["dead_at"] = None
-            p["notified_ready"] = False
-            p["notified_12h"] = False
-            p["notified_dead"] = False
-            p["water_used_at"] = None
-            p["fertilizer_used_at"] = None
-            p["storm_shielded"] = False
-            break
-    await database.save_farm_plots(telegram_id, farm_plots)
-
     await callback.answer(
-        f"🚜 Собрано {plant.get('emoji','')} незрелым: +{half_reward_kopecks // 100} ₽",
+        f"🚜 Собрано незрелым: +{payout_kopecks // 100} ₽",
         show_alert=True,
     )
     pool = await database.get_pool()
