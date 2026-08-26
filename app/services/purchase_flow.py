@@ -286,15 +286,13 @@ async def provision_subscription(
     if not bypass_sub_url:
         try:
             from app.services import remnawave_api
-            # Приоритет — numeric id (стабильно 3.x), затем uuid, затем tg_id.
-            probe_key = None
-            cache = await database.get_remnawave_bypass_cache(telegram_id)
-            if cache and cache.get("remnawave_uuid"):
-                probe_key = cache["remnawave_uuid"]
-            if probe_key:
-                entity = await remnawave_api.get_user(probe_key)
-            else:
-                entity = await remnawave_api.find_user_by_telegram_id(telegram_id)
+            # ⚠️ Резолвим ГАРАНТИРОВАННО bypass-сущность (username == str(tg)),
+            # а НЕ первую попавшуюся по telegram_id: панельный stream часто
+            # отдаёт premium первым, и его subscriptionUrl утекал в
+            # remnawave_bypass_sub_url → на экране «Обход» показывался ключ
+            # основных серверов (один ключ на оба). get_bypass_entity_safe
+            # проверяет username и по пути чинит id/uuid в БД.
+            entity = await remnawave_api.get_bypass_entity_safe(telegram_id)
             fetched_url = ((entity or {}).get("subscriptionUrl") or "").strip() or None
             if fetched_url:
                 bypass_sub_url = fetched_url

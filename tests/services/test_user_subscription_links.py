@@ -158,18 +158,89 @@ async def test_bypass_url_returns_cache_hit(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bypass_url_cache_hit_not_flagged_when_premium_distinct(monkeypatch):
+    # Healthy user: distinct bypass/premium uuids AND urls → fast path, cache
+    # returned as-is, NO panel self-heal (guard must not false-positive).
+    safe = AsyncMock()
+    _patch_db(monkeypatch, rows=[_Row(
+        remnawave_uuid="byp-uuid",
+        remnawave_bypass_sub_url="https://rmnw/sub/byp-cached",
+        remnawave_premium_uuid="prem-uuid",
+        remnawave_premium_sub_url="https://rmnw/sub/prem-cached",
+    )])
+    with _patch_config(), patch("app.services.remnawave_api.get_bypass_entity_safe", safe):
+        url = await user_subscription_links.get_user_bypass_url(42)
+    assert url == "https://rmnw/sub/byp-cached"
+    safe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_bypass_url_panel_fallback_with_backfill(monkeypatch):
+    # Cache miss → resolve the genuine bypass entity via the username-verified
+    # self-heal (get_bypass_entity_safe), back-fill the corrected URL.
     set_cache_mock = AsyncMock()
     _patch_db(
         monkeypatch,
         rows=[_Row(remnawave_uuid="byp-uuid", remnawave_bypass_sub_url=None)],
         set_bypass_cache_mock=set_cache_mock,
     )
-    panel = AsyncMock(return_value={"subscriptionUrl": "https://rmnw/sub/byp-panel", "shortUuid": "by_s"})
-    with _patch_config(), patch("app.services.remnawave_api.get_user", panel):
+    safe = AsyncMock(return_value={
+        "uuid": "byp-uuid", "subscriptionUrl": "https://rmnw/sub/byp-panel", "shortUuid": "by_s",
+    })
+    with _patch_config(), patch("app.services.remnawave_api.get_bypass_entity_safe", safe):
         url = await user_subscription_links.get_user_bypass_url(42)
     assert url == "https://rmnw/sub/byp-panel"
     set_cache_mock.assert_awaited_once_with(42, "byp-uuid", "https://rmnw/sub/byp-panel", "by_s")
+
+
+@pytest.mark.asyncio
+async def test_bypass_url_selfheals_when_column_holds_premium(monkeypatch):
+    # Contamination: bypass URL column == premium URL column (legacy backfill /
+    # purchase-flow stream lookup wrote premium's URL into the bypass column).
+    # Must NOT return the premium URL — instead re-resolve the real bypass
+    # entity by username and overwrite the column.
+    set_cache_mock = AsyncMock()
+    _patch_db(
+        monkeypatch,
+        rows=[_Row(
+            remnawave_uuid="byp-uuid",
+            remnawave_bypass_sub_url="https://rmnw/sub/PREMIUM",     # contaminated!
+            remnawave_premium_uuid="prem-uuid",
+            remnawave_premium_sub_url="https://rmnw/sub/PREMIUM",    # identical → contaminated
+        )],
+        set_bypass_cache_mock=set_cache_mock,
+    )
+    safe = AsyncMock(return_value={
+        "uuid": "byp-uuid", "subscriptionUrl": "https://rmnw/sub/REAL-BYPASS", "shortUuid": "by_s",
+    })
+    with _patch_config(), patch("app.services.remnawave_api.get_bypass_entity_safe", safe):
+        url = await user_subscription_links.get_user_bypass_url(42)
+    assert url == "https://rmnw/sub/REAL-BYPASS"     # NOT the premium URL
+    safe.assert_awaited_once_with(42)
+    set_cache_mock.assert_awaited_once_with(42, "byp-uuid", "https://rmnw/sub/REAL-BYPASS", "by_s")
+
+
+@pytest.mark.asyncio
+async def test_bypass_url_selfheals_when_uuid_equals_premium(monkeypatch):
+    # Contamination variant: the bypass uuid pointer equals the premium uuid.
+    set_cache_mock = AsyncMock()
+    _patch_db(
+        monkeypatch,
+        rows=[_Row(
+            remnawave_uuid="same-uuid",
+            remnawave_bypass_sub_url="https://rmnw/sub/whatever",
+            remnawave_premium_uuid="same-uuid",                     # == bypass uuid → contaminated
+            remnawave_premium_sub_url="https://rmnw/sub/prem",
+        )],
+        set_bypass_cache_mock=set_cache_mock,
+    )
+    safe = AsyncMock(return_value={
+        "uuid": "byp-real", "subscriptionUrl": "https://rmnw/sub/REAL-BYPASS", "shortUuid": "by_s",
+    })
+    with _patch_config(), patch("app.services.remnawave_api.get_bypass_entity_safe", safe):
+        url = await user_subscription_links.get_user_bypass_url(42)
+    assert url == "https://rmnw/sub/REAL-BYPASS"
+    safe.assert_awaited_once_with(42)
 
 
 @pytest.mark.asyncio
