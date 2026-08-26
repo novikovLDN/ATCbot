@@ -131,8 +131,7 @@ async def cb_aggregator_refresh(callback) -> None:
         await callback.answer("Нет обеих ссылок в БД — не могу пересоздать", show_alert=True)
         return
     await callback.answer("Пара обновлена, кеш сброшен ✓", show_alert=True)
-    # Don't log the full URL — the token in it is the user's secret key.
-    logger.info("SUB_AGGREGATOR_ADMIN_REFRESH tg=%s token=%s…", tg_id, url.rsplit("/", 1)[-1][:6])
+    logger.info("SUB_AGGREGATOR_ADMIN_REFRESH tg=%s url=%s", tg_id, url)
 
 
 @sub_aggregator_admin_router.message(lambda m: m.text and m.text.strip().lower().startswith("/aggregator"))

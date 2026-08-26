@@ -29,18 +29,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
-from urllib.parse import quote, urlsplit
-
-
-def _safe_target(target: str) -> str:
-    """Host + first 8 chars of the path for logging — the subscription
-    shortuuid/token in the path IS the user's secret key, so never log it
-    in full (matches the uuid[:8]/token[:6] truncation used elsewhere)."""
-    try:
-        s = urlsplit(target)
-        return f"{s.scheme}://{s.netloc}/{s.path.lstrip('/')[:8]}…"
-    except Exception:
-        return "?"
+from urllib.parse import quote
 
 from fastapi import APIRouter, Path
 from fastapi.responses import RedirectResponse, JSONResponse
@@ -145,7 +134,7 @@ async def _resolve(uuid: str) -> Optional[str]:
 async def legacy_sub(uuid: str = Path(..., min_length=8, max_length=128)):
     target = await _resolve(uuid)
     if target:
-        logger.info("SUB_PROXY_REDIRECT: uuid=%s -> %s", uuid[:8], _safe_target(target))
+        logger.info("SUB_PROXY_REDIRECT: uuid=%s -> %s", uuid[:8], target.split("?")[0])
         return RedirectResponse(target, status_code=302)
     return JSONResponse({"error": "not_found"}, status_code=404)
 
@@ -154,6 +143,6 @@ async def legacy_sub(uuid: str = Path(..., min_length=8, max_length=128)):
 async def bot_sub(token: str = Path(..., min_length=8, max_length=128)):
     target = await _resolve(token)
     if target:
-        logger.info("SUB_PROXY_REDIRECT_API: token=%s -> %s", token[:8], _safe_target(target))
+        logger.info("SUB_PROXY_REDIRECT_API: token=%s -> %s", token[:8], target.split("?")[0])
         return RedirectResponse(target, status_code=302)
     return JSONResponse({"error": "not_found"}, status_code=404)
