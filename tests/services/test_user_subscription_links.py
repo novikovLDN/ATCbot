@@ -98,6 +98,35 @@ def _reset_locks():
     user_subscription_links._lazy_provision_locks.clear()
 
 
+# ── _rewrite_sub_host: dead-host normalization ────────────────────────
+
+def test_rewrite_dead_host_to_live():
+    with _patch_config():
+        r = user_subscription_links._rewrite_sub_host
+        # vps-cloud.uk was decommissioned (invalid cert) → force to live host,
+        # path + query preserved.
+        assert r("https://subscription.vps-cloud.uk/abc123?x=1") == \
+            "https://sub.atlassecure.ru/abc123?x=1"
+        # subdomain variant also normalized
+        assert r("https://sub.vps-cloud.uk/abc123") == "https://sub.atlassecure.ru/abc123"
+
+
+def test_rewrite_leaves_live_and_other_hosts_untouched():
+    with _patch_config():
+        r = user_subscription_links._rewrite_sub_host
+        # already-live → unchanged
+        assert r("https://sub.atlassecure.ru/abc") == "https://sub.atlassecure.ru/abc"
+        # legacy samopis host → MUST NOT be forced to the panel host
+        assert r("https://app.atlassecure.ru/api/sub/xyz?id=42") == \
+            "https://app.atlassecure.ru/api/sub/xyz?id=42"
+        # aggregator link (different service/path) → unchanged
+        assert r("https://subscription.palantirdns.uk/a/TOKEN") == \
+            "https://subscription.palantirdns.uk/a/TOKEN"
+        # empty / None passthrough
+        assert r("") == ""
+        assert r(None) is None
+
+
 # ── get_user_premium_url: cache hit / status-agnostic / panel fallback ──
 
 @pytest.mark.asyncio

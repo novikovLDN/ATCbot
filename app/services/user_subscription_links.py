@@ -47,26 +47,42 @@ _lazy_provision_locks: dict[int, asyncio.Lock] = {}
 
 
 # ── Subscription host rewrite ────────────────────────────────────────
-# Раньше подменяли `sub.atlassecure.ru → subscription.vps-cloud.uk` (RF-фронт).
-# vps-cloud.uk снесли — cert невалиден → Happ орёт «Сертификат недействителен».
-# До возврата на агрегатор (subscription.palantirdns.uk) — no-op rewrite:
-# отдаём URL от панели как есть (у sub.atlassecure.ru cert валидный).
+# `subscription.vps-cloud.uk` был RF-фронтом (reverse-proxy) к панели. Его
+# снесли — TLS-cert невалиден, и любая ссылка, всё ещё указывающая туда
+# (в БД remnawave_*_sub_url, в панельном subscriptionUrl или уже вшитая в
+# клиент юзера), падает в Happ/Incy с «Сертификат недействителен».
 #
-# Поменять на новый хост позже — правишь _NEW_HOST одной строкой:
-#   _NEW_HOST = "subscription.palantirdns.uk"
-# после того как этот домен запущен и cert выпущен.
-_OLD_HOST = "sub.atlassecure.ru"
-_NEW_HOST = "sub.atlassecure.ru"  # no-op — панель сама отдаёт валидный host
+# Единая точка нормализации ИСХОДЯЩИХ ссылок: любой МЁРТВЫЙ host гоним на
+# ЖИВОЙ (тот же, что использует агрегатор — config.SUB_AGGREGATOR_UPSTREAM_HOST,
+# по умолчанию sub.atlassecure.ru). Живые/samopis/прочие хосты НЕ трогаем —
+# rewrite строго по списку мёртвых, иначе сломали бы legacy-samopis фолбэк
+# (get_user_primary_subscription_url → _legacy_sub_url идёт через этот же
+# rewrite). path/shortuuid у vps-cloud.uk и живого host совпадают (это был
+# просто фронт к той же панели) → достаточно подменить host.
+_DEAD_SUB_HOST_SUFFIXES = ("vps-cloud.uk",)
+
+
+def _live_sub_host() -> str:
+    return getattr(config, "SUB_AGGREGATOR_UPSTREAM_HOST", "") or "sub.atlassecure.ru"
 
 
 def _rewrite_sub_host(url: Optional[str]) -> Optional[str]:
-    """Swap the legacy subscription host for the new one on outbound URLs.
-    No-op пока _NEW_HOST == _OLD_HOST — отдаём URL панели без изменений."""
+    """Rewrite ONLY decommissioned subscription hosts to the live panel host.
+    Anything not on the dead-host list (already-live, samopis, etc.) is
+    returned unchanged."""
     if not url:
         return url
-    if _OLD_HOST == _NEW_HOST:
-        return url
-    return url.replace(_OLD_HOST, _NEW_HOST)
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if host and any(host == s or host.endswith("." + s) for s in _DEAD_SUB_HOST_SUFFIXES):
+            live = _live_sub_host()
+            netloc = f"{live}:{parts.port}" if parts.port else live
+            return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    except Exception:
+        pass
+    return url
 
 
 # Публичный alias — низкоуровневые сервисы (remnawave_api) применяют
