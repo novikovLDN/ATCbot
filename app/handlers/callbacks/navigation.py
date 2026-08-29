@@ -1687,7 +1687,7 @@ _APPLE_TRY_RATE = 2.9   # RUB per 1 TRY
 
 _APPLE_NOMINALS = {
     "usa": [2, 5, 10, 15, 20, 25, 50, 60, 70],
-    "turkey": [100, 150, 200, 300, 500, 600],
+    "turkey": [100, 200, 300, 500, 600],
     "russia": [500, 800, 1000, 1500, 2000, 2500, 3000],
     "india": [100, 200, 250, 500, 1000],
 }
@@ -1702,7 +1702,17 @@ _APPLE_REGIONS = {
 
 # Явные price-точки для регионов, где нет линейного rate-конвертирования.
 # Ключ — nominal региона, значение — цена в рублях к оплате.
+# usa/turkey тоже держим тут (а не через rate), чтобы цены оставались
+# ЦЕЛЫМИ рублями после наценки — иначе в оплате (price_kopecks) полезли бы
+# копейки. usa = базовая (nominal×101) ×1.15; turkey = (nominal×2.9) ×1.20.
 _APPLE_PRICES_EXPLICIT: dict[str, dict[int, int]] = {
+    "usa": {
+        2: 232, 5: 581, 10: 1162, 15: 1742, 20: 2323,
+        25: 2904, 50: 5808, 60: 6969, 70: 8131,
+    },
+    "turkey": {
+        100: 348, 200: 696, 300: 1044, 500: 1740, 600: 2088,
+    },
     "russia": {
         500: 1400, 800: 2200, 1000: 2600, 1500: 3900,
         2000: 5200, 2500: 6400, 3000: 7700,
@@ -1916,6 +1926,12 @@ async def callback_apple_confirm(callback: CallbackQuery):
     nominal = int(parts[2])
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
+
+    # Валидируем номинал против актуального списка региона: снятые с продажи
+    # номиналы (напр. Turkey 150 TL) не должны покупаться даже crafted-callback'ом.
+    if nominal not in _APPLE_NOMINALS.get(region, []):
+        await callback.answer("Этот номинал недоступен.", show_alert=True)
+        return
 
     region_label = _APPLE_REGIONS.get(region, region)
     price_rub = _apple_price_rub(region, nominal)
