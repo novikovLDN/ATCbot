@@ -47,26 +47,42 @@ _lazy_provision_locks: dict[int, asyncio.Lock] = {}
 
 
 # ── Subscription host rewrite ────────────────────────────────────────
-# Раньше подменяли `sub.atlassecure.ru → subscription.vps-cloud.uk` (RF-фронт).
-# vps-cloud.uk снесли — cert невалиден → Happ орёт «Сертификат недействителен».
-# До возврата на агрегатор (subscription.palantirdns.uk) — no-op rewrite:
-# отдаём URL от панели как есть (у sub.atlassecure.ru cert валидный).
+# `subscription.vps-cloud.uk` был RF-фронтом (reverse-proxy) к панели. Его
+# снесли — TLS-cert невалиден, и любая ссылка, всё ещё указывающая туда
+# (в БД remnawave_*_sub_url, в панельном subscriptionUrl или уже вшитая в
+# клиент юзера), падает в Happ/Incy с «Сертификат недействителен».
 #
-# Поменять на новый хост позже — правишь _NEW_HOST одной строкой:
-#   _NEW_HOST = "subscription.palantirdns.uk"
-# после того как этот домен запущен и cert выпущен.
-_OLD_HOST = "sub.atlassecure.ru"
-_NEW_HOST = "sub.atlassecure.ru"  # no-op — панель сама отдаёт валидный host
+# Единая точка нормализации ИСХОДЯЩИХ ссылок: любой МЁРТВЫЙ host гоним на
+# ЖИВОЙ (тот же, что использует агрегатор — config.SUB_AGGREGATOR_UPSTREAM_HOST,
+# по умолчанию sub.atlassecure.ru). Живые/samopis/прочие хосты НЕ трогаем —
+# rewrite строго по списку мёртвых, иначе сломали бы legacy-samopis фолбэк
+# (get_user_primary_subscription_url → _legacy_sub_url идёт через этот же
+# rewrite). path/shortuuid у vps-cloud.uk и живого host совпадают (это был
+# просто фронт к той же панели) → достаточно подменить host.
+_DEAD_SUB_HOST_SUFFIXES = ("vps-cloud.uk",)
+
+
+def _live_sub_host() -> str:
+    return getattr(config, "SUB_AGGREGATOR_UPSTREAM_HOST", "") or "sub.atlassecure.ru"
 
 
 def _rewrite_sub_host(url: Optional[str]) -> Optional[str]:
-    """Swap the legacy subscription host for the new one on outbound URLs.
-    No-op пока _NEW_HOST == _OLD_HOST — отдаём URL панели без изменений."""
+    """Rewrite ONLY decommissioned subscription hosts to the live panel host.
+    Anything not on the dead-host list (already-live, samopis, etc.) is
+    returned unchanged."""
     if not url:
         return url
-    if _OLD_HOST == _NEW_HOST:
-        return url
-    return url.replace(_OLD_HOST, _NEW_HOST)
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if host and any(host == s or host.endswith("." + s) for s in _DEAD_SUB_HOST_SUFFIXES):
+            live = _live_sub_host()
+            netloc = f"{live}:{parts.port}" if parts.port else live
+            return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    except Exception:
+        pass
+    return url
 
 
 # Публичный alias — низкоуровневые сервисы (remnawave_api) применяют
@@ -302,7 +318,8 @@ async def _bypass_url_from_cache(telegram_id: int) -> Optional[str]:
             return None
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT remnawave_uuid, remnawave_bypass_sub_url "
+                "SELECT remnawave_uuid, remnawave_bypass_sub_url, "
+                "       remnawave_premium_uuid, remnawave_premium_sub_url "
                 "FROM subscriptions WHERE telegram_id = $1 "
                 "ORDER BY (status='active') DESC, expires_at DESC NULLS LAST LIMIT 1",
                 telegram_id,
@@ -311,27 +328,56 @@ async def _bypass_url_from_cache(telegram_id: int) -> Optional[str]:
             return None
         cached_raw = row["remnawave_bypass_sub_url"]
         cached = cached_raw.strip() if cached_raw else ""
-        if cached:
+        bypass_uuid = (row["remnawave_uuid"] or "").strip()
+        premium_uuid = (row["remnawave_premium_uuid"] or "").strip()
+        premium_url_raw = row["remnawave_premium_sub_url"]
+        premium_url = premium_url_raw.strip() if premium_url_raw else ""
+
+        # ⚠️ Contamination guard. Legacy backfill / stream lookups sometimes
+        # wrote the PREMIUM entity's uuid/url into the bypass columns (panel
+        # stream returns premium first). Then this helper faithfully served
+        # premium's URL as "обход" → the manual-setup screen showed the SAME
+        # key for основные and обход. Detect it cheaply (no panel call for
+        # healthy users): the bypass pointer/url must not equal the premium
+        # one. If it does — fall through to the username-verified self-heal.
+        contaminated = bool(
+            (bypass_uuid and premium_uuid and bypass_uuid == premium_uuid)
+            or (cached and premium_url
+                and _rewrite_sub_host(cached) == _rewrite_sub_host(premium_url))
+        )
+        if cached and not contaminated:
             return _rewrite_sub_host(cached)
-        # Cache miss but uuid present — fetch from panel + back-fill.
-        rmn_uuid_raw = row["remnawave_uuid"]
-        rmn_uuid = rmn_uuid_raw.strip() if rmn_uuid_raw else ""
-        if not rmn_uuid:
-            return None
+
+        # Miss OR contaminated → resolve the GENUINE bypass entity by username
+        # (get_bypass_entity_safe verifies username == str(tg), the canonical
+        # bypass discriminator, and self-heals remnawave_id/uuid in the DB).
         try:
             from app.services import remnawave_api
-            entity = await remnawave_api.get_user(rmn_uuid)
+            entity = await remnawave_api.get_bypass_entity_safe(telegram_id)
         except Exception as e:
             logger.warning("USER_BYPASS_PANEL_FALLBACK_FAIL: tg=%s %s", telegram_id, e)
             return None
         url = ((entity or {}).get("subscriptionUrl") or "").strip() or None
         if not url:
             return None
-        # Back-fill cache with the raw panel URL — rewrite only on return.
+        # Overwrite the (possibly contaminated) cached bypass URL with the
+        # verified one. uuid was already fixed inside get_bypass_entity_safe.
         try:
-            await database.set_remnawave_bypass_cache(telegram_id, rmn_uuid, url, (entity or {}).get("shortUuid"))
+            await database.set_remnawave_bypass_cache(
+                telegram_id,
+                (entity or {}).get("uuid") or (entity or {}).get("vlessUuid"),
+                url,
+                (entity or {}).get("shortUuid"),
+            )
         except Exception as e:
             logger.warning("USER_BYPASS_BACKFILL_FAIL: tg=%s %s", telegram_id, e)
+        if contaminated:
+            logger.warning(
+                "USER_BYPASS_URL_SELFHEAL: tg=%s bypass column held premium data "
+                "(bypass_uuid==premium_uuid or bypass_url==premium_url) — replaced "
+                "with username-verified bypass URL",
+                telegram_id,
+            )
         return _rewrite_sub_host(url)
     except Exception as e:
         logger.warning("USER_BYPASS_URL_LOOKUP_FAIL: tg=%s %s", telegram_id, e)

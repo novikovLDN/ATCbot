@@ -266,6 +266,7 @@ from database.farm import (  # noqa: F401
     list_users_with_growing_plots,
     apply_storm_shield_atomic,
     execute_storm_for_user,
+    harvest_plot_atomic,
     touch_last_seen,
     STORM_ANNOUNCE_BEFORE_HOURS,
     STORM_MIN_INTERVAL_DAYS,
