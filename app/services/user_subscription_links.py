@@ -46,6 +46,35 @@ logger = logging.getLogger(__name__)
 _lazy_provision_locks: dict[int, asyncio.Lock] = {}
 
 
+# ── Subscription host rewrite ────────────────────────────────────────
+# Раньше подменяли `sub.atlassecure.ru → subscription.vps-cloud.uk` (RF-фронт).
+# vps-cloud.uk снесли — cert невалиден → Happ орёт «Сертификат недействителен».
+# До возврата на агрегатор (subscription.palantirdns.uk) — no-op rewrite:
+# отдаём URL от панели как есть (у sub.atlassecure.ru cert валидный).
+#
+# Поменять на новый хост позже — правишь _NEW_HOST одной строкой:
+#   _NEW_HOST = "subscription.palantirdns.uk"
+# после того как этот домен запущен и cert выпущен.
+_OLD_HOST = "sub.atlassecure.ru"
+_NEW_HOST = "sub.atlassecure.ru"  # no-op — панель сама отдаёт валидный host
+
+
+def _rewrite_sub_host(url: Optional[str]) -> Optional[str]:
+    """Swap the legacy subscription host for the new one on outbound URLs.
+    No-op пока _NEW_HOST == _OLD_HOST — отдаём URL панели без изменений."""
+    if not url:
+        return url
+    if _OLD_HOST == _NEW_HOST:
+        return url
+    return url.replace(_OLD_HOST, _NEW_HOST)
+
+
+# Публичный alias — низкоуровневые сервисы (remnawave_api) применяют
+# этот rewrite централизованно, чтобы raw URL из панели никогда не
+# уходил юзеру с невалидным cert-хостом.
+rewrite_sub_host = _rewrite_sub_host
+
+
 def _legacy_sub_url(telegram_id: int) -> str:
     """Fallback to the existing samopis-style URL. Sync so it always works."""
     from vpn_utils import build_sub_url
@@ -94,7 +123,7 @@ async def get_user_premium_url(telegram_id: int) -> Optional[str]:
         cached_raw = row["remnawave_premium_sub_url"]
         cached = cached_raw.strip() if cached_raw else ""
         if cached:
-            return cached
+            return _rewrite_sub_host(cached)
 
         # Step 3: panel fallback.  We have the entity uuid but the URL
         # column was never populated (e.g. row migrated before column 046
@@ -113,12 +142,14 @@ async def get_user_premium_url(telegram_id: int) -> Optional[str]:
         url = ((entity or {}).get("subscriptionUrl") or "").strip() or None
         if not url:
             return None
-        # Best-effort cache write so the next call is fast.
+        # Best-effort cache write so the next call is fast.  We store the
+        # panel's raw URL (legacy host) so the DB stays consistent with
+        # Remnawave — the host swap only happens on the user-facing return.
         try:
             await database.set_remnawave_premium_sub_url(telegram_id, url)
         except Exception as e:
             logger.warning("USER_PREMIUM_BACKFILL_FAIL: tg=%s %s", telegram_id, e)
-        return url
+        return _rewrite_sub_host(url)
     except Exception as e:
         logger.warning("USER_PREMIUM_URL_LOOKUP_FAIL: tg=%s %s", telegram_id, e)
         return None
@@ -185,6 +216,8 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
                             presult.subscription_url,
                             short_uuid=presult.short_uuid,
                         )
+                        if presult.panel_id is not None:
+                            await database.set_remnawave_premium_id(telegram_id, presult.panel_id)
                         out["created_premium"] = True
                         logger.info(
                             "LAZY_PROVISION_PREMIUM_DONE: tg=%s uuid=%s recovered=%s trial=%s",
@@ -229,6 +262,8 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
                             bresult.subscription_url,
                             bresult.short_uuid,
                         )
+                        if bresult.panel_id is not None:
+                            await database.set_remnawave_id(telegram_id, bresult.panel_id)
                         out["created_bypass"] = True
                         logger.info(
                             "LAZY_PROVISION_BYPASS_DONE: tg=%s uuid=%s bytes=%d trial=%s",
@@ -277,7 +312,7 @@ async def _bypass_url_from_cache(telegram_id: int) -> Optional[str]:
         cached_raw = row["remnawave_bypass_sub_url"]
         cached = cached_raw.strip() if cached_raw else ""
         if cached:
-            return cached
+            return _rewrite_sub_host(cached)
         # Cache miss but uuid present — fetch from panel + back-fill.
         rmn_uuid_raw = row["remnawave_uuid"]
         rmn_uuid = rmn_uuid_raw.strip() if rmn_uuid_raw else ""
@@ -292,11 +327,12 @@ async def _bypass_url_from_cache(telegram_id: int) -> Optional[str]:
         url = ((entity or {}).get("subscriptionUrl") or "").strip() or None
         if not url:
             return None
+        # Back-fill cache with the raw panel URL — rewrite only on return.
         try:
             await database.set_remnawave_bypass_cache(telegram_id, rmn_uuid, url, (entity or {}).get("shortUuid"))
         except Exception as e:
             logger.warning("USER_BYPASS_BACKFILL_FAIL: tg=%s %s", telegram_id, e)
-        return url
+        return _rewrite_sub_host(url)
     except Exception as e:
         logger.warning("USER_BYPASS_URL_LOOKUP_FAIL: tg=%s %s", telegram_id, e)
         return None
@@ -348,7 +384,10 @@ async def get_user_primary_subscription_url(telegram_id: int) -> str:
         if premium:
             return premium
 
-    return _legacy_sub_url(telegram_id)
+    # Legacy samopis URL is served by our own app.atlassecure.ru — nothing
+    # to rewrite in that case, but the helper is a no-op for URLs that don't
+    # contain the old host, so we run it unconditionally for consistency.
+    return _rewrite_sub_host(_legacy_sub_url(telegram_id))
 
 
 __all__ = [

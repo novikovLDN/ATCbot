@@ -418,6 +418,13 @@ LANG = {
     'setup.install_happ_android': "📲 Скачать Happ",
     'setup.next_step': "➡️ Дальше",
     'setup.key_install_title': "⚡️ <b>Подключитесь в одно нажатие</b>\n\nНажмите кнопки ниже — ключи добавятся автоматически.\nДобавьте оба для полноценной работы.\n\n<blockquote>🔑 VPN — основные сервера, весь интернет без блокировок\n🌐 Обход — белые списки РФ, интернет работает в любой точке мира</blockquote>",
+    'setup.key_install_title_agg': "⚡️ <b>Подключитесь в одно нажатие</b>\n\nНажмите <b>«Добавить ключ»</b> в вашем приложении — подписка импортируется автоматически.\n\nЕсли по каким-то причинам не открылось — нажмите <b>«Настроить вручную»</b> ниже.\n\n<blockquote>🌐 Трафик расходуется <b>только</b> на серверах с пометкой <b>LTE</b>.\n🚀 Безлимитные серверы работают без расхода ГБ.</blockquote>",
+    'setup.btn_add_happ': "📥 Добавить ключ в Happ",
+    'setup.btn_add_incy': "💚 Добавить ключ в Incy",
+    'setup.btn_add_v2raytun': "🚀 Добавить ключ в V2RayTun",
+    'setup.btn_manual_setup': "⚙️ Настроить вручную",
+    'setup.key_happ_label': "🔑 <b>Ключ Happ</b> (скопируйте и вставьте в приложение):",
+    'setup.key_incy_label': "💚 <b>Ключ Incy</b> (скопируйте и вставьте в приложение):",
     'setup.auto_install_header': "",
     'setup.manual_install_header': "",
     'setup.key_vpn': "🔑 <b>VPN ключ</b> (обычные сервера — безлимит):",
@@ -440,13 +447,9 @@ LANG = {
     'instruction._download_tv': "📺 TV",
     'instruction._open_guide': "📖 Инструкция по установке",
     'instruction._text': "📖 Инструкция по установке\n\nДля настройки подключения перейдите\nв мини-приложение — там вы найдёте\nпошаговую инструкцию по установке\nи подключению на вашем устройстве.",
-    'lang.button_ar': "🇸🇦 العربية",
-    'lang.button_de': "🇩🇪 Deutsch",
     'lang.button_en': "🇺🇸 English",
-    'lang.button_kk': "🇰🇿 Қазақша",
     'lang.button_ru': "🇷🇺 Русский",
-    'lang.button_tj': "🇹🇯 Тоҷикӣ",
-    'lang.button_uz': "🇺🇿 O'zbek",
+    'start_lang.title': "🌍 Выберите язык / Select language",
     'lang.change': "🌍 Изменить язык",
     'lang.changed': "Язык изменён",
     'lang.changed_toast': "✅ Язык изменён",
@@ -621,7 +624,8 @@ LANG = {
     'main.vip_discount_label': "👑 VIP-доступ",
     'main.vip_status_active': "👑 Ваш VIP-статус активен",
     'main.vip_status_badge': "👑 VIP-статус активен",
-    'main.welcome': "<tg-emoji emoji-id=\"5462902520215002477\">💎</tg-emoji> <b>Atlas Secure</b>\n\nИнтернет без блокировок, нервов и ограничений.\n\n<tg-emoji emoji-id=\"5258203794772085854\">⚡️</tg-emoji> Молниеносное соединение\n<tg-emoji emoji-id=\"5226928895189598791\">⭐️</tg-emoji> Трафик под защитой 24/7\n<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> Весь интернет — как он должен быть\n\n<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> В нашем магазине — пополняй Steam, покупай Telegram Premium и многое другое",
+    'main.welcome': "<tg-emoji emoji-id=\"5462902520215002477\">💎</tg-emoji> <b>Atlas Secure</b>\n\nИнтернет без блокировок, нервов и ограничений.\n\n<tg-emoji emoji-id=\"5258203794772085854\">⚡️</tg-emoji> Молниеносное соединение\n<tg-emoji emoji-id=\"5226928895189598791\">⭐️</tg-emoji> Трафик под защитой 24/7\n🏆 Премия «Надежный VPN 2026»\n\n<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> В нашем магазине — пополняй Steam, покупай Telegram Premium и многое другое",
+    'main.legal_footer': "\n\n<a href=\"https://telegra.ph/Politika-konfidencialnosti-08-06-86\">Политика конфиденциальности</a>\n<a href=\"https://telegra.ph/Polzovatelskoe-soglashenie-08-06-50\">Пользовательское соглашение</a>",
     'main.welcome_no_sub': "<tg-emoji emoji-id=\"5462902520215002477\">💎</tg-emoji> <b>Atlas Secure</b> — это свободный, быстрый и безопасный интернет\n\n<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> Обход белых списков\n<tg-emoji emoji-id=\"5188481279963715781\">🚀</tg-emoji> Скорость 75 Гбит/с\n<tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> Подключение за минуту — без настроек и нервов\n📱 Одна подписка — вся семья подключена\n\n<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> В нашем магазине — пополняй Steam, покупай Telegram Premium и многое другое\n\n100 000+ пользователей нам доверяют.",
     'main.welcome_expired': "<tg-emoji emoji-id=\"5462902520215002477\">💎</tg-emoji> <b>Atlas Secure</b>\n\nПодписка закончилась — но всё легко вернуть.\n\nВаш ключ и настройки сохранены.\nНажмите кнопку — VPN заработает снова.\n\n<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> В нашем магазине — пополняй Steam, покупай Telegram Premium и многое другое\n\n<blockquote>100 000+ пользователей нам доверяют</blockquote>",
     'main.welcome_bypass': "<tg-emoji emoji-id=\"5462902520215002477\">💎</tg-emoji> <b>Atlas Secure</b>\n\n<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> Обход блокировок — активен\n\nИнтернет работает в любой точке мира.\nРоссийские сервисы — без сбоев.",
@@ -644,23 +648,29 @@ LANG = {
     'payment.pending_activation': "✅ Подписка оформлена!\n\n📅 Срок действия: до {date}\n\n⏳ Активация выполняется автоматически. VPN ключ будет отправлен вам в ближайшее время.\n\nЕсли ключ не пришёл в течение часа, обратитесь в поддержку.",
     'payment.rejected': "❌ Платёж не подтверждён.\n\nЕсли вы уверены, что оплатили —\nобратитесь в поддержку.",
     'payment.sbp': "СБП",
-    'payment.sbp_waiting': "🏦 Оплата через СБП\n\nСумма: {amount:.2f} ₽\n\n⏳ Перейдите по ссылке для оплаты. После подтверждения доступ будет выдан автоматически.",
+    'payment.sbp_waiting': "🏦 <b>Оплата через СБП</b>\n\nСумма: {amount:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты.\n\nЖдём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Обработка занимает до 5 минут — зависит от банка.</i>",
     'payment.sbp_pay_button': "🏦 Оплатить через СБП",
     'payment.sbp_unavailable': "Оплата через СБП временно недоступна",
+    'payment.wata_check_button': "🔄 Проверить платёж",
+    'payment.wata_check_cooldown': "Попробуйте через {seconds} сек.",
+    'payment.wata_check_not_paid': "⌛ Платёж ещё не поступил. Обычно занимает до 1 минуты.",
+    'payment.wata_check_paid': "✅ Оплата подтверждена! Активируем доступ…",
+    'payment.wata_check_already': "✅ Оплата уже была подтверждена.",
+    'payment.wata_check_error': "Не удалось проверить платёж, попробуйте позже.",
     'payment.crypto': "CryptoBot",
-    'payment.crypto_waiting': "₿ Оплата криптовалютой\n\nСумма: {amount:.2f} ₽\n\n⏳ Перейдите по ссылке для оплаты через @CryptoBot.\nПосле подтверждения подписка будет активирована автоматически.",
+    'payment.crypto_waiting': "₿ <b>Оплата криптовалютой</b>\n\nСумма: {amount:.2f} ₽\n\nНажмите кнопку ниже — откроется @CryptoBot.\n\nЖдём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Обработка занимает до 5 минут — зависит от банка.</i>",
     'payment.crypto_pay_button': "₿ Оплатить через CryptoBot",
     'payment.crypto_unavailable': "Оплата криптовалютой временно недоступна",
     'payment.lava': "СБП резерв 3%",
-    'payment.lava_waiting': "📱 Оплата по СБП\n\nСумма: {amount:.2f} ₽\n\n⏳ Оплатите в течение 10 минут",
+    'payment.lava_waiting': "📱 <b>Оплата по СБП</b>\n\nСумма: {amount:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты.\n\nЖдём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Обработка занимает до 5 минут — зависит от банка.</i>",
     'payment.lava_pay_button': "📱 Оплатить по СБП",
     'payment.lava_unavailable': "Оплата по СБП временно недоступна",
     'payment.card_pl': "Банковская карта",
-    'payment.card_pl_waiting': "💳 Оплата банковской картой\n\nСумма: {amount:.2f} ₽\n\n⏳ Перейдите по ссылке для оплаты. После подтверждения доступ будет выдан автоматически.",
+    'payment.card_pl_waiting': "💳 <b>Оплата банковской картой</b>\n\nСумма: {amount:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты.\n\nЖдём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Обработка занимает до 5 минут — зависит от банка.</i>",
     'payment.card_pl_pay_button': "💳 Оплатить картой",
     'payment.card_pl_unavailable': "Оплата картой временно недоступна",
     'payment.intl_pl': "🌎 Международные платежи",
-    'payment.intl_pl_waiting': "🌎 Международный платёж\n\nСумма: {amount:.2f} ₽\n\n⏳ Перейдите по ссылке для оплаты. После подтверждения доступ будет выдан автоматически.",
+    'payment.intl_pl_waiting': "🌎 <b>Международный платёж</b>\n\nСумма: {amount:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты.\n\nЖдём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Обработка занимает до 5 минут — зависит от банка.</i>",
     'payment.intl_pl_pay_button': "🌎 Оплатить",
     'payment.intl_pl_unavailable': "Международные платежи временно недоступны",
     'payment.crypto_success': "🎉 Оплата получена!\n{tariff_icon} Тариф: {tariff}\n📅 До: {date}",
@@ -669,6 +679,8 @@ LANG = {
     'payment.success_first': "🎉 <b>Подписка успешно активирована</b>\n\n📅 <b>Срок действия:</b> до {date}\n\n🔗 <b>Ссылка подписки:</b>\n<code>{sub_url}</code>\n\nИспользуйте её в приложении VPN.",
     'payment.success_renewal': "🔄 <b>Подписка продлена</b>\n\n📅 <b>Новый срок действия:</b> до {date}\n\n🔗 <b>Ссылка подписки:</b>\n<code>{sub_url}</code>\n\nВы можете продолжить использовать текущую ссылку подключения.",
     'payment.success_renewal_compact': "✅ <b>Подписка продлена!</b>\n\n{tariff_icon} Тариф: {tariff}\n📅 До: {date}\n\nVPN продолжает работать.\n\n🤍 Atlas Secure",
+    'payment.success_welcome_basic': "🎉 <b>Добро пожаловать в Atlas Secure!</b>\n\n📦 Тариф: <b>Basic</b>\n📅 До: {date}\n\nПодписка активна — VPN готов к работе.\n\n🤍 Atlas Secure",
+    'payment.success_welcome_plus': "🎉 <b>Добро пожаловать в Atlas Secure!</b>\n\n⭐️ Тариф: <b>Plus</b>\n📅 До: {date}\n\nПодписка активна — VPN готов к работе.\n\n🤍 Atlas Secure",
     'payment.test': "Служебный режим Недоступно",
     'profile.access_key_label': "Ключ подключения:",
     'profile.auto_renew_disabled': "🔁 Автопродление: выключено",
@@ -777,7 +789,7 @@ LANG = {
     'trial.expired_discount_btn': "🔥 Купить со скидкой 30%",
     'trial.notification_6h': "✨ Просто напоминание\n\nVPN лучше включать всегда, чтобы защитить ваши данные.",
     'trial.notification_60h': "🛡 VPN скоро отключится\n\nОсталось 12 часов пробного доступа.\n\nПродолжите пользоваться защитой — оформите подписку.",
-    'trial.notification_71h': "🚨 Последний час пробного доступа\n\nЧерез час VPN будет отключён.\n\nОформите подписку, чтобы продолжить пользоваться защитой.",
+    'trial.notification_71h': "🚨 Последний час пробного доступа\n\nЧерез час VPN будет отключён.\n\nОформите подписку, чтобы оставаться на связи, даже когда глушат связь!",
 
     # === TRIAL NOTIFICATIONS (new schedule) ===
     'trial.reminder_24h': "⏳ <b>Пробный период заканчивается завтра</b>\n\nЗавтра доступ отключится — сайты и приложения вернутся к блокировкам.\n\nОформите подписку сейчас — ключ и настройки сохранятся, ничего не нужно переустанавливать.",
@@ -997,7 +1009,7 @@ LANG = {
 
     # --- Help / FAQ ---
     'help.menu_title': "❓ <b>Помощь</b>\n\nВыберите подходящий вариант ниже:\n\n<blockquote>📖 <b>Ответы на частые вопросы</b>\nКороткие решения типичных проблем</blockquote>\n\n<blockquote>📲 <b>Инструкции по сервису</b>\nКак настроить VPN на вашем устройстве</blockquote>\n\n<blockquote>📞 <b>Контакты</b>\nПочта поддержки и отдела продаж</blockquote>\n\n<blockquote>💬 <b>Помощь</b>\nНаписать живому оператору в Telegram</blockquote>",
-    'help.contacts_title': "📞 <b>Контакты</b>\n\nСвяжитесь с нами по электронной почте:\n\n<blockquote>📧 <b>Техническая поддержка</b>\n<code>support@atlassecure.uk</code>\nПроекты Atlas Secure и QoDev</blockquote>\n\n<blockquote>💼 <b>Отдел продаж</b>\n<code>sales@atlassecure.uk</code>\nИнфраструктурные решения Atlas Secure</blockquote>\n\n<i>Нажмите на адрес, чтобы скопировать.</i>",
+    'help.contacts_title': "📞 <b>Контакты</b>\n\nСвяжитесь с нами по электронной почте — <b>нажмите на адрес, и он скопируется</b>.\n\n<blockquote>📧 <b>Техническая поддержка</b></blockquote>\n<code>support@atlassecure.uk</code>\nПроекты Atlas Secure и QoDev\n\n<blockquote>💼 <b>Отдел продаж</b></blockquote>\n<code>sales@atlassecure.uk</code>\nИнфраструктурные решения Atlas Secure",
     'help.faq_title': "📖 <b>Ответы на частые вопросы</b>\n\nВыберите свой вопрос — покажем короткое решение.",
     'help.faq_q1': "🚫 Не работает VPN",
     'help.faq_q2': "📲 Как подключиться / настроить",
@@ -1019,7 +1031,7 @@ LANG = {
     'help.faq_a9': "⚠️ <b>Happ — Ошибка Xray-ядра</b>\n\nВстречается часто, лечится за минуту.\n\n<b>Почему возникает</b>\n\n<blockquote>Многие VPN-сервисы автоматически подсовывают на устройство <b>файлы маршрутизации</b> — без вашего ведома. Мы так не делаем: <b>все настройки живут на наших серверах</b>, а не на телефоне.\n\nНо иногда файлы, оставшиеся от других VPN, конфликтуют с нашим ядром — и Happ показывает ошибку Xray.</blockquote>\n\n<b>Как исправить</b>\n\n<blockquote>1️⃣ Откройте <b>Happ</b>\n\n2️⃣ Нажмите на <b>шестерёнку ⚙️</b> в левом верхнем углу\n\n3️⃣ Выберите <b>«Маршрутизация»</b>\n\n4️⃣ Удалите <b>каждый</b> файл маршрутизации из списка\n\n5️⃣ Перезапустите приложение</blockquote>\n\nПодключение заработает штатно 🚀\n\n<i>Не помогло? Напишите оператору — разберёмся вместе за 5–10 минут.</i> 💬",
 
     # --- Mini Shop ---
-    'shop.title': "<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> <b>Мини-магазинчик</b>\n\nЗдесь можно купить полезные цифровые товары — быстро, без нервов и лишних сложностей.\n\n<blockquote><tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> <b>Telegram Premium</b> — расширьте возможности мессенджера\n⭐ <b>Telegram Stars</b> — звёзды для себя или в подарок\n<tg-emoji emoji-id=\"5422545633112249830\">🍎</tg-emoji> <b>Пополнение Apple ID</b> — пополните баланс App Store в любом регионе\n<tg-emoji emoji-id=\"5319247469165433798\">🎮</tg-emoji> <b>Пополнить Steam</b> — кошелёк Steam без VPN и блокировок\n<tg-emoji emoji-id=\"5226639745106330551\">🧠</tg-emoji> <b>Claude Pro/Max</b> <i>(скоро)</i> — самый мощный AI-ассистент для работы и творчества</blockquote>\n\nВыберите что вас интересует:",
+    'shop.title': "<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> <b>Мини-магазинчик</b>\n\nЗдесь можно купить полезные цифровые товары — быстро, без нервов и лишних сложностей.\n\n<blockquote><tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> <b>Telegram Premium</b> — расширьте возможности мессенджера\n<tg-emoji emoji-id=\"5422545633112249830\">🍎</tg-emoji> <b>Пополнение Apple ID</b> — пополните баланс App Store в любом регионе\n<tg-emoji emoji-id=\"5319247469165433798\">🎮</tg-emoji> <b>Пополнить Steam</b> — кошелёк Steam без VPN\n<tg-emoji emoji-id=\"5226639745106330551\">🧠</tg-emoji> <b>Claude Pro/Max</b> <i>(скоро)</i> — самый мощный AI-ассистент для работы и творчества</blockquote>\n\nВыберите что вас интересует:",
     'shop.claude_coming_soon': "💪 Собрали все свои суперсилы, чтобы быстрее реализовать",
     'shop.apple_title': "🍎 <b>Пополнение Apple ID</b>\n\nВыберите регион вашего Apple ID:\n\n<blockquote>Не знаете свой регион?\nОткройте <b>Настройки → Apple ID → Медиаматериалы и покупки → Просмотреть</b> — там будет указана страна/регион.</blockquote>",
     'shop.apple_amount_title': "🍎 <b>Пополнение Apple ID</b>\n\nРегион: {region}\n\nВыберите номинал пополнения:",
@@ -1100,7 +1112,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 Мой трафик",
-    'traffic.info': "<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {used} / {limit}\n{bar} {pct}%\n\n<tg-emoji emoji-id=\"5454415424319931791\">⏳</tg-emoji> До: {expires}\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote expandable><code>{sub_url}</code></blockquote>\n\n📲 <b>Куда вставить:</b>\n└ <b>Happ</b> → Главная → <b>+</b> → Вставить из буфера",
+    'traffic.info': "<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {used} / {limit}\n{bar} {pct}%\n\n<tg-emoji emoji-id=\"5454415424319931791\">⏳</tg-emoji> До: {expires}\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ для Happ</b> <i>(нажми — скопируется)</i>\n<blockquote expandable><code>{happ_url}</code></blockquote>\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ для Incy</b> <i>(нажми — скопируется)</i>\n<blockquote expandable><code>{incy_url}</code></blockquote>\n\n<b>Установка в один клик</b>\nНажмите кнопку ниже — приложение откроется и импортирует ключ автоматически.\n\n<i>Если авто-импорт не сработал:</i>\n└ <b>Happ:</b> Главная → <b>+</b> → Вставить из буфера\n└ <b>Incy:</b> Настройки → Импорт → Из буфера",
     'traffic.no_subscription': "📊 <b>Обход блокировок</b> 🇷🇺\n\n🔒 Нет активной подписки.",
     'traffic.trial_no_bypass': "📊 <b>Обход блокировок</b> 🇷🇺\n\n🔒 Обход доступен на тарифах Basic и Plus.",
     'traffic.trial_upgrade_hint': "Купите подписку Basic или Plus, чтобы разблокировать больше ГБ и покупку трафика",
@@ -1111,8 +1123,13 @@ LANG = {
     'traffic.subscription_expired_bypass_active': "⚠️ <b>Ваша основная подписка закончилась</b>\n\nОбход блокировок продолжает работать — ваши ГБ на месте.\n\nНе забудьте докупить трафик, если он заканчивается 👇",
     'traffic.buy_subscription': "📈 Купить подписку",
     'traffic.buy_traffic_btn': "💳 Купить трафик",
+    'traffic.install_insy_btn': "📥 Установить в Incy",
+    'traffic.install_incy_btn': "📥 Установить в Incy",
+    'traffic.install_happ_btn': "📥 Установить в Happ",
+    'traffic.buy_gb_btn': "📈 Докупить ГБ обхода",
+    'traffic.main_menu_btn': "🏠 Главное меню",
     'traffic.back_to_traffic': "📊 К трафику",
-    'traffic.buy_title': "<tg-emoji emoji-id=\"5447410659077661506\">📦</tg-emoji> <b>Купить трафик 🇷🇺</b>\n\nДобавляется к текущему остатку.\n\n<tg-emoji emoji-id=\"5203993413346680064\">📊</tg-emoji> <b>Пакет — это ваш личный запас ГБ</b>\nНе сгорает по времени и не привязан к подписке — тратится только когда вы реально пользуетесь.\n\n<tg-emoji emoji-id=\"5325547803936572038\">✨</tg-emoji> Возьмите столько, сколько нужно — и пользуйтесь спокойно.\nЗакончится — пополните, когда удобно <tg-emoji emoji-id=\"5289944036881230584\">⭐️</tg-emoji>\n\n<blockquote><tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> Примерный расход:\n├ 15 ГБ — ~1 неделя\n├ 50 ГБ — ~3 недели\n├ 75 ГБ — ~1 месяц\n├ 100 ГБ — ~1.5 месяца\n├ 150 ГБ — ~2.5 месяца\n└ 200 ГБ — ~3 месяца</blockquote>\n\n💎 Чем больше пакет — тем выгоднее за ГБ",
+    'traffic.buy_title': "<tg-emoji emoji-id=\"5447410659077661506\">📦</tg-emoji> <b>Купить трафик 🇷🇺</b>\n\nДобавляется к текущему остатку.\n\n<tg-emoji emoji-id=\"5203993413346680064\">📊</tg-emoji> <b>Пакет — это ваш личный запас ГБ</b>\nНе сгорает по времени и не привязан к подписке — тратится только когда вы реально пользуетесь.\n\n<tg-emoji emoji-id=\"5325547803936572038\">✨</tg-emoji> Возьмите столько, сколько нужно — и пользуйтесь спокойно.\nЗакончится — пополните, когда удобно <tg-emoji emoji-id=\"5289944036881230584\">⭐️</tg-emoji>\n\n💎 Чем больше пакет — тем выгоднее за ГБ",
     'traffic.buy_title_extended': "<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> <b>Больше объёма 🇷🇺</b>\n\nДобавляется к текущему остатку.\n\n<blockquote><tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> Примерный расход:\n├ 300 ГБ — ~5 месяцев\n├ 600 ГБ — ~10 месяцев\n├ 1 200 ГБ — ~1.5 года\n├ 2 200 ГБ — ~3 чел. на год\n├ 5 000 ГБ — ~7 чел. на год\n└ 8 000 ГБ — ~11 чел. на год</blockquote>",
     'traffic.confirm_purchase': "💳 <b>Оплата: {gb} ГБ — {price} ₽</b>\n\n💰 Ваш баланс: {balance} ₽",
     'traffic.pay_balance': "💰 Оплатить с баланса ({price} ₽)",
@@ -1185,4 +1202,180 @@ LANG = {
         "Подождите минуту и нажмите «Назад → Дальше» ещё раз. "
         "Если ошибка повторится, напишите в поддержку."
     ),
+
+    # === Batch 2: hardcoded strings extracted from handlers ===
+
+    # common buttons / toasts
+    'common.support_short': "💬 Поддержка",
+    'common.help_button': "💬 Помощь",
+    'common.back_arrow': "🔙 Назад",
+
+    # main menu / settings
+    'main.settings_change_language_btn': "🗣 Изменить язык",
+    'main.settings_privacy_btn': "🔐 Политика конфиденциальности",
+    'main.tracker_only_btn': "✍️ Трекер Only",
+
+    # main menu — main buttons (keyboards.py)
+    'main.btn_connect': "🚀 Подключиться",
+    'main.btn_connect_short': "⚡️ Подключиться",
+    'main.btn_need_help': "💬 Нужна помощь",
+    'main.btn_buy_vpn': "Купить VPN",
+    'main.btn_renew_vpn': "Продлить VPN",
+    'main.btn_buy_gb': "Докупить ГБ обхода",
+    'main.btn_trial_free': "Попробовать бесплатно — 3 дня",
+    'main.btn_renew_discount_15': "Продлить со скидкой 15% | ⏳ {remaining}",
+    'main.btn_bypass_only': "🌐 Только обход блокировок",
+    'main.btn_my_subscription': "Моя подписка",
+    'main.btn_invite_friends': "Пригласить друзей",
+    'main.btn_my_profile': "Мой профиль",
+    'main.btn_shop': "Магазин",
+    'main.btn_games': "Игры",
+    'main.btn_help': "Помощь",
+    'main.btn_devices': "Мои устройства",
+    'main.btn_topup_balance': "Пополнить баланс",
+    'main.btn_auto_renew_on': "🔁 Автопродление с баланса ✅",
+    'main.btn_auto_renew_off': "🔁 Автопродление с баланса",
+    'main.btn_change_language_full': "Сменить язык / Change language",
+    'main.btn_legal': "Правила",
+
+    # shop buttons
+    'shop.premium_button': "⚡️ Telegram Premium",
+    'shop.apple_id_button': "🍎 Пополнить Apple ID",
+    'shop.steam_top_up_button': "🎮 Пополнить Steam",
+    'shop.spotify_button': "🎧 Spotify Premium",
+    'shop.claude_coming_soon_button': "🧠 Claude Pro/Max (скоро)",
+    'shop.mt_proxy_button': "Купить Telegram MT Прокси",
+
+    # setup buttons (auto-install)
+    'setup.install_incy_btn': "📲 Скачать Incy",
+    'setup.install_happ_btn': "📲 Установить Happ",
+    'setup.download_happ_btn': "📲 Скачать Happ",
+    'setup.happ_vpn_label': "Happ VPN",
+    'setup.incy_vpn_label': "Incy VPN",
+    'setup.happ_bypass_label': "Happ Обход",
+    'setup.incy_bypass_label': "Incy Обход",
+    'setup.key_hint_press': "Установка ключа в одно нажатие 👇",
+
+    # biz control panel toasts
+    'biz.copy_link_alert': "Скопируйте ссылку выше",
+    'biz.no_key_alert': "Ключ не найден",
+    'biz.link_ready_suffix': "\n\n🔗 Ваша ссылка подключения готова.",
+
+    # errors — payment / general
+    'errors.card_payment_unavailable': "Оплата картой временно недоступна",
+    'errors.sbp_unavailable_toast': "СБП временно недоступен",
+    'errors.min_card_amount': "Сумма ниже минимальной для оплаты картой (64₽)",
+    'errors.payment_creation': "Ошибка создания платежа",
+    'errors.sbp_creation': "Ошибка создания платежа СБП",
+    'errors.special_offer_expired': "⏰ Срок спецпредложения истёк. Вы можете приобрести подписку по обычной цене.",
+
+    # main — 15% auto-discount notification
+    'main.discount_applied_choose_tariff': "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:",
+
+    # combo flow
+    'combo.promo_period_prompt': "\n\n🎁 Промокод: скидка {discount_pct}%\nВыберите период:",
+    'combo.choose_period_prompt': "\n\nВыберите период:",
+
+    # traffic / bypass buttons
+    'traffic.btn_more_volume': "Больше объёма →",
+    'traffic.promo_active_line': "\n\n🎁 Промо-скидка {discount_pct}% активна!",
+    'traffic.refresh_btn': "🔄 Обновить",
+    'traffic.gb_price_label': "{gb} ГБ — {price} ₽",
+
+    # buy screen
+    'buy.combo_button': "🚀 Комбо (VPN + обход)",
+    'buy.have_promo_button': "У меня промокод",
+    'buy.select_tariff_new': '<tg-emoji emoji-id="5427168083074628963">💎</tg-emoji> <b>Выберите тариф</b>\n\n{tariffs}\n\n<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPN + обход в одном пакете\n<blockquote>Трафик обхода включён · от 329 ₽/мес</blockquote>',
+    'buy.select_tariff_bypass_active': "🌐 <b>У вас активен обход блокировок</b>\n\nДля основной подписки выберите тариф:\n\n{tariffs}\n\n<tg-emoji emoji-id=\"5445284980978621387\">🚀</tg-emoji> <b>Комбо</b> — VPN + обход в одном пакете\n<blockquote>Трафик обхода включён · от 329 ₽/мес</blockquote>",
+
+    # profile screen (personal cabinet)
+    'profile.info_active_until': "📆 Подписка: активна до {date}",
+    'profile.info_tariff': "⭐️ Тариф: {tariff}",
+    'profile.info_inactive': "📆 Подписка: не активна",
+    'profile.info_tariff_none': "⭐️ Тариф: —",
+    'profile.info_bypass_none': "💎 Трафик: —",
+    'profile.info_bypass_left': "💎 Осталось трафика: {remaining} из {limit}",
+    'profile.info_auto_renew_on': "🔁 Автопродление: включено",
+    'profile.info_auto_renew_none': "🔁 Автопродление: —",
+    'profile.info_balance': "💰 Баланс: {balance} ₽",
+    'profile.info_invited_friends': "👥 Приглашено друзей: {count}",
+
+    # my subscription screen
+    'main.my_sub_title': "<b>Информация о подписке</b>",
+    'main.my_sub_active_until': "Активна до: {date}",
+    'main.my_sub_active_until_none': "Активна до: —",
+    'main.my_sub_bypass_none': "Трафик: —",
+    'main.my_sub_bypass_left': "Осталось трафика: {remaining} из {limit}",
+    'main.my_sub_bypass_unlimited': "Трафик: безлимит",
+    'main.my_sub_btn_connect': "Подключить VPN",
+    'main.my_sub_btn_renew': "Продлить подписку",
+    'main.my_sub_btn_buy_vpn': "Купить VPN",
+    'main.my_sub_btn_topup_gb': "Пополнить ГБ Обхода",
+    'main.my_sub_btn_my_proxy': "Мой прокси",
+    'main.my_sub_btn_mt_proxy': "Telegram MT Прокси",
+
+    # legal
+    'main.legal_title': "📰 <b>Правовые документы</b>\n\nВыберите документ для ознакомления:",
+    'main.legal_terms_btn': "Пользовательское соглашение",
+    'main.legal_privacy_btn': "Политика конфиденциальности",
+
+    # help / faq screen buttons
+    'help.faq_button': "📖 Ответы на частые вопросы",
+    'help.instructions_button': "📲 Инструкции по сервису",
+    'help.contacts_button': "📞 Контакты",
+
+    # referral screen
+    'referral.hero_beginner': "Ты на первой ступени. Делись ссылкой → друг покупает подписку → ты получаешь <b>кэшбэк</b> на баланс.\n\n",
+    'referral.hero_top': "Это вершина. <b>Зафиксировано бессрочно.</b> Тебя меньше 1%.\n\n",
+    'referral.status_block': "🏆 Уровень: <b>{status}</b> · {percent}%\n💵 <b>{percent}%</b> кэшбэка с каждой покупки\n💰 Заработано: <b>{amount} ₽</b>",
+    'referral.progress_to_next': "📈 До <b>{next_name}</b> ({next_pct}%) — <b>{remaining}</b> купивших.\nУровень только растёт и не падает.",
+    'referral.your_link_hint': "🔗 <b>Твоя ссылка</b> <i>(нажми — скопируется)</i>\n",
+    'referral.header': "🎖 <b>Круг Амбассадоров</b>\n<i>От проводника до амбассадора</i>\n\n",
+
+    # Invoice descriptions & minor payment strings
+    'buy.renewal_invoice_description': "Atlas Secure VPN продление подписки на {period_text}",
+    'buy.period_text_1': "1 месяц",
+    'buy.period_text_2_4': "{months} месяца",
+    'buy.period_text_5_plus': "{months} месяцев",
+    'trial.degradation_notice': "\n\n⏳ Возможны небольшие задержки",
+
+    # Plus→Basic downgrade confirmation
+    'buy.downgrade_confirm_text': "⚠️ Вы переходите с Plus на Basic.\n\nКлюч будет ротирован с выделенного сервера на базовый.\n\nПодтвердить переход?",
+    'buy.downgrade_confirm_yes': "⚡️ Да, перейти на Basic",
+    'buy.downgrade_confirm_no': "❌ Отмена",
+
+    # Payments: withdraw admin notification & alerts (user-facing part only)
+    'withdraw.admin_new_request': "💸 Новая заявка на вывод #{wid}\n\n👤 Пользователь: @{username} (ID: {telegram_id})\n📊 Баланс: {balance:.2f} ₽\n💰 Сумма: {amount:.2f} ₽\n📶 Подписка: {sub_text}\n🏦 Реквизиты: {requisites}",
+    'withdraw.admin_btn_approve': "✅ Подтвердить",
+    'withdraw.admin_btn_reject': "❌ Отклонить",
+    'withdraw.request_note': "Обратитесь в техподдержку для создания заявки на вывод средств.",
+
+    # global discount notice
+    'buy.global_discount_default_reason': "Спец-цены",
+    'buy.global_discount_notice': "\n\n🎁 <b>Скидка −{pct}%</b> · {reason}",
+    'buy.global_discount_notice_dated': "\n\n🎁 <b>Скидка −{pct}%</b> · {reason} · до {date}",
+
+    # start.py — site link + promo/gift link errors
+    'start.site_linked_success': "✅ Сайт QoDev успешно привязан.\nТеперь синхронизация работает! ⚡️",
+    'promo_link.not_found': "⚠️ <b>Ссылка не найдена</b>\n\nВозможно, она удалена или адрес введён неправильно.",
+    'promo_link.activation_failed': "⚠️ <b>Не получилось активировать ссылку</b>\n\nПопробуй ещё раз чуть позже.",
+    'promo_link.error_inactive': "🚫 <b>Ссылка выключена</b>\n\nАдмин её деактивировал.",
+    'promo_link.error_expired': "⏳ <b>Срок действия ссылки истёк</b>",
+    'promo_link.error_exhausted': "🚫 <b>Ссылка полностью использована</b>\n\nЛимит активаций исчерпан.",
+    'promo_link.error_already_redeemed_by_user': "ℹ️ <b>Ты уже использовал эту ссылку</b>\n\nОдна активация на пользователя.",
+    'promo_link.error_not_found': "⚠️ <b>Ссылка не найдена</b>",
+    'promo_link.error_db_not_ready': "⚠️ <b>Сервис перезапускается</b>\n\nПопробуй через минуту.",
+    'promo_link.error_generic': "⚠️ <b>Активация не прошла</b>",
+    'promo_link.reward_not_applied': "⚠️ <b>Награда пока не применилась</b>\n\nПопробуй ещё раз через минуту или напиши в поддержку — мы всё выдадим.",
+    'promo_link.header_activated': "🎉 <b>Награда активирована!</b>\n\n",
+    'promo_link.reward_subscription': "📦 <b>Подписка</b> · {tariff}\n⏳ <b>{days} дн.</b>\n📅 До: <b>{end}</b>",
+    'promo_link.reward_discount_subscription': "🎁 <b>Твой подарок активирован</b>\n\n<blockquote>— Скидка <b>{percent}%</b> на любой тариф\n— Действует ещё <b>{hours} часов</b></blockquote>\n\nВыбери подходящий тариф ниже ↓",
+    'promo_link.reward_discount_traffic': "🎁 <b>Твой подарок активирован</b>\n\n<blockquote>— Скидка <b>{percent}%</b> на пакеты ГБ обхода\n— Действует ещё <b>{hours} часов</b></blockquote>\n\nВыбери подходящий тариф ниже ↓",
+    'promo_link.reward_bypass_gb': "📊 <b>+{gb} ГБ</b> обхода начислено\n\nПакет ГБ не сгорает — тратится только при работе на LTE-серверах.",
+    'promo_link.fallback_success_hint': "Открой «Купить подписку» — скидка применится автоматически.",
+
+    # stage-only user picker
+    'stage.user_role_prompt': "Привет 👋\n\nТы разработчик Atlas Secure или пользователь?\nВыбери вариант ниже 👇",
+    'stage.role_user_btn': "👤 Пользователь",
+    'stage.role_dev_btn': "💻 Разработчик",
 }

@@ -11,34 +11,38 @@
 
   body {
     font-feature-settings: "ss01", "ss02", "cv11";
-    /* Матовый премиальный канвас: субтильный белый halo сверху-справа,
-       тонкая сетка hi-tech dots + мельчайший cyan-подглоу справа снизу
-       (сдержанный технологичный акцент). Никаких насыщенных цветов —
-       только чёрный, off-white и грей + ювелирные проценты cyan/violet. */
+    /* WHITE THEME 2026/2027 — warm off-white канвас с тонкими colored halo
+       по углам (info/special/success по 3%). Плюс субтильная dot-grid
+       12px и SVG-turbulence noise-плёнка — даёт «paper texture» вместо
+       плоского белого, снижает нагрузку на глаз при долгом просмотре. */
     background:
-      radial-gradient(ellipse 70% 40% at 90% -10%, rgba(255, 255, 255, 0.045), transparent 65%),
-      radial-gradient(ellipse 50% 45% at 5% 105%, rgba(125, 211, 252, 0.030), transparent 60%),
-      radial-gradient(ellipse 40% 30% at 100% 100%, rgba(196, 181, 253, 0.022), transparent 60%),
-      radial-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
-      #0A0A0A;
-    background-size: auto, auto, auto, 24px 24px, auto;
+      radial-gradient(ellipse 60% 40% at 100% 0%, rgba(37, 99, 235, 0.045), transparent 65%),
+      radial-gradient(ellipse 55% 45% at 0% 100%, rgba(124, 58, 237, 0.035), transparent 60%),
+      radial-gradient(ellipse 40% 35% at 100% 100%, rgba(16, 185, 129, 0.030), transparent 60%),
+      radial-gradient(rgba(15, 23, 32, 0.055) 1px, transparent 1px),
+      #FBFBF9;
+    background-size: auto, auto, auto, 12px 12px, auto;
     min-height: 100vh;
     letter-spacing: -0.01em;
-    color: #FCFCFC;
+    color: #0F1720;
     position: relative;
+    /* Safe-area-friendly для iOS PWA (notch, home-indicator) */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    -webkit-tap-highlight-color: transparent; /* убрать серый flash на tap */
   }
-  /* Едва различимая zern-текстура поверх канваса — матовый эффект,
-     ощущение «плёнки». SVG turbulence data-uri, opacity ~0.02.
-     Отключаем pointer-events, поверх всего идёт контент. */
+  /* Ультратонкая plâter-текстура. Opacity 0.035, multiply — не серит
+     карточки (у них своё pure white), только оживляет фон.
+     iOS Safari корректно рендерит SVG data-uri. */
   body::before {
     content: "";
     position: fixed;
     inset: 0;
     pointer-events: none;
     z-index: 0;
-    opacity: 0.020;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.85'/></svg>");
-    mix-blend-mode: overlay;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.85'/></svg>");
+    mix-blend-mode: multiply;
   }
   #root {
     position: relative;
@@ -46,11 +50,11 @@
   }
 
   ::selection {
-    background-color: rgba(245, 245, 245, 0.28);
-    color: #0A0A0A;
+    background-color: rgba(37, 99, 235, 0.18);   /* info-blue tint */
+    color: #0F1720;
   }
 
-  /* Scrollbar — узкий, тёмно-серый, чтобы не выпрыгивал на dark. */
+  /* Scrollbar — тонкий slate на light canvas. */
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -59,13 +63,13 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: #2A2A2A;
+    background: rgba(15, 23, 32, 0.15);
     border-radius: 8px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #3A3A3A;
+    background: rgba(15, 23, 32, 0.25);
     background-clip: padding-box;
     border: 2px solid transparent;
   }
@@ -363,6 +367,120 @@
      компонентом CountUp через inline animation. */
   .num-tick {
     animation: num-tick 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     DESIGN 2026 — bento grid, frosted cards, motion primitives
+     ═══════════════════════════════════════════════════════════════ */
+
+  /* Bento-card — базовая карточка Bento-грида. Pure white surface,
+     hair-line border, hover-lift + subtle scale, focus-ring для
+     клавиатурной навигации. */
+  .bento-card {
+    @apply relative overflow-hidden rounded-2xl border border-border
+           bg-bg-card shadow-card transition-all duration-300 ease-out;
+  }
+  .bento-card-hover {
+    @apply hover:-translate-y-0.5 hover:border-fg/15
+           hover:shadow-[0_0_0_1px_rgba(15,23,32,0.08),0_8px_24px_-12px_rgba(15,23,32,0.16)];
+  }
+
+  /* Bento-tile-hero — большая карточка для главной KPI (2 col на md).
+     С subtle ambient-gradient и слегка увеличенным padding.  */
+  .bento-hero {
+    @apply bento-card p-5 md:p-7;
+    background:
+      radial-gradient(ellipse 80% 60% at 100% 0%, rgba(37, 99, 235, 0.055), transparent 60%),
+      radial-gradient(ellipse 60% 45% at 0% 100%, rgba(124, 58, 237, 0.040), transparent 60%),
+      #FFFFFF;
+    background-size: 200% 200%;
+    animation: ambient 20s ease-in-out infinite;
+  }
+
+  /* Tap-scale — тактильный отклик на клик (mobile-first). */
+  .tap-scale {
+    @apply transition-transform duration-100 active:scale-[0.98];
+  }
+
+  /* Coloured chip — маленький пилюль для «today +12%» / «-5%». */
+  .chip-success {
+    @apply inline-flex items-center gap-0.5 rounded-full bg-success/12
+           px-2 py-0.5 text-[11px] font-semibold text-success ring-1 ring-success/25;
+  }
+  .chip-danger {
+    @apply inline-flex items-center gap-0.5 rounded-full bg-danger/12
+           px-2 py-0.5 text-[11px] font-semibold text-danger ring-1 ring-danger/25;
+  }
+  .chip-info {
+    @apply inline-flex items-center gap-0.5 rounded-full bg-info/12
+           px-2 py-0.5 text-[11px] font-semibold text-info ring-1 ring-info/25;
+  }
+
+  /* Collapsible — раскрывающаяся секция. Header + опциональный chevron.
+     Открытие анимируется через grid-template-rows 0fr → 1fr (без JS-
+     измерения высоты, чисто CSS). Работает на всех современных
+     браузерах (Chrome 117+, Safari 17+, Firefox 120+ — iOS PWA OK). */
+  .collapsible {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .collapsible[data-open="true"] {
+    grid-template-rows: 1fr;
+  }
+  .collapsible > .collapsible-inner {
+    overflow: hidden;
+    min-height: 0;
+  }
+  .collapsible[data-open="true"] > .collapsible-inner {
+    animation: collapse-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* Tooltip-hint — inline (?) иконка с hover-подсказкой.
+     На мобильных tap раскрывает; на десктопе — hover. */
+  .hint-dot {
+    @apply relative inline-flex h-4 w-4 shrink-0 items-center justify-center
+           rounded-full bg-bg-elevated text-[10px] font-bold text-fg-subtle
+           ring-1 ring-border cursor-help transition-colors
+           hover:bg-info/15 hover:text-info hover:ring-info/30;
+  }
+
+  /* Tap-highlight-off — для интерактивов, где мы сами анимируем tap. */
+  .no-tap-highlight {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+
+  /* Sticky-top-bar — mobile-first sticky header страницы.
+     Frosted-glass, безопасное перекрытие безнотчей iOS. */
+  .sticky-top-bar {
+    @apply sticky top-0 z-30 -mx-4 md:-mx-8 border-b border-border/70
+           bg-bg/80 px-4 py-3 backdrop-blur-xl md:px-8;
+  }
+
+  /* Bento-in animation — mount карточки Bento. */
+  .bento-in {
+    animation: bento-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  }
+  /* Stagger для bento-grid, до 12 карточек. */
+  .bento-grid > *:nth-child(1)  { animation-delay: 0ms; }
+  .bento-grid > *:nth-child(2)  { animation-delay: 50ms; }
+  .bento-grid > *:nth-child(3)  { animation-delay: 100ms; }
+  .bento-grid > *:nth-child(4)  { animation-delay: 150ms; }
+  .bento-grid > *:nth-child(5)  { animation-delay: 200ms; }
+  .bento-grid > *:nth-child(6)  { animation-delay: 250ms; }
+  .bento-grid > *:nth-child(7)  { animation-delay: 300ms; }
+  .bento-grid > *:nth-child(8)  { animation-delay: 350ms; }
+  .bento-grid > *:nth-child(9)  { animation-delay: 400ms; }
+  .bento-grid > *:nth-child(10) { animation-delay: 450ms; }
+  .bento-grid > *:nth-child(11) { animation-delay: 500ms; }
+  .bento-grid > *:nth-child(12) { animation-delay: 550ms; }
+
+  /* Attention pulse — вспышка на карточке когда через WS пришло
+     событие (например, revenue вырос). Инициируется JS: .classList.add
+     на 900мс, потом remove. */
+  .attention-pulse {
+    animation: attention 0.9s cubic-bezier(0.4, 0, 0.2, 1) 1;
   }
 
   /* Staggered fade-up для children — секций главной. backwards

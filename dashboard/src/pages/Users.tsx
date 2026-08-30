@@ -15,9 +15,10 @@ import {
   Minus,
   Trash2,
   ChevronRight,
+  Gauge,
 } from "lucide-react";
 import { endpoints, ApiError, type UserDetail } from "@/lib/api";
-import { fmtNum, fmtRub, fmtDate } from "@/lib/format";
+import { fmtNum, fmtRub, fmtDate, fmtBytes, daysUntil } from "@/lib/format";
 import { toast } from "@/store/toast";
 import { Spinner } from "@/components/Spinner";
 import { EmptyState } from "@/components/EmptyState";
@@ -317,7 +318,7 @@ function UserCard({
           </div>
         </div>
 
-        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
           <Cell
             icon={Wallet}
             label="Баланс"
@@ -332,13 +333,8 @@ function UserCard({
                 : "—"
             }
           />
-          <Cell
-            icon={Calendar}
-            label="Истекает"
-            value={fmtDate(
-              sub ? String((sub as Record<string, unknown>).expires_at ?? "") : null,
-            )}
-          />
+          <PremiumCell premium={d.premium} />
+          <BypassCell bypass={d.bypass} />
           <Cell
             icon={Percent}
             label="Скидка"
@@ -400,6 +396,60 @@ function Cell({
         <Icon className="h-3 w-3" /> {label}
       </div>
       <div className="mt-1 truncate text-sm font-semibold text-fg">{value}</div>
+    </div>
+  );
+}
+
+function PremiumCell({ premium }: { premium: UserDetail["premium"] }) {
+  // Sub-value: сколько дней осталось (для быстрой оценки). Показываем
+  // только когда премиум активен и есть будущая дата — иначе бесполезно.
+  const days = premium.is_active ? daysUntil(premium.expires_at) : null;
+  const value = premium.expires_at ? fmtDate(premium.expires_at) : "—";
+  const hint = premium.has_entity
+    ? premium.is_active
+      ? days !== null
+        ? `осталось ${days} дн`
+        : "активен"
+      : "истёк"
+    : "нет ключа";
+  return (
+    <div className="rounded-xl border border-border bg-bg-subtle/60 p-3">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
+        <Calendar className="h-3 w-3" /> Премиум до
+      </div>
+      <div className="mt-1 truncate text-sm font-semibold text-fg">{value}</div>
+      <div
+        className={
+          "mt-0.5 truncate text-[10px] " +
+          (premium.is_active ? "text-success" : "text-fg-subtle")
+        }
+      >
+        {hint}
+      </div>
+    </div>
+  );
+}
+
+function BypassCell({ bypass }: { bypass: UserDetail["bypass"] }) {
+  // limit_bytes = 0 у Remnawave означает «безлимит» — трактуем так же.
+  const unlimited = bypass.has_entity && bypass.limit_bytes === 0;
+  const value = !bypass.has_entity
+    ? "—"
+    : unlimited
+      ? "∞"
+      : fmtBytes(bypass.remaining_bytes);
+  const hint = !bypass.has_entity
+    ? "нет ключа"
+    : unlimited
+      ? "безлимит"
+      : `из ${fmtBytes(bypass.limit_bytes)} · потрачено ${fmtBytes(bypass.used_bytes)}`;
+  return (
+    <div className="rounded-xl border border-border bg-bg-subtle/60 p-3">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
+        <Gauge className="h-3 w-3" /> Обход · осталось
+      </div>
+      <div className="mt-1 truncate text-sm font-semibold text-fg">{value}</div>
+      <div className="mt-0.5 truncate text-[10px] text-fg-subtle">{hint}</div>
     </div>
   );
 }
@@ -821,6 +871,18 @@ function Actions({
     onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
   });
 
+  const reissueAgg = useMutation({
+    mutationFn: () => endpoints.userReissueAggregator(telegramId),
+    onSuccess: (r) => {
+      toast.success("Ссылка перевыпущена — старая больше не работает");
+      try {
+        if (r?.url) navigator.clipboard?.writeText(r.url);
+      } catch { /* clipboard недоступен — не критично */ }
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+
   const vipRevoke = useMutation({
     mutationFn: () => endpoints.userVipRevoke(telegramId),
     onSuccess: () => {
@@ -895,6 +957,19 @@ function Actions({
             <Crown className="h-3.5 w-3.5" /> Выдать VIP
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => {
+            if (confirm("Перевыпустить ссылку агрегатора? Старая перестанет работать, юзеру нужно взять новую в боте."))
+              reissueAgg.mutate();
+          }}
+          className="btn-secondary"
+          disabled={reissueAgg.isPending}
+          title="Новый token агрегатора. Затрагивает только этого юзера, апстрим-ссылки не меняются."
+        >
+          {reissueAgg.isPending ? <Spinner /> : <RefreshCcw className="h-3.5 w-3.5" />}
+          Перевыпустить ссылку
+        </button>
       </div>
 
       <DeleteUserSection telegramId={telegramId} />

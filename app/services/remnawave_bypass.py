@@ -23,7 +23,7 @@ import logging
 import uuid as uuid_lib
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 import config
 from app.services import remnawave_api
@@ -65,19 +65,26 @@ def _bypass_expire_iso() -> str:
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
     """Heuristic: does this panel entity belong to our bot?
 
-    Identical contract to remnawave_premium._is_our_entity — accept
-    on telegramId match OR description containing one of our markers.
+    Fail-safe против takeover:
+      1. Явный panel.telegramId → строгое решение по нему (match/mismatch).
+         Никакие другие маркеры не могут перехватить существующего owner'а.
+      2. panel.telegramId отсутствует (legacy 2.7.4 не проставлял) → адоптим
+         по нашему username-паттерну или маркеру описания.
     """
     if not isinstance(user, dict):
         return False
     tg_field = user.get("telegramId")
     if tg_field is None:
         tg_field = user.get("telegram_id")
-    try:
-        if tg_field is not None and int(tg_field) == int(telegram_id):
-            return True
-    except (TypeError, ValueError):
-        pass
+    if tg_field is not None:
+        try:
+            return int(tg_field) == int(telegram_id)
+        except (TypeError, ValueError):
+            return False
+    # telegramId пусто → fallback на username / description (только legacy).
+    entity_username = str(user.get("username") or "").strip()
+    if entity_username and entity_username == build_bypass_username(telegram_id):
+        return True
     desc = (user.get("description") or "").lower()
     if "bypass" in desc or "samopis" in desc or "via bot" in desc:
         return True
@@ -93,18 +100,80 @@ class BypassCreateResult:
     status: int
     error: Optional[str]
     recovered: bool = False
+    panel_id: Optional[int] = None  # numeric id панели 3.x
+
+
+def _extract_id(user: dict) -> Optional[int]:
+    """Достать numeric .id из entity (3.x). None если нет / кривой."""
+    v = user.get("id") if isinstance(user, dict) else None
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_panel_uuid(payload: dict) -> Optional[str]:
+    """Вернуть UUID entity для сохранения в subscriptions.remnawave_uuid.
+
+    3.x POST/GET-response больше не отдаёт `uuid` — только `vlessUuid`
+    (VLESS-UUID клиента, тоже уникальный per-user). Fallback гарантирует,
+    что колонка `remnawave_uuid` никогда не остаётся NULL при успешном
+    создании — иначе downstream-код (profile show_traffic, verify_delivery,
+    top-up) считает "у юзера нет bypass" и либо прячет UI, либо создаёт
+    дубль и перетирает trafficLimitBytes.
+    """
+    if not isinstance(payload, dict):
+        return None
+    v = payload.get("uuid") or payload.get("vlessUuid")
+    return str(v) if v else None
 
 
 def _result_from_existing(user: dict, *, http_status: int) -> BypassCreateResult:
     return BypassCreateResult(
         ok=True,
-        panel_uuid=user.get("uuid"),
+        panel_uuid=_extract_panel_uuid(user),
         subscription_url=user.get("subscriptionUrl") or None,
         short_uuid=user.get("shortUuid"),
         status=http_status,
         error=None,
         recovered=True,
+        panel_id=_extract_id(user),
     )
+
+
+async def _backfill_telegram_id(user: dict, telegram_id: int) -> None:
+    """PATCH telegramId onto an adopted entity that has none, so future
+    purchases match on the fast path instead of falling back to the
+    username heuristic.  Best-effort — never raises."""
+    if not isinstance(user, dict):
+        return
+    existing_tg = user.get("telegramId") if user.get("telegramId") is not None else user.get("telegram_id")
+    if existing_tg is not None:
+        try:
+            if int(existing_tg) == int(telegram_id):
+                return
+        except (TypeError, ValueError):
+            pass
+    # 3.x: сначала id, потом uuid/vlessUuid — update_user резолвит
+    # оба, но numeric id — самый прямой путь без лишних lookup'ов.
+    target = user.get("id")
+    if target is None:
+        target = user.get("uuid") or user.get("vlessUuid")
+    if not target:
+        return
+    try:
+        await remnawave_api.update_user(target, telegramId=int(telegram_id))
+        logger.info(
+            "REMNAWAVE_BYPASS_TELEGRAM_ID_BACKFILLED: tg=%s target=%s",
+            telegram_id, str(target)[:16],
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "REMNAWAVE_BYPASS_TELEGRAM_ID_BACKFILL_FAIL: tg=%s target=%s err=%s",
+            telegram_id, str(target)[:16], e,
+        )
 
 
 # ── Create ────────────────────────────────────────────────────────────
@@ -154,6 +223,7 @@ async def create_bypass_user_entity(
                 "REMNAWAVE_BYPASS_RECOVERED_PREFLIGHT: tg=%s username=%s uuid=%s",
                 telegram_id, username, (existing.get("uuid") or "")[:8],
             )
+            await _backfill_telegram_id(existing, telegram_id)
             return _result_from_existing(existing, http_status=200)
         logger.warning(
             "REMNAWAVE_BYPASS_USERNAME_TAKEN_UNRELATED: tg=%s username=%s existing_tg=%s",
@@ -161,7 +231,7 @@ async def create_bypass_user_entity(
         )
         return BypassCreateResult(
             ok=False,
-            panel_uuid=existing.get("uuid"),
+            panel_uuid=_extract_panel_uuid(existing),
             subscription_url=None,
             short_uuid=None,
             status=409,
@@ -186,11 +256,12 @@ async def create_bypass_user_entity(
         response = raw.get("response") or {}
         return BypassCreateResult(
             ok=True,
-            panel_uuid=response.get("uuid"),
+            panel_uuid=_extract_panel_uuid(response),
             subscription_url=response.get("subscriptionUrl"),
             short_uuid=response.get("shortUuid"),
             status=int(raw.get("status") or 0),
             error=None,
+            panel_id=_extract_id(response),
         )
 
     # 409 from POST — race between preflight and POST.
@@ -201,6 +272,7 @@ async def create_bypass_user_entity(
         except Exception:
             existing2 = None
         if existing2 and _is_our_entity(existing2, telegram_id):
+            await _backfill_telegram_id(existing2, telegram_id)
             return _result_from_existing(existing2, http_status=409)
 
     err_body = (raw or {}).get("body")
@@ -223,28 +295,45 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     Matches the customer's "трафик не сбрасывать" requirement: we read
     the current trafficLimitBytes and PATCH the sum, never reset.
     Returns True on success.
+
+    Self-heal через `get_bypass_entity_safe`: если БД-кеш (remnawave_id
+    или remnawave_uuid) указывает на PREMIUM entity (последствие
+    backfill-корапшена), helper это ловит, чистит кеш, резолвит bypass
+    entity по username=`str(tg)` и записывает правильный id обратно в БД.
+    После этого PATCH идёт на bypass, а не на premium (без SAFETY-DROP).
     """
     if not config.REMNAWAVE_ENABLED or extra_bytes <= 0:
         return False
-    import database  # lazy
-    cache = await database.get_remnawave_bypass_cache(telegram_id)
-    rmn_uuid = cache.get("remnawave_uuid") if cache else None
-    if not rmn_uuid:
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-    if not rmn_uuid:
+
+    # Резолвим гарантированно bypass entity (self-heal DB pointers).
+    entity = await remnawave_api.get_bypass_entity_safe(telegram_id)
+    if not isinstance(entity, dict):
+        logger.warning(
+            "REMNAWAVE_BYPASS_TOPUP_NO_ENTITY: tg=%s — bypass entity не найден "
+            "в панели (нужно create). +%d bytes не применены.",
+            telegram_id, extra_bytes,
+        )
         return False
-    try:
-        user = await remnawave_api.get_user(rmn_uuid)
-    except Exception as e:
-        logger.error("REMNAWAVE_BYPASS_TOPUP_GET_FAIL: tg=%s %s", telegram_id, e)
+
+    # Target — numeric id (стабильный fast path 3.x). Fallback на uuid.
+    target: Any = entity.get("id")
+    if target is None:
+        target = entity.get("uuid") or entity.get("vlessUuid")
+    if target is None:
+        logger.error(
+            "REMNAWAVE_BYPASS_TOPUP_NO_TARGET: tg=%s entity_username=%r — "
+            "resolved bypass entity без id/uuid",
+            telegram_id, entity.get("username"),
+        )
         return False
-    if not user:
-        return False
-    current_limit = int(user.get("trafficLimitBytes") or 0)
+
+    current_limit = int(entity.get("trafficLimitBytes") or 0)
+    # Юзер оплатил пакет → просто добавляем ровно extra_bytes.
+    # current=0 = "трафика нет" (израсходовал / не выдавали), не безлимит.
     new_limit = current_limit + int(extra_bytes)
     try:
         result = await remnawave_api.update_user(
-            rmn_uuid,
+            target,
             trafficLimitBytes=new_limit,
             status="ACTIVE",
         )
@@ -252,11 +341,29 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
         logger.error("REMNAWAVE_BYPASS_TOPUP_PATCH_FAIL: tg=%s %s", telegram_id, e)
         return False
     if result is None:
+        # update_user вернул None: PATCH не отправлен (network fail ИЛИ
+        # safety-drop за попытку PATCH на premium). Не логируем success.
+        # Should NOT happen после get_bypass_entity_safe (username-check
+        # гарантирует что target=bypass, не premium), но если панель
+        # вернула кривой entity — не молчим.
+        logger.warning(
+            "REMNAWAVE_BYPASS_TOPUP_NOT_APPLIED: tg=%s target=%s username=%r +%d bytes — "
+            "PATCH дропнут (см. предыдущий SAFETY-DROP WARNING). "
+            "get_bypass_entity_safe вернул не-bypass entity?",
+            telegram_id, str(target)[:16], entity.get("username"), extra_bytes,
+        )
         return False
     logger.info(
-        "REMNAWAVE_BYPASS_TOPPED_UP: tg=%s uuid=%s +%d bytes (new=%d)",
-        telegram_id, rmn_uuid[:8], extra_bytes, new_limit,
+        "REMNAWAVE_BYPASS_TOPPED_UP: tg=%s target=%s username=%r +%d bytes (new=%d)",
+        telegram_id, str(target)[:16], entity.get("username"), extra_bytes, new_limit,
     )
+    # Sub-aggregator hook: bypass GB изменился → сбросить кеш агрегатора,
+    # чтобы клиент сразу увидел новый лимит в userinfo. Fire-and-forget.
+    try:
+        from app.services import sub_aggregator
+        sub_aggregator.invalidate_bg(telegram_id)
+    except Exception:
+        pass
     return True
 
 

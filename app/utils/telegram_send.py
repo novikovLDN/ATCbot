@@ -27,14 +27,36 @@ async def send_with_long_caption_fallback(
     text: str,
     *,
     photo_file_id: Optional[str] = None,
+    animation_file_id: Optional[str] = None,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
     parse_mode: str = "HTML",
 ) -> list[int]:
-    """Send text (+ optional photo). Splits to 2 messages on caption_too_long.
+    """Send text (+ optional media). Media priority: animation > photo.
+    Splits to 2 messages on caption_too_long.
 
     Returns:
-        List of message_ids (1 or 2). Длина 2 — split-случай: [photo_id, text_id].
+        List of message_ids (1 or 2). Длина 2 — split-случай: [media_id, text_id].
     """
+    if animation_file_id:
+        try:
+            m = await bot.send_animation(
+                chat_id,
+                animation=animation_file_id,
+                caption=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
+            return [m.message_id]
+        except TelegramBadRequest as e:
+            if "caption is too long" not in (e.message or "").lower():
+                raise
+            anim_msg = await bot.send_animation(chat_id, animation=animation_file_id)
+            text_msg = await bot.send_message(
+                chat_id, text,
+                reply_markup=reply_markup, parse_mode=parse_mode,
+            )
+            return [anim_msg.message_id, text_msg.message_id]
+
     if not photo_file_id:
         m = await bot.send_message(
             chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode,

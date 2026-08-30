@@ -642,8 +642,10 @@ async def _fix_worker(admin_id: int, actionable: list):
                 tg, expected_username, actual_username,
             )
             return
-        uuid = user.get("uuid")
-        if not uuid:
+        # 3.x: predпочитаем numeric id (быстрее — panel сразу применит,
+        # без auto-resolve через нашу БД). Fallback на uuid для legacy.
+        panel_ref = user.get("id") if user.get("id") is not None else user.get("uuid")
+        if panel_ref is None:
             state["fix_skipped"] += 1
             return
         fields = {"expireAt": _iso_z(rec["expected_end"]), "status": "ACTIVE"}
@@ -651,7 +653,7 @@ async def _fix_worker(admin_id: int, actionable: list):
             fields["externalSquadUuid"] = target_squad
         try:
             result = await asyncio.wait_for(
-                remnawave_api.update_user(uuid, **fields),
+                remnawave_api.update_user(panel_ref, **fields),
                 timeout=_AUDIT_HTTP_TIMEOUT_S,
             )
         except Exception as e:

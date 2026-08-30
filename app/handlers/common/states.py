@@ -72,10 +72,6 @@ class AdminTrafficEdit(StatesGroup):
     waiting_for_confirm = State()
 
 
-class CorporateAccessRequest(StatesGroup):
-    waiting_for_confirmation = State()
-
-
 class PromoCodeInput(StatesGroup):
     waiting_for_promo = State()
 
@@ -166,6 +162,22 @@ class SteamPurchaseState(StatesGroup):
     waiting_for_disclaimer_ack = State()  # noop placeholder; ack is a button click
     choose_amount = State()
     waiting_for_login = State()
+    choose_payment_method = State()
+    processing_payment = State()
+
+
+class SpotifyPurchaseState(StatesGroup):
+    """Shop: Spotify Premium (EG-регион).
+
+    Disclaimer → info → choose_plan → choose_duration →
+    email input → email confirm → password input → password confirm →
+    review → payment_method → processing.
+    """
+    waiting_for_email = State()
+    confirming_email = State()
+    waiting_for_password = State()
+    confirming_password = State()
+    reviewing = State()
     choose_payment_method = State()
     processing_payment = State()
 

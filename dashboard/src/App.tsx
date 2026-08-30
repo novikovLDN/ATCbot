@@ -15,12 +15,17 @@ import { Broadcasts } from "@/pages/Broadcasts";
 import { BroadcastCreate } from "@/pages/BroadcastCreate";
 import { Referrals } from "@/pages/Referrals";
 import { BypassGifts } from "@/pages/BypassGifts";
+import { BetaApplications } from "@/pages/BetaApplications";
 import { BypassAudit } from "@/pages/BypassAudit";
+import { TrafficAudit } from "@/pages/TrafficAudit";
 import { PromoCodes } from "@/pages/PromoCodes";
 import { Service } from "@/pages/Service";
 import { Payments } from "@/pages/Payments";
 import { Settings } from "@/pages/Settings";
 import { MarketingLinks } from "@/pages/MarketingLinks";
+import { AutomatedNotifications } from "@/pages/AutomatedNotifications";
+import { Statistics } from "@/pages/Statistics";
+import { Pricing } from "@/pages/Pricing";
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -101,12 +106,17 @@ export default function App() {
               <Route index element={<Dashboard />} />
               <Route path="users" element={<Users />} />
               <Route path="analytics" element={<Analytics />} />
+              <Route path="statistics" element={<Statistics />} />
+              <Route path="pricing" element={<Pricing />} />
               <Route path="payments" element={<Payments />} />
               <Route path="broadcasts" element={<Broadcasts />} />
               <Route path="broadcasts/new" element={<BroadcastCreate />} />
+              <Route path="automated-notifications" element={<AutomatedNotifications />} />
               <Route path="referrals" element={<Referrals />} />
               <Route path="bgift" element={<BypassGifts />} />
+              <Route path="beta-applications" element={<BetaApplications />} />
               <Route path="bypass-audit" element={<BypassAudit />} />
+              <Route path="traffic-audit" element={<TrafficAudit />} />
               <Route path="audit" element={<Audit />} />
               <Route path="promo" element={<PromoCodes />} />
               <Route path="links" element={<MarketingLinks />} />

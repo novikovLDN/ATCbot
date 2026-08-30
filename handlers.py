@@ -561,27 +561,19 @@ router = Router()
 
 logger = logging.getLogger(__name__)
 
+# Фото экрана выбора способа оплаты «💳 К оплате: N ₽» (2026-08).
+PAYMENT_METHOD_PHOTO_FILE_ID = "AgACAgQAAxkBAAF-krxqdr7EFkK7vBafs-7eLasnInLCjAACfQ1rG2iAuVPYVBCZHdhHgQEAAwIAA3kAAz0E"
+
 
 # Функция send_vpn_keys_alert удалена - больше не используется
 # VPN-ключи теперь создаются динамически через Xray API, лимита нет
 
 def get_language_keyboard(language: str = "ru"):
-    """Клавиатура для выбора языка (языковые названия показываются в нативной форме)"""
+    """Клавиатура выбора языка — только ru + en."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ru"), callback_data="lang_ru"),
             InlineKeyboardButton(text=i18n_get_text(language, "lang.button_en"), callback_data="lang_en"),
-        ],
-        [
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_de"), callback_data="lang_de"),
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_kk"), callback_data="lang_kk"),
-        ],
-        [
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ar"), callback_data="lang_ar"),
-        ],
-        [
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_uz"), callback_data="lang_uz"),
-            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_tj"), callback_data="lang_tj"),
         ],
     ])
     return keyboard
@@ -1019,20 +1011,36 @@ async def show_payment_method_selection(
     crypto_on = cryptobot_service.is_enabled()
 
     btn_card_pl = InlineKeyboardButton(text=i18n_get_text(language, "payment.card_pl"), callback_data="pay:card_pl")
+    # СБП — обратно через Platega (revert Wata-миграции по просьбе).
     btn_sbp = InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp"), callback_data="pay:sbp")
     btn_card = InlineKeyboardButton(text=i18n_get_text(language, "payment.card"), callback_data="pay:card")
-    btn_lava = InlineKeyboardButton(text=i18n_get_text(language, "payment.lava"), callback_data="pay:lava")
+    # Lava-кнопка подменена на Wata: та же надпись "payment.lava" в UI,
+    # но callback уходит в Wata-хендлер (pay:wata). Код lava_service не
+    # удаляем — только UI-роутинг.
+    btn_lava = InlineKeyboardButton(text=i18n_get_text(language, "payment.lava"), callback_data="pay:wata")
     btn_intl = InlineKeyboardButton(text=i18n_get_text(language, "payment.intl_pl"), callback_data="pay:intl_pl")
     btn_stars = InlineKeyboardButton(text=i18n_get_text(language, "payment.stars"), callback_data="pay:stars")
     btn_crypto = InlineKeyboardButton(text=i18n_get_text(language, "payment.crypto"), callback_data="pay:crypto")
 
     if platega_on:
+        # [Карта Platega] [СБП Platega]
         buttons.append([btn_card_pl, btn_sbp])
 
     row2 = [btn_card]
     if lava_on:
         row2.append(btn_lava)
     buttons.append(row2)
+
+    # Platega recurring SBP subscription — admin-only beta (MVP: только 30д)
+    try:
+        import platega_service as _ps
+        if _ps.is_subscription_visible_to(telegram_id) and period_days == 30:
+            buttons.append([InlineKeyboardButton(
+                text="🔄 СБП-подписка (авто-продление)",
+                callback_data="pay:sbp_sub",
+            )])
+    except Exception:
+        pass
 
     if platega_on:
         buttons.append([btn_intl])
@@ -1051,9 +1059,31 @@ async def show_payment_method_selection(
     )])
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    
+
+    # Экран выбора способа оплаты рендерится с новым фото — safe_edit_text
+    # умеет только менять caption/text, но не саму картинку. Удаляем
+    # предыдущее сообщение и отправляем новое photo+caption.
     try:
-        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        try:
+            await callback.bot.send_photo(
+                chat_id=callback.message.chat.id,
+                photo=PAYMENT_METHOD_PHOTO_FILE_ID,
+                caption=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+        except Exception:
+            # Fallback без фото — если file_id устарел на текущем боте.
+            await callback.bot.send_message(
+                chat_id=callback.message.chat.id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
         await callback.answer()
     except Exception as e:
         logger.exception("Error showing payment method selection: %s", e)

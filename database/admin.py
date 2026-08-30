@@ -330,48 +330,125 @@ async def create_broadcast(
     message_a: str = None,
     message_b: str = None,
     photo_file_id: Optional[str] = None,
+    animation_file_id: Optional[str] = None,
     buttons: Optional[list] = None,
+    tag: Optional[str] = None,
+    tag_color: Optional[str] = None,
 ) -> int:
     """Создать новое уведомление.
 
-    Args:
-        title: Заголовок уведомления
-        message: Текст уведомления (для обычных уведомлений)
-        broadcast_type: Тип уведомления (info | maintenance | security | promo)
-        segment: Сегмент получателей (all_users | active_subscriptions)
-        sent_by: Telegram ID администратора
-        is_ab_test: Является ли уведомление A/B тестом
-        message_a: Текст варианта A (для A/B тестов)
-        message_b: Текст варианта B (для A/B тестов)
-        photo_file_id: Telegram file_id прикреплённого фото (для clone/re-send)
-        buttons: список ключей кнопок из _BUTTON_TYPES (для clone/re-send)
-
-    Returns:
-        ID созданного уведомления
+    photo_file_id и animation_file_id мутуально-эксклюзивные — если
+    заданы оба, animation имеет приоритет при отправке.
+    tag/tag_color — опциональная цветная метка (migration 071).
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        if is_ab_test:
-            row = await conn.fetchrow(
-                """INSERT INTO broadcasts
-                       (title, message_a, message_b, is_ab_test, type,
-                        segment, sent_by, photo_file_id, buttons)
-                   VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8)
-                   RETURNING id""",
-                title, message_a, message_b, broadcast_type, segment, sent_by,
-                photo_file_id, buttons,
+        # Try newest schema (migration 071 — tag/tag_color + 070 animation).
+        try:
+            if is_ab_test:
+                row = await conn.fetchrow(
+                    """INSERT INTO broadcasts
+                           (title, message_a, message_b, is_ab_test, type,
+                            segment, sent_by, photo_file_id, animation_file_id,
+                            buttons, tag, tag_color)
+                       VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8, $9, $10, $11)
+                       RETURNING id""",
+                    title, message_a, message_b, broadcast_type, segment, sent_by,
+                    photo_file_id, animation_file_id, buttons, tag, tag_color,
+                )
+            else:
+                row = await conn.fetchrow(
+                    """INSERT INTO broadcasts
+                           (title, message, is_ab_test, type, segment,
+                            sent_by, photo_file_id, animation_file_id,
+                            buttons, tag, tag_color)
+                       VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8, $9, $10)
+                       RETURNING id""",
+                    title, message, broadcast_type, segment, sent_by,
+                    photo_file_id, animation_file_id, buttons, tag, tag_color,
+                )
+            return row["id"]
+        except Exception as e:
+            _emsg = str(e)
+            # Migration 071 (tag) не применена.
+            missing_tag = "\"tag\"" in _emsg or "column tag " in _emsg or "tag_color" in _emsg
+            missing_anim = "animation_file_id" in _emsg
+            if not (missing_tag or missing_anim):
+                raise
+            logger.warning(
+                "broadcasts new columns missing (migration 070/071 not applied) "
+                "— falling back: missing_tag=%s missing_anim=%s",
+                missing_tag, missing_anim,
             )
-        else:
-            row = await conn.fetchrow(
-                """INSERT INTO broadcasts
-                       (title, message, is_ab_test, type, segment,
-                        sent_by, photo_file_id, buttons)
-                   VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7)
-                   RETURNING id""",
-                title, message, broadcast_type, segment, sent_by,
-                photo_file_id, buttons,
+            # Пробуем средний вариант (070 применена, 071 нет).
+            if missing_tag and not missing_anim:
+                try:
+                    if is_ab_test:
+                        row = await conn.fetchrow(
+                            """INSERT INTO broadcasts
+                                   (title, message_a, message_b, is_ab_test, type,
+                                    segment, sent_by, photo_file_id, animation_file_id, buttons)
+                               VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8, $9)
+                               RETURNING id""",
+                            title, message_a, message_b, broadcast_type, segment, sent_by,
+                            photo_file_id, animation_file_id, buttons,
+                        )
+                    else:
+                        row = await conn.fetchrow(
+                            """INSERT INTO broadcasts
+                                   (title, message, is_ab_test, type, segment,
+                                    sent_by, photo_file_id, animation_file_id, buttons)
+                               VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7, $8)
+                               RETURNING id""",
+                            title, message, broadcast_type, segment, sent_by,
+                            photo_file_id, animation_file_id, buttons,
+                        )
+                    return row["id"]
+                except Exception:
+                    pass
+            # Совсем старая схема (ни 070, ни 071).
+            if is_ab_test:
+                row = await conn.fetchrow(
+                    """INSERT INTO broadcasts
+                           (title, message_a, message_b, is_ab_test, type,
+                            segment, sent_by, photo_file_id, buttons)
+                       VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8)
+                       RETURNING id""",
+                    title, message_a, message_b, broadcast_type, segment, sent_by,
+                    photo_file_id, buttons,
+                )
+            else:
+                row = await conn.fetchrow(
+                    """INSERT INTO broadcasts
+                           (title, message, is_ab_test, type, segment,
+                            sent_by, photo_file_id, buttons)
+                       VALUES ($1, $2, FALSE, $3, $4, $5, $6, $7)
+                       RETURNING id""",
+                    title, message, broadcast_type, segment, sent_by,
+                    photo_file_id, buttons,
+                )
+            return row["id"]
+
+
+async def update_broadcast_tag(
+    broadcast_id: int, tag: Optional[str], tag_color: Optional[str],
+) -> bool:
+    """PATCH тега уже существующей рассылки. Пустая строка → NULL."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            res = await conn.execute(
+                """UPDATE broadcasts
+                   SET tag = $2, tag_color = $3
+                   WHERE id = $1""",
+                broadcast_id, tag or None, tag_color or None,
             )
-        return row["id"]
+        except Exception as e:
+            if "tag" not in str(e):
+                raise
+            logger.warning("update_broadcast_tag: migration 071 not applied")
+            return False
+    return res.startswith("UPDATE ") and res != "UPDATE 0"
 
 
 async def get_broadcast(broadcast_id: int) -> Optional[Dict[str, Any]]:
@@ -664,6 +741,141 @@ async def get_payments_by_provider(hours: int) -> list:
         }
         for r in rows
     ]
+
+
+async def get_payments_breakdown(hours: int) -> Dict[str, Any]:
+    """Полный разрез оплат за окно N часов:
+      - total: {count, revenue_rubles}
+      - by_provider:  [(provider, count, revenue_rubles), ...] сорт. по revenue
+      - by_type:      [(purchase_type, count, revenue_rubles), ...]
+      - by_tariff:    [(tariff, count, revenue_rubles), ...] топ-15
+      - by_apple_nominal: [(region, nominal, count, revenue_rubles), ...]
+
+    Используется в дашборде для «что купили сегодня/за N часов»:
+    админ видит, кто платит, чем и за что.
+    """
+    pool = await get_pool()
+    if pool is None:
+        return {}
+    since = _to_db_utc(datetime.now(timezone.utc) - timedelta(hours=hours))
+    out: Dict[str, Any] = {
+        "hours": hours,
+        "total": {"count": 0, "revenue_rubles": 0.0},
+        "by_provider": [],
+        "by_type": [],
+        "by_tariff": [],
+        "by_apple_nominal": [],
+    }
+    async with pool.acquire() as conn:
+        try:
+            total = await conn.fetchrow(
+                """SELECT COUNT(*)::BIGINT AS count,
+                          COALESCE(SUM(price_kopecks), 0)::BIGINT AS revenue_kop
+                   FROM pending_purchases
+                   WHERE status = 'paid' AND created_at >= $1""",
+                since,
+            )
+            out["total"] = {
+                "count": int(total["count"] or 0),
+                "revenue_rubles": int(total["revenue_kop"] or 0) / 100,
+            }
+        except Exception as e:
+            logger.warning("breakdown total_failed: %s", e)
+
+        # by_provider
+        try:
+            rows = await conn.fetch(
+                """SELECT COALESCE(payment_provider, 'unknown') AS k,
+                          COUNT(*)::BIGINT AS c,
+                          COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
+                   FROM pending_purchases
+                   WHERE status = 'paid' AND created_at >= $1
+                   GROUP BY k
+                   ORDER BY rev DESC""",
+                since,
+            )
+            out["by_provider"] = [
+                {"provider": r["k"], "count": int(r["c"]),
+                 "revenue_rubles": int(r["rev"]) / 100}
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning("breakdown by_provider failed: %s", e)
+
+        # by_type (subscription / apple_id / steam / spotify / ...)
+        try:
+            rows = await conn.fetch(
+                """SELECT COALESCE(purchase_type, 'unknown') AS k,
+                          COUNT(*)::BIGINT AS c,
+                          COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
+                   FROM pending_purchases
+                   WHERE status = 'paid' AND created_at >= $1
+                   GROUP BY k
+                   ORDER BY rev DESC""",
+                since,
+            )
+            out["by_type"] = [
+                {"purchase_type": r["k"], "count": int(r["c"]),
+                 "revenue_rubles": int(r["rev"]) / 100}
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning("breakdown by_type failed: %s", e)
+
+        # by_tariff (top-15 по revenue)
+        try:
+            rows = await conn.fetch(
+                """SELECT COALESCE(tariff, 'unknown') AS k,
+                          COUNT(*)::BIGINT AS c,
+                          COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
+                   FROM pending_purchases
+                   WHERE status = 'paid' AND created_at >= $1
+                   GROUP BY k
+                   ORDER BY rev DESC
+                   LIMIT 15""",
+                since,
+            )
+            out["by_tariff"] = [
+                {"tariff": r["k"], "count": int(r["c"]),
+                 "revenue_rubles": int(r["rev"]) / 100}
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning("breakdown by_tariff failed: %s", e)
+
+        # by_apple_nominal — только apple_id_ строки, распарсим tariff
+        # apple_id_{region}_{nominal} → region + nominal.
+        try:
+            rows = await conn.fetch(
+                """SELECT tariff, COUNT(*)::BIGINT AS c,
+                          COALESCE(SUM(price_kopecks), 0)::BIGINT AS rev
+                   FROM pending_purchases
+                   WHERE status = 'paid' AND created_at >= $1
+                     AND tariff LIKE 'apple_id_%'
+                   GROUP BY tariff
+                   ORDER BY rev DESC""",
+                since,
+            )
+            apple = []
+            for r in rows:
+                t = str(r["tariff"] or "")
+                parts = t.split("_")
+                region = parts[2] if len(parts) >= 3 else "?"
+                nominal_raw = parts[3] if len(parts) >= 4 else "0"
+                try:
+                    nominal = int(nominal_raw)
+                except ValueError:
+                    nominal = 0
+                apple.append({
+                    "region": region,
+                    "nominal": nominal,
+                    "count": int(r["c"]),
+                    "revenue_rubles": int(r["rev"]) / 100,
+                })
+            out["by_apple_nominal"] = apple
+        except Exception as e:
+            logger.warning("breakdown by_apple_nominal failed: %s", e)
+    return out
 
 
 async def get_recent_payments_feed(
@@ -1495,6 +1707,84 @@ async def get_users_by_segment(segment: str) -> list:
                      )"""
             )
             return [row["telegram_id"] for row in rows]
+        elif segment in ("paid_bought_within_7d", "paid_bought_within_14d",
+                         "paid_bought_within_30d"):
+            # Юзер оформил платную подписку в течение последних N дней.
+            # Читаем историю успешных платежей (status IN 'paid','approved').
+            # Кумулятивное окно (NOT ровно-N-суток бакет) — все, кто
+            # покупал хотя бы раз за N дней. Дубли по telegram_id
+            # убираются через DISTINCT.
+            days = int(segment.split("_")[-1].rstrip("d"))
+            rows = await conn.fetch(
+                f"""SELECT DISTINCT p.telegram_id
+                    FROM payments p
+                    WHERE p.status IN ('paid', 'approved')
+                      AND p.created_at >= (NOW() AT TIME ZONE 'UTC') - INTERVAL '{days} days'"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "trial_active_any":
+            # Все юзеры у которых СЕЙЧАС идёт триал (не истёк, платной ещё нет).
+            # Целевая аудитория для мидл-триал коммуникаций (день 2 из 3 и т.п.).
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE u.trial_used_at IS NOT NULL
+                     AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                           > (NOW() AT TIME ZONE 'UTC')
+                     AND NOT EXISTS (
+                         SELECT 1 FROM subscriptions s
+                         WHERE s.telegram_id = u.telegram_id
+                           AND s.source = 'payment'
+                           AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                     )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "trial_activated_today":
+            # Активировали триал в течение последних 24 часов. Свежая ЦА
+            # для welcome-серии, объяснения features и т.п.
+            rows = await conn.fetch(
+                """SELECT telegram_id FROM users
+                   WHERE trial_used_at IS NOT NULL
+                     AND trial_used_at >= (NOW() AT TIME ZONE 'UTC') - INTERVAL '24 hours'"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment in ("trial_active_day1", "trial_active_day2",
+                         "trial_active_day3"):
+            # Триал активен И его активировали N-1..N дней назад.
+            # Классические welcome-day2/day3 коммуникации:
+            #   day1 → [NOW-24h, NOW]                → «первый день»
+            #   day2 → [NOW-48h, NOW-24h)            → «уже 2 дня с нами»
+            #   day3 → [NOW-72h, NOW-48h)            → «завтра закончится»
+            # Ограничение trial_expires_at > NOW отсеивает истекшие триалы.
+            day = int(segment.split("_")[-1].replace("day", ""))
+            rows = await conn.fetch(
+                f"""SELECT u.telegram_id FROM users u
+                    WHERE u.trial_used_at IS NOT NULL
+                      AND u.trial_used_at <= (NOW() AT TIME ZONE 'UTC') - INTERVAL '{day - 1} hours' * 24
+                      AND u.trial_used_at >  (NOW() AT TIME ZONE 'UTC') - INTERVAL '{day} hours' * 24
+                      AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                            > (NOW() AT TIME ZONE 'UTC')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM subscriptions s
+                          WHERE s.telegram_id = u.telegram_id
+                            AND s.source = 'payment'
+                            AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                      )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment in ("paid_expires_in_1d", "paid_expires_in_3d",
+                         "paid_expires_in_7d", "paid_expires_in_14d"):
+            # Платная подписка сейчас активна, кончается в течение N суток.
+            # Точка renewal-подсказки — юзер ещё внутри, есть время оформить.
+            # source='payment' — исключаем trial/admin_grant/gift (у них другой
+            # renewal-flow).
+            days = int(segment.rsplit("_", 1)[-1].rstrip("d"))
+            rows = await conn.fetch(
+                f"""SELECT DISTINCT s.telegram_id FROM subscriptions s
+                    WHERE s.source = 'payment'
+                      AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                      AND s.expires_at <= (NOW() AT TIME ZONE 'UTC') + INTERVAL '{days} days'"""
+            )
+            return [row["telegram_id"] for row in rows]
         elif segment == "trial_expired_within_6m":
             # КУМУЛЯТИВНОЕ окно: юзер активировал триал, тот истёк В ЛЮБОЙ
             # момент последних 180 дней (не exact-day bucket, а всё окно),
@@ -1529,7 +1819,9 @@ async def get_users_by_segment(segment: str) -> list:
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("trial_expired_7d", "trial_expired_14d",
-                         "trial_expired_30d", "trial_expired_90d"):
+                         "trial_expired_30d", "trial_expired_60d",
+                         "trial_expired_90d", "trial_expired_180d",
+                         "trial_expired_365d"):
             # Триал истёк N дней назад — И пользователь никогда не покупал
             # (нет ни одной строки в subscriptions с source='payment').
             # Это чистая «холодная реактивация» — прошло много времени,
@@ -1584,7 +1876,9 @@ async def get_users_by_segment(segment: str) -> list:
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("paid_expired_7d", "paid_expired_14d",
-                         "paid_expired_60d", "paid_expired_90d"):
+                         "paid_expired_60d", "paid_expired_90d",
+                         "paid_expired_180d", "paid_expired_365d",
+                         "paid_expired_730d"):
             # Платная (source='payment') истекла ровно N суток назад
             # (24-час бакет [NOW-(N+1)d, NOW-Nd)) — сейчас нет активной
             # ПЛАТНОЙ. Классическая точка реактивации, аналог paid_expired_1d
@@ -1672,6 +1966,23 @@ async def get_users_by_segment(segment: str) -> list:
                      AND s.source = 'payment'"""
             )
             return [row["telegram_id"] for row in rows]
+        elif segment == "bought_proxy":
+            # Купил standalone Telegram MT Прокси (users.proxy_purchased_at IS NOT NULL).
+            # Tolerates missing column: если миграция 051 ещё не проехала,
+            # asyncpg кидает UndefinedColumnError — возвращаем пустой список,
+            # чтобы не ронять роут segments_list.
+            try:
+                rows = await conn.fetch(
+                    """SELECT telegram_id FROM users
+                       WHERE proxy_purchased_at IS NOT NULL"""
+                )
+            except asyncpg.UndefinedColumnError:
+                logging.warning(
+                    "bought_proxy segment: users.proxy_purchased_at missing "
+                    "— migration 051 not applied, returning empty list"
+                )
+                return []
+            return [row["telegram_id"] for row in rows]
         elif segment in ("expired_1d", "expired_2d", "expired_3d"):
             # User's MOST RECENT subscription expired exactly N full days
             # ago (24-hour bucket). MAX(expires_at) делает выборку
@@ -1740,6 +2051,88 @@ async def get_broadcast_stats(broadcast_id: int) -> Dict[str, int]:
             broadcast_id
         )
         return {"sent": sent_count or 0, "failed": failed_count or 0}
+
+
+async def get_broadcast_analytics(broadcast_id: int) -> Dict[str, Any]:
+    """Расширенная статистика по одной рассылке.
+
+    Возвращает:
+      - total_recipients   — сколько было в аудитории (sent + failed + deleted)
+      - sent               — успешно доставлено
+      - failed             — не доставлено (включая blocked)
+      - deleted            — сообщение удалено пост-фактум (bulk-delete)
+      - converted_1d/3d/7d — уникальные юзеры, купившие в течение окна
+                             от sent_at (по любой успешной оплате в payments)
+      - revenue_kop_1d/3d/7d — суммарный доход от этих оплат в копейках
+      - conversion_rate_7d — converted_7d / sent (0..1)
+      - blocked_estimate   — эвристика: доля failed от общего (0..1)
+
+    Все окна считаются от `sent_at` каждого получателя (не от одной точки
+    рассылки) — на случай ретаргетинг-рассылок, где отправка растянута.
+
+    Совместимость статусов оплаты: как 'paid', так и 'approved' (в
+    разных провайдерах прижилось по-разному).
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Suммарные счётчики по статусам broadcast_log
+        counts_row = await conn.fetchrow(
+            """SELECT
+                   COUNT(*) FILTER (WHERE status = 'sent')     AS sent,
+                   COUNT(*) FILTER (WHERE status = 'failed')   AS failed,
+                   COUNT(*) FILTER (WHERE status = 'deleted')  AS deleted,
+                   COUNT(*)                                     AS total
+               FROM broadcast_log
+               WHERE broadcast_id = $1""",
+            broadcast_id,
+        )
+        sent = int(counts_row["sent"] or 0)
+        failed = int(counts_row["failed"] or 0)
+        deleted = int(counts_row["deleted"] or 0)
+        total = int(counts_row["total"] or 0)
+        # Считаем deleted как «доставленных ранее» — они конвертились
+        # ДО удаления, факт удаления сообщения не отменяет продажу.
+        delivered = sent + deleted
+
+        async def _conv_and_rev(hours: int) -> tuple[int, int]:
+            row = await conn.fetchrow(
+                f"""SELECT
+                        COUNT(DISTINCT bl.telegram_id) AS conv,
+                        COALESCE(SUM(p.amount), 0)     AS rev
+                    FROM broadcast_log bl
+                    JOIN payments p
+                      ON p.telegram_id = bl.telegram_id
+                     AND p.status IN ('paid', 'approved')
+                     AND p.created_at BETWEEN bl.sent_at
+                                          AND bl.sent_at + INTERVAL '{hours} hours'
+                    WHERE bl.broadcast_id = $1
+                      AND bl.status IN ('sent', 'deleted')""",
+                broadcast_id,
+            )
+            return int(row["conv"] or 0), int(row["rev"] or 0)
+
+        converted_1d, rev_1d = await _conv_and_rev(24)
+        converted_3d, rev_3d = await _conv_and_rev(72)
+        converted_7d, rev_7d = await _conv_and_rev(24 * 7)
+
+        conversion_rate_7d = (converted_7d / delivered) if delivered > 0 else 0.0
+        blocked_estimate = (failed / total) if total > 0 else 0.0
+
+    return {
+        "total_recipients": total,
+        "sent": sent,
+        "failed": failed,
+        "deleted": deleted,
+        "delivered": delivered,
+        "converted_1d": converted_1d,
+        "converted_3d": converted_3d,
+        "converted_7d": converted_7d,
+        "revenue_kop_1d": rev_1d,
+        "revenue_kop_3d": rev_3d,
+        "revenue_kop_7d": rev_7d,
+        "conversion_rate_7d": round(conversion_rate_7d, 4),
+        "blocked_estimate": round(blocked_estimate, 4),
+    }
 
 
 async def get_recent_broadcasts(limit: int = 10) -> list:
@@ -3979,6 +4372,10 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
 
     pool = await get_pool()
     uuid_to_remove = None
+    remnawave_bypass_uuid = None
+    remnawave_bypass_id = None
+    remnawave_premium_uuid = None
+    remnawave_premium_id = None
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -3989,12 +4386,22 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
             if not user_row:
                 return False
 
-            # Получаем UUID из подписки для удаления из Xray
+            # Получаем UUID / numeric id из подписки ДО DELETE — иначе
+            # delete_remnawave_user_bg (fire-and-forget после tx) не сможет
+            # прочитать их из уже удалённой subscriptions-строки и оставит
+            # entities-orphans в панели (bypass + premium).
             sub_row = await conn.fetchrow(
-                "SELECT uuid FROM subscriptions WHERE telegram_id = $1", telegram_id
+                "SELECT uuid, remnawave_uuid, remnawave_id, "
+                "remnawave_premium_uuid, remnawave_premium_id "
+                "FROM subscriptions WHERE telegram_id = $1", telegram_id
             )
-            if sub_row and sub_row.get("uuid"):
-                uuid_to_remove = sub_row["uuid"]
+            if sub_row:
+                if sub_row.get("uuid"):
+                    uuid_to_remove = sub_row["uuid"]
+                remnawave_bypass_uuid = sub_row.get("remnawave_uuid")
+                remnawave_bypass_id = sub_row.get("remnawave_id")
+                remnawave_premium_uuid = sub_row.get("remnawave_premium_uuid")
+                remnawave_premium_id = sub_row.get("remnawave_premium_id")
 
             # Удаляем все связанные данные (порядок важен для FK constraints)
             await conn.execute("DELETE FROM promo_usage_logs WHERE telegram_id = $1", telegram_id)
@@ -4027,10 +4434,51 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
         except Exception as e:
             logger.error(f"ADMIN_DELETE_UUID_REMOVAL_FAILED uuid={uuid_to_remove[:8]}... error={e}")
 
-    # Delete Remnawave user (fire-and-forget)
+    # Delete Remnawave entities — bypass + premium (оба!).
+    # UUID auto-резолв через subscriptions-lookup здесь НЕ работает
+    # (запись уже удалена). Действуем явно: если есть numeric id —
+    # DELETE напрямую, иначе резолв через find_user_by_username по
+    # НАШЕМУ шаблону username → берём id из entity → DELETE.
+    async def _delete_pair(*, numeric_id, uuid, username_hint):
+        if numeric_id is None and not uuid:
+            return
+        try:
+            from app.services import remnawave_api
+            target_id = numeric_id
+            if target_id is None and username_hint:
+                entity = await remnawave_api.find_user_by_username(username_hint)
+                if entity and entity.get("id") is not None:
+                    try:
+                        target_id = int(entity["id"])
+                    except (TypeError, ValueError):
+                        pass
+            if target_id is None:
+                logger.warning(
+                    "REMNAWAVE_ADMIN_DELETE_SKIP: tg=%s no numeric id, uuid=%s",
+                    telegram_id, str(uuid or "")[:16],
+                )
+                return
+            await remnawave_api._request(
+                "DELETE", f"/api/users/delete/{target_id}", quiet=True,
+            )
+        except Exception as e:
+            logger.warning(
+                "REMNAWAVE_ADMIN_DELETE_ENTITY_FAIL: tg=%s err=%s",
+                telegram_id, e,
+            )
+
     try:
-        from app.services.remnawave_service import delete_remnawave_user_bg
-        delete_remnawave_user_bg(telegram_id)
+        import asyncio as _aio
+        _aio.create_task(_delete_pair(
+            numeric_id=remnawave_bypass_id,
+            uuid=remnawave_bypass_uuid,
+            username_hint=str(telegram_id),
+        ))
+        _aio.create_task(_delete_pair(
+            numeric_id=remnawave_premium_id,
+            uuid=remnawave_premium_uuid,
+            username_hint=f"tg_{telegram_id}_premium",
+        ))
     except Exception as rmn_err:
         logger.warning("REMNAWAVE_ADMIN_DELETE_FAIL: tg=%s %s", telegram_id, rmn_err)
 

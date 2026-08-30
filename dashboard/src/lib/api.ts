@@ -71,12 +71,29 @@ export const api = {
       body: body ? JSON.stringify(body) : undefined,
     });
   },
+  patch<T>(path: string, body?: unknown) {
+    return request<T>(path, {
+      method: "PATCH",
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  },
   del<T>(path: string) {
     return request<T>(path, { method: "DELETE" });
   },
 };
 
 // ── Endpoint binders ────────────────────────────────────────────────
+export interface PanelEntitySnapshot {
+  source: "by_uuid" | "by_username" | "by_id";
+  panel_id: number | null;
+  vless_uuid: string | null;
+  subscription_url: string | null;
+  traffic_limit_bytes: number;
+  used_traffic_bytes: number;
+  status: string;
+  telegram_id_field: number | null;
+}
+
 export interface StatsOverview {
   total_users?: number;
   active_subscriptions?: number;
@@ -92,10 +109,27 @@ export interface RevenueStats {
   avg_ltv_rubles: number;
 }
 
+export interface PremiumState {
+  has_entity: boolean;
+  is_active: boolean;
+  expires_at: string | null;
+  subscription_type?: string | null;
+}
+
+export interface BypassState {
+  has_entity: boolean;
+  used_bytes: number;
+  limit_bytes: number;
+  remaining_bytes: number;
+  status: string | null;
+}
+
 export interface UserDetail {
   user: Record<string, unknown>;
   balance_rubles: number;
   subscription: Record<string, unknown> | null;
+  premium: PremiumState;
+  bypass: BypassState;
   trial: Record<string, unknown> | null;
   discount: Record<string, unknown> | null;
   traffic_discount: Record<string, unknown> | null;
@@ -196,6 +230,103 @@ export const endpoints = {
         reason?: string;
       }>;
     }>("/bypass-audit/fix-all"),
+  // ── Traffic audit: DB (subscription base + traffic_purchases) vs
+  //    Remnawave panel (trafficLimitBytes). Найти юзеров у которых
+  //    в панели меньше трафика чем оплачено.
+  trafficAuditList: (opts?: { limit?: number; user?: number; concurrent?: number }) => {
+    const p = new URLSearchParams();
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    if (opts?.user != null) p.set("user", String(opts.user));
+    if (opts?.concurrent != null) p.set("concurrent", String(opts.concurrent));
+    const qs = p.toString() ? `?${p.toString()}` : "";
+    return api.get<{
+      summary: {
+        total: number;
+        match: number;
+        mismatch: number;
+        desync: number;
+        no_entity: number;
+        panel_error: number;
+        shortfall_total_bytes: number;
+        shortfall_total_gb: number;
+      };
+      results: Array<{
+        tg: number;
+        subscription_type: string;
+        period_days: number | null;
+        is_bypass_only: boolean;
+        traffic_purchases_gb: number;
+        traffic_purchases: Array<{
+          id: number;
+          gb_amount: number;
+          price_rub: number;
+          payment_method: string | null;
+          created_at: string | null;
+        }>;
+        expected_bytes: number;
+        actual_bytes: number;
+        used_bytes: number;
+        shortfall_bytes: number;
+        panel_status: string;
+        kind: "match" | "mismatch" | "desync" | "no_entity" | "panel_error";
+        note: string;
+        expected_gb: number;
+        actual_gb: number;
+        used_gb: number;
+        shortfall_gb: number;
+        db_uuid: string | null;
+        db_id: number | null;
+        db_sub_url: string | null;
+        panel_by_our_ref: PanelEntitySnapshot | null;
+        panel_by_username: PanelEntitySnapshot | null;
+        desync: boolean;
+      }>;
+    }>(`/traffic-audit${qs}`);
+  },
+  trafficAuditResync: (telegram_id: number) =>
+    api.post<{
+      ok: boolean;
+      new_id: number | null;
+      new_uuid: string | null;
+      new_sub_url: string | null;
+      panel_limit_bytes: number;
+      panel_used_bytes: number;
+    }>(`/traffic-audit/resync/${telegram_id}`),
+  trafficAuditFixOne: (telegram_id: number) =>
+    api.post<{
+      ok: boolean;
+      before_bytes?: number;
+      after_bytes?: number;
+      used_bytes?: number;
+      expected_bytes?: number;
+      audit: Record<string, unknown>;
+      reason?: string;
+    }>(`/traffic-audit/fix/${telegram_id}`),
+  trafficAuditFixAll: (opts?: { limit?: number; concurrent?: number }) => {
+    const p = new URLSearchParams();
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    if (opts?.concurrent != null) p.set("concurrent", String(opts.concurrent));
+    const qs = p.toString() ? `?${p.toString()}` : "";
+    return api.post<{
+      audit_summary: {
+        total: number;
+        match: number;
+        mismatch: number;
+        shortfall_total_gb: number;
+      };
+      fixed: number;
+      failed: number;
+      results: Array<{
+        telegram_id: number;
+        ok: boolean;
+        reason?: string;
+        before_bytes: number;
+        after_bytes: number | null;
+        used_bytes: number;
+        expected_bytes: number;
+      }>;
+    }>(`/traffic-audit/fix-all${qs}`);
+  },
   statsDaily: (days = 30) =>
     api.get<{
       days: number;
@@ -250,6 +381,8 @@ export const endpoints = {
       body,
     ),
   userRevoke: (tg: number) => api.post<{ ok: boolean }>(`/users/${tg}/revoke`),
+  userReissueAggregator: (tg: number) =>
+    api.post<{ ok: boolean; url: string }>(`/users/${tg}/reissue-aggregator`),
   userSwitchTariff: (tg: number, body: { tariff: string }) =>
     api.post<{ ok: boolean; subscription: unknown }>(`/users/${tg}/switch-tariff`, body),
   userDiscountCreate: (
@@ -300,6 +433,29 @@ export const endpoints = {
     api.get<Record<string, unknown>>(`/broadcasts/${id}`),
   broadcastStats: (id: number) =>
     api.get<Record<string, unknown>>(`/broadcasts/${id}/stats`),
+  broadcastPatchTag: (id: number, tag: string | null, tagColor: string | null) =>
+    api.patch<{
+      ok: boolean;
+      id: number;
+      tag: string | null;
+      tag_color: string | null;
+    }>(`/broadcasts/${id}/tag`, { tag, tag_color: tagColor }),
+  broadcastAnalytics: (id: number) =>
+    api.get<{
+      total_recipients: number;
+      sent: number;
+      failed: number;
+      deleted: number;
+      delivered: number;
+      converted_1d: number;
+      converted_3d: number;
+      converted_7d: number;
+      revenue_kop_1d: number;
+      revenue_kop_3d: number;
+      revenue_kop_7d: number;
+      conversion_rate_7d: number;
+      blocked_estimate: number;
+    }>(`/broadcasts/${id}/analytics`),
   broadcastSegments: () =>
     api.get<
       Array<{
@@ -316,16 +472,43 @@ export const endpoints = {
     ),
   broadcastDeleteCancel: (id: number) =>
     api.post<{ ok: boolean }>(`/broadcasts/${id}/delete-from-users/cancel`),
+
+  // ── Scheduled + recurring broadcasts (migration 067) ─────────────────
+  broadcastScheduleCreate: (body: {
+    source_broadcast_id: number;
+    scheduled_at_msk: string; // "YYYY-MM-DD HH:MM"
+    recurrence: "once" | "daily" | "weekdays" | "weekly";
+    recurrence_end_at_msk?: string | null;
+    segment?: string | null;
+  }) =>
+    api.post<{
+      ok: boolean;
+      sched_id: number;
+      scheduled_at_utc: string;
+      scheduled_at_msk: string;
+      recurrence: string;
+    }>(`/broadcasts/schedule`, body),
+  broadcastScheduleList: (activeOnly = true, limit = 200) =>
+    api.get<Array<Record<string, unknown>>>(
+      `/broadcasts/scheduled?active_only=${activeOnly}&limit=${limit}`,
+    ),
+  broadcastScheduleGet: (id: number) =>
+    api.get<Record<string, unknown>>(`/broadcasts/scheduled/${id}`),
+  broadcastScheduleCancel: (id: number) =>
+    api.del<{ ok: boolean }>(`/broadcasts/scheduled/${id}`),
   broadcastCreate: (body: {
     title: string;
     message: string;
     segment: string;
     photo_file_id?: string | null;
+    animation_file_id?: string | null;
     buttons: string[];
     discount_percent?: number | null;
     discount_hours?: number | null;
     discount_label?: string | null;
     gift_reveal_percent?: number | null;
+    tag?: string | null;
+    tag_color?: string | null;
   }) =>
     api.post<{ ok: boolean; broadcast_id: number; audience: number }>(
       "/broadcasts",
@@ -336,11 +519,14 @@ export const endpoints = {
     message: string;
     segment: string;
     photo_file_id?: string | null;
+    animation_file_id?: string | null;
     buttons: string[];
     discount_percent?: number | null;
     discount_hours?: number | null;
     discount_label?: string | null;
     gift_reveal_percent?: number | null;
+    tag?: string | null;
+    tag_color?: string | null;
   }) =>
     api.post<{
       ok: boolean;
@@ -397,6 +583,16 @@ export const endpoints = {
     max_uses: number;
   }) => api.post<Record<string, unknown>>("/bgift", body),
   bgiftDelete: (id: number) => api.del<{ ok: boolean }>(`/bgift/${id}`),
+
+  // ── Beta-testing applications ──────────────────────────────────────
+  betaAppsSummary: (program = "vpn_innovator") =>
+    api.get<{ program: string; total: number }>(
+      `/beta-applications/summary?program=${encodeURIComponent(program)}`,
+    ),
+  betaAppsList: (page = 0, page_size = 50, program = "vpn_innovator") =>
+    api.get<Array<Record<string, unknown>>>(
+      `/beta-applications/list?program=${encodeURIComponent(program)}&page=${page}&page_size=${page_size}`,
+    ),
 
   userDelete: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}`),
 
@@ -474,6 +670,32 @@ export const endpoints = {
     api.get<Array<{ provider: string; count: number; revenue_rubles: number }>>(
       `/payments/by-provider?hours=${hours}`,
     ),
+  paymentsBreakdown: (hours: number) =>
+    api.get<{
+      hours: number;
+      total: { count: number; revenue_rubles: number };
+      by_provider: Array<{
+        provider: string;
+        count: number;
+        revenue_rubles: number;
+      }>;
+      by_type: Array<{
+        purchase_type: string;
+        count: number;
+        revenue_rubles: number;
+      }>;
+      by_tariff: Array<{
+        tariff: string;
+        count: number;
+        revenue_rubles: number;
+      }>;
+      by_apple_nominal: Array<{
+        region: string;
+        nominal: number;
+        count: number;
+        revenue_rubles: number;
+      }>;
+    }>(`/payments/breakdown?hours=${hours}`),
   paymentsRecent: (params: { limit?: number; hours?: number; status?: string } = {}) => {
     const u = new URLSearchParams();
     if (params.limit !== undefined) u.set("limit", String(params.limit));
@@ -540,6 +762,16 @@ export const endpoints = {
   settingsTestNotifications: () =>
     api.post<{ ok: boolean; count: number; delay_seconds: number }>(
       "/settings/notifications/test",
+    ),
+
+  settingsSbpRouterGet: () =>
+    api.get<{ mode: "platega" | "wata" | "split"; wata_percent: number }>(
+      "/settings/sbp-router",
+    ),
+  settingsSbpRouterPatch: (mode: "platega" | "wata" | "split", wata_percent: number) =>
+    api.post<{ mode: "platega" | "wata" | "split"; wata_percent: number }>(
+      "/settings/sbp-router",
+      { mode, wata_percent },
     ),
 
   // ── Reconciliation («Сверка») ─────────────────────────────────────
@@ -668,7 +900,176 @@ export const endpoints = {
         created_at: string;
       }>
     >("/reconciliation/over-issuance-log"),
+
+  // ── Automated notifications (migration 068) ──────────────────────────
+  automatedNotifications: () =>
+    api.get<
+      Array<{
+        key: string;
+        title: string;
+        description: string | null;
+        category: string;
+        is_enabled: boolean;
+        has_custom_text: boolean;
+        default_text_ru: string;
+        custom_text_ru: string | null;
+        trigger_config: Record<string, unknown>;
+        template_vars: string[];
+        updated_at: string | null;
+        last_edited_by: number | null;
+        is_code_registered: boolean;
+      }>
+    >("/automated-notifications/"),
+  automatedNotificationCreate: (body: {
+    key: string;
+    title: string;
+    description?: string;
+    category: string;
+    default_text_ru: string;
+    template_vars?: string[];
+    trigger_config?: Record<string, unknown>;
+  }) =>
+    api.post<{ ok: boolean; key: string; created: boolean }>(
+      "/automated-notifications/",
+      body,
+    ),
+  automatedNotificationDelete: (key: string) =>
+    api.del<{ ok: boolean; key: string; deleted: boolean }>(
+      `/automated-notifications/${encodeURIComponent(key)}`,
+    ),
+  automatedNotificationGet: (key: string) =>
+    api.get<{
+      key: string;
+      title: string;
+      description: string | null;
+      category: string;
+      is_enabled: boolean;
+      has_custom_text: boolean;
+      default_text_ru: string;
+      custom_text_ru: string | null;
+      trigger_config: Record<string, unknown>;
+      template_vars: string[];
+      updated_at: string | null;
+      last_edited_by: number | null;
+    }>(`/automated-notifications/${encodeURIComponent(key)}`),
+  automatedNotificationPatch: (
+    key: string,
+    body: {
+      custom_text_ru?: string | null;
+      is_enabled?: boolean;
+      trigger_config?: Record<string, unknown>;
+    },
+  ) =>
+    api.patch<{ ok: boolean; key: string }>(
+      `/automated-notifications/${encodeURIComponent(key)}`,
+      body,
+    ),
+  automatedNotificationReset: (key: string) =>
+    api.post<{ ok: boolean; key: string; reset: boolean }>(
+      `/automated-notifications/${encodeURIComponent(key)}/reset`,
+    ),
+  automatedNotificationStats: (key: string, hours = 168) =>
+    api.get<{
+      key: string;
+      hours: number;
+      sent: number;
+      failed: number;
+      blocked: number;
+      skipped: number;
+    }>(
+      `/automated-notifications/${encodeURIComponent(key)}/stats?hours=${hours}`,
+    ),
+  automatedNotificationTestSend: (key: string) =>
+    api.post<{ ok: boolean; sent_to: number; key: string }>(
+      `/automated-notifications/${encodeURIComponent(key)}/test-send`,
+    ),
+
+  // ── Pricing management (migration 069) ────────────────────────────
+  pricingTariffs: () =>
+    api.get<
+      Array<{
+        tariff: string;
+        period_days: number;
+        base_price: number;
+        config_price: number;
+        effective_price: number;
+        discount_percent: number;
+        is_overridden: boolean;
+        has_discount: boolean;
+      }>
+    >("/pricing/tariffs"),
+  pricingSetOverride: (tariff: string, periodDays: number, priceRub: number) =>
+    api.patch<{
+      ok: boolean;
+      tariff: string;
+      period_days: number;
+      price_rub: number;
+    }>(
+      `/pricing/tariffs/${encodeURIComponent(tariff)}/${periodDays}`,
+      { price_rub: priceRub },
+    ),
+  pricingClearOverride: (tariff: string, periodDays: number) =>
+    api.del<{ ok: boolean; tariff: string; period_days: number; cleared: boolean }>(
+      `/pricing/tariffs/${encodeURIComponent(tariff)}/${periodDays}`,
+    ),
+  pricingGetGlobalDiscount: () =>
+    api.get<{
+      global_discount_percent: number;
+      discount_reason: string | null;
+      discount_until_at: string | null;
+      updated_at: string | null;
+      updated_by: number | null;
+    }>("/pricing/global-discount"),
+  pricingSetGlobalDiscount: (body: {
+    percent: number;
+    reason?: string | null;
+    until_at_iso?: string | null;
+  }) => api.put<{ ok: boolean; percent: number }>("/pricing/global-discount", body),
+  pricingClearGlobalDiscount: () =>
+    api.del<{ ok: boolean; cleared: boolean }>("/pricing/global-discount"),
+
+  remnawaveBackfillStart: (dry_run: boolean) =>
+    api.post<{
+      ok: boolean;
+      error?: string;
+      status: RemnawaveBackfillStatus;
+    }>("/remnawave/backfill/start", { dry_run }),
+  remnawaveBackfillStatus: () =>
+    api.get<RemnawaveBackfillStatus>("/remnawave/backfill/status"),
+  remnawaveResetPremiumUnlimited: (dry_run: boolean = true) => {
+    const p = new URLSearchParams({ dry_run: String(dry_run) });
+    return api.post<{
+      total: number;
+      checked: number;
+      limited: number;
+      reset: number;
+      errors: number;
+      dry_run: boolean;
+      samples: Array<{
+        telegram_id: number;
+        premium_id: number;
+        before_limit_bytes: number;
+        before_status: string;
+      }>;
+    }>(`/remnawave/reset-premium-unlimited?${p.toString()}`);
+  },
 };
+
+export interface RemnawaveBackfillStatus {
+  running: boolean;
+  started_at: number | null;
+  finished_at: number | null;
+  dry_run: boolean;
+  total: number;
+  processed: number;
+  already_set: number;
+  id_backfilled: number;
+  tg_backfilled: number;
+  missing: number;
+  errors: number;
+  last_error: string | null;
+  elapsed_sec: number;
+}
 
 // Auth-aware CSV download via fetch + blob. Returns nothing; triggers
 // a browser download. We can't use a plain <a href="..."> because the
@@ -701,11 +1102,13 @@ export async function downloadCsv(path: string, filename: string) {
 }
 
 // Multipart upload — special case, can't use api.post (JSON-only).
-export async function uploadBroadcastPhoto(file: File): Promise<{ file_id: string }> {
+async function _uploadMultipart(
+  path: string, file: File,
+): Promise<{ file_id: string }> {
   const token = auth.get();
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch("/dashboard/api/broadcasts/upload-photo", {
+  const res = await fetch(path, {
     method: "POST",
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: fd,
@@ -721,4 +1124,12 @@ export async function uploadBroadcastPhoto(file: File): Promise<{ file_id: strin
     throw new ApiError(res.status, detail);
   }
   return res.json();
+}
+
+export function uploadBroadcastPhoto(file: File): Promise<{ file_id: string }> {
+  return _uploadMultipart("/dashboard/api/broadcasts/upload-photo", file);
+}
+
+export function uploadBroadcastAnimation(file: File): Promise<{ file_id: string }> {
+  return _uploadMultipart("/dashboard/api/broadcasts/upload-animation", file);
 }

@@ -19,7 +19,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 
 from aiogram.types import (
     BufferedInputFile,
@@ -50,7 +51,7 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 @router.get("/recent")
-async def broadcasts_recent(limit: int = Query(20, gt=0, le=200)):
+async def broadcasts_recent(limit: int = Query(20, gt=0, le=500)):
     try:
         rows = await database.get_recent_broadcasts(limit)
     except Exception as e:
@@ -101,6 +102,21 @@ async def segments_list():
          "Cold-start"),
 
         # ── Триальная воронка (кто активировал триал) ────────────────
+        ("trial_active_any", "Триал — сейчас идёт (любой)",
+         "У всех, у кого сейчас активен пробный период (не истёк, платной ещё нет). Годится для мидл-триал коммуникаций «второй день с нами», FAQ, кейсы.",
+         "Триал"),
+        ("trial_activated_today", "Триал — активирован за 24ч",
+         "Юзеры, которые активировали пробный период за последние 24 часа. Свежая аудитория для welcome-серии и объяснения фич.",
+         "Триал"),
+        ("trial_active_day1", "Триал — 1-й день (0–24ч)",
+         "Активировали триал в последние 24ч, триал ещё идёт. Welcome / первый месседж.",
+         "Триал"),
+        ("trial_active_day2", "Триал — 2-й день (24–48ч)",
+         "Второй день триала, триал ещё идёт. «Уже 2 дня с нами, что успели попробовать?»",
+         "Триал"),
+        ("trial_active_day3", "Триал — 3-й день (48–72ч)",
+         "Последний день триала (обычно ~72ч). «Завтра истечёт — оформи сейчас».",
+         "Триал"),
         ("trial_ends_in_1d", "Триал — заканчивается через 24ч",
          "Триал ещё идёт, но истечёт в ближайшие 24 часа. Ключевой момент конверсии — «оформи, чтобы не потерять».",
          "Триал"),
@@ -125,16 +141,37 @@ async def segments_list():
         ("trial_expired_30d", "Триал — истёк 30 дней назад (не купил)",
          "Триал закончился ~30 дней назад И никогда не покупал. Месячная реактивация.",
          "Триал"),
+        ("trial_expired_60d", "Триал — истёк 60 дней назад (не купил)",
+         "Триал закончился ~60 дней назад И никогда не покупал. Двухмесячная реактивация.",
+         "Триал"),
         ("trial_expired_90d", "Триал — истёк 3 мес назад (не купил)",
          "Триал закончился ~90 дней назад И никогда не покупал. «Последний шанс» — сильный оффер обязателен.",
+         "Триал"),
+        ("trial_expired_180d", "Триал — истёк полгода назад (не купил)",
+         "Триал закончился ~180 дней назад И никогда не покупал. Крайняя точка реактивации.",
+         "Триал"),
+        ("trial_expired_365d", "Триал — истёк год назад (не купил)",
+         "Триал закончился ~365 дней назад И никогда не покупал. Год без активности — либо забыл, либо ушёл к конкуренту.",
          "Триал"),
         ("trial_expired_within_6m", "Триал — истёк за последние 6 мес (не купил)",
          "Кумулятивное окно: триал закончился в любой момент за последние 180 дней И юзер никогда не покупал, сейчас без подписки. Массовая реактивация всех отвалившихся за полгода — один раскат по большой аудитории.",
          "Триал"),
 
         # ── Платные churn / реактивация ──────────────────────────────
-        ("expires_in_3d", "Платная — заканчивается за 3 дня",
-         "Платная подписка ещё активна, истечёт в ближайшие 72ч. Точка «продли/переоформи» пока пользователь внутри.",
+        ("paid_expires_in_1d", "Платная — заканчивается за 1 день",
+         "Платная подписка ещё активна, истечёт в ближайшие 24 часа. Финальное напоминание — «продли сейчас, чтобы не отключилось».",
+         "Платная"),
+        ("paid_expires_in_3d", "Платная — заканчивается за 3 дня",
+         "Платная активна, истечёт за 72 часа. Мягкий пре-напоминающий пуш «пора продлить».",
+         "Платная"),
+        ("paid_expires_in_7d", "Платная — заканчивается за 7 дней",
+         "Платная активна, истечёт за неделю. Хорошо ложится оффер «продли заранее — фиксируешь цену».",
+         "Платная"),
+        ("paid_expires_in_14d", "Платная — заканчивается за 14 дней",
+         "Платная активна, истечёт за 2 недели. Ранний пуш для тех, кто планирует бюджет заранее.",
+         "Платная"),
+        ("expires_in_3d", "Любая — заканчивается за 3 дня (legacy)",
+         "То же что paid_expires_in_3d — оставлено для совместимости с ранее созданными рассылками.",
          "Платная"),
         ("paid_expired_1d", "Платная — истекла 1 день назад",
          "Платная истекла ~1 день назад, сейчас платной нет. Свежий churn — первое напоминание.",
@@ -151,12 +188,32 @@ async def segments_list():
         ("paid_expired_60d", "Платная — истекла 60 дней назад",
          "Платная истекла ~60 дней назад. Двухмесячный churn.",
          "Платная"),
-        ("paid_expired_90d", "Платная — истекла 90 дней назад",
+        ("paid_expired_90d", "Платная — истекла 3 мес назад",
          "Платная истекла ~90 дней назад. Крайний край реактивации.",
+         "Платная"),
+        ("paid_expired_180d", "Платная — истекла полгода назад",
+         "Платная истекла ~180 дней назад. Полугодовой churn — «мы соскучились».",
+         "Платная"),
+        ("paid_expired_365d", "Платная — истекла год назад",
+         "Платная истекла ~365 дней назад. Год без подписки — реактивация «с чистого листа».",
+         "Платная"),
+        ("paid_expired_730d", "Платная — истекла 2 года назад",
+         "Платная истекла ~730 дней назад. Максимально дальний churn — редкая, но всё же аудитория.",
          "Платная"),
         ("paid_lapsed_any", "Платная — когда-либо платил, сейчас не активен",
          "Когда-либо оплачивал (purchase / renewal / auto_renew) и сейчас без активной подписки. Максимальная реактивационная аудитория — всех «ушедших».",
          "Платная"),
+
+        # ── Недавно купившие — cross-sell / thanks / upsell ──────────
+        ("paid_bought_within_7d", "Купил платную за 7 дней",
+         "Оформил успешную оплату (payments.status='paid'|'approved') в течение последних 7 дней. Целевая для благодарности, upsell-оффера, feedback-опроса.",
+         "Недавно купили"),
+        ("paid_bought_within_14d", "Купил платную за 14 дней",
+         "Оформил успешную оплату в течение последних 14 дней. Двухнедельное окно — свежая активная аудитория, есть с чем работать.",
+         "Недавно купили"),
+        ("paid_bought_within_30d", "Купил платную за 30 дней",
+         "Оформил успешную оплату в течение последних 30 дней. Месячная когорта — большая, годится для широких кампаний по «активным».",
+         "Недавно купили"),
 
         # ── Любая (комбинированные) ──────────────────────────────────
         ("expired_1d", "Истекла (любая) 1 день назад",
@@ -187,6 +244,10 @@ async def segments_list():
          "Апселл / особые"),
         ("has_balance_50plus", "Баланс ≥ 50₽",
          "На балансе не меньше 50₽. Напоминание использовать балансовый чекаут.",
+         "Апселл / особые"),
+        ("bought_proxy", "Купил прокси",
+         "Юзер купил отдельный товар «Telegram MT Прокси» (users.proxy_purchased_at IS NOT NULL). "
+         "Целевая для допродажи VPN-подписки, апдейтов по прокси или лояльных предложений.",
          "Апселл / особые"),
     ]
     out = []
@@ -247,6 +308,58 @@ async def broadcast_stats(broadcast_id: int = Path(..., gt=0)):
     return _serialize(stats or {})
 
 
+class BroadcastTagPatch(BaseModel):
+    """PATCH body для тега рассылки. Пустая строка = снять тег."""
+    tag: Optional[str] = Field(None, max_length=40)
+    tag_color: Optional[str] = Field(None, max_length=16)
+
+    @field_validator("tag_color")
+    @classmethod
+    def _valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        v = v.lower().strip()
+        if v not in _VALID_TAG_COLORS:
+            raise ValueError(f"tag_color must be one of {sorted(_VALID_TAG_COLORS)}")
+        return v
+
+
+@router.patch("/{broadcast_id}/tag")
+async def broadcast_patch_tag(
+    body: BroadcastTagPatch,
+    broadcast_id: int = Path(..., gt=0),
+):
+    """Обновить/снять цветной тег уже существующей рассылки.
+    Пустые значения → NULL (снять тег)."""
+    try:
+        ok = await database.update_broadcast_tag(
+            broadcast_id,
+            (body.tag or "").strip() or None,
+            body.tag_color,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"tag_patch_failed: {e}")
+    if not ok:
+        raise HTTPException(404, "broadcast not found or migration 071 pending")
+    return {"ok": True, "id": broadcast_id, "tag": body.tag,
+            "tag_color": body.tag_color}
+
+
+@router.get("/{broadcast_id}/analytics")
+async def broadcast_analytics(broadcast_id: int = Path(..., gt=0)):
+    """Расширенная аналитика рассылки: conversion / revenue / blocked.
+
+    Возвращает счётчики sent/failed/deleted и окна конверсии
+    (1д/3д/7д) — уникальные юзеры, купившие после отправки, и
+    их суммарный доход.
+    """
+    try:
+        data = await database.get_broadcast_analytics(broadcast_id)
+    except Exception as e:
+        raise HTTPException(500, f"broadcast_analytics_failed: {e}")
+    return _serialize(data or {})
+
+
 # ── PHOTO UPLOAD ─────────────────────────────────────────────────────
 
 
@@ -283,6 +396,53 @@ async def upload_photo(
     if not msg.photo:
         raise HTTPException(500, "telegram_returned_no_photo")
     return {"file_id": msg.photo[-1].file_id}
+
+
+@router.post("/upload-animation")
+async def upload_animation(
+    file: UploadFile = File(...),
+    admin: dict = Depends(require_admin),
+):
+    """Загрузить GIF/MP4-animation → получить Telegram file_id.
+
+    Механика та же что у /upload-photo: bot шлёт файл в чат админа
+    как animation, Telegram возвращает file_id, который потом
+    используется в broadcast для send_animation.
+
+    Ограничение размера: 20 MB (Telegram Bot API лимит на animation).
+    Accept: image/gif, video/mp4.
+    """
+    bot = _get_bot()
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "empty_file")
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(413, "file_too_large_max_20MB")
+
+    filename = (file.filename or "animation.gif").lower()
+    if not (filename.endswith(".gif") or filename.endswith(".mp4")):
+        # По content-type тоже проверим на всякий случай
+        ct = (file.content_type or "").lower()
+        if ct not in ("image/gif", "video/mp4"):
+            raise HTTPException(
+                400, "only .gif or .mp4 accepted"
+            )
+
+    animation = BufferedInputFile(
+        content, filename=file.filename or "animation.gif",
+    )
+    try:
+        msg = await bot.send_animation(
+            chat_id=int(admin["sub"]),
+            animation=animation,
+            caption="🎬 GIF загружен для рассылки",
+        )
+    except Exception as e:
+        raise HTTPException(500, f"upload_to_telegram_failed: {e}")
+
+    if not msg.animation:
+        raise HTTPException(500, "telegram_returned_no_animation")
+    return {"file_id": msg.animation.file_id}
 
 
 # ── CREATE + SEND ────────────────────────────────────────────────────
@@ -327,10 +487,18 @@ _BUTTON_TYPES = {
     "web_client",
     "buy_combo",
     "share_discount",
+    "my_proxy",
+    "gift_combo",
+    "beta_apply",
 }
 
 
 _GIFT_REVEAL_PERCENT_CHOICES = (20, 25, 30, 35, 40)
+
+
+_VALID_TAG_COLORS = {
+    "gray", "red", "orange", "yellow", "green", "blue", "purple",
+}
 
 
 class BroadcastCreateRequest(BaseModel):
@@ -338,6 +506,9 @@ class BroadcastCreateRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
     segment: str = Field(..., min_length=1, max_length=60)
     photo_file_id: Optional[str] = Field(None, max_length=300)
+    # GIF/MP4 animation — мутуально-эксклюзивно с photo_file_id.
+    # Если заданы оба — в бэкенде отдаётся приоритет animation.
+    animation_file_id: Optional[str] = Field(None, max_length=300)
     buttons: list[str] = Field(default_factory=list)
     discount_percent: Optional[int] = Field(None, ge=1, le=100)
     discount_hours: Optional[int] = Field(None, gt=0, le=8760)
@@ -345,6 +516,21 @@ class BroadcastCreateRequest(BaseModel):
     # Процент для кнопки «👀 Посмотреть подарок». Пресеты 20/25/30/35/40.
     # Действует 48ч после клика (продолжительность зашита в коде callback'а).
     gift_reveal_percent: Optional[int] = Field(None, ge=20, le=40)
+    # Опциональная цветная метка (migration 071)
+    tag: Optional[str] = Field(None, max_length=40)
+    tag_color: Optional[str] = Field(None, max_length=16)
+
+    @field_validator("tag_color")
+    @classmethod
+    def _valid_tag_color(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        v = v.lower().strip()
+        if v not in _VALID_TAG_COLORS:
+            raise ValueError(
+                f"tag_color must be one of {sorted(_VALID_TAG_COLORS)}",
+            )
+        return v
 
     @field_validator("buttons")
     @classmethod
@@ -481,6 +667,7 @@ async def broadcast_test_self(
             admin_id,
             message_html,
             photo_file_id=body.photo_file_id,
+            animation_file_id=body.animation_file_id,
             reply_markup=reply_markup,
             parse_mode="HTML",
         )
@@ -528,7 +715,10 @@ async def broadcast_create(
             segment=body.segment,
             sent_by=int(admin["sub"]),
             photo_file_id=body.photo_file_id,
+            animation_file_id=body.animation_file_id,
             buttons=list(body.buttons) if body.buttons else None,
+            tag=body.tag,
+            tag_color=body.tag_color,
         )
     except Exception as e:
         raise HTTPException(500, f"create_broadcast_failed: {e}")
@@ -576,6 +766,7 @@ async def broadcast_create(
         message=message_html,
         reply_markup=reply_markup,
         photo_file_id=body.photo_file_id,
+        animation_file_id=body.animation_file_id,
         admin_telegram_id=int(admin["sub"]),
     ))
 
@@ -660,12 +851,12 @@ def _build_reply_markup(
             )])
         elif btn == "bypass":
             rows.append([InlineKeyboardButton(
-                text="🌐 Включить обход", callback_data="traffic_info",
+                text="🌐 Включить обход", callback_data="broadcast_bypass",
             )])
         elif btn == "happ_ios":
             rows.append([InlineKeyboardButton(
                 text="📲 Скачать Happ для iOS ⚡️",
-                url="https://apps.apple.com/ru/app/happ-proxy-utility/id6783623643?l=en-GB",
+                url="https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6788279553?l=en-GB",
             )])
         elif btn == "happ_android":
             rows.append([InlineKeyboardButton(
@@ -706,6 +897,30 @@ def _build_reply_markup(
                 text="🎁 Поделиться скидкой",
                 callback_data="share_discount_open",
             )])
+        elif btn == "gift_combo":
+            # Персональный подарок Combo Basic 1 мес со скидкой (% и часы
+            # из полей рассылки). Handler: callback_broadcast_gift_combo
+            # в admin/broadcast.py.
+            rows.append([InlineKeyboardButton(
+                text="🎁 Забрать подарок",
+                callback_data=f"broadcast_gift_combo:{broadcast_id}",
+            )])
+        elif btn == "my_proxy":
+            # Для рассылок владельцам прокси (сегмент bought_proxy):
+            # callback proxy_open отрисует delivery-screen «Ваш Telegram-
+            # прокси готов» + кнопку «🔌 Подключить прокси».
+            rows.append([InlineKeyboardButton(
+                text="🧩 Мой прокси",
+                callback_data="proxy_open",
+            )])
+        elif btn == "beta_apply":
+            # Бета-заявка «🧪 VPN-Инноватор»: запись в beta_applications с
+            # source_broadcast_id, повторный клик → toast «Заявка уже
+            # принята». Handler: app/handlers/callbacks/beta_apply.py.
+            rows.append([InlineKeyboardButton(
+                text="🧪 Оставить заявку",
+                callback_data=f"beta_apply:{broadcast_id}",
+            )])
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
@@ -721,3 +936,188 @@ def _serialize(row) -> dict:
         else:
             out[k] = v
     return out
+
+
+# ═════════════════════════════════════════════════════════════════════
+# SCHEDULED BROADCASTS — отложенные и повторяющиеся
+# ═════════════════════════════════════════════════════════════════════
+#
+# Тайм-зона планировщика — Europe/Moscow (UTC+3). Админ вводит время
+# в MSK через UI, бэкенд конвертирует в UTC для хранения и сравнения
+# с NOW() в scheduler-worker'е.
+
+_MSK_TZ = timezone(timedelta(hours=3))
+_MAX_SCHEDULE_WEEKS_AHEAD = 4  # запрет планировать больше чем на 4 недели вперёд
+
+
+class ScheduleBroadcastRequest(BaseModel):
+    """Запланировать существующую рассылку.
+
+    Клонирует title/message/photo/buttons/discount из source_broadcast_id
+    (снапшот) и создаёт задачу в scheduled_broadcasts.
+
+    scheduled_at_msk: `YYYY-MM-DD HH:MM` в Europe/Moscow. Максимум +4 недели.
+    recurrence: once | daily | weekdays | weekly
+    recurrence_end_at_msk: опциональный «дедлайн» для recurring — тоже MSK.
+    segment: опционально переопределить (по умолчанию — из source).
+    """
+    source_broadcast_id: int = Field(..., gt=0)
+    scheduled_at_msk: str = Field(..., min_length=10, max_length=32)
+    recurrence: str = Field("once")
+    recurrence_end_at_msk: Optional[str] = Field(None, max_length=32)
+    segment: Optional[str] = Field(None, min_length=1, max_length=60)
+
+    @field_validator("recurrence")
+    @classmethod
+    def _valid_rec(cls, v: str) -> str:
+        v = (v or "once").strip().lower()
+        if v not in database.VALID_RECURRENCES:
+            raise ValueError(
+                f"recurrence must be one of {sorted(database.VALID_RECURRENCES)}"
+            )
+        return v
+
+
+def _parse_msk(dt_str: str) -> datetime:
+    """Парсит `YYYY-MM-DD HH:MM` (или ISO) как MSK, возвращает UTC-aware."""
+    dt_str = dt_str.strip().replace("T", " ")
+    # Пробуем два формата: с секундами и без
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            naive = datetime.strptime(dt_str, fmt)
+            break
+        except ValueError:
+            continue
+    else:
+        raise HTTPException(400, f"invalid datetime format: {dt_str!r}")
+    msk = naive.replace(tzinfo=_MSK_TZ)
+    return msk.astimezone(timezone.utc)
+
+
+@router.post("/schedule")
+async def broadcast_schedule_create(
+    body: ScheduleBroadcastRequest,
+    admin: dict = Depends(require_admin),
+):
+    """Создать отложенное/повторяющееся задание на основе существующей рассылки."""
+    # 1. Валидация datetime (MSK → UTC)
+    scheduled_utc = _parse_msk(body.scheduled_at_msk)
+    now_utc = datetime.now(timezone.utc)
+    if scheduled_utc < now_utc - timedelta(minutes=1):
+        raise HTTPException(400, "scheduled_at is in the past")
+    if scheduled_utc > now_utc + timedelta(weeks=_MAX_SCHEDULE_WEEKS_AHEAD):
+        raise HTTPException(
+            400,
+            f"scheduled_at too far in the future (max {_MAX_SCHEDULE_WEEKS_AHEAD} weeks ahead)",
+        )
+    end_utc: Optional[datetime] = None
+    if body.recurrence_end_at_msk:
+        end_utc = _parse_msk(body.recurrence_end_at_msk)
+        if end_utc <= scheduled_utc:
+            raise HTTPException(400, "recurrence_end_at must be after scheduled_at")
+
+    # 2. Достаём исходную рассылку — из неё делаем снапшот.
+    try:
+        source = await database.get_broadcast(body.source_broadcast_id)
+    except Exception as e:
+        raise HTTPException(500, f"source_lookup_failed: {e}")
+    if not source:
+        raise HTTPException(404, "source broadcast not found")
+
+    # Discount fields — подтягиваем отдельно (лежат в broadcast_discounts)
+    disc = None
+    try:
+        disc = await database.get_broadcast_discount(body.source_broadcast_id)
+    except Exception as e:
+        logger.warning("SCHED_DISC_LOOKUP_FAIL: %s", e)
+    disc = disc or {}
+
+    # 3. Создаём scheduled_broadcast
+    try:
+        sched_id = await database.create_scheduled_broadcast(
+            source_broadcast_id=body.source_broadcast_id,
+            title=str(source.get("title") or ""),
+            message=str(source.get("message") or source.get("message_a") or ""),
+            segment=body.segment or str(source.get("segment") or ""),
+            scheduled_at=scheduled_utc,
+            recurrence=body.recurrence,
+            recurrence_end_at=end_utc,
+            created_by=int(admin["sub"]),
+            photo_file_id=(source.get("photo_file_id") or None),
+            animation_file_id=(source.get("animation_file_id") or None),
+            buttons=list(source.get("buttons") or []) or None,
+            discount_percent=disc.get("discount_percent"),
+            discount_hours=disc.get("discount_hours"),
+            discount_label=disc.get("discount_label"),
+            gift_reveal_percent=disc.get("gift_reveal_percent"),
+        )
+    except ValueError as ve:
+        raise HTTPException(400, str(ve))
+    except Exception as e:
+        raise HTTPException(500, f"schedule_create_failed: {e}")
+
+    bus.publish({
+        "type": "broadcast:scheduled",
+        "sched_id": sched_id,
+        "source_broadcast_id": body.source_broadcast_id,
+        "scheduled_at": scheduled_utc.isoformat(),
+        "recurrence": body.recurrence,
+        "by": admin.get("sub"),
+    })
+    return {
+        "ok": True,
+        "sched_id": sched_id,
+        "scheduled_at_utc": scheduled_utc.isoformat(),
+        "scheduled_at_msk": scheduled_utc.astimezone(_MSK_TZ).isoformat(),
+        "recurrence": body.recurrence,
+    }
+
+
+@router.get("/scheduled")
+async def broadcast_schedule_list(
+    active_only: bool = Query(True),
+    limit: int = Query(200, gt=0, le=500),
+):
+    """Список запланированных задач. active_only=true — только активные,
+    active_only=false — вся история (в т.ч. cancelled/completed)."""
+    try:
+        rows = await database.list_scheduled_broadcasts(
+            active_only=active_only, limit=limit,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"scheduled_list_failed: {e}")
+    return [_serialize(r) for r in rows]
+
+
+@router.get("/scheduled/{sched_id}")
+async def broadcast_schedule_get(sched_id: int = Path(..., gt=0)):
+    try:
+        row = await database.get_scheduled_broadcast(sched_id)
+    except Exception as e:
+        raise HTTPException(500, f"scheduled_get_failed: {e}")
+    if not row:
+        raise HTTPException(404, "scheduled broadcast not found")
+    return _serialize(row)
+
+
+@router.delete("/scheduled/{sched_id}")
+async def broadcast_schedule_cancel(
+    sched_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+):
+    """Отменить запланированное задание. Уже отработавшие запуски
+    остаются в истории broadcasts."""
+    try:
+        ok = await database.cancel_scheduled_broadcast(
+            sched_id, cancelled_by=int(admin["sub"]),
+        )
+    except Exception as e:
+        raise HTTPException(500, f"scheduled_cancel_failed: {e}")
+    if not ok:
+        raise HTTPException(404, "not found or already inactive")
+    bus.publish({
+        "type": "broadcast:scheduled_cancelled",
+        "sched_id": sched_id,
+        "by": admin.get("sub"),
+    })
+    return {"ok": True}

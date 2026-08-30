@@ -22,6 +22,7 @@ from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.keyboards import get_back_keyboard
 from app.handlers.common.states import BomberState
 from app.handlers.common.utils import safe_edit_text
+from app.handlers.common.emoji import CE
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -75,23 +76,29 @@ def get_games_menu_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "games.button_bowling", "🎳 Боулинг"),
-            callback_data="game_bowling"
+            callback_data="game_bowling",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "games.button_dice", "🎲 Кубики"),
-            callback_data="game_dice"
+            callback_data="game_dice",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "games.button_bomber", "💣 Бомбер"),
-            callback_data="game_bomber"
+            callback_data="game_bomber",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "games.button_farm", "🌾 Ферма"),
-            callback_data="game_farm"
+            callback_data="game_farm",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -101,7 +108,9 @@ def get_games_back_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "games.back_to_games", "🔙 К играм"),
-            callback_data="games_menu"
+            callback_data="games_menu",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -208,10 +217,14 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                     [InlineKeyboardButton(
                         text=i18n_get_text(language, "main.buy"),
                         callback_data="menu_buy_vpn",
+                        icon_custom_emoji_id=CE["buy"],
+                        style="success",
                     )],
                     [InlineKeyboardButton(
                         text=i18n_get_text(language, "common.back"),
                         callback_data="menu_main",
+                        icon_custom_emoji_id=CE["back"],
+                        style="primary",
                     )],
                 ])
                 await safe_edit_text(callback.message,paywall_text, reply_markup=keyboard, parse_mode="HTML")
@@ -343,10 +356,14 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                     [InlineKeyboardButton(
                         text=i18n_get_text(language, "main.buy"),
                         callback_data="menu_buy_vpn",
+                        icon_custom_emoji_id=CE["buy"],
+                        style="success",
                     )],
                     [InlineKeyboardButton(
                         text=i18n_get_text(language, "games.back_to_games", "🔙 К играм"),
                         callback_data="games_menu",
+                        icon_custom_emoji_id=CE["back"],
+                        style="primary",
                     )],
                 ])
                 await safe_edit_text(callback.message,paywall_text, reply_markup=keyboard, parse_mode="HTML")
@@ -425,14 +442,16 @@ def create_bomber_grid_keyboard(mines: Set[int], player_bombs: Set[int], languag
                     emoji = "⬜"
             row_buttons.append(InlineKeyboardButton(
                 text=emoji,
-                callback_data=f"bomber_cell:{cell_idx}"
+                callback_data=f"bomber_cell:{cell_idx}",
+                style="primary",
             ))
         buttons.append(row_buttons)
-    
+
     if not game_over:
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "games.bomber_finish", "🚩 Завершить"),
-            callback_data="bomber_exit"
+            callback_data="bomber_exit",
+            style="primary",
         )])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -665,12 +684,14 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             if storm_active:
                 buttons.append([InlineKeyboardButton(
                     text=f"🚫 Грядка {i+1}: посадка во время шторма недоступна",
-                    callback_data="farm_noop"
+                    callback_data="farm_noop",
+                    style="primary",
                 )])
             else:
                 buttons.append([InlineKeyboardButton(
                     text=f"🌱 Посадить на грядку {i+1}",
-                    callback_data=f"farm_choose_{i}"
+                    callback_data=f"farm_choose_{i}",
+                    style="primary",
                 )])
         elif status == "growing":
             # Storm controls — only during the 24h announcement window, only if not already shielded.
@@ -682,11 +703,13 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
                 half_reward_rub = int(plant.get("reward", 0)) // 200  # half of reward, in RUB
                 buttons.append([InlineKeyboardButton(
                     text=f"🛡 Накрыть #{i+1} — {shield_cost_rub} ₽",
-                    callback_data=f"farm_shield:{i}"
+                    callback_data=f"farm_shield:{i}",
+                    style="primary",
                 )])
                 buttons.append([InlineKeyboardButton(
                     text=f"🚜 Собрать незрелым #{i+1} — +{half_reward_rub} ₽",
-                    callback_data=f"farm_early:{i}"
+                    callback_data=f"farm_early:{i}",
+                    style="primary",
                 )])
 
             # Water button
@@ -697,27 +720,30 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             can_fert = not fert_used or (now - datetime.fromisoformat(fert_used)).total_seconds() >= 86400
 
             if can_water:
-                row.append(InlineKeyboardButton(text=f"💧 Полить #{i+1}", callback_data=f"farm_water_{i}"))
+                row.append(InlineKeyboardButton(text=f"💧 Полить #{i+1}", callback_data=f"farm_water_{i}", style="primary"))
             if can_fert:
-                row.append(InlineKeyboardButton(text=f"🌿 Удобрить #{i+1}", callback_data=f"farm_fert_{i}"))
+                row.append(InlineKeyboardButton(text=f"🌿 Удобрить #{i+1}", callback_data=f"farm_fert_{i}", style="primary"))
             if row:
                 buttons.append(row)
             # Always show dig button for growing plots
             buttons.append([InlineKeyboardButton(
                 text=f"⛏ Выкопать #{i+1}",
-                callback_data=f"farm_dig_{i}"
+                callback_data=f"farm_dig_{i}",
+                style="primary",
             )])
         elif status == "ready":
             buttons.append([InlineKeyboardButton(
                 text=f"🌾 Собрать {plant.get('emoji','')} #{i+1} (+{plant.get('reward',0)//100} ₽)",
-                callback_data=f"farm_harvest_{i}"
+                callback_data=f"farm_harvest_{i}",
+                style="primary",
             )])
         elif status == "dead":
             buttons.append([InlineKeyboardButton(
                 text=f"☠️ Убрать #{i+1}",
-                callback_data=f"farm_remove_{i}"
+                callback_data=f"farm_remove_{i}",
+                style="primary",
             )])
-    
+
     # Buy plot button
     if plot_count < FARM_MAX_PLOTS:
         price = FARM_PLOT_PRICE_KOPECKS
@@ -726,19 +752,22 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         if balance >= price:
             buttons.append([InlineKeyboardButton(
                 text=f"➕ Купить грядку — {price_rub} ₽ (осталось мест: {remaining})",
-                callback_data="farm_buy_plot"
+                callback_data="farm_buy_plot",
+                icon_custom_emoji_id=CE["buy"],
+                style="success",
             )])
         else:
             buttons.append([InlineKeyboardButton(
                 text=f"➕ Грядка (нужно {price_rub} ₽, осталось мест: {remaining})",
-                callback_data="farm_noop"
+                callback_data="farm_noop",
+                style="primary",
             )])
-    
+
     buttons.append([InlineKeyboardButton(
         text="📖 Инструкция",
         url="https://telegra.ph/Instrukciya-Ferma-02-20"
     )])
-    buttons.append([InlineKeyboardButton(text="🔙 К играм", callback_data="games_menu")])
+    buttons.append([InlineKeyboardButton(text="🔙 К играм", callback_data="games_menu", icon_custom_emoji_id=CE["back"], style="primary")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     
     try:
@@ -796,9 +825,10 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
     for key, plant in PLANT_TYPES.items():
         buttons.append([InlineKeyboardButton(
             text=f"{plant['emoji']} {plant['name']} — {plant['days']} дн. → +{plant['reward']//100} ₽",
-            callback_data=f"farm_plant_{plot_id}_{key}"
+            callback_data=f"farm_plant_{plot_id}_{key}",
+            style="primary",
         )])
-    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="game_farm")])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="game_farm", icon_custom_emoji_id=CE["back"], style="primary")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     
     await safe_edit_text(callback.message,
@@ -1103,11 +1133,13 @@ async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="✅ Да, убрать",
-            callback_data=f"farm_remove_confirm_{plot_id}"
+            callback_data=f"farm_remove_confirm_{plot_id}",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="❌ Нет",
-            callback_data="farm_noop"
+            callback_data="farm_noop",
+            style="primary",
         )]
     ])
     
@@ -1223,11 +1255,13 @@ async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
         [
             InlineKeyboardButton(
                 text="⛏ Да, выкопать",
-                callback_data=f"farm_dig_confirm_{plot_id}"
+                callback_data=f"farm_dig_confirm_{plot_id}",
+                style="primary",
             ),
             InlineKeyboardButton(
                 text="❌ Нет",
-                callback_data="game_farm"
+                callback_data="game_farm",
+                style="primary",
             )
         ]
     ])
@@ -1370,9 +1404,9 @@ async def callback_farm_shield(callback: CallbackQuery):
         f"Выберите способ оплаты:"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Картой", callback_data=f"farm_shield_lava:{plot_id}")],
-        [InlineKeyboardButton(text="📲 СБП", callback_data=f"farm_shield_sbp:{plot_id}")],
-        [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+        [InlineKeyboardButton(text="💳 Картой", callback_data=f"farm_shield_lava:{plot_id}", style="primary")],
+        [InlineKeyboardButton(text="📲 СБП", callback_data=f"farm_shield_sbp:{plot_id}", style="primary")],
+        [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     try:
         await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
@@ -1431,7 +1465,7 @@ async def callback_farm_shield_lava(callback: CallbackQuery):
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💳 Перейти к оплате", url=payment_url)],
-            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
@@ -1489,7 +1523,7 @@ async def callback_farm_shield_sbp(callback: CallbackQuery):
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📲 Оплатить через СБП", url=tx["redirect_url"])],
-            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()

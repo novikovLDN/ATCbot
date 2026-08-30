@@ -28,6 +28,7 @@ import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.core.rate_limit import check_rate_limit
+from app.handlers.common.emoji import CE
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.states import TelegramPremiumState
 from app.handlers.common.utils import safe_edit_text
@@ -82,6 +83,8 @@ def _get_back_to_main_kb(language: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(
             text=i18n_get_text(language, "premium.back_button"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -170,10 +173,13 @@ async def _show_period_screen(message: Message, language: str, username: str):
         rows.append([InlineKeyboardButton(
             text=i18n_get_text(language, plan["label_key"]),
             callback_data=f"premium_period:{days}",
+            style="primary",
         )])
     rows.append([InlineKeyboardButton(
         text=i18n_get_text(language, "premium.back_button"),
         callback_data="premium_buy",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -224,10 +230,12 @@ async def callback_premium_period(callback: CallbackQuery, state: FSMContext):
         username=username, period=period_text, price=f"{price_rubles:,}".replace(",", " "),
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="premium_pay:card")],
+        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="premium_pay:card", style="primary")],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "premium.back_button"),
             callback_data=f"premium_period_back",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     await safe_edit_text(callback.message, text, reply_markup=kb)
@@ -259,10 +267,13 @@ async def callback_premium_period_back(callback: CallbackQuery, state: FSMContex
         rows.append([InlineKeyboardButton(
             text=i18n_get_text(language, plan["label_key"]),
             callback_data=f"premium_period:{days}",
+            style="primary",
         )])
     rows.append([InlineKeyboardButton(
         text=i18n_get_text(language, "premium.back_button"),
         callback_data="premium_buy",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await safe_edit_text(callback.message, text, reply_markup=kb)
@@ -425,6 +436,8 @@ async def send_premium_success(
         [InlineKeyboardButton(
             text=i18n_get_text(language, "premium.back_button"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     try:

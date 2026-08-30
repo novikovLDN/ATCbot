@@ -397,6 +397,12 @@ LAVA_SIGN_KEY = env("LAVA_SIGN_KEY", default="")  # Additional key for JWT HMAC 
 LAVA_SHOP_ID = env("LAVA_SHOP_ID", default="")  # Project/shop ID
 LAVA_API_URL = env("LAVA_API_URL") or "https://api.lava.ru"
 
+# Wata (wata.pro) Configuration — H2H REST API.
+# Access token (Bearer JWT) выдаётся в личном кабинете мерчанта.
+# WATA_SANDBOX=true → https://api-sandbox.wata.pro (тестовые карты).
+WATA_ACCESS_TOKEN = env("WATA_ACCESS_TOKEN", default="")
+WATA_SANDBOX = env("WATA_SANDBOX", default="false").lower() in ("1", "true", "yes")
+
 # Site Sync API (Atlas Secure website ↔ Bot sync)
 SITE_API_URL = env("SITE_API_URL", default="")  # e.g. https://qodev.dev/api/bot
 SITE_BOT_API_KEY = env("SITE_BOT_API_KEY", default="")  # X-Bot-Api-Key header
@@ -441,6 +447,14 @@ if REMNAWAVE_ENABLED:
     _log.info("REMNAWAVE_ENABLED=true, API_URL=%s", REMNAWAVE_API_URL)
 else:
     _log.info("REMNAWAVE_ENABLED=false (URL or TOKEN not set)")
+
+# Cutover 2026-08: samopis Xray-мастер выведен из эксплуатации, единственный
+# источник provisioning — Remnawave 3.x. Все существующие call-sites
+# `config.VPN_ENABLED` / `config.VPN_PROVISIONING_ENABLED` семантически
+# означают "можно ли боту выдавать/продлять VPN" — переменяем на статус
+# Remnawave, чтобы не переписывать 20+ мест по коду.
+VPN_ENABLED = REMNAWAVE_ENABLED  # noqa: F811 — override с 352
+VPN_PROVISIONING_ENABLED = REMNAWAVE_ENABLED  # noqa: F811 — override с 355
 
 # Traffic limits per tariff (in bytes). Trial has NO bypass.
 TRAFFIC_LIMITS = {
@@ -619,4 +633,41 @@ LEGACY_SAMOPIS_SUB_BASE_URL = env(
 
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Sub-aggregator service — константы (без ENV).
+#
+# Меняешь прямо здесь и рестартишь бота. Держим захардкоженным чтобы не
+# плодить переменные окружения в Railway UI.
+#
+# INTERNAL_SECRET должен совпадать с тем, что в .env сервиса-агрегатора
+# (sub-aggregator/.env → INTERNAL_SECRET). Пустая строка → invalidate
+# skip-нётся, кеш обновится через CACHE_TTL (5 мин) автоматически —
+# приемлемо для беты.
+# ─────────────────────────────────────────────────────────────────────────
+
+# ── ДВА НЕЗАВИСИМЫХ ПЕРЕКЛЮЧАТЕЛЯ ──────────────────────────────────────
+# SUB_AGGREGATOR_ENABLED — монтирует эндпоинт /a/{token} (обслуживает уже
+#   добавленные пользователями ссылки). ДЕРЖИМ True, иначе у всех, кто уже
+#   добавил единый ключ, он перестанет открываться.
+# SUB_AGGREGATOR_ISSUE_ENABLED — выдаём/показываем ли НОВУЮ единую ссылку в
+#   экранах бота (подключение/профиль). False → фича выключена для всех,
+#   юзеры идут по legacy-флоу (2 отдельных ключа), НО эндпоинт продолжает
+#   отдавать уже выданные ссылки. Так «отключаем агрегатор, но ссылки у всех
+#   работают».
+SUB_AGGREGATOR_ENABLED = True          # эндпоинт /a/{token} живёт (existing links работают)
+SUB_AGGREGATOR_ISSUE_ENABLED = False   # выдача новым/показ в боте ВЫКЛ для всех
+SUB_AGGREGATOR_URL = "https://subscription.palantirdns.uk"
+SUB_AGGREGATOR_ADMIN_ONLY = False  # (не влияет пока ISSUE_ENABLED=False; при True гейтил бы выдачу только на админа)
+SUB_AGGREGATOR_INTERNAL_SECRET = ""  # заполни после генерации в sub-aggregator/.env
+
+# ЖИВОЙ host панели, откуда агрегатор качает upstream-подписки. Что бы ни
+# лежало в БД (subscription.vps-cloud.uk, старый rewrite, etc.) — агрегатор
+# принудительно бьёт СЮДА. Иначе fetch падает → пустая склейка → 503 →
+# клиент пишет «неизвестный тип контента».
+# ⚠️ Должен совпадать с public-доменом подписок в панели Remnawave.
+# Если панель отдаёт subscriptionUrl на другом хосте — поставь его сюда.
+# Пусто → агрегатор качает URL как есть (без подмены host).
+SUB_AGGREGATOR_UPSTREAM_HOST = "sub.atlassecure.ru"
 

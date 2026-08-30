@@ -46,6 +46,7 @@ from app.handlers.common.keyboards import get_payment_success_keyboard
 from app.handlers.common.states import BroadcastCreate
 from app.handlers.admin.promo_trial import PromoTrialFSM
 from app.handlers.common.utils import clear_promo_session
+from app.handlers.common.emoji import CE
 
 payments_router = Router()
 logger = logging.getLogger(__name__)
@@ -93,12 +94,15 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
     ~StateFilter(PromoTrialFSM.waiting_for_photo),
 )
 async def log_incoming_photo_file_id(message: Message):
-    """Log file_id of incoming photos for later use (e.g. loyalty images). Does not send reply.
+    """Log file_id of incoming photos for later use (e.g. loyalty images).
 
     Excludes FSM states that legitimately consume an admin-attached
     photo (broadcast wizard, trial-promo photo attach), so the
     intended handler in that router gets the message instead of us
     silently swallowing it for a log line.
+
+    Если фото прислал админ в личку — сразу отвечаем file_id в чат,
+    чтобы не лезть в логи вручную.
     """
     try:
         telegram_id = message.from_user.id if message.from_user else 0
@@ -108,6 +112,16 @@ async def log_incoming_photo_file_id(message: Message):
             telegram_id,
             file_id,
         )
+        from app.utils.security import is_admin
+        if (
+            message.chat.type == "private"
+            and message.from_user
+            and is_admin(telegram_id)
+        ):
+            await message.reply(
+                f"🆔 <b>photo</b>\n<code>{file_id}</code>",
+                parse_mode="HTML",
+            )
     except Exception as e:
         logger.warning("PHOTO_FILE_ID_RECEIVED log failed: %s", e)
 
@@ -223,14 +237,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "buy.renew_button", "buy_renew_button"),
-                callback_data="menu_buy_vpn"
+                callback_data="menu_buy_vpn",
+                icon_custom_emoji_id=CE["buy"],
+                style="success",
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "main.support_button", "support_button"),
                 url="https://t.me/atlas_suppbot"
             )]
         ])
-        
+
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         logger.error("Payment received but service unavailable (DB not ready)")
         duration_ms = (time.time() - start_time) * 1000
@@ -372,11 +388,15 @@ async def process_successful_payment(message: Message, state: FSMContext):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "buy.renew_button", "buy_renew_button"),
-                    callback_data="menu_buy_vpn"
+                    callback_data="menu_buy_vpn",
+                    icon_custom_emoji_id=CE["buy"],
+                    style="success",
                 )],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.profile", "profile"),
-                    callback_data="menu_profile"
+                    callback_data="menu_profile",
+                    icon_custom_emoji_id=CE["profile"],
+                    style="primary",
                 )]
             ])
             
@@ -717,6 +737,14 @@ async def process_successful_payment(message: Message, state: FSMContext):
         return
 
     # --- Traffic pack purchase: finalize + add Remnawave traffic ---
+    # 🔧 UNIFIED: Использует ту же логику, что и webhook-провайдеры (platega, cryptobot)
+    # через _handle_traffic_pack_confirmation. Это гарантирует:
+    #   • self-heal через get_bypass_entity_safe (защита от DB-корапшена
+    #     remnawave_id → premium)
+    #   • 3-branch fallback: top-up → username-resolve+retry → create fresh
+    #   • корректные bypass-only setup, trial activation, кнопки/тексты
+    # Раньше здесь был свой inline код на remnawave_service.add_traffic, который
+    # НЕ имел self-heal и молча ронял PATCH через SAFETY-DROP на premium.
     is_traffic_pack = pending_purchase.get("purchase_type") == "traffic_pack"
     if is_traffic_pack:
         payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
@@ -727,101 +755,32 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 amount_rubles=payment_amount_rubles,
             )
             if traffic_result and traffic_result.get("is_traffic_pack"):
-                traffic_gb = traffic_result.get("traffic_gb", 0)
-                _tariff_tag = pending_purchase.get("tariff", "")
-                _is_bypass = _tariff_tag.startswith("bypass_")
-
-                # Bypass-only: ensure subscription row + Remnawave user exist
-                if _is_bypass:
-                    await database.ensure_bypass_only_subscription(telegram_id)
-
-                # Add traffic via Remnawave (create user if stale/missing)
-                rmn_success = False
-                pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
-                if pack:
-                    traffic_bytes = pack["bytes"]
-                    rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-                    if rmn_uuid:
-                        try:
-                            from app.services.remnawave_service import add_traffic
-                            rmn_success = await add_traffic(telegram_id, traffic_bytes)
-                        except Exception as rmn_err:
-                            logger.error(
-                                "TRAFFIC_PACK_REMNAWAVE_ERROR: user=%s gb=%s error=%s",
-                                telegram_id, traffic_gb, rmn_err,
-                            )
-                    if not rmn_success:
-                        # No UUID or stale (404) — clear and create fresh
-                        if rmn_uuid:
-                            await database.clear_remnawave_uuid(telegram_id)
-                        try:
-                            from app.services import remnawave_service
-                            from datetime import datetime, timezone, timedelta
-                            far_future = datetime.now(timezone.utc) + timedelta(days=3650)
-                            await remnawave_service.create_remnawave_user(
-                                telegram_id, "basic", far_future,
-                                traffic_limit_override=traffic_bytes,
-                            )
-                            rmn_success = True
-                            logger.info("BYPASS_REMNAWAVE_USER_CREATED user=%s gb=%s", telegram_id, traffic_gb)
-                        except Exception as rmn_err:
-                            logger.error(
-                                "TRAFFIC_PACK_REMNAWAVE_CREATE_ERROR: user=%s gb=%s error=%s",
-                                telegram_id, traffic_gb, rmn_err,
-                            )
-                else:
-                    logger.error(
-                        "TRAFFIC_PACK_INVALID_GB: user=%s gb=%s purchase=%s",
-                        telegram_id, traffic_gb, purchase_id,
+                traffic_gb = int(traffic_result.get("traffic_gb", 0) or 0)
+                tariff_tag = pending_purchase.get("tariff", "") or ""
+                from app.services.payments.confirmation import _handle_traffic_pack_confirmation
+                try:
+                    await _handle_traffic_pack_confirmation(
+                        provider=payment_provider_name,
+                        bot=message.bot,
+                        telegram_id=telegram_id,
+                        payment_id=int(traffic_result.get("payment_id") or 0),
+                        purchase_id=str(purchase_id),
+                        traffic_gb=traffic_gb,
+                        tariff_type=tariff_tag,
                     )
-
-                # Bypass-only: activate 3-day trial if eligible
-                _trial_activated = False
-                if _is_bypass:
-                    try:
-                        from app.services.trials import service as trial_service
-                        if await trial_service.is_trial_available(telegram_id):
-                            await trial_service.activate_trial(telegram_id)
-                            _trial_activated = True
-                            logger.info("BYPASS_TRIAL_ACTIVATED user=%s", telegram_id)
-                    except Exception as trial_err:
-                        logger.warning("BYPASS_TRIAL_FAIL user=%s: %s", telegram_id, trial_err)
-
-                if _is_bypass:
-                    text = i18n_get_text(language, "bypass.purchase_success", gb=traffic_gb)
-                    if _trial_activated:
-                        text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
-                else:
-                    text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
-                if not rmn_success:
-                    text += "\n\n⚠️ Активация трафика задерживается. Обратитесь в поддержку, если не применится в течение часа."
-                    logger.error(
-                        "TRAFFIC_PACK_NOT_APPLIED: user=%s gb=%s purchase=%s — needs manual resolution",
-                        telegram_id, traffic_gb, purchase_id,
+                    logger.info(
+                        "TRAFFIC_PACK_PAYMENT_FINALIZED purchase_id=%s user=%s gb=%s provider=%s",
+                        purchase_id, telegram_id, traffic_gb, payment_provider_name,
                     )
-                if _is_bypass:
-                    kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
-                        [InlineKeyboardButton(
-                            text="Купить ещё ГБ",
-                            callback_data="buy_traffic",
-                            icon_custom_emoji_id="5199785165735367039",  # ⚡️
-                        )],
-                        [InlineKeyboardButton(text="← На главную", callback_data="menu_main")],
-                    ])
-                else:
-                    kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text=i18n_get_text(language, "common.back"),
-                            callback_data="menu_main",
-                        )],
-                    ])
-                await message.answer(text, reply_markup=kb, parse_mode="HTML")
-
-                logger.info(
-                    "TRAFFIC_PACK_PAYMENT_FINALIZED purchase_id=%s user=%s gb=%s",
-                    purchase_id, telegram_id, traffic_gb,
-                )
+                except Exception as conf_err:
+                    logger.exception(
+                        "TRAFFIC_PACK_CONFIRMATION_FAIL user=%s gb=%s purchase=%s err=%s",
+                        telegram_id, traffic_gb, purchase_id, conf_err,
+                    )
+                    await message.answer(
+                        i18n_get_text(language, "errors.payment_processing"),
+                        parse_mode="HTML",
+                    )
             else:
                 logger.error(f"Traffic pack finalization unexpected result: {traffic_result}")
                 await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
@@ -876,7 +835,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
             pending_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.profile"),
-                    callback_data="menu_profile"
+                    callback_data="menu_profile",
+                    icon_custom_emoji_id=CE["profile"],
+                    style="primary",
                 )],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.support"),

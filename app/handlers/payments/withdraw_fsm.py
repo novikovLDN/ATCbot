@@ -18,6 +18,7 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_message
 from app.handlers.common.states import WithdrawStates
+from app.handlers.common.emoji import CE
 
 payments_router = Router()
 logger = logging.getLogger(__name__)
@@ -104,8 +105,8 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
     await state.set_state(WithdrawStates.withdraw_confirm)
     text = i18n_get_text(language, "withdraw.confirm_amount", amount=amount)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.confirm"), callback_data="withdraw_confirm_amount")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_cancel")]
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.confirm"), callback_data="withdraw_confirm_amount", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_cancel", icon_custom_emoji_id=CE["back"], style="primary")]
     ])
     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
@@ -152,7 +153,7 @@ async def process_withdraw_requisites(message: Message, state: FSMContext):
     amount = data["withdraw_amount"]
     text = i18n_get_text(language, "withdraw.final_confirm", amount=amount, requisites=requisites)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.confirm"), callback_data="withdraw_final_confirm")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_back_to_requisites")]
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.confirm"), callback_data="withdraw_final_confirm", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_back_to_requisites", icon_custom_emoji_id=CE["back"], style="primary")]
     ])
     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")

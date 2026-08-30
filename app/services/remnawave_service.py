@@ -10,7 +10,7 @@ import asyncio
 import logging
 import uuid as uuid_lib
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 import config
 import database
@@ -118,17 +118,76 @@ async def create_remnawave_user(
         far_future = datetime.now(timezone.utc) + timedelta(days=3650)
         expire_str = far_future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        # PREFLIGHT (3.x): существующий bypass entity с username=str(tg_id)
+        # уже мог быть создан ранее (2.7.4 legacy). POST /api/users вернёт
+        # 400 A019 "username already exists" без preflight. Найдём entity
+        # через resolve, адоптим (кешируем uuid + id + telegramId), затем
+        # PATCH trafficLimitBytes + expireAt в актуальные значения.
+        existing = await remnawave_api.find_user_by_username(str(telegram_id))
+        if existing and isinstance(existing, dict):
+            existing_id = existing.get("id")
+            # 3.x response не отдаёт `uuid` — только `vlessUuid`.
+            # Fallback гарантирует, что колонка `remnawave_uuid`
+            # не останется NULL после adopt.
+            existing_uuid = existing.get("uuid") or existing.get("vlessUuid")
+            if existing_id is not None or existing_uuid:
+                if existing_uuid:
+                    await database.set_remnawave_uuid(telegram_id, str(existing_uuid))
+                if existing_id is not None:
+                    try:
+                        await database.set_remnawave_id(telegram_id, int(existing_id))
+                    except (TypeError, ValueError):
+                        pass
+                logger.info(
+                    "REMNAWAVE_USER_ADOPTED: tg=%s uuid=%s id=%s (bypass legacy)",
+                    telegram_id, str(existing_uuid or "")[:8], existing_id,
+                )
+                # Обновляем expiry + status. trafficLimitBytes — ТОЛЬКО
+                # если у существующей entity лимит меньше нужного (never-
+                # -decrease, чтобы не обнулить накопленные покупки/докупки
+                # трафика при повторном adopt из profile.show fallback).
+                update_fields = {
+                    "expireAt": expire_str,
+                    "status": "ACTIVE",
+                }
+                try:
+                    existing_limit = int(existing.get("trafficLimitBytes") or 0)
+                except (TypeError, ValueError):
+                    existing_limit = 0
+                # Если у entity безлимит (0) — оставить безлимитом.
+                # Иначе — set только если новый лимит строго больше.
+                if existing_limit != 0 and int(traffic_limit) > existing_limit:
+                    update_fields["trafficLimitBytes"] = int(traffic_limit)
+                if not existing.get("telegramId"):
+                    update_fields["telegramId"] = int(telegram_id)
+                await remnawave_api.update_user(
+                    int(existing_id) if existing_id is not None else existing_uuid,
+                    **update_fields,
+                )
+                await database.reset_traffic_notification_flags(telegram_id)
+                return
+
         result = await remnawave_api.create_user(
             username=str(telegram_id),
             short_uuid=short_uuid,
             traffic_limit_bytes=traffic_limit,
             expire_at=expire_str,
             device_limit=_device_limit_for_tariff(tariff),
+            telegram_id=telegram_id,
         )
         if result:
-            # Save full UUID for API calls (/api/users/{uuid})
-            rmn_uuid = result.get("uuid") or short_uuid
+            # 3.x: response не отдаёт `uuid` — только `vlessUuid` + `id`.
+            # Fallback на vlessUuid → short_uuid, чтобы колонка не осталась
+            # пустой (иначе profile.show_traffic=False и т.д.).
+            rmn_uuid = result.get("uuid") or result.get("vlessUuid") or short_uuid
             await database.set_remnawave_uuid(telegram_id, rmn_uuid)
+            # 3.x: сохранить numeric id (панель отдаёт его в response.id).
+            rmn_id = result.get("id")
+            if rmn_id is not None:
+                try:
+                    await database.set_remnawave_id(telegram_id, int(rmn_id))
+                except (TypeError, ValueError):
+                    pass
             await database.reset_traffic_notification_flags(telegram_id)
             sub_url = result.get("subscriptionUrl", "")
             logger.info(
@@ -198,7 +257,13 @@ async def renew_remnawave_user(
             await create_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days)
             return
 
-        api_uuid = user_data.get("uuid") or rmn_uuid
+        # Резолвим цель через numeric bypass id из БД — не через
+        # user_data.get("uuid"), чтобы гарантированно попасть в bypass
+        # entity, а не в premium (safety-drop иначе тихо теряет PATCH).
+        bypass_id = await database.get_remnawave_id(telegram_id)
+        api_target: Any = bypass_id if bypass_id is not None else (
+            user_data.get("uuid") or rmn_uuid
+        )
         current_limit = user_data.get("trafficLimitBytes", 0)
         new_limit = current_limit + traffic_add
         # Bypass works by traffic (GB), not by date — keep expireAt far future
@@ -207,23 +272,25 @@ async def renew_remnawave_user(
         expire_str = far_future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         await remnawave_api.update_user(
-            api_uuid,
+            api_target,
             trafficLimitBytes=new_limit,
             expireAt=expire_str,
+            # 3.x: hwidDeviceLimit — новое имя. Шлём оба для совместимости.
+            hwidDeviceLimit=_device_limit_for_tariff(tariff),
             deviceLimit=_device_limit_for_tariff(tariff),
         )
         # Re-enable if disabled
         if user_data.get("status") != "ACTIVE":
-            await remnawave_api.update_user(api_uuid, status="ACTIVE")
+            await remnawave_api.update_user(api_target, status="ACTIVE")
         # Ensure squad assigned (skip if already has one)
         if config.REMNAWAVE_SQUAD_UUID:
             squads = user_data.get("activeInternalSquads") or []
             if not squads:
-                await remnawave_api.assign_user_to_squad(api_uuid, config.REMNAWAVE_SQUAD_UUID)
+                await remnawave_api.assign_user_to_squad(api_target, config.REMNAWAVE_SQUAD_UUID)
         await database.reset_traffic_notification_flags(telegram_id)
         logger.info(
-            "REMNAWAVE_RENEWED: tg=%s uuid=%s old_limit=%d new_limit=%d",
-            telegram_id, api_uuid[:8], current_limit, new_limit,
+            "REMNAWAVE_RENEWED: tg=%s target=%s old_limit=%d new_limit=%d",
+            telegram_id, str(api_target)[:16], current_limit, new_limit,
         )
     except Exception as e:
         logger.error("REMNAWAVE_RENEW_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
@@ -328,36 +395,68 @@ def delete_remnawave_user_bg(telegram_id: int) -> None:
 # ── Add traffic (purchased pack) ──────────────────────────────────────
 
 async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
-    """Add purchased traffic to current limit. Returns True on success."""
+    """Add purchased traffic to current limit. Returns True on success.
+
+    ⚠️ УСТАРЕВШИЙ helper — использует get_bypass_entity_safe для резолва
+    правильной bypass entity (не premium). Ранее слепо использовал
+    remnawave_id из БД, который у скорапченных юзеров указывал на premium
+    → SAFETY-DROP → трафик молча терялся.
+
+    Для новых мест предпочтительнее использовать
+    remnawave_bypass.add_bypass_traffic (та же логика через тот же helper).
+    """
     if not config.REMNAWAVE_ENABLED:
+        logger.warning("REMNAWAVE_ADD_TRAFFIC_DISABLED: tg=%s", telegram_id)
         return False
     try:
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if not rmn_uuid:
+        # Резолвим гарантированно bypass entity через self-heal helper.
+        # Он: проверяет username, чистит кривой remnawave_id (premium),
+        # резолвит через username=str(tg), backfillит правильный id.
+        entity = await remnawave_api.get_bypass_entity_safe(telegram_id)
+        if not isinstance(entity, dict):
+            logger.info(
+                "REMNAWAVE_ADD_TRAFFIC_NO_ENTITY: tg=%s (bypass entity не найден в панели, "
+                "нужна recovery через add_bypass_traffic)",
+                telegram_id,
+            )
             return False
 
-        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
-        if not user_data:
+        api_target: Any = entity.get("id")
+        if api_target is None:
+            api_target = entity.get("uuid") or entity.get("vlessUuid")
+        if api_target is None:
+            logger.warning(
+                "REMNAWAVE_ADD_TRAFFIC_NO_TARGET: tg=%s username=%r — resolved bypass без id/uuid",
+                telegram_id, entity.get("username"),
+            )
             return False
 
-        api_uuid = user_data.get("uuid") or rmn_uuid
-        current_limit = user_data.get("trafficLimitBytes", 0)
-        new_limit = current_limit + extra_bytes
+        current_limit = int(entity.get("trafficLimitBytes", 0) or 0)
+        # Юзер оплатил пакет → просто добавляем ровно extra_bytes.
+        # current=0 означает "нет доступного трафика" (израсходовал или
+        # ещё не было выдано) — не безлимит. Складываем без условий.
+        new_limit = current_limit + int(extra_bytes)
 
-        result = await remnawave_api.update_user(api_uuid, trafficLimitBytes=new_limit)
+        result = await remnawave_api.update_user(api_target, trafficLimitBytes=new_limit)
         if result is not None:
             # Re-enable if disabled
-            if user_data.get("status") != "ACTIVE":
-                await remnawave_api.update_user(api_uuid, status="ACTIVE")
+            if entity.get("status") != "ACTIVE":
+                await remnawave_api.update_user(api_target, status="ACTIVE")
             await database.reset_traffic_notification_flags(telegram_id)
             logger.info(
-                "REMNAWAVE_TRAFFIC_ADDED: tg=%s +%d bytes, new_limit=%d",
-                telegram_id, extra_bytes, new_limit,
+                "REMNAWAVE_TRAFFIC_ADDED: tg=%s target=%s username=%r +%d bytes, current=%d → new=%d",
+                telegram_id, str(api_target)[:16], entity.get("username"),
+                extra_bytes, current_limit, new_limit,
             )
             return True
+        logger.warning(
+            "REMNAWAVE_ADD_TRAFFIC_PATCH_FAILED: tg=%s target=%s username=%r "
+            "(update_user returned None — вышестоящий флоу пусть fallback'нет)",
+            telegram_id, str(api_target)[:16], entity.get("username"),
+        )
         return False
     except Exception as e:
-        logger.error("REMNAWAVE_ADD_TRAFFIC_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
+        logger.exception("REMNAWAVE_ADD_TRAFFIC_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
         return False
 
 
@@ -384,6 +483,36 @@ async def add_bypass_traffic(
                 return True
             # Stale UUID (user deleted in Remnawave) — drop and recreate
             await database.clear_remnawave_uuid(telegram_id)
+
+        # DB has no UUID but the panel may still hold an entity created earlier
+        # with username=str(telegram_id). Trying create_user directly would fail
+        # with A019 "User username already exists". Recover the existing entity
+        # by username first, cache its UUID, and top-up its trafficLimitBytes.
+        existing = await remnawave_api.find_user_by_username(str(telegram_id))
+        if existing:
+            # 3.x response не отдаёт `uuid` — только `vlessUuid`. Берём его
+            # как idempotent connection UUID, чтобы колонка не осталась пустой.
+            api_uuid = existing.get("uuid") or existing.get("vlessUuid")
+            if api_uuid:
+                await database.set_remnawave_uuid(telegram_id, str(api_uuid))
+                # 3.x: сразу закешируем numeric id, чтобы add_traffic /
+                # update_user работали без повторного stream-резолва.
+                api_id = existing.get("id")
+                if api_id is not None:
+                    try:
+                        await database.set_remnawave_id(telegram_id, int(api_id))
+                    except (TypeError, ValueError):
+                        pass
+                logger.info(
+                    "REMNAWAVE_BYPASS_RECOVERED: tg=%s uuid=%s id=%s (was orphaned in panel)",
+                    telegram_id, str(api_uuid)[:8], api_id,
+                )
+                if await add_traffic(telegram_id, extra_bytes):
+                    return True
+                # add_traffic failed for a reason other than missing UUID —
+                # fall through to create_remnawave_user, which will surface
+                # the real error in logs.
+                await database.clear_remnawave_uuid(telegram_id)
 
         expire_at = subscription_end or (datetime.now(timezone.utc) + timedelta(days=3650))
         await create_remnawave_user(
@@ -420,6 +549,7 @@ async def update_tariff(telegram_id: int, new_tariff: str, period_days: int = 30
         await remnawave_api.update_user(
             api_uuid,
             trafficLimitBytes=new_limit,
+            hwidDeviceLimit=new_devices,
             deviceLimit=new_devices,
         )
         logger.info("REMNAWAVE_TARIFF_UPDATED: tg=%s tariff=%s", telegram_id, new_tariff)

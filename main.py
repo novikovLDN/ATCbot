@@ -35,13 +35,10 @@ import trial_notifications
 import activation_worker
 from app.workers import farm_notifications
 from app.workers import traffic_monitor
-try:
-    import xray_sync
-    XRAY_SYNC_AVAILABLE = True
-except Exception as e:
-    XRAY_SYNC_AVAILABLE = False
-    xray_sync = None
-    print(f"[XRAY_SYNC] disabled: {e}")
+# xray_sync worker удалён вместе с samopis-мастером (cutover 2026-08).
+# Единственный источник provisioning — Remnawave 3.x через remnawave_api.
+XRAY_SYNC_AVAILABLE = False
+xray_sync = None
 
 # ====================================================================================
 # STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
@@ -304,6 +301,30 @@ async def main():
     except Exception as e:
         logger.warning("admin_notifier failed to start: %s", e)
 
+    # Automated notifications registry sync (migration 068). Upsert-only
+    # для defaults — админ-правки не затираются. Ошибка не критична: если
+    # sync упал, bot всё равно работает по in-code REGISTRY defaults.
+    try:
+        from app.services.automated_notifications import sync_registry_to_db
+        synced = await sync_registry_to_db()
+        logger.info("Automated notifications registry synced: %d specs", synced)
+    except Exception as e:
+        logger.warning("automated_notifications sync failed: %s", e)
+
+    # Scheduled + recurring broadcasts (migration 067)
+    # Long-lived task: раз в минуту проверяет БД и запускает готовые рассылки.
+    try:
+        from app.services.scheduled_broadcasts_worker import (
+            run_scheduled_broadcasts_worker,
+        )
+        sched_bcast_task = asyncio.create_task(
+            run_scheduled_broadcasts_worker(bot)
+        )
+        background_tasks.append(sched_bcast_task)
+        logger.info("Scheduled broadcasts worker started")
+    except Exception as e:
+        logger.warning("scheduled_broadcasts_worker failed to start: %s", e)
+
     # NB: incy_crypto.selftest() used to be scheduled here for the
     # crypt1 / Node-sidecar code path. Production `to_incy_link()` is
     # now pure-Python (`incy://add/<plain_url>` — universal across
@@ -332,7 +353,6 @@ async def main():
         "fast_cleanup": None,
         "auto_renewal": None,
         "activation_worker": None,
-        "xray_sync": None,
     }
     
     async def retry_db_init():
@@ -349,7 +369,7 @@ async def main():
         - Никогда не падает (все исключения обрабатываются)
         - Не блокирует главный event loop
         """
-        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, xray_sync_task, recovered_tasks, background_tasks
+        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, recovered_tasks, background_tasks
         retry_interval = 30  # секунд
         
         # Если БД уже готова, задача не запускается
@@ -412,16 +432,6 @@ async def main():
                             recovered_tasks["activation_worker"] = t
                             background_tasks.append(t)
                             logger.info("Activation worker task started (recovered)")
-                        
-                        if XRAY_SYNC_AVAILABLE and config.XRAY_SYNC_ENABLED and xray_sync_task is None and recovered_tasks["xray_sync"] is None:
-                            try:
-                                t = await start_xray_sync_safe(bot)
-                                if t:
-                                    recovered_tasks["xray_sync"] = t
-                                    background_tasks.append(t)
-                                    logger.info("Xray sync worker started (recovered)")
-                            except Exception as e:
-                                logger.warning("Xray sync recovery failed: %s", e)
                         
                         # Успешно инициализировали БД - выходим из цикла
                         logger.info("DB retry task completed successfully, stopping retry loop")
@@ -508,30 +518,24 @@ async def main():
         except Exception as e:
             logger.warning("Site sync worker failed to start: %s", e)
 
-    # Xray sync: safe optional background worker (fail-safe, never crashes bot)
-    async def start_xray_sync_safe(bot_obj):
-        if not XRAY_SYNC_AVAILABLE:
-            print("[XRAY_SYNC] module not available, skipping startup")
-            return None
-        if not config.XRAY_SYNC_ENABLED:
-            logger.info("[XRAY_SYNC] disabled by config (XRAY_SYNC_ENABLED=false), skipping")
-            return None
-        if not database.DB_READY or not config.VPN_ENABLED:
-            logger.info("[XRAY_SYNC] DB or VPN not ready, skipping (will start on recovery if enabled)")
-            return None
+    # Wata reconciler — защита от потерянных webhook'ов (каждые 5 минут)
+    wata_reconciler_task_instance = None
+    if database.DB_READY:
         try:
-            task = asyncio.create_task(xray_sync.start(bot_obj))
-            print("[XRAY_SYNC] started successfully")
-            return task
+            import wata_service as _wata
+            if _wata.is_enabled():
+                from app.workers.wata_reconciler import wata_reconciler_task
+                wata_reconciler_task_instance = asyncio.create_task(wata_reconciler_task(bot))
+                background_tasks.append(wata_reconciler_task_instance)
+                logger.info("Wata reconciler task started (interval=5min)")
+            else:
+                logger.info("Wata reconciler skipped (WATA_ACCESS_TOKEN not configured)")
         except Exception as e:
-            logger.error("[XRAY_SYNC] failed to start: %s", e)
-            return None
+            logger.warning("Wata reconciler failed to start: %s", e)
 
-    xray_sync_task = None
-    xray_sync_task = await start_xray_sync_safe(bot)
-    if xray_sync_task:
-        background_tasks.append(xray_sync_task)
-    
+    # xray_sync worker удалён вместе с samopis-мастером — весь sync
+    # теперь встроен в purchase_flow.provision_subscription (Remnawave 3.x).
+
     # Bot initialization complete
     if database.DB_READY:
         logger.info("✅ Бот запущен в полнофункциональном режиме")
@@ -558,6 +562,7 @@ async def main():
             BotCommand(command="help", description="Помощь"),
             BotCommand(command="instruction", description="Инструкция"),
             BotCommand(command="hwadd", description="📲 Добавить устройство"),
+            BotCommand(command="docs", description="🔐 Политика конфиденциальности"),
             BotCommand(command="language", description="Изменить язык"),
         ])
         logger.info("Bot commands registered")

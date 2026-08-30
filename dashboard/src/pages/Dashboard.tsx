@@ -8,6 +8,10 @@ import {
   Megaphone,
   Sparkles,
   TrendingUp,
+  Database,
+  RefreshCcw,
+  CheckCircle2,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Area,
@@ -20,6 +24,7 @@ import {
 } from "recharts";
 
 import { endpoints } from "@/lib/api";
+import { Collapsible } from "@/components/Collapsible";
 import { useEventStream, type BusEvent } from "@/lib/ws";
 import { LivePaymentTicker } from "@/components/LivePaymentTicker";
 import {
@@ -31,6 +36,8 @@ import {
 } from "@/lib/format";
 import { EmptyState } from "@/components/EmptyState";
 import { ReconciliationSection } from "@/components/ReconciliationSection";
+import { toast } from "@/store/toast";
+import type { RemnawaveBackfillStatus } from "@/lib/api";
 
 // ─ Daily chart metric/range config ──────────────────────────────────
 
@@ -63,7 +70,7 @@ const METRICS: readonly MetricDef[] = [
     key: "revenue_rubles",
     label: "Доход",
     short: "Доход",
-    color: "#F5F5F5",
+    color: "#0F1720",
     fillId: "metric-revenue",
     valueFmt: (v) => fmtRub(v),
     axisFmt: fmtCompactRub,
@@ -72,7 +79,7 @@ const METRICS: readonly MetricDef[] = [
     key: "new_users",
     label: "Новые юзеры",
     short: "Юзеры",
-    color: "#D4D4D8",
+    color: "#2563EB",
     fillId: "metric-users",
     valueFmt: (v) => fmtNum(v),
     axisFmt: fmtCompactInt,
@@ -216,6 +223,15 @@ export function Dashboard() {
     refetchInterval: 90_000,
     staleTime: 60_000,
   });
+  // Payments breakdown (тип / провайдер / тариф / apple-номинал) —
+  // отдельный переключатель окна.
+  const [breakdownHours, setBreakdownHours] = useState<24 | 168 | 720>(24);
+  const paymentsBreakdown = useQuery({
+    queryKey: ["payments", "breakdown", breakdownHours],
+    queryFn: () => endpoints.paymentsBreakdown(breakdownHours),
+    refetchInterval: 120_000,
+    staleTime: 60_000,
+  });
   // Hourly breakdown: окно 1д / 7д / 30д, тот же metric switcher.
   const [hourlyDays, setHourlyDays] = useState<1 | 7 | 30>(7);
   const [hourlyMetric, setHourlyMetric] = useState<MetricKey>("payments_count");
@@ -325,6 +341,10 @@ export function Dashboard() {
 
         {/* LIVE ticker — real-time платежи бегущей строкой. */}
         <LivePaymentTicker />
+
+        {/* Remnawave 3.x backfill — admin-only ручной запуск,
+            заполняет numeric id в БД + telegramId в панели. */}
+        <RemnawaveBackfillCard />
 
         {/* Hero — revenue + active + paying */}
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -487,7 +507,13 @@ export function Dashboard() {
           </div>
         </SurfaceCard>
 
-        {/* Подписки — health */}
+        {/* Подписки — health. Collapsible: свернутая по умолчанию, если
+            админу нужны быстрые KPI — hero + Финансы выше уже дают всё. */}
+        <Collapsible
+          title="Подписки · health"
+          subtitle="renewal, lifetime, retention — расширенные метрики"
+          remember="dash-subs-health"
+        >
         <SurfaceCard>
           <SurfaceHeader
             eyebrow="Подписки"
@@ -533,8 +559,14 @@ export function Dashboard() {
             />
           </div>
         </SurfaceCard>
+        </Collapsible>
 
-        {/* Маркетинг: реферальная программа */}
+        {/* Маркетинг: реферальная программа. Collapsed по умолчанию. */}
+        <Collapsible
+          title="Маркетинг · реферальная программа"
+          subtitle="доход от рефералов, топ-амбассадоры, breakdown тарифов и провайдеров"
+          remember="dash-marketing"
+        >
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <SurfaceCard className="lg:col-span-1">
             <SurfaceHeader
@@ -592,8 +624,28 @@ export function Dashboard() {
             />
           </SurfaceCard>
         </section>
+        </Collapsible>
 
-        {/* Hourly activity — пик активности по часам МСК */}
+        {/* Payments breakdown — что и как оплатили за последние 24ч/7д/30д. */}
+        <Collapsible
+          title="Оплаты · разбивка по продукту и провайдеру"
+          subtitle="что купили + как заплатили + Apple-номиналы"
+          remember="dash-payments-breakdown"
+        >
+          <PaymentsBreakdownCard
+            data={paymentsBreakdown.data}
+            loading={paymentsBreakdown.isLoading}
+            hours={breakdownHours}
+            onHoursChange={setBreakdownHours}
+          />
+        </Collapsible>
+
+        {/* Активность по часам + funnel. Collapsed по умолчанию. */}
+        <Collapsible
+          title="Активность и воронка"
+          subtitle="hourly-график покупок + conversion-funnel"
+          remember="dash-activity"
+        >
         <SurfaceCard>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <SurfaceHeader
@@ -630,15 +682,29 @@ export function Dashboard() {
             loading={overview.isLoading || revenue.isLoading}
           />
         </SurfaceCard>
+        </Collapsible>
 
-        {/* Segments */}
+        {/* Сегменты рассылки. Collapsed по умолчанию —
+            служебная информация, не критичная для «одного взгляда». */}
+        <Collapsible
+          title="Сегменты рассылки"
+          subtitle="кто и сколько по каждой когорте (для планирования кампаний)"
+          remember="dash-segments"
+        >
         <SegmentsCard
           loading={segments.isLoading}
           error={segments.isError}
           data={segments.data}
         />
+        </Collapsible>
 
-        {/* Live */}
+        {/* Live-поток событий. Collapsed по умолчанию — live-ticker
+            уже висит наверху; тут детальный лог для расследований. */}
+        <Collapsible
+          title="Live · поток событий"
+          subtitle="детальный лог WS — регистрации, платежи, админ-действия"
+          remember="dash-live"
+        >
         <SurfaceCard>
           <SurfaceHeader
             eyebrow="Live"
@@ -689,10 +755,19 @@ export function Dashboard() {
             </ul>
           )}
         </SurfaceCard>
+        </Collapsible>
 
         {/* «Сверка» — reconciliation of premium subscriptions vs. paid history.
-            Lives at the very bottom of the main dashboard per product spec. */}
-        <ReconciliationSection />
+            Lives at the very bottom of the main dashboard per product spec.
+            Скрыто по умолчанию — используется редко, только когда есть подозрение
+            на рассинхрон Remnawave ↔ БД. */}
+        <Collapsible
+          title="Сверка · Remnawave ↔ БД"
+          subtitle="разница между panel-подписками и локальной историей"
+          remember="dash-reconciliation"
+        >
+          <ReconciliationSection />
+        </Collapsible>
       </div>
     </div>
   );
@@ -1194,16 +1269,16 @@ function RevenueChart({
       <AreaChart data={data} margin={{ top: 6, right: 4, left: 4, bottom: 4 }}>
         <defs>
           <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#F5F5F5" stopOpacity={0.28} />
-            <stop offset="100%" stopColor="#F5F5F5" stopOpacity={0} />
+            <stop offset="0%" stopColor="#0F1720" stopOpacity={0.22} />
+            <stop offset="100%" stopColor="#0F1720" stopOpacity={0} />
           </linearGradient>
         </defs>
         <Tooltip content={<ChartTooltip valueFmt={fmtRub} label="Доход" />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "3 3" }} />
         <Area
           type="monotone"
           dataKey="revenue_rubles"
-          stroke="#F5F5F5"
-          strokeWidth={1.75}
+          stroke="#0F1720"
+          strokeWidth={2}
           fill="url(#revGrad)"
           isAnimationActive={false}
         />
@@ -1336,21 +1411,18 @@ function HourlyChart({
           return (
             <div
               key={d.hour}
-              className="group relative flex flex-1 flex-col items-center justify-end"
+              className="group relative flex h-full flex-1 flex-col items-center justify-end"
             >
-              {/* Бар. Peak — solid lime с верхним brighter градиентом
-                  + glow snippet. Прочие — приглушённый зинк. Так
-                  «один лаймовый» бар читается как фокус-точка
-                  (brand-deck $16,021 / Cashflow). */}
+              {/* Бар. Peak — solid accent-цвет метрики (виден на white bg),
+                  non-peak — тот же цвет но с 22% opacity (муute-tone).
+                  Так «один яркий» бар читается как фокус-точка. */}
               <div
                 className="w-full rounded-t-md transition-[height,background-color] duration-500 ease-out"
                 style={{
                   height: `${Math.max(2, pct)}%`,
-                  background: isPeak
-                    ? "linear-gradient(180deg, #FFFFFF 0%, #F5F5F5 70%, #A1A1AA 100%)"
-                    : "#262626",
+                  background: isPeak ? def.color : def.color + "33",
                   boxShadow: isPeak
-                    ? "0 8px 22px -10px rgba(245,245,245,0.40)"
+                    ? `0 8px 22px -10px ${def.color}66`
                     : undefined,
                 }}
               />
@@ -1457,34 +1529,107 @@ function labelForKey(key?: string, fallback?: string): string {
 
 // ─ Segments card (kept) ──────────────────────────────────────────────
 
-const SEGMENT_GROUPS: { title: string; keys: string[] }[] = [
+// Группы + краткое описание для plashka-header. Каждая группа
+// сворачивается отдельно (Collapsible), список плашек по вертикали.
+// Все свёрнуты по умолчанию — иначе экран сегментов растягивается
+// на 500+ px.
+const SEGMENT_GROUPS: { title: string; sub: string; keys: string[] }[] = [
   {
     title: "База",
+    sub: "все юзеры · активные · без подписки · без Remnawave · холодные",
     keys: [
       "all_users",
       "active_subscriptions",
       "no_subscription",
       "no_remnawave",
+      "started_1d_cold",
+      "started_3d_cold",
       "started_7d_cold",
+      "started_14d_cold",
+      "started_30d_cold",
     ],
   },
   {
-    title: "Истёкли (любая подписка)",
-    keys: ["expired_1d", "expired_2d", "expired_3d"],
+    title: "Активный триал",
+    sub: "сейчас идут · день 1/2/3 · активирован за 24ч",
+    keys: [
+      "trial_active_any",
+      "trial_activated_today",
+      "trial_active_day1",
+      "trial_active_day2",
+      "trial_active_day3",
+      "trial_ends_in_1d",
+    ],
   },
   {
-    title: "Триал-воронка",
+    title: "Триал истёк · реактивация",
+    sub: "6ч / 1д / 2д / 3д / 7д / 14д / 30д / 60д / 90д / 180д / 365д",
     keys: [
-      "trial_ends_in_1d",
       "trial_expired_6h",
       "trial_expired_1d",
       "trial_expired_2d",
       "trial_expired_3d",
+      "trial_expired_7d",
+      "trial_expired_14d",
+      "trial_expired_30d",
+      "trial_expired_60d",
+      "trial_expired_90d",
+      "trial_expired_180d",
+      "trial_expired_365d",
+      "trial_expired_within_6m",
     ],
   },
   {
-    title: "Реактивация платных",
-    keys: ["paid_expired_1d", "paid_expired_30d", "paid_lapsed_any"],
+    title: "Платные — скоро истекут",
+    sub: "1д / 3д / 7д / 14д — pre-churn напоминания",
+    keys: [
+      "paid_expires_in_1d",
+      "paid_expires_in_3d",
+      "paid_expires_in_7d",
+      "paid_expires_in_14d",
+    ],
+  },
+  {
+    title: "Платные истекли · реактивация",
+    sub: "1д / 7д / 14д / 30д / 60д / 90д / 180д / 365д / 2 года",
+    keys: [
+      "paid_expired_1d",
+      "paid_expired_7d",
+      "paid_expired_14d",
+      "paid_expired_30d",
+      "paid_expired_60d",
+      "paid_expired_90d",
+      "paid_expired_180d",
+      "paid_expired_365d",
+      "paid_expired_730d",
+      "paid_lapsed_any",
+    ],
+  },
+  {
+    title: "Недавно купили платную",
+    sub: "7д / 14д / 30д — благодарности, upsell, feedback",
+    keys: [
+      "paid_bought_within_7d",
+      "paid_bought_within_14d",
+      "paid_bought_within_30d",
+    ],
+  },
+  {
+    title: "Истёкла любая подписка",
+    sub: "агрегированные окна (триал ∪ платная)",
+    keys: ["expired_1d", "expired_2d", "expired_3d", "expires_in_3d"],
+  },
+  {
+    title: "Апселл · особые",
+    sub: "VIP · Basic · Plus · Combo · со скидкой · с балансом",
+    keys: [
+      "vip_active",
+      "basic_active",
+      "plus_active",
+      "combo_active",
+      "discount_active",
+      "has_balance_50plus",
+    ],
   },
 ];
 
@@ -1503,34 +1648,54 @@ function SegmentsCard({
       <SurfaceHeader
         eyebrow="Сегменты"
         title="Аудитории для рассылок"
-        sub="обновляется каждые 5 минут · клик → создать рассылку"
+        sub="обновляется каждые 5 мин · клик по строке → создать рассылку"
       />
       {error ? (
         <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
           Не удалось загрузить сегменты.
         </div>
       ) : (
-        <div className="mt-4 space-y-5">
-          {SEGMENT_GROUPS.map((group) => (
-            <div key={group.title}>
-              <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-                {group.title}
-              </div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {group.keys.map((k) => {
-                  const s = byKey.get(k);
-                  return (
-                    <SegmentRow
-                      key={k}
-                      label={s?.label ?? k}
-                      count={s?.count}
-                      loading={loading}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+        <div className="mt-4 space-y-2.5">
+          {SEGMENT_GROUPS.map((group) => {
+            // Total-count группы (сумма всех сегментов) для badge в header.
+            // count === -1 значит ошибка счётчика — пропускаем.
+            const total = group.keys.reduce((a, k) => {
+              const s = byKey.get(k);
+              return s && s.count >= 0 ? a + s.count : a;
+            }, 0);
+            const badge = loading
+              ? "…"
+              : total > 0
+              ? fmtNum(total)
+              : "0";
+            return (
+              <Collapsible
+                key={group.title}
+                title={group.title}
+                subtitle={group.sub}
+                remember={`segments-${group.title}`}
+                badge={
+                  <span className="rounded-md bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent tabular-nums">
+                    {badge}
+                  </span>
+                }
+              >
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {group.keys.map((k) => {
+                    const s = byKey.get(k);
+                    return (
+                      <SegmentRow
+                        key={k}
+                        label={s?.label ?? k}
+                        count={s?.count}
+                        loading={loading}
+                      />
+                    );
+                  })}
+                </div>
+              </Collapsible>
+            );
+          })}
         </div>
       )}
     </SurfaceCard>
@@ -1654,11 +1819,18 @@ function TopReferrersList({
   return (
     <ol className="mt-4 space-y-1.5">
       {data.slice(0, 5).map((r, i) => {
-        const id = asNum(r.telegram_id) ?? 0;
+        // Backend возвращает referrer_id/total_invited_revenue/
+        // total_cashback_paid — раньше был баг: читали telegram_id/
+        // total_revenue/cashback_paid → всё показывалось как «—».
+        const id = asNum(r.referrer_id) ?? asNum(r.telegram_id) ?? 0;
         const username = (r.username as string) || "—";
         const invited = asNum(r.invited_count) ?? 0;
-        const revenue = asNum(r.total_revenue) ?? 0;
-        const cashback = asNum(r.cashback_paid) ?? 0;
+        const trials = asNum(r.trial_count) ?? 0;
+        const paid = asNum(r.paid_count) ?? 0;
+        const trialPct = asNum(r.trial_percent) ?? 0;
+        const paidPct = asNum(r.conversion_percent) ?? 0;
+        const revenue = asNum(r.total_invited_revenue) ?? asNum(r.total_revenue) ?? 0;
+        const cashback = asNum(r.total_cashback_paid) ?? asNum(r.cashback_paid) ?? 0;
         return (
           <Link
             key={String(id) + "_" + i}
@@ -1672,8 +1844,35 @@ function TopReferrersList({
               <div className="truncate text-sm font-medium text-fg">
                 {username !== "—" ? `@${username}` : `tg:${id}`}
               </div>
-              <div className="truncate text-[11px] text-fg-muted">
-                {fmtNum(invited)} приглашённых · кэшбэк {fmtRub(cashback)}
+              <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] tabular-nums">
+                <span className="rounded-md bg-fg/5 px-1.5 py-0.5 text-fg-muted">
+                  👥 {fmtNum(invited)}
+                </span>
+                <span
+                  className="rounded-md bg-info/10 px-1.5 py-0.5 text-info"
+                  title="сколько из приглашённых активировали пробный период"
+                >
+                  🎁 {fmtNum(trials)}
+                  {invited > 0 && (
+                    <span className="ml-0.5 text-info/70">
+                      · {trialPct.toFixed(0)}%
+                    </span>
+                  )}
+                </span>
+                <span
+                  className="rounded-md bg-success/10 px-1.5 py-0.5 text-success"
+                  title="сколько из приглашённых сделали хотя бы одну оплату"
+                >
+                  💳 {fmtNum(paid)}
+                  {invited > 0 && (
+                    <span className="ml-0.5 text-success/70">
+                      · {paidPct.toFixed(0)}%
+                    </span>
+                  )}
+                </span>
+                <span className="text-fg-subtle">
+                  кэшбэк {fmtRub(cashback)}
+                </span>
               </div>
             </div>
             <div className="shrink-0 text-right">
@@ -1692,9 +1891,9 @@ function TopReferrersList({
 }
 
 const TARIFF_DEFS = [
-  { key: "basic", label: "Basic", color: "#F5F5F5" },
-  { key: "plus", label: "Plus", color: "#D4D4D8" },
-  { key: "basic_combo", label: "Basic + Combo", color: "#FFD66B" },
+  { key: "basic", label: "Basic", color: "#0F1720" },
+  { key: "plus", label: "Plus", color: "#2563EB" },
+  { key: "basic_combo", label: "Basic + Combo", color: "#10B981" },
   { key: "plus_combo", label: "Plus + Combo", color: "#EC4899" },
   { key: "proxy", label: "Прокси", color: "#F59E0B" },
 ] as const;
@@ -1774,13 +1973,189 @@ const PROVIDER_LABELS: Record<string, string> = {
   unknown: "Прочее",
 };
 const PROVIDER_COLORS: Record<string, string> = {
-  platega: "#F5F5F5",
+  platega: "#0F1720",
   cryptobot: "#F59E0B",
-  telegram_stars: "#D4D4D8",
+  telegram_stars: "#2563EB",
   lava: "#10B981",
-  balance: "#64748B",
+  balance: "#7C3AED",
   unknown: "#94A3B8",
 };
+
+// Локализуем ключи для читаемого label в PaymentsBreakdownCard.
+const _PT_LABEL: Record<string, string> = {
+  subscription: "Подписка",
+  balance_topup: "Пополнение баланса",
+  gift: "Подарок",
+  telegram_premium: "Telegram Premium",
+  telegram_stars: "Telegram Stars",
+  traffic_pack: "Пакет ГБ",
+  apple_id: "Apple ID",
+  steam: "Steam",
+  spotify: "Spotify Premium",
+  proxy: "MTProxy",
+  unknown: "Прочее",
+};
+const _APPLE_REGION_LABEL: Record<string, string> = {
+  usa: "🇺🇸 USA",
+  turkey: "🇹🇷 Turkey",
+  russia: "🇷🇺 Russia",
+  india: "🇮🇳 India",
+};
+const _APPLE_CUR: Record<string, string> = {
+  usa: "$",
+  turkey: "TL",
+  russia: "₽",
+  india: "INR",
+};
+
+function PaymentsBreakdownCard({
+  data,
+  loading,
+  hours,
+  onHoursChange,
+}: {
+  data:
+    | {
+        total: { count: number; revenue_rubles: number };
+        by_provider: Array<{ provider: string; count: number; revenue_rubles: number }>;
+        by_type: Array<{ purchase_type: string; count: number; revenue_rubles: number }>;
+        by_tariff: Array<{ tariff: string; count: number; revenue_rubles: number }>;
+        by_apple_nominal: Array<{
+          region: string;
+          nominal: number;
+          count: number;
+          revenue_rubles: number;
+        }>;
+      }
+    | undefined;
+  loading: boolean;
+  hours: 24 | 168 | 720;
+  onHoursChange: (h: 24 | 168 | 720) => void;
+}) {
+  const label = (h: number) => (h === 24 ? "24ч" : h === 168 ? "7д" : "30д");
+  return (
+    <SurfaceCard className="mt-2">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <SurfaceHeader
+          eyebrow={`Оплаты · ${label(hours)}`}
+          title="Разбивка по продукту и провайдеру"
+          sub={
+            data
+              ? `${fmtNum(data.total.count)} шт · ${fmtRub(data.total.revenue_rubles)}`
+              : undefined
+          }
+        />
+        <SegPill<24 | 168 | 720>
+          value={hours}
+          options={[24, 168, 720]}
+          onChange={onHoursChange}
+          fmt={label}
+        />
+      </div>
+      {loading ? (
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="skeleton h-32" />
+          ))}
+        </div>
+      ) : !data || data.total.count === 0 ? (
+        <div className="mt-6 text-sm text-fg-subtle">
+          За выбранный период оплат не было.
+        </div>
+      ) : (
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <BreakdownList
+            title="По продукту"
+            rows={data.by_type.map((r) => ({
+              label: _PT_LABEL[r.purchase_type] ?? r.purchase_type,
+              count: r.count,
+              revenue: r.revenue_rubles,
+            }))}
+          />
+          <BreakdownList
+            title="По провайдеру оплаты"
+            rows={data.by_provider.map((r) => ({
+              label: PROVIDER_LABELS[r.provider] ?? r.provider,
+              count: r.count,
+              revenue: r.revenue_rubles,
+              color: PROVIDER_COLORS[r.provider],
+            }))}
+          />
+          <BreakdownList
+            title="Топ-15 тарифов"
+            rows={data.by_tariff.map((r) => ({
+              label: r.tariff,
+              count: r.count,
+              revenue: r.revenue_rubles,
+            }))}
+          />
+          {data.by_apple_nominal.length > 0 && (
+            <BreakdownList
+              title="Apple ID · по номиналу"
+              rows={data.by_apple_nominal.map((r) => ({
+                label: `${_APPLE_REGION_LABEL[r.region] ?? r.region} · ${r.nominal}${_APPLE_CUR[r.region] ?? "$"}`,
+                count: r.count,
+                revenue: r.revenue_rubles,
+              }))}
+            />
+          )}
+        </div>
+      )}
+    </SurfaceCard>
+  );
+}
+
+function BreakdownList({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: Array<{ label: string; count: number; revenue: number; color?: string }>;
+}) {
+  const totalRev = rows.reduce((a, r) => a + r.revenue, 0);
+  return (
+    <div className="rounded-xl border border-border bg-bg-subtle/40 p-3">
+      <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+        {title}
+      </div>
+      <div className="space-y-1.5">
+        {rows.length === 0 && (
+          <div className="text-xs text-fg-subtle">Нет данных</div>
+        )}
+        {rows.map((r) => {
+          const pct = totalRev > 0 ? (r.revenue / totalRev) * 100 : 0;
+          return (
+            <div key={r.label} className="text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  {r.color && (
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ background: r.color }}
+                    />
+                  )}
+                  <span className="truncate text-fg-muted">{r.label}</span>
+                </div>
+                <div className="shrink-0 tabular-nums text-fg">
+                  {fmtRub(r.revenue)}
+                  <span className="ml-1.5 text-[10px] text-fg-subtle">
+                    {fmtNum(r.count)}
+                  </span>
+                </div>
+              </div>
+              <div className="mt-1 h-1 overflow-hidden rounded-full bg-bg-elevated">
+                <div
+                  className="h-full bg-accent/70 transition-[width] duration-500"
+                  style={{ width: `${Math.max(2, pct)}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function ProvidersBlock({
   data,
@@ -1934,4 +2309,184 @@ function AnimatedNum({
   const animated = useCountUp(value, duration);
   if (loading || value == null) return <span>…</span>;
   return <span>{fmt(animated)}</span>;
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Remnawave 3.x backfill — админский разовый прогон.
+// Заполняет subscriptions.remnawave_id / remnawave_premium_id
+// (numeric id из панели) + telegramId в панели для legacy-юзеров,
+// у которых после апгрейда 2.7.4→3.x поле пустое. Всё работает
+// через _resolve_to_int_id и без этого, но каждый вызов делает
+// лишний stream-запрос — backfill убирает overhead.
+// ───────────────────────────────────────────────────────────────────
+function RemnawaveBackfillCard() {
+  const [status, setStatus] = useState<RemnawaveBackfillStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Poll every 2s пока задача running.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const s = await endpoints.remnawaveBackfillStatus();
+        if (!cancelled) setStatus(s);
+      } catch {
+        // silent
+      }
+    };
+    tick();
+    const iv = setInterval(() => {
+      if (status?.running) tick();
+    }, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, [status?.running]);
+
+  const start = async (dry: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await endpoints.remnawaveBackfillStart(dry);
+      setStatus(r.status);
+      if (!r.ok) {
+        toast.info("Уже запущено — жди прогресс ниже");
+      } else {
+        toast.success(dry ? "Dry-run запущен" : "Backfill запущен");
+      }
+    } catch (e) {
+      toast.error("Не удалось запустить: " + (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const s = status;
+  const pct = s && s.total > 0 ? Math.round((s.processed / s.total) * 100) : 0;
+  const done = s && s.finished_at != null && !s.running;
+
+  return (
+    <section className="card overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
+        <div className="flex items-center gap-3">
+          <div className="grid h-9 w-9 place-items-center rounded-xl bg-accent/15 text-accent">
+            <Database className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-medium uppercase tracking-[0.15em] text-fg-subtle">
+              Remnawave 3.x · backfill
+            </div>
+            <div className="text-sm font-semibold text-fg">
+              Синхронизация numeric id + telegramId в панель
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => start(true)}
+            disabled={busy || s?.running}
+            className="rounded-xl border border-border bg-bg-elevated px-4 py-2 text-xs font-medium text-fg-muted transition-colors hover:text-fg disabled:opacity-40"
+          >
+            Dry-run
+          </button>
+          <button
+            type="button"
+            onClick={() => start(false)}
+            disabled={busy || s?.running}
+            className="rounded-xl bg-accent px-4 py-2 text-xs font-semibold text-bg shadow-glow-sm transition-all hover:bg-accent-hover disabled:opacity-40"
+          >
+            <RefreshCcw className="mr-1 inline h-3 w-3" />
+            Запустить backfill
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 px-5 py-4 md:grid-cols-6">
+        <BackfillStat label="Всего" value={s?.total ?? 0} />
+        <BackfillStat label="Обработано" value={s?.processed ?? 0} />
+        <BackfillStat label="ID закешено" value={s?.id_backfilled ?? 0} accent />
+        <BackfillStat label="tgID в панель" value={s?.tg_backfilled ?? 0} accent />
+        <BackfillStat label="Не найдены" value={s?.missing ?? 0} />
+        <BackfillStat
+          label="Ошибок"
+          value={s?.errors ?? 0}
+          warning={(s?.errors ?? 0) > 0}
+        />
+      </div>
+
+      {s?.total ? (
+        <div className="px-5 pb-4">
+          <div className="mb-1 flex items-center justify-between text-[11px] text-fg-subtle">
+            <span>
+              {pct}% · {s.elapsed_sec.toFixed(0)}с
+              {s.dry_run && " · dry-run"}
+            </span>
+            <span>
+              {s.running ? (
+                <>
+                  <RefreshCcw className="inline h-3 w-3 animate-spin" /> идёт
+                </>
+              ) : done ? (
+                <>
+                  <CheckCircle2 className="inline h-3 w-3 text-success" /> готово
+                </>
+              ) : null}
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-elevated">
+            <div
+              className="h-full bg-accent transition-all duration-500"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          {s.last_error && (
+            <div className="mt-2 flex items-start gap-2 text-[11px] text-danger">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+              <span className="truncate">{s.last_error}</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="px-5 pb-4 text-[11px] text-fg-subtle">
+          Панель Remnawave 3.x уже отдаёт id для новых entities автоматически;
+          этот прогон нужен один раз для legacy-юзеров (после апгрейда 2.7.4 →
+          3.x). Dry-run покажет что бы сделалось без записи.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function BackfillStat({
+  label,
+  value,
+  accent,
+  warning,
+}: {
+  label: string;
+  value: number;
+  accent?: boolean;
+  warning?: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-bg-subtle/60 p-3">
+      <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
+        {label}
+      </div>
+      <div
+        className={
+          "mt-1 text-lg font-semibold " +
+          (warning
+            ? "text-danger"
+            : accent
+              ? "text-accent"
+              : "text-fg")
+        }
+      >
+        {value.toLocaleString("ru-RU")}
+      </div>
+    </div>
+  );
 }

@@ -22,6 +22,7 @@ from aiogram.types import (
 )
 
 from app.handlers.common.utils import safe_edit_text
+from app.handlers.common.emoji import CE
 from app.services import remnawave_api
 
 user_router = Router()
@@ -93,6 +94,7 @@ async def _build_main_view(telegram_id: int) -> Tuple[str, InlineKeyboardMarkup]
             rows.append([InlineKeyboardButton(
                 text=f"{name} · нет подписки",
                 callback_data="user:devices:noop",
+                style="primary",
             )])
             continue
         devices = await remnawave_api.get_user_hwid_devices(uuid)
@@ -101,8 +103,9 @@ async def _build_main_view(telegram_id: int) -> Tuple[str, InlineKeyboardMarkup]
         rows.append([InlineKeyboardButton(
             text=label,
             callback_data=f"user:devices:tier:{tier}",
+            style="primary",
         )])
-    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="menu_profile")])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="menu_profile", icon_custom_emoji_id=CE["back"], style="primary")])
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -133,8 +136,8 @@ async def _build_tier_view(telegram_id: int, tier: str, uuid: str) -> Tuple[str,
             "⚠️ Не удалось получить список устройств. Попробуй ещё раз через минуту."
         )
         return text, InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"user:devices:tier:{tier}")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="user:devices")],
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"user:devices:tier:{tier}", style="primary")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="user:devices", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
 
     if not devices:
@@ -144,8 +147,8 @@ async def _build_tier_view(telegram_id: int, tier: str, uuid: str) -> Tuple[str,
             "Если ты только что добавил подписку в приложение — обнови экран через минуту."
         )
         return text, InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"user:devices:tier:{tier}")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="user:devices")],
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"user:devices:tier:{tier}", style="primary")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="user:devices", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
 
     text = f"<b>{name}</b> · подключено {len(devices)}\n\n"
@@ -158,14 +161,16 @@ async def _build_tier_view(telegram_id: int, tier: str, uuid: str) -> Tuple[str,
         rows.append([InlineKeyboardButton(
             text=f"🗑 Удалить · {label}",
             callback_data=f"user:devices:del:{tier}:{idx}",
+            style="primary",
         )])
     if len(devices) > 1:
         rows.append([InlineKeyboardButton(
             text="🗑 Отключить все",
             callback_data=f"user:devices:dela:{tier}",
+            style="primary",
         )])
-    rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data=f"user:devices:tier:{tier}")])
-    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="user:devices")])
+    rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data=f"user:devices:tier:{tier}", style="primary")])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="user:devices", icon_custom_emoji_id=CE["back"], style="primary")])
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -202,8 +207,8 @@ async def callback_devices_confirm_delete(callback: CallbackQuery):
         "После удаления устройство потеряет доступ к VPN. Чтобы вернуть — переподключи подписку в приложении на этом устройстве."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Да, удалить", callback_data=f"user:devices:cdel:{tier}:{idx}")],
-        [InlineKeyboardButton(text="◀️ Отмена", callback_data=f"user:devices:tier:{tier}")],
+        [InlineKeyboardButton(text="Да, удалить", callback_data=f"user:devices:cdel:{tier}:{idx}", style="primary")],
+        [InlineKeyboardButton(text="◀️ Отмена", callback_data=f"user:devices:tier:{tier}", style="primary")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
 
@@ -261,8 +266,8 @@ async def callback_devices_confirm_delete_all(callback: CallbackQuery):
         "Все подключённые устройства потеряют доступ к VPN. Чтобы вернуть — переподключи подписку на нужных устройствах."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Да, отключить все", callback_data=f"user:devices:cdela:{tier}")],
-        [InlineKeyboardButton(text="◀️ Отмена", callback_data=f"user:devices:tier:{tier}")],
+        [InlineKeyboardButton(text="Да, отключить все", callback_data=f"user:devices:cdela:{tier}", style="primary")],
+        [InlineKeyboardButton(text="◀️ Отмена", callback_data=f"user:devices:tier:{tier}", style="primary")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
 

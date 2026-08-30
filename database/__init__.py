@@ -173,6 +173,7 @@ from database.subscriptions import (  # noqa: F401
     mark_proxy_purchased,
     get_pending_purchase,
     get_pending_purchase_by_id,
+    get_pending_purchase_any_status,
     cancel_pending_purchases,
     update_pending_purchase_invoice_id,
     mark_pending_purchase_paid,
@@ -187,6 +188,10 @@ from database.traffic import (  # noqa: F401
     get_remnawave_uuid,
     set_remnawave_uuid,
     clear_remnawave_uuid,
+    get_remnawave_id,
+    set_remnawave_id,
+    get_remnawave_premium_id,
+    set_remnawave_premium_id,
     get_remnawave_premium_uuid,
     set_remnawave_premium_uuid,
     set_remnawave_premium_uuid_and_url,
@@ -351,6 +356,18 @@ from database.admin import (  # noqa: F401
     update_subscription_expires_at_bulk,
     get_active_trial_telegram_ids,
 )
+
+# Scheduled + recurring broadcasts (migration 067)
+from database.scheduled_broadcasts import (  # noqa: F401
+    VALID_RECURRENCES,
+    create_scheduled_broadcast,
+    list_scheduled_broadcasts,
+    get_scheduled_broadcast,
+    cancel_scheduled_broadcast,
+    mark_ran_and_reschedule,
+    fetch_due_scheduled,
+)
+
 
 # Subscription reconciliation & over-issuance watchdog
 from database.reconciliation import (  # noqa: F401

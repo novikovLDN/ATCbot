@@ -34,13 +34,17 @@ _SCHEMES = {
     #       under the hood) → incy://crypt1/<payload>. If Node/package
     #       is unavailable at request time, falls back to a clean error
     #       page so the user understands "не получилось", not a 500.
+    # V2RayTun: без шифрования — принимает обычную ссылку подписки
+    #       напрямую по схеме v2raytun://import/<url>. iOS + Android.
     "happ": "happ",
     "incy": "incy",
+    "v2raytun": "v2raytun",
 }
 
 _CLIENT_NAMES = {
     "happ": "Happ",
     "incy": "Incy",
+    "v2raytun": "V2RayTun",
 }
 
 
@@ -71,6 +75,12 @@ async def _build_deep_link(client: str, raw_url: str) -> str | None:
         except Exception:
             logger.exception("INCY_BUILD_FAIL — returning None")
             return None
+    if client == "v2raytun":
+        # V2RayTun не шифрует ссылку — принимает обычную подписку по
+        # схеме v2raytun://import/<urlencoded_url>. Открывает приложение
+        # на iOS/Android и импортирует подписку.
+        safe = quote(raw_url, safe='')
+        return f"v2raytun://import/{safe}"
     return None
 
 

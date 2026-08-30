@@ -26,6 +26,7 @@ from app.services import happ_crypto, incy_crypto
 from app.services.language_service import resolve_user_language
 from app.services.user_subscription_links import get_user_bypass_url
 from app.handlers.common.utils import safe_edit_text
+from app.handlers.common.emoji import CE
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,8 @@ async def callback_bypass_setup_open(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
@@ -88,10 +91,98 @@ async def callback_bypass_setup_open(callback: CallbackQuery):
         [InlineKeyboardButton(
             text=i18n_get_text(language, "bypass_setup.manual_btn"),
             callback_data="bypass_setup_manual",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
+        )],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
+
+
+@bypass_setup_router.callback_query(F.data == "broadcast_bypass")
+async def callback_broadcast_bypass(callback: CallbackQuery):
+    """Экран установки обхода из broadcast-кнопки «🌐 Включить обход».
+
+    Гибрид bypass_setup_open + bypass_setup_manual:
+      - Инструкция + оба ключа (Happ/Incy) в expandable blockquote'ах
+        (как в setup_step2_manual — юзеру привычный UX).
+      - Внизу кнопки:
+          [🚀 Happ обход] [🚀 Incy обход]    ← deeplink через /open/
+          [💬 Нужна помощь]                    ← поддержка
+          [✅ Готово]                          ← 🎉-анимация + главный экран
+        Отдельный from-broadcast flow, чтобы отличалось от старого
+        traffic_info (который вёл на экран трафика — не то что просил юзер).
+    """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    bypass_url = await get_user_bypass_url(telegram_id)
+    if not bypass_url:
+        text = i18n_get_text(language, "bypass_setup.no_key_yet")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
+        ])
+        await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
+        return
+
+    # Готовим оба ключа (crypt4 для Happ, crypt1 для Incy).
+    happ_link = happ_crypto.format_for_user(bypass_url) or bypass_url
+    try:
+        incy_link = await incy_crypto.to_incy_link(bypass_url)
+    except Exception as e:
+        logger.warning("broadcast_bypass: incy link build failed user=%s: %s", telegram_id, e)
+        incy_link = None
+
+    # Текст экрана — та же структура что в setup_step2_manual /
+    # bypass_setup_manual, юзер её уже знает.
+    header = i18n_get_text(language, "bypass_setup.manual_screen_header")
+    happ_block = i18n_get_text(
+        language, "bypass_setup.manual_screen_happ_block", happ_key=happ_link,
+    )
+    parts = [header, happ_block]
+    if incy_link:
+        parts.append(
+            i18n_get_text(
+                language, "bypass_setup.manual_screen_incy_block", incy_key=incy_link,
+            )
+        )
+    parts.append(i18n_get_text(language, "bypass_setup.manual_screen_footer"))
+    text = "\n\n".join(parts)
+
+    # Клавиатура: 2 кнопки-URL в одном ряду (Happ + Incy), помощь, готово.
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🚀 Happ обход",
+                url=_redirect_url("happ", bypass_url),
+            ),
+            InlineKeyboardButton(
+                text="🚀 Incy обход",
+                url=_redirect_url("incy", bypass_url),
+            ),
+        ],
+        [InlineKeyboardButton(
+            text="💬 Нужна помощь",
+            url="https://t.me/atlas_suppbot",
+        )],
+        [InlineKeyboardButton(
+            text="✅ Готово",
+            callback_data="setup_done",  # тот же handler что в ручной установке (🎉 → главный экран)
+            style="primary",
         )],
     ])
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
@@ -122,6 +213,8 @@ async def callback_bypass_setup_manual(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="bypass_setup_open",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
@@ -159,6 +252,8 @@ async def callback_bypass_setup_manual(callback: CallbackQuery):
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="bypass_setup_open",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")

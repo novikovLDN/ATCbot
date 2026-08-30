@@ -72,6 +72,9 @@ async def calculate_price(
     try:
         # Combo tariffs pass an explicit base price (config.COMBO_TARIFFS),
         # so they skip validation against config.TARIFFS.
+        original_config_price_kopecks: Optional[int] = None
+        pricing_reason: Optional[str] = None
+        pricing_percent: int = 0
         if base_price_override_rubles is None:
             # Validate tariff exists
             if tariff not in config.TARIFFS:
@@ -80,6 +83,27 @@ async def calculate_price(
             # Validate period exists for tariff
             if period_days not in config.TARIFFS[tariff]:
                 raise InvalidTariffError(f"Invalid period_days: {period_days} for tariff {tariff}")
+
+            # Admin-managed pricing (migration 069): применяем override
+            # + global discount ПЕРЕД юзер-скидками (promo/vip/personal).
+            # Combo/business с country идут по другому пути (get_biz_price)
+            # — их не трогаем.
+            if country is None:
+                try:
+                    from app.services import pricing as _pricing
+                    _ep = await _pricing.get_effective_price(tariff, period_days)
+                    if _ep is not None:
+                        # Оригинал из config — для strikethrough в UI.
+                        original_config_price_kopecks = int(config.TARIFFS[tariff][period_days]["price"] * 100)
+                        # Если override или global-discount изменили цену,
+                        # передаём в БД как base_price_override → юзер-скидки
+                        # применятся поверх нашей.
+                        if _ep.effective != int(config.TARIFFS[tariff][period_days]["price"]):
+                            base_price_override_rubles = _ep.effective
+                            pricing_reason = _ep.discount_reason
+                            pricing_percent = _ep.discount_percent
+                except Exception as _e:
+                    logger.warning("pricing helper failed (fallback config): %s", _e)
 
         # Delegate to database layer
         result = await database.calculate_final_price(
@@ -90,6 +114,14 @@ async def calculate_price(
             country=country,
             base_price_override_rubles=base_price_override_rubles
         )
+
+        # Дополнительные поля для UI-рендера strikethrough.
+        # Backward-compatible: старые вызовы читающие только base/final
+        # продолжают работать.
+        if original_config_price_kopecks is not None:
+            result["original_config_price_kopecks"] = original_config_price_kopecks
+            result["pricing_discount_reason"] = pricing_reason
+            result["pricing_discount_percent"] = pricing_percent
 
         return result
         

@@ -28,6 +28,7 @@ from app.core.rate_limit import check_rate_limit
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.states import GiftState
+from app.handlers.common.emoji import CE
 
 gift_router = Router()
 logger = logging.getLogger(__name__)
@@ -93,15 +94,19 @@ async def callback_gift_start(callback: CallbackQuery, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="📦 Basic",
-            callback_data="gift_tariff:basic"
+            callback_data="gift_tariff:basic",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="⚡ Plus",
-            callback_data="gift_tariff:plus"
+            callback_data="gift_tariff:plus",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -154,12 +159,15 @@ async def callback_gift_tariff(callback: CallbackQuery, state: FSMContext):
             btn_text = f"{btn_text} {badge}"
         buttons.append([InlineKeyboardButton(
             text=btn_text,
-            callback_data=f"gift_period:{period_days}"
+            callback_data=f"gift_period:{period_days}",
+            style="primary",
         )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data="gift_subscription"
+        callback_data="gift_subscription",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -219,15 +227,19 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
     buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.pay_balance", balance=balance),
-            callback_data="gift_pay:balance"
+            callback_data="gift_pay:balance",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.pay_with_card"),
-            callback_data="gift_pay:card"
+            callback_data="gift_pay:card",
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "payment.stars", "⭐ Telegram Stars"),
-            callback_data="gift_pay:stars"
+            callback_data="gift_pay:stars",
+            style="primary",
         )],
     ]
 
@@ -236,20 +248,34 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
     if cryptobot_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.crypto", "🌎 CryptoBot"),
-            callback_data="gift_pay:crypto"
+            callback_data="gift_pay:crypto",
+            style="primary",
         )])
 
-    # Lava (card) — если настроен
+    # Lava-кнопка подменена на Wata: та же надпись, но callback уходит
+    # в подарочный Wata-хендлер. Код lava_service не удаляем — оставляем
+    # гейт видимости.
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.lava", "📱 СБП 3%"),
-            callback_data="gift_pay:lava"
+            callback_data="gift_pay:wata",
+            style="primary",
+        )])
+    # СБП — обратно через Platega (revert Wata-миграции).
+    import platega_service
+    if platega_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text="📱 СБП",
+            callback_data="gift_pay:sbp",
+            style="primary",
         )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data="gift_subscription"
+        callback_data="gift_subscription",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -556,7 +582,9 @@ async def callback_gift_pay_crypto(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="gift_subscription"
+                callback_data="gift_subscription",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -639,7 +667,9 @@ async def callback_gift_pay_lava(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="gift_subscription"
+                callback_data="gift_subscription",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
 
@@ -651,6 +681,145 @@ async def callback_gift_pay_lava(callback: CallbackQuery, state: FSMContext):
 
     except Exception as e:
         logger.exception(f"Error creating gift lava invoice: user={telegram_id}, error={e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+        await state.clear()
+
+
+@gift_router.callback_query(F.data == "gift_pay:sbp", GiftState.choose_payment_method)
+async def callback_gift_pay_sbp(callback: CallbackQuery, state: FSMContext):
+    """Оплата подарка через СБП. Провайдер (Platega / Wata) выбирается
+    через runtime-настройку в дашборде (см. app.services.sbp_router)."""
+    telegram_id = callback.from_user.id
+
+    # Живой выбор провайдера — прозрачно для пользователя.
+    from app.services import sbp_router
+    provider = await sbp_router.resolve_provider(telegram_id)
+    if provider == "wata":
+        logger.info(f"sbp_router: user {telegram_id} → wata (gift_pay:sbp)")
+        return await callback_gift_pay_wata(callback, state)
+
+    language = await resolve_user_language(telegram_id)
+    fsm_data = await state.get_data()
+    tariff = fsm_data.get("gift_tariff")
+    period_days = fsm_data.get("gift_period_days")
+    price_kopecks = fsm_data.get("gift_price_kopecks")
+    if not tariff or not period_days or not price_kopecks:
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+        await state.clear()
+        return
+
+    import platega_service
+    if not platega_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.sbp_unavailable"), show_alert=True)
+        return
+
+    try:
+        # СБП через Platega применяет наценку (SBP_MARKUP_PERCENT).
+        sbp_price_kopecks = platega_service.apply_sbp_markup(price_kopecks)
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff,
+            period_days=period_days,
+            price_kopecks=sbp_price_kopecks,
+            purchase_type="gift",
+        )
+        await state.update_data(gift_purchase_id=purchase_id)
+
+        tariff_name = _tariff_display_name(tariff)
+        period_text = _period_display(period_days)
+        sbp_price_rubles = sbp_price_kopecks / 100.0
+
+        tx_data = await platega_service.create_transaction(
+            amount_rubles=sbp_price_rubles,
+            description=f"Подарочная подписка {tariff_name} на {period_text}",
+            purchase_id=purchase_id,
+            telegram_id=telegram_id,
+        )
+        transaction_id = tx_data["transaction_id"]
+        redirect_url = tx_data["redirect_url"]
+
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+        except Exception as e:
+            logger.error(f"Failed to save platega tx_id for gift: purchase_id={purchase_id}, error={e}")
+
+        text = i18n_get_text(language, "payment.sbp_waiting", amount=sbp_price_rubles)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.sbp_pay_button"),
+                url=redirect_url,
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="gift_subscription",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
+        ])
+        msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg))
+        await callback.answer()
+        await state.set_state(None)
+        await state.clear()
+    except Exception as e:
+        logger.exception(f"Error creating gift SBP (platega) transaction: user={telegram_id}, error={e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+        await state.clear()
+
+
+@gift_router.callback_query(F.data == "gift_pay:wata", GiftState.choose_payment_method)
+async def callback_gift_pay_wata(callback: CallbackQuery, state: FSMContext):
+    """Оплата подарка через Wata (admin-only beta)."""
+    telegram_id = callback.from_user.id
+    import wata_service
+    if not wata_service.is_visible_to(telegram_id):
+        await callback.answer("Wata пока в закрытой бете", show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+    fsm_data = await state.get_data()
+    tariff = fsm_data.get("gift_tariff")
+    period_days = fsm_data.get("gift_period_days")
+    price_kopecks = fsm_data.get("gift_price_kopecks")
+    if not tariff or not period_days or not price_kopecks:
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+        await state.clear()
+        return
+    try:
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff,
+            period_days=period_days,
+            price_kopecks=price_kopecks,
+            purchase_type="gift",
+        )
+        await state.update_data(gift_purchase_id=purchase_id)
+        tariff_name = _tariff_display_name(tariff)
+        period_text = _period_display(period_days)
+        price_rubles = price_kopecks / 100.0
+        invoice = await wata_service.create_invoice(
+            amount_rubles=price_rubles,
+            purchase_id=purchase_id,
+            comment=f"Подарочная подписка {tariff_name} на {period_text}",
+            user_id=telegram_id,
+        )
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]))
+        except Exception:
+            pass
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить {price_rubles:.0f}₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="gift_subscription", icon_custom_emoji_id=CE["back"], style="primary")],
+        ])
+        msg = await callback.message.answer(
+            f"💳 <b>СБП 2</b>\n\nПодарок {tariff_name} на {period_text}\n<b>{price_rubles:.0f} ₽</b>",
+            reply_markup=keyboard, parse_mode="HTML",
+        )
+        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg))
+        await callback.answer()
+        await state.set_state(None)
+        await state.clear()
+    except Exception as e:
+        logger.exception(f"Error creating gift wata invoice: user={telegram_id}, error={e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
         await state.clear()
 
@@ -691,6 +860,8 @@ async def _send_gift_success(bot: Bot, telegram_id: int, language: str, gift_cod
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -731,11 +902,15 @@ async def callback_my_gifts(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "gift.buy_gift_btn", "🎁 Подарить подписку"),
-                callback_data="gift_subscription"
+                callback_data="gift_subscription",
+                icon_custom_emoji_id=CE["gift"],
+                style="success",
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "gift.back_to_profile", "👤 Вернуться в профиль"),
-                callback_data="menu_profile"
+                callback_data="menu_profile",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML", bot=callback.bot)
@@ -762,7 +937,8 @@ async def callback_my_gifts(callback: CallbackQuery):
             btn_text = f"{tariff_name} {period_text} {status_icon}"
             row.append(InlineKeyboardButton(
                 text=btn_text,
-                callback_data=f"gift_detail:{gift['id']}:{page}"
+                callback_data=f"gift_detail:{gift['id']}:{page}",
+                style="primary",
             ))
         buttons.append(row)
 
@@ -772,18 +948,22 @@ async def callback_my_gifts(callback: CallbackQuery):
         if page > 0:
             nav_row.append(InlineKeyboardButton(
                 text=i18n_get_text(language, "gift.page_prev", "⬅️ Назад"),
-                callback_data=f"my_gifts:{page - 1}"
+                callback_data=f"my_gifts:{page - 1}",
+                style="primary",
             ))
         if page < total_pages - 1:
             nav_row.append(InlineKeyboardButton(
                 text=i18n_get_text(language, "gift.page_next", "Дальше ➡️"),
-                callback_data=f"my_gifts:{page + 1}"
+                callback_data=f"my_gifts:{page + 1}",
+                style="primary",
             ))
         buttons.append(nav_row)
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "gift.back_to_profile", "👤 Вернуться в профиль"),
-        callback_data="menu_profile"
+        callback_data="menu_profile",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -843,7 +1023,9 @@ async def callback_gift_detail(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "gift.back_to_gifts", "🎁 Назад к подаркам"),
-                callback_data=f"my_gifts:{back_page}"
+                callback_data=f"my_gifts:{back_page}",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
     else:
@@ -870,7 +1052,9 @@ async def callback_gift_detail(callback: CallbackQuery):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "gift.back_to_gifts", "🎁 Назад к подаркам"),
-                callback_data=f"my_gifts:{back_page}"
+                callback_data=f"my_gifts:{back_page}",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
 
@@ -962,7 +1146,7 @@ async def callback_gift_offer_claim(callback: CallbackQuery, state: FSMContext):
         "Скидка применится автоматически при оплате."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Выбрать тариф", callback_data="menu_main")],
+        [InlineKeyboardButton(text="🚀 Выбрать тариф", callback_data="menu_main", style="primary")],
     ])
     try:
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")

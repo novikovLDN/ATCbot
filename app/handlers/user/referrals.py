@@ -12,6 +12,7 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.screens import _open_referral_screen
+from app.handlers.common.emoji import CE
 from app.utils.referral_link import build_referral_link, build_share_discount_link
 import database
 
@@ -34,34 +35,6 @@ async def callback_referral(callback: CallbackQuery):
     """Экран «Программа лояльности». Entry from inline button."""
     from app.handlers.common.screens import _open_referral_screen
     await _open_referral_screen(callback, callback.bot)
-
-
-@user_router.callback_query(F.data == "share_referral_link")
-@user_router.callback_query(F.data == "copy_referral_link")
-async def callback_copy_referral_link(callback: CallbackQuery):
-    """Поделиться реферальной ссылкой - отправляет ссылку отдельным сообщением"""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(callback.from_user.id)
-    
-    try:
-        # Получаем username бота для реферальной ссылки
-        bot_info = await callback.bot.get_me()
-        referral_link = await build_referral_link(telegram_id, bot_info.username)
-        
-        # Отправляем ссылку отдельным сообщением для копирования (одно нажатие в Telegram)
-        await callback.message.answer(
-            f"<code>{referral_link}</code>",
-            parse_mode="HTML"
-        )
-        
-        # Показываем toast уведомление
-        await callback.answer(i18n_get_text(language, "referral.link_copied"), show_alert=False)
-        
-        logger.info(f"Referral link sent to user: {telegram_id}")
-        
-    except Exception as e:
-        logger.exception(f"Error in share_referral_link handler: user={telegram_id}: {e}")
-        await callback.answer(i18n_get_text(language, "errors.profile_load"), show_alert=True)
 
 
 @user_router.callback_query(F.data == "referral_stats")
@@ -105,10 +78,12 @@ async def callback_referral_stats(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_referral"
+                callback_data="menu_referral",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )]
         ])
-        
+
         await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
         
@@ -129,7 +104,9 @@ async def callback_referral_how_it_works(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_referral"
+                callback_data="menu_referral",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
         
@@ -181,6 +158,8 @@ async def callback_share_discount_open(callback: CallbackQuery):
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
             )],
         ])
 

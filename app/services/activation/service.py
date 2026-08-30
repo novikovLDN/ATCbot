@@ -382,8 +382,10 @@ async def _attempt_activation_no_conn_hold(
         raise ActivationNotAllowedError(
             f"Subscription {subscription_id} is not pending (status={current_status})"
         )
-    if not config.VPN_ENABLED:
-        raise VPNActivationError("VPN API is not enabled")
+    # 3.x: samopis XRAY_API мёртв, config.VPN_ENABLED всегда False.
+    # Проверяем реальный источник провижена — Remnawave.
+    if not config.REMNAWAVE_ENABLED:
+        raise VPNActivationError("Remnawave API is not enabled")
     subscription_end_raw = subscription_row.get("expires_at")
     if not subscription_end_raw:
         raise VPNActivationError("Subscription has no expires_at")

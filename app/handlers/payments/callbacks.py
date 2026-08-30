@@ -27,7 +27,8 @@ from app.handlers.common.utils import (
 from app.handlers.common.keyboards import (
     get_connect_keyboard,
 )
-from app.handlers.common.states import PromoCodeInput, CorporateAccessRequest, PurchaseState
+from app.handlers.common.states import PromoCodeInput, PurchaseState
+from app.handlers.common.emoji import CE
 from app.core.structured_logger import log_event
 from app.handlers.notifications import send_referral_cashback_notification
 
@@ -100,23 +101,31 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     else:
         renew_cb = f"tariff:{current_key}"
 
+    from app.handlers.common.keyboards import CE
     buttons = [
         [InlineKeyboardButton(
-            text=f"🔄 Продлить {meta['name']}",
+            text=f"Продлить {meta['name']}",
             callback_data=renew_cb,
+            icon_custom_emoji_id=CE["renew"],
+            style="success",
         )],
         [InlineKeyboardButton(
-            text="📦 Сменить тарифный план",
+            text="Сменить тарифный план",
             callback_data="switch_tariff_menu",
+            icon_custom_emoji_id=CE["my_sub"],
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="Купить ГБ обхода",
             callback_data="buy_traffic",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            icon_custom_emoji_id=CE["traffic"],
+            style="success",
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_profile",
+            text=i18n_get_text(language, "common.back", "Назад"),
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ]
 
@@ -149,6 +158,7 @@ async def callback_switch_tariff_menu(callback: CallbackQuery, state: FSMContext
         "Доступные тарифы:"
     )
 
+    from app.handlers.common.keyboards import CE
     buttons = []
     for key, meta in _TARIFF_META.items():
         if key == current_key:
@@ -156,11 +166,14 @@ async def callback_switch_tariff_menu(callback: CallbackQuery, state: FSMContext
         buttons.append([InlineKeyboardButton(
             text=f"{meta['icon']} {meta['name']}",
             callback_data=f"switch_tariff:{key}",
+            style="success",
         )])
 
     buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
+        text=i18n_get_text(language, "common.back", "Назад"),
         callback_data="menu_buy_vpn",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -182,7 +195,15 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
     language = await resolve_user_language(telegram_id)
 
     new_tariff = callback.data.split(":")[1]
+    logger.info(
+        "SWITCH_TARIFF_CLICK: tg=%s tariff=%s state=%s",
+        telegram_id, new_tariff, await state.get_state(),
+    )
     if new_tariff not in _TARIFF_META:
+        logger.warning(
+            "SWITCH_TARIFF_UNKNOWN_META: tg=%s tariff=%s known=%s",
+            telegram_id, new_tariff, list(_TARIFF_META.keys()),
+        )
         return
 
     meta = _TARIFF_META[new_tariff]
@@ -237,6 +258,7 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
             buttons.append([InlineKeyboardButton(
                 text=btn_text,
                 callback_data=f"combo_period:{new_tariff}:{period_days}",
+                style="primary",
             )])
     else:
         # Обычный тариф: берём цены из TARIFFS + calculate_price
@@ -301,12 +323,15 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
 
             buttons.append([InlineKeyboardButton(
                 text=button_text,
-                callback_data=f"period:{new_tariff}:{period_days}"
+                callback_data=f"period:{new_tariff}:{period_days}",
+                style="primary",
             )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data="switch_tariff_menu"
+        callback_data="switch_tariff_menu",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -418,10 +443,12 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         for code, info in config.BIZ_COUNTRIES.items():
             price = config.get_biz_price(tariff_type, 30, code)
             btn_text = f"{info['flag']} {info['name']} · от {price:,} ₽/мес".replace(",", " ")
-            buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"biz_country:{code}")])
+            buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"biz_country:{code}", style="primary")])
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="corporate_access_request"
+            callback_data="corporate_access_request",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )])
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -464,7 +491,16 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         base_price_rubles = price_info["base_price_kopecks"] / 100.0
         final_price_rubles = price_info["final_price_kopecks"] / 100.0
         has_discount = price_info["discount_percent"] > 0
-        
+
+        # Admin-managed global-discount (migration 069): если оригинал
+        # из config выше базы после нашего override — покажем страйк
+        # от оригинала (юзеру видно «199 → 149»). Даже если у него
+        # промо-кода нет.
+        _orig_kop = price_info.get("original_config_price_kopecks")
+        if _orig_kop and int(_orig_kop) > price_info["base_price_kopecks"]:
+            base_price_rubles = int(_orig_kop) / 100.0
+            has_discount = True
+
         # КРИТИЧНО: Логируем расчет цены для диагностики
         logger.debug(
             f"Price recalculated: tariff={tariff_type}, period={period_days}, "
@@ -506,7 +542,8 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         # КРИТИЧНО: callback_data БЕЗ purchase_id - только tariff и period
         buttons.append([InlineKeyboardButton(
             text=button_text,
-            callback_data=f"period:{tariff_type}:{period_days}"
+            callback_data=f"period:{tariff_type}:{period_days}",
+            style="primary",
         )])
     
     # Кнопка назад:
@@ -531,12 +568,61 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data=back_callback
+        callback_data=back_callback,
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
+    # Admin-managed global-discount notice (migration 069): если
+    # активна глобальная скидка, добавим строку-подпись над кнопками.
+    try:
+        from app.services import pricing as _pricing
+        _gd = await _pricing.get_global_discount()
+        _pct = int(_gd.get("global_discount_percent") or 0)
+        if _pct > 0:
+            # Проверим что скидка не истекла
+            _until_iso = _gd.get("discount_until_at")
+            _active = True
+            if _until_iso:
+                try:
+                    from datetime import datetime, timezone as _tz
+                    _until_dt = datetime.fromisoformat(_until_iso.replace("Z", "+00:00"))
+                    if _until_dt <= datetime.now(_tz.utc):
+                        _active = False
+                except Exception:
+                    pass
+            if _active:
+                _reason = _gd.get("discount_reason") or i18n_get_text(language, "buy.global_discount_default_reason", "Спец-цены")
+                _until_str = ""
+                if _until_iso:
+                    try:
+                        from datetime import datetime as _dt
+                        _until_dt2 = _dt.fromisoformat(_until_iso.replace("Z", "+00:00"))
+                        _until_str = _until_dt2.strftime('%d.%m')
+                    except Exception:
+                        pass
+                if _until_str:
+                    _notice = i18n_get_text(
+                        language, "buy.global_discount_notice_dated",
+                        "\n\n🎁 <b>Скидка −{pct}%</b> · {reason} · до {date}",
+                        pct=_pct, reason=_reason, date=_until_str,
+                    )
+                else:
+                    _notice = i18n_get_text(
+                        language, "buy.global_discount_notice",
+                        "\n\n🎁 <b>Скидка −{pct}%</b> · {reason}",
+                        pct=_pct, reason=_reason,
+                    )
+                text = (text or "") + _notice
+    except Exception as _e:
+        logger.warning("global-discount notice render failed: %s", _e)
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
-    
+    # Pass bot so that если предыдущий экран был photo (напр. invoice
+    # Wata с картинкой) — safe_edit_text корректно удалит photo-message
+    # и отправит текст вместо edit_caption поверх фотки.
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+
     # КРИТИЧНО: Переходим в состояние choose_period
     await state.set_state(PurchaseState.choose_period)
 
@@ -677,14 +763,13 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
                 final_price_kopecks=price_info["final_price_kopecks"],
                 discount_percent=price_info["discount_percent"]
             )
-            downgrade_text = (
-                "⚠️ Вы переходите с Plus на Basic.\n\n"
-                "Ключ будет ротирован с выделенного сервера на базовый.\n\n"
-                "Подтвердить переход?"
+            downgrade_text = i18n_get_text(
+                language, "buy.downgrade_confirm_text",
+                "⚠️ Вы переходите с Plus на Basic.\n\nКлюч будет ротирован с выделенного сервера на базовый.\n\nПодтвердить переход?",
             )
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⚡️ Да, перейти на Basic", callback_data="downgrade_confirm_basic")],
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="tariff:basic")]
+                [InlineKeyboardButton(text=i18n_get_text(language, "buy.downgrade_confirm_yes", "⚡️ Да, перейти на Basic"), callback_data="downgrade_confirm_basic", style="primary")],
+                [InlineKeyboardButton(text=i18n_get_text(language, "buy.downgrade_confirm_no", "❌ Отмена"), callback_data="tariff:basic", style="primary")]
             ])
             await safe_edit_text(callback.message, downgrade_text, reply_markup=keyboard)
             return
@@ -825,13 +910,13 @@ async def callback_corporate_access_request(callback: CallbackQuery, state: FSMC
     text = i18n_get_text(language, "buy.biz_screen_title")
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_starter_btn"), callback_data="tariff:biz_starter")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_team_btn"), callback_data="tariff:biz_team")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_business_btn"), callback_data="tariff:biz_business")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_pro_btn"), callback_data="tariff:biz_pro")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_enterprise_btn"), callback_data="tariff:biz_enterprise")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_ultimate_btn"), callback_data="tariff:biz_ultimate")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_starter_btn"), callback_data="tariff:biz_starter", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_team_btn"), callback_data="tariff:biz_team", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_business_btn"), callback_data="tariff:biz_business", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_pro_btn"), callback_data="tariff:biz_pro", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_enterprise_btn"), callback_data="tariff:biz_enterprise", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "buy.biz_ultimate_btn"), callback_data="tariff:biz_ultimate", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
 
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -895,121 +980,17 @@ async def callback_biz_country_selected(callback: CallbackQuery, state: FSMConte
             button_text = f"{button_text} {badge}"
         buttons.append([InlineKeyboardButton(
             text=button_text,
-            callback_data=f"period:{tariff_type}:{period_days}"
+            callback_data=f"period:{tariff_type}:{period_days}",
+            style="primary",
         )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data=f"tariff:{tariff_type}"
+        callback_data=f"tariff:{tariff_type}",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
 
-
-@payments_callbacks_router.callback_query(F.data == "corporate_access_confirm", StateFilter(CorporateAccessRequest.waiting_for_confirmation))
-async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    """
-    🧩 CORPORATE ACCESS REQUEST FLOW
-    
-    On confirmation: Send admin notification and user confirmation.
-    """
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    if not await ensure_db_ready_callback(callback):
-        return
-    
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    user = await database.get_user(telegram_id)
-
-    try:
-        # Get user data with sanitization
-        raw_username = callback.from_user.username if callback.from_user else None
-        if raw_username:
-            sanitized = sanitize_display_name(raw_username)
-            username_display = f"@{sanitized}" if sanitized else i18n_get_text(language, "common.user")
-        else:
-            username_display = i18n_get_text(language, "common.username_not_set")
-        
-        # Get subscription status
-        subscription = await database.get_subscription(telegram_id)
-        has_active_subscription = False
-        if subscription:
-            from app.services.subscriptions.service import get_subscription_status
-            subscription_status = get_subscription_status(subscription)
-            has_active_subscription = subscription_status.is_active
-        
-        subscription_status_text = "ДА" if has_active_subscription else "НЕТ"
-        
-        # Get registration date
-        registration_date = "N/A"
-        if user and user.get("created_at"):
-            if isinstance(user["created_at"], str):
-                from datetime import datetime
-                registration_date = datetime.fromisoformat(user["created_at"]).strftime("%d.%m.%Y")
-            else:
-                registration_date = user["created_at"].strftime("%d.%m.%Y")
-        
-        # Current date
-        from datetime import datetime, timezone
-        request_date = datetime.now(timezone.utc).strftime("%d.%m.%Y")
-        
-        # Send admin notification using unified service
-        import admin_notifications
-        admin_message = (
-            f"📩 Новый запрос на корпоративный доступ\n\n"
-            f"ID: {telegram_id}\n"
-            f"Username: {username_display}\n"
-            f"Дата запроса: {request_date}\n\n"
-            f"Активная подписка: {subscription_status_text}\n"
-            f"Дата регистрации в боте: {registration_date}"
-        )
-        
-        admin_notified = await admin_notifications.send_admin_notification(
-            bot=bot,
-            message=admin_message,
-            notification_type="corporate_access_request",
-            parse_mode=None
-        )
-        
-        # Send user confirmation message
-        user_confirmation_text = i18n_get_text(language, "buy.corporate_request_accepted")
-
-        user_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "main.profile"),
-                callback_data="menu_profile"
-            )],
-        ])
-
-        await callback.message.answer(user_confirmation_text, reply_markup=user_keyboard, parse_mode="HTML")
-        
-        # Write audit log
-        try:
-            await database._log_audit_event_atomic_standalone(
-                "corporate_access_request",
-                telegram_id,
-                None,
-                f"Corporate access request: username={username_display}, has_active_subscription={has_active_subscription}, admin_notified={admin_notified}, requested_at={request_date}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to write audit log for corporate access request: {e}")
-        
-        # Clear FSM
-        await state.clear()
-        logger.debug(f"FSM: CorporateAccessRequest cleared after confirmation for user {telegram_id}")
-        
-    except Exception as e:
-        logger.exception(f"Error in callback_corporate_access_confirm: {e}")
-        # Still confirm user even if admin notification fails
-        try:
-            user_confirmation_text = i18n_get_text(language, "buy.corporate_request_accepted")
-            await callback.message.answer(user_confirmation_text, parse_mode="HTML")
-        except Exception:
-            pass
-        await state.clear()
-        await callback.answer(i18n_get_text(language, "buy.corporate_request_accepted").split("\n")[0], show_alert=True)

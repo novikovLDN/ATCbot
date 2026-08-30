@@ -13,8 +13,13 @@ import {
   Tag,
   Wrench,
   Stethoscope,
+  Gauge,
   CreditCard,
+  Bell,
+  BarChart3,
+  Tag as TagIcon,
   Settings as SettingsIcon,
+  FlaskConical,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { auth } from "@/lib/auth";
@@ -37,6 +42,7 @@ const sections: Section[] = [
     label: "Main",
     items: [
       { to: "/", label: "Главная", icon: LayoutDashboard },
+      { to: "/statistics", label: "📊 Статистика", icon: BarChart3 },
       { to: "/users", label: "Пользователи", icon: Users },
       { to: "/analytics", label: "Аналитика", icon: TrendingUp },
       { to: "/payments", label: "Платежи", icon: CreditCard },
@@ -46,10 +52,13 @@ const sections: Section[] = [
     label: "Маркетинг",
     items: [
       { to: "/broadcasts", label: "Рассылки", icon: Megaphone },
+      { to: "/automated-notifications", label: "Автоуведомления", icon: Bell },
+      { to: "/pricing", label: "💸 Цены и скидки", icon: TagIcon },
       { to: "/promo", label: "Промокоды", icon: Tag },
       { to: "/links", label: "Ссылки", icon: LinkIcon },
       { to: "/referrals", label: "Рефералы", icon: Share2 },
       { to: "/bgift", label: "Гифт-ГБ", icon: Gift },
+      { to: "/beta-applications", label: "🧪 VPN-Инноватор", icon: FlaskConical },
     ],
   },
   {
@@ -57,6 +66,7 @@ const sections: Section[] = [
     items: [
       { to: "/audit", label: "Аудит", icon: ScrollText },
       { to: "/bypass-audit", label: "Bypass Audit", icon: Stethoscope },
+      { to: "/traffic-audit", label: "Traffic Audit", icon: Gauge },
       { to: "/service", label: "Сервис", icon: Wrench },
       { to: "/settings", label: "Настройки", icon: SettingsIcon },
     ],
