@@ -838,6 +838,8 @@ LANG = {
     'traffic.pay_card': "💳 Pay by card ({price} ₽)",
     'traffic.pay_sbp': "🏦 Pay via SBP ({price} ₽)",
     'traffic.pay_lava': "SBP reserve ({price} ₽)",
+    'traffic.pay_wata': "Pay (Wata)",
+    'traffic.pay_reserve': "Reserve (Platega)",
     'traffic.insufficient_balance': "❌ Insufficient balance",
     'traffic.purchase_success': "✅ <b>Traffic added!</b>\n\n📦 +{gb} GB\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ Error adding traffic. Funds returned to balance.",
