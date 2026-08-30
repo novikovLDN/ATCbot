@@ -28,16 +28,17 @@ class TransientPaymentError(Exception):
 async def _get_current_bypass_bytes(telegram_id: int) -> Optional[int]:
     """Snapshot текущего trafficLimitBytes bypass entity перед top-up.
     Нужен verify_bypass_delivery — точно сравнить diff после add_traffic.
+
+    Резолвим через get_bypass_entity_safe (username=str(tg)) — ТУ ЖЕ энтити,
+    что патчит add_bypass_traffic. Раньше читали через remnawave_uuid, и при
+    контаминации колонок baseline/add/verify расходились по разным энтити.
     """
     try:
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if not rmn_uuid:
-            return None
         from app.services import remnawave_api
-        traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-        if not traffic:
+        entity = await remnawave_api.get_bypass_entity_safe(telegram_id)
+        if not isinstance(entity, dict):
             return None
-        return int(traffic.get("trafficLimitBytes") or 0)
+        return int(entity.get("trafficLimitBytes") or 0)
     except Exception:
         return None
 
