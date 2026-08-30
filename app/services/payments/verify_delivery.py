@@ -66,61 +66,27 @@ async def verify_bypass_delivery(
     # Дадим панели время применить PATCH.
     await _aio.sleep(max(0.1, delay_sec))
     try:
-        import database
         from app.services import remnawave_api
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        # Self-heal: если DB пусто (Phase-1 write мог не долететь до
-        # `subscriptions` row) — резолвим bypass entity по username=str(tg_id)
-        # напрямую из панели, пишем uuid/id обратно в БД, продолжаем verify.
-        if not rmn_uuid:
-            try:
-                by_name = await remnawave_api.find_user_by_username(str(telegram_id))
-                if by_name and isinstance(by_name, dict):
-                    api_uuid = by_name.get("uuid") or by_name.get("vlessUuid")
-                    api_id = by_name.get("id")
-                    if api_uuid:
-                        await database.set_remnawave_uuid(telegram_id, str(api_uuid))
-                        rmn_uuid = str(api_uuid)
-                    if api_id is not None:
-                        try:
-                            await database.set_remnawave_id(telegram_id, int(api_id))
-                        except (TypeError, ValueError):
-                            pass
-                    logger.info(
-                        "BYPASS_VERIFY_SELFHEAL: tg=%s resolved by username → uuid=%s id=%s",
-                        telegram_id, str(api_uuid or "")[:8], api_id,
-                    )
-            except Exception as e:
-                logger.warning("bypass verify self-heal failed tg=%s: %s", telegram_id, e)
-        if not rmn_uuid:
+        # Читаем ТУ ЖЕ bypass-энтити, что патчит add_bypass_traffic —
+        # get_bypass_entity_safe (username=str(tg), self-heal id/uuid).
+        # Раньше verify резолвил через remnawave_uuid и при контаминации
+        # колонок мерил ДРУГУЮ энтити → ложные mismatch-алерты.
+        entity = await remnawave_api.get_bypass_entity_safe(telegram_id)
+        if not isinstance(entity, dict):
             await _send_admin_alert(
-                "Bypass verify FAIL: no remnawave_uuid",
+                "Bypass verify FAIL: entity not in panel",
                 (
                     f"User: <code>tg:{telegram_id}</code>\n"
                     f"Kind: <b>{kind}</b> · Provider: <b>{provider}</b>\n"
                     f"Tariff: <b>{tariff}</b>{f' · {period_days}d' if period_days else ''}\n"
                     f"Purchase: <code>{purchase_id}</code>\n"
                     f"Expected +{_fmt_gb(expected_added_bytes)} bypass\n"
-                    "В subscriptions.remnawave_uuid пусто И по username в панели "
-                    "тоже entity нет — bypass не создался. Проверить логи "
-                    "PURCHASE_FLOW."
+                    "get_bypass_entity_safe вернул пусто — bypass entity "
+                    "(username=str(tg)) в панели нет. Проверить PURCHASE_FLOW."
                 ),
             )
             return
-        traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-        if not traffic:
-            await _send_admin_alert(
-                "Bypass verify FAIL: entity not in panel",
-                (
-                    f"User: <code>tg:{telegram_id}</code>\n"
-                    f"Kind: <b>{kind}</b> · Provider: <b>{provider}</b>\n"
-                    f"UUID: <code>{str(rmn_uuid)[:16]}</code>\n"
-                    "GET /api/users вернул пусто — entity удалён "
-                    "или UUID/id stale."
-                ),
-            )
-            return
-        actual_bytes = int(traffic.get("trafficLimitBytes") or 0)
+        actual_bytes = int(entity.get("trafficLimitBytes") or 0)
         # Ok-условия — алертим ТОЛЬКО на недостачу (юзер заплатил, но GB не долетели).
         # Излишек (actual > expected) — не проблема: юзер получил больше, чем
         # ожидалось (обычно потому что baseline_bytes был снят до другого top-up'а,

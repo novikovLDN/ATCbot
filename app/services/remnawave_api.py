@@ -499,6 +499,14 @@ async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, 
     для premium → дропаем поле и логируем WARNING. Иначе получаем
     LIMITED-premium как жаловался клиент.
     """
+    # Доверенный обход premium-guard: вызывающий (add_bypass_traffic) уже
+    # авторитетно резолвнул bypass entity по username=str(tg) через
+    # get_bypass_entity_safe и передаёт ЕЁ СОБСТВЕННЫЙ numeric id. В этом
+    # случае _is_premium_entity — ложное срабатывание (id bypass-энтити мог
+    # попасть в чью-то remnawave_premium_id из-за backfill-контаминации),
+    # и SAFETY-DROP тихо гасит начисление → «оплатил, GB не пришли».
+    trust_bypass = bool(fields.pop("_trust_bypass", False))
+
     resolved = await _resolve_to_int_id(user_id)
     if resolved is None:
         logger.warning("update_user: cannot resolve id from %s", str(user_id)[:16])
@@ -508,7 +516,7 @@ async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, 
     fields.pop("trafficLimitGb", None)
     fields.pop("trafficLimitMb", None)
     # Premium никогда не должен получать trafficLimitBytes-лимит.
-    if "trafficLimitBytes" in fields and await _is_premium_entity(resolved):
+    if "trafficLimitBytes" in fields and not trust_bypass and await _is_premium_entity(resolved):
         logger.warning(
             "update_user: SAFETY-DROP trafficLimitBytes=%s for PREMIUM entity id=%s "
             "(premium должен быть безлимит по ТЗ, PATCH мимо-ушёл на premium вместо bypass) — "
@@ -782,6 +790,23 @@ async def get_bypass_entity_safe(telegram_id: int) -> Optional[Dict[str, Any]]:
         except Exception:
             ent = None
         if await _looks_like_bypass(ent):
+            # Сходимость колонок: remnawave_uuid должен указывать на ТУ ЖЕ
+            # bypass-энтити, что и remnawave_id. Иначе add_bypass_traffic
+            # (резолв по id) патчит одну энтити, а verify/подписка/агрегатор
+            # (резолв по remnawave_uuid) читают другую → «GB не пришли».
+            try:
+                api_uuid = ent.get("uuid") or ent.get("vlessUuid")
+                if api_uuid:
+                    cached_uuid = await database.get_remnawave_uuid(telegram_id)
+                    if str(cached_uuid or "") != str(api_uuid):
+                        await database.set_remnawave_uuid(telegram_id, str(api_uuid))
+                        logger.info(
+                            "get_bypass_entity_safe: healed remnawave_uuid tg=%s "
+                            "%s→%s (сходимость с remnawave_id)",
+                            telegram_id, str(cached_uuid or "")[:8], str(api_uuid)[:8],
+                        )
+            except Exception:
+                pass
             return ent
         # Mismatch — cached_id указывает на premium (или другого юзера).
         # Чистим bypass-id, ниже перерезолвим через username.

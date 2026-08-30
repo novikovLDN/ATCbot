@@ -331,11 +331,17 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     # Юзер оплатил пакет → просто добавляем ровно extra_bytes.
     # current=0 = "трафика нет" (израсходовал / не выдавали), не безлимит.
     new_limit = current_limit + int(extra_bytes)
+    # entity уже верифицирован как bypass по username=str(tg) в
+    # get_bypass_entity_safe. Если у нас есть ЕГО собственный numeric id —
+    # PATCH'им по нему напрямую и обходим premium-guard в update_user (иначе
+    # ложный _is_premium_entity гасит начисление → GB не долетают).
+    _trusted = entity.get("id") is not None
     try:
         result = await remnawave_api.update_user(
             target,
             trafficLimitBytes=new_limit,
             status="ACTIVE",
+            _trust_bypass=_trusted,
         )
     except Exception as e:
         logger.error("REMNAWAVE_BYPASS_TOPUP_PATCH_FAIL: tg=%s %s", telegram_id, e)
