@@ -216,13 +216,13 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
     import platega_service
     if wata_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_wata", "Оплатить (Wata)"),
+            text=i18n_get_text(language, "traffic.pay_wata", "Оплатить"),
             callback_data=f"bypass_pay_wata:{gb}",
             style="success",
         )])
     if platega_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_reserve", "Резерв (Platega)"),
+            text=i18n_get_text(language, "traffic.pay_reserve", "Резерв"),
             callback_data=f"bypass_pay_sbp:{gb}",
             style="success",
         )])
@@ -811,13 +811,13 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
     import platega_service
     if wata_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_wata", "Оплатить (Wata)"),
+            text=i18n_get_text(language, "traffic.pay_wata", "Оплатить"),
             callback_data=f"traffic_pay_wata:{gb}",
             style="success",
         )])
     if platega_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_reserve", "Резерв (Platega)"),
+            text=i18n_get_text(language, "traffic.pay_reserve", "Резерв"),
             callback_data=f"traffic_pay_sbp:{gb}",
             style="success",
         )])
