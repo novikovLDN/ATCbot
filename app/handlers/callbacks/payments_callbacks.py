@@ -925,6 +925,13 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
     - Создает invoice через Telegram Payments
     - Переводит в processing_payment
     """
+    # «Банковская карта» → универсальный инвойс Wata (юзер сам выбирает
+    # карта/СБП/T-Pay на странице Wata). Fallback на Telegram Payments,
+    # если Wata не сконфигурирована.
+    import wata_service
+    if wata_service.is_enabled():
+        return await callback_pay_wata(callback, state)
+
     telegram_id = callback.from_user.id
 
     # Rate limiting
@@ -2542,6 +2549,12 @@ async def callback_topup_card(callback: CallbackQuery):
     """Оплата пополнения баланса картой"""
     if not await ensure_db_ready_callback(callback):
         return
+
+    # «Банковская карта» → универсальный инвойс Wata. Fallback на карту, если выкл.
+    import wata_service
+    if wata_service.is_enabled():
+        return await callback_topup_wata(callback)
+
     telegram_id = callback.from_user.id
 
     is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
