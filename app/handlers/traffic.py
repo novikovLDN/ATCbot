@@ -209,39 +209,24 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
 
     buttons = []
 
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "payment.card"),
-        callback_data=f"bypass_pay_card:{gb}",
-        style="primary",
-    )])
-    # СБП — обратно через Platega (revert Wata-миграции).
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "payment.sbp"),
-        callback_data=f"bypass_pay_sbp:{gb}",
-        style="primary",
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "payment.stars"),
-        callback_data=f"bypass_pay_stars:{gb}",
-        style="primary",
-    )])
-
-    import cryptobot_service
-    if cryptobot_service.is_enabled():
+    # Оплата трафика (bypass-only) — те же 2 кнопки, что и на трафик-паке:
+    #   «Оплатить (Wata)» — универсальный инвойс Wata (юзер сам выбирает способ)
+    #   «Резерв (Platega)» — запасной провайдер (Platega СБП)
+    import wata_service
+    import platega_service
+    if wata_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.crypto"),
-            callback_data=f"bypass_pay_crypto:{gb}",
-            style="primary",
-        )])
-
-    # Lava-кнопка подменена на Wata: bypass_pay_lava → bypass_pay_wata.
-    # Код lava_service не удаляем — оставляем гейт видимости.
-    import lava_service
-    if lava_service.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.lava"),
+            text=i18n_get_text(language, "traffic.pay_wata", "Оплатить"),
             callback_data=f"bypass_pay_wata:{gb}",
-            style="primary",
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
+        )])
+    if platega_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.pay_reserve", "Резерв"),
+            callback_data=f"bypass_pay_sbp:{gb}",
+            icon_custom_emoji_id=CE["buy"],
+            style="success",
         )])
 
     buttons.append([InlineKeyboardButton(
@@ -828,14 +813,16 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
     import platega_service
     if wata_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_wata", "Оплатить (Wata)"),
+            text=i18n_get_text(language, "traffic.pay_wata", "Оплатить"),
             callback_data=f"traffic_pay_wata:{gb}",
+            icon_custom_emoji_id=CE["buy"],
             style="success",
         )])
     if platega_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_reserve", "Резерв (Platega)"),
+            text=i18n_get_text(language, "traffic.pay_reserve", "Резерв"),
             callback_data=f"traffic_pay_sbp:{gb}",
+            icon_custom_emoji_id=CE["buy"],
             style="success",
         )])
 
