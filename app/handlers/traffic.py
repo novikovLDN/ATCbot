@@ -821,33 +821,21 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
 
     buttons: list = []
 
-    # Card (YooKassa) button — requires TG_PROVIDER_TOKEN
-    if config.TG_PROVIDER_TOKEN:
+    # Оплата трафика — 2 кнопки, без старых иконок:
+    #   «Оплатить (Wata)» — универсальный инвойс Wata (юзер сам выбирает способ)
+    #   «Резерв (Platega)» — запасной провайдер (Platega СБП)
+    import wata_service
+    import platega_service
+    if wata_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_card", price=price),
-            callback_data=f"traffic_pay_card:{gb}",
-            icon_custom_emoji_id=CE["buy"],
+            text=i18n_get_text(language, "traffic.pay_wata", "Оплатить (Wata)"),
+            callback_data=f"traffic_pay_wata:{gb}",
             style="success",
         )])
-
-    # СБП — обратно через Platega (revert Wata-миграции).
-    import platega_service
     if platega_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_sbp", price=f"{sbp_price:.0f}"),
+            text=i18n_get_text(language, "traffic.pay_reserve", "Резерв (Platega)"),
             callback_data=f"traffic_pay_sbp:{gb}",
-            icon_custom_emoji_id=CE["buy"],
-            style="success",
-        )])
-
-    # Lava-кнопка подменена на Wata: traffic_pay_lava → traffic_pay_wata.
-    # Код lava_service не удаляем — оставляем гейт видимости.
-    import lava_service
-    if lava_service.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_lava", price=price),
-            callback_data=f"traffic_pay_wata:{gb}",
-            icon_custom_emoji_id=CE["buy"],
             style="success",
         )])
 
