@@ -373,6 +373,11 @@ async def callback_gift_pay_card(callback: CallbackQuery, state: FSMContext):
     """Оплата подарка картой через Telegram Payments."""
     telegram_id = callback.from_user.id
 
+    # «Банковская карта» → универсальный инвойс Wata. Fallback на карту, если выкл.
+    import wata_service
+    if wata_service.is_enabled():
+        return await callback_gift_pay_wata(callback, state)
+
     is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)

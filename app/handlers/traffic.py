@@ -870,6 +870,12 @@ async def callback_traffic_pay_card(callback: CallbackQuery):
     if not await ensure_db_ready_callback(callback):
         return
 
+    # «Банковская карта» → универсальный инвойс Wata (способ выбирается на
+    # странице Wata). Fallback на карту, если Wata не сконфигурирована.
+    import wata_service
+    if wata_service.is_enabled():
+        return await callback_traffic_pay_wata(callback)
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
@@ -1236,6 +1242,11 @@ async def callback_bypass_pay_card(callback: CallbackQuery):
     """Pay for bypass-only pack via card (Telegram Payments)."""
     if not await ensure_db_ready_callback(callback):
         return
+
+    # «Банковская карта» → универсальный инвойс Wata. Fallback на карту, если выкл.
+    import wata_service
+    if wata_service.is_enabled():
+        return await callback_bypass_pay_wata(callback)
 
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)

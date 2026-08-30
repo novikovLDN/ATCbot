@@ -1032,15 +1032,17 @@ async def show_payment_method_selection(
     buttons.append(row2)
 
     # Platega recurring SBP subscription — admin-only beta (MVP: только 30д)
-    try:
-        import platega_service as _ps
-        if _ps.is_subscription_visible_to(telegram_id) and period_days == 30:
-            buttons.append([InlineKeyboardButton(
-                text="🔄 СБП-подписка (авто-продление)",
-                callback_data="pay:sbp_sub",
-            )])
-    except Exception:
-        pass
+    # КНОПКА СКРЫТА по просьбе (сейчас не нужна). Логика/хендлер pay:sbp_sub
+    # оставлены нетронутыми — вернуть кнопку = раскомментировать блок ниже.
+    # try:
+    #     import platega_service as _ps
+    #     if _ps.is_subscription_visible_to(telegram_id) and period_days == 30:
+    #         buttons.append([InlineKeyboardButton(
+    #             text="🔄 СБП-подписка (авто-продление)",
+    #             callback_data="pay:sbp_sub",
+    #         )])
+    # except Exception:
+    #     pass
 
     if platega_on:
         buttons.append([btn_intl])
