@@ -69,6 +69,34 @@ _MAX_SCAN = 100_000
 # that's fine, just rescan.
 _last_plan: dict[int, list] = {}
 
+# ── Background-job plumbing ───────────────────────────────────────────
+# The scan (paced panel stream) and the apply both run for MINUTES — far
+# beyond the 25s webhook-handler budget (WEBHOOK_HANDLER_TIMEOUT). So the
+# callbacks NEVER await the work: they spawn a detached task (survives the
+# handler being cancelled) and return immediately; the task edits the
+# message itself as it progresses and on completion.
+_bg_tasks: set = set()
+# Per-admin job guard: "scan" | "apply" | None — prevents двойной запуск.
+_job_state: dict[int, str] = {}
+
+
+def _spawn_bg(coro) -> None:
+    t = asyncio.ensure_future(coro)
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+
+
+async def _edit(bot, chat_id: int, msg_id: int, text: str, reply_markup=None) -> None:
+    """Edit the recovery message from a background task (no live Message obj)."""
+    try:
+        await bot.edit_message_text(
+            text=text, chat_id=chat_id, message_id=msg_id,
+            reply_markup=reply_markup, parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        pass
+
 
 def _parse_rmn_dt(value) -> "datetime | None":
     """Parse a Remnawave ISO-8601 expireAt string into UTC datetime."""
@@ -358,9 +386,76 @@ def _format_dry_run(checked: int, plan: list, stats: "dict | None" = None) -> st
     return "\n".join(lines)
 
 
+async def _run_scan_bg(bot, chat_id: int, msg_id: int, admin_id: int) -> None:
+    """Background: DB scan → paced panel verify → edit the message with the
+    final report. Runs detached so the 25s webhook budget can't kill it."""
+    progress: dict = {"phase": "compute", "total": 0, "done": 0, "panel_seen": 0}
+    stop = asyncio.Event()
+
+    async def _tick():
+        while not stop.is_set():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=_PROGRESS_INTERVAL)
+                break
+            except asyncio.TimeoutError:
+                pass
+            if progress.get("phase") == "verify":
+                seen = progress.get("panel_seen", 0)
+                pt = progress.get("panel_total")
+                tail = f" / ~{pt}" if pt else ""
+                txt = (
+                    "🩹 Сверяю с панелью (медленный стрим, без упора в лимит)…\n\n"
+                    f"Просмотрено энтити: <b>{seen}</b>{tail}\n"
+                    "<i>Паузы между страницами — это норма, не зависание.</i>"
+                )
+            else:
+                txt = (
+                    "🩹 Считаю план из БД…\n\n"
+                    f"Обработано: <b>{progress.get('done', 0)}</b> / "
+                    f"{progress.get('total', 0)}"
+                )
+            await _edit(bot, chat_id, msg_id, txt)
+
+    tick = asyncio.ensure_future(_tick())
+    try:
+        checked, plan = await _scan(progress)
+        progress["phase"] = "verify"
+        progress["done"] = 0
+        verified_plan, stats = await _verify_all_against_panel(plan, progress)
+        final_plan = verified_plan if stats is not None else plan
+        _last_plan[admin_id] = final_plan
+
+        actionable = [p for p in final_plan if p["action"] == "patch"]
+        rows = []
+        if actionable:
+            rows.append([InlineKeyboardButton(
+                text=f"🩹 Применить ({len(actionable)} фантомов)",
+                callback_data="admin:premium_recovery_apply",
+            )])
+        rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")])
+        stop.set()
+        await _edit(
+            bot, chat_id, msg_id,
+            _format_dry_run(checked, final_plan, stats=stats),
+            InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+    except Exception as e:
+        logger.exception("PREMIUM_RECOVERY: scan bg failed: %s", e)
+        stop.set()
+        await _edit(bot, chat_id, msg_id, f"❌ Ошибка сверки: {e}", get_admin_back_keyboard())
+    finally:
+        stop.set()
+        try:
+            await tick
+        except Exception:
+            pass
+        _job_state.pop(admin_id, None)
+
+
 @admin_premium_recovery_router.callback_query(F.data == "admin:premium_recovery")
 async def callback_premium_recovery(callback: CallbackQuery):
-    """Dry-run: scan, compute the plan, show the report."""
+    """Dry-run: kick off the scan in the BACKGROUND and return immediately —
+    the work takes minutes, far past the 25s webhook budget."""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав", show_alert=True)
         return
@@ -377,91 +472,28 @@ async def callback_premium_recovery(callback: CallbackQuery):
         )
         return
 
-    await safe_edit_text(
-        callback.message,
-        "🩹 Считаю план отката…\nЭто dry-run, пока ничего не меняется.",
-        bot=callback.bot, parse_mode="HTML",
-    )
-
-    progress: dict = {"phase": "compute", "total": 0, "done": 0}
-    try:
-        scan_task = asyncio.create_task(_scan(progress))
-        while not scan_task.done():
-            await asyncio.sleep(_PROGRESS_INTERVAL)
-            if scan_task.done():
-                break
-            text = (
-                "🩹 Сверяю кандидатов…\n\n"
-                f"Обработано: <b>{progress.get('done', 0)}</b> / "
-                f"{progress.get('total', 0)}"
-            )
-            try:
-                await safe_edit_text(
-                    callback.message, text, bot=callback.bot, parse_mode="HTML",
-                )
-            except Exception:
-                pass
-        checked, plan = await scan_task
-    except Exception as e:
-        logger.exception("PREMIUM_RECOVERY: scan failed: %s", e)
+    admin_id = callback.from_user.id
+    if _job_state.get(admin_id):
         await safe_edit_text(
             callback.message,
-            f"❌ Ошибка при сканировании: {e}",
+            f"🩹 Уже идёт задача (<b>{_job_state[admin_id]}</b>) в фоне — "
+            "дождитесь её завершения (сообщение обновится само).",
             reply_markup=get_admin_back_keyboard(), bot=callback.bot, parse_mode="HTML",
         )
         return
 
-    # Verify EVERY candidate against the panel: keep only genuine
-    # tg_*_premium entities with expireAt > 5y. Per-candidate GET (paced) —
-    # the full stream hits the rate-limit, paced GETs don't. ~15-25 min.
-    db_pool = checked
-    stats = None
-    try:
-        progress["phase"] = "verify"
-        progress["done"] = 0
-        verify_task = asyncio.create_task(_verify_all_against_panel(plan, progress))
-        while not verify_task.done():
-            await asyncio.sleep(_PROGRESS_INTERVAL)
-            if verify_task.done():
-                break
-            try:
-                seen = progress.get("panel_seen", 0)
-                ptotal = progress.get("panel_total")
-                tail = f" / ~{ptotal}" if ptotal else ""
-                await safe_edit_text(
-                    callback.message,
-                    "🩹 Сверяю с панелью (медленный стрим, без упора в лимит)…\n\n"
-                    f"Просмотрено энтити: <b>{seen}</b>{tail}\n"
-                    f"Кандидатов из БД: {db_pool}\n"
-                    "<i>Оставлю только tg_*_premium с expireAt &gt; 5 лет. "
-                    "Идёт медленно (паузы между страницами) — это норма.</i>",
-                    bot=callback.bot, parse_mode="HTML",
-                )
-            except Exception:
-                pass
-        verified_plan, stats = await verify_task
-    except Exception as e:
-        logger.warning("PREMIUM_RECOVERY: panel verify failed: %s — using DB plan", e)
-        verified_plan, stats = plan, None
-
-    # Apply works off the VERIFIED plan (only real tg_*_premium phantoms).
-    _last_plan[callback.from_user.id] = verified_plan
-
-    actionable = [p for p in verified_plan if p["action"] == "patch"]
-    rows = []
-    if actionable:
-        rows.append([InlineKeyboardButton(
-            text=f"🩹 Применить ({len(actionable)} фантомов)",
-            callback_data="admin:premium_recovery_apply",
-        )])
-    rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")])
-
+    _job_state[admin_id] = "scan"
     await safe_edit_text(
         callback.message,
-        _format_dry_run(db_pool, verified_plan, stats=stats),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        "🩹 Запустил сверку в <b>фоне</b>.\n\n"
+        "БД → медленный стрим панели (без упора в лимит), несколько минут. "
+        "Это сообщение обновлю автоматически по ходу и по завершении — "
+        "можно свернуть чат.",
         bot=callback.bot, parse_mode="HTML",
     )
+    _spawn_bg(_run_scan_bg(
+        callback.bot, callback.message.chat.id, callback.message.message_id, admin_id,
+    ))
 
 
 @admin_premium_recovery_router.callback_query(F.data == "admin:premium_recovery_apply")
@@ -494,13 +526,33 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
         )
         return
 
+    if _job_state.get(callback.from_user.id):
+        await safe_edit_text(
+            callback.message,
+            f"🩹 Уже идёт задача (<b>{_job_state[callback.from_user.id]}</b>) — "
+            "дождитесь завершения.",
+            reply_markup=get_admin_back_keyboard(), bot=callback.bot, parse_mode="HTML",
+        )
+        return
+
+    _job_state[callback.from_user.id] = "apply"
     await safe_edit_text(
         callback.message,
-        f"🩹 Применяю откат для {total} записей…\n\n"
-        "Bypass entities не трогаются.",
+        f"🩹 Запустил применение отката для {total} записей в <b>фоне</b>.\n\n"
+        "Bypass entities не трогаются. Сообщение обновлю по ходу и по завершении — "
+        "можно свернуть чат.",
         bot=callback.bot, parse_mode="HTML",
     )
+    _spawn_bg(_run_apply_bg(
+        callback.bot, callback.message.chat.id, callback.message.message_id,
+        callback.from_user.id, actionable,
+    ))
 
+
+async def _run_apply_bg(bot, chat_id: int, msg_id: int, admin_id: int, actionable: list) -> None:
+    """Background: PATCH every entity in the plan (detached from the 25s
+    webhook budget). Only tg_*_premium with far-future expireAt are touched."""
+    total = len(actionable)
     sem = asyncio.Semaphore(_FIX_CONCURRENCY)
     progress: dict = {"done": 0, "ok": 0, "gone": 0,
                       "skipped": 0, "failed": 0}
@@ -645,39 +697,37 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
     async def _run_all_fixes():
         return await asyncio.gather(*[_fix_one(p) for p in actionable])
 
-    fix_task = asyncio.create_task(_run_all_fixes())
-    while not fix_task.done():
-        await asyncio.sleep(_PROGRESS_INTERVAL)
-        if fix_task.done():
-            break
-        try:
-            await safe_edit_text(
-                callback.message,
+    try:
+        fix_task = asyncio.ensure_future(_run_all_fixes())
+        while not fix_task.done():
+            await asyncio.sleep(_PROGRESS_INTERVAL)
+            if fix_task.done():
+                break
+            await _edit(
+                bot, chat_id, msg_id,
                 "🩹 Применяю откат…\n\n"
                 f"Обработано: <b>{progress['done']}</b> / {total}\n"
                 f"  ✅ Откатано: {progress['ok']}\n"
                 f"  👻 Уже отсутствует на панели: {progress['gone']}\n"
                 f"  🛡 Не тронуто (защита): {progress['skipped']}\n"
                 f"  ❌ Сбой: {progress['failed']}",
-                bot=callback.bot, parse_mode="HTML",
             )
-        except Exception:
-            pass
+        await fix_task
+        _last_plan.pop(admin_id, None)
 
-    await fix_task
-    _last_plan.pop(callback.from_user.id, None)
-
-    text = (
-        "🩹 <b>Откат premium-подписок завершён</b>\n\n"
-        f"✅ Откатано на панели: <b>{progress['ok']}</b> / {total}\n"
-        f"👻 Уже отсутствует на панели: <b>{progress['gone']}</b>\n"
-        f"🛡 Не тронуто (защита username/дата): <b>{progress['skipped']}</b>\n"
-        f"❌ Сбой (ручной разбор): <b>{progress['failed']}</b>\n\n"
-        "<i>Bypass entities остались нетронутыми.</i>\n"
-        "<i>Защита по username: трогаем только entity вида tg_&lt;id&gt;_premium.</i>\n"
-        "Запустите повторно, чтобы убедиться (idempotent)."
-    )
-    await safe_edit_text(
-        callback.message, text,
-        reply_markup=get_admin_back_keyboard(), bot=callback.bot, parse_mode="HTML",
-    )
+        text = (
+            "🩹 <b>Откат premium-подписок завершён</b>\n\n"
+            f"✅ Откатано на панели: <b>{progress['ok']}</b> / {total}\n"
+            f"👻 Уже отсутствует на панели: <b>{progress['gone']}</b>\n"
+            f"🛡 Не тронуто (защита username/дата): <b>{progress['skipped']}</b>\n"
+            f"❌ Сбой (ручной разбор): <b>{progress['failed']}</b>\n\n"
+            "<i>Bypass entities остались нетронутыми.</i>\n"
+            "<i>Защита по username: трогаем только entity вида tg_&lt;id&gt;_premium.</i>\n"
+            "Запустите повторно, чтобы убедиться (idempotent)."
+        )
+        await _edit(bot, chat_id, msg_id, text, get_admin_back_keyboard())
+    except Exception as e:
+        logger.exception("PREMIUM_RECOVERY: apply bg failed: %s", e)
+        await _edit(bot, chat_id, msg_id, f"❌ Ошибка применения: {e}", get_admin_back_keyboard())
+    finally:
+        _job_state.pop(admin_id, None)
