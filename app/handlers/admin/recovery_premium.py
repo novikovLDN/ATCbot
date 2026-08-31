@@ -207,67 +207,67 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
     return len(candidates), plan
 
 
-_SAMPLE_SIZE = 200
-_SAMPLE_CONCURRENCY = 5
-_SAMPLE_HTTP_TIMEOUT_S = 8
+async def _verify_all_against_panel(plan: list, progress: "dict | None" = None):
+    """GET EVERY candidate from the panel and keep ONLY genuine phantoms:
+    username == tg_{id}_premium AND panel expireAt > NOW+5y.
 
+    Per-candidate GET at low concurrency + throttle (same pattern the apply
+    uses — the full get_all_users() stream hits the panel rate-limit, but
+    paced individual GETs don't). Slow (~pool/13 per second) but exact, and
+    it guarantees every kept entity is really a premium entity.
 
-async def _estimate_phantoms_by_sample(plan: list, progress: "dict | None" = None) -> dict:
-    """Estimate how many DB candidates are REAL phantoms (panel expireAt > 5y)
-    by GET-ing a random sample — the full panel stream is too heavy / rate-
-    limited to walk ~100k entities just for a preview.
-
-    DB candidates match on the bypass-only +10y marker, so most are NOT
-    affected. We sample ~200, measure the phantom rate among resolved
-    entities, and extrapolate to the whole pool. Apply then GETs every
-    candidate and patches only the real phantoms (SAFETY CHECK 3), so this
-    is only a heads-up number, never used to drop anyone.
-
-    Returns {sample, resolved, phantom, rate, estimate} (estimate=None if the
-    panel couldn't be reached at all).
+    Returns (verified_plan, stats). stats keys: done, phantom, wrong_username,
+    sane, gone, error.
     """
-    import random
     from app.services import remnawave_api
 
     cutoff = datetime.now(timezone.utc) + timedelta(days=365 * 5)
-    total = len(plan)
-    pool = plan if total <= _SAMPLE_SIZE else random.sample(plan, _SAMPLE_SIZE)
-    sem = asyncio.Semaphore(_SAMPLE_CONCURRENCY)
-    stat = {"done": 0, "resolved": 0, "phantom": 0}
+    sem = asyncio.Semaphore(_FIX_CONCURRENCY)
+    lock = asyncio.Lock()
+    verified: list = []
+    stats = {"done": 0, "phantom": 0, "wrong_username": 0,
+             "sane": 0, "gone": 0, "error": 0}
 
     async def _one(p: dict) -> None:
         async with sem:
             try:
                 u = await asyncio.wait_for(
                     remnawave_api.get_user(p["panel_uuid"]),
-                    timeout=_SAMPLE_HTTP_TIMEOUT_S,
+                    timeout=_FIX_HTTP_TIMEOUT_S,
                 )
             except Exception:
-                u = None
-            stat["done"] += 1
-            if progress is not None:
-                progress["sample_done"] = stat["done"]
-            if not u:
+                async with lock:
+                    stats["error"] += 1
+                    stats["done"] += 1
+                    if progress is not None:
+                        progress["done"] = stats["done"]
+                await asyncio.sleep(_FIX_THROTTLE_S)
                 return
-            dt = _parse_rmn_dt(u.get("expireAt"))
-            if dt is None:
-                return
-            stat["resolved"] += 1
-            if dt > cutoff:
-                stat["phantom"] += 1
 
-    await asyncio.gather(*[_one(p) for p in pool])
+            async with lock:
+                stats["done"] += 1
+                if progress is not None:
+                    progress["done"] = stats["done"]
+                if not u:
+                    stats["gone"] += 1
+                else:
+                    uname = (u.get("username") or "").strip()
+                    dt = _parse_rmn_dt(u.get("expireAt"))
+                    if uname != f"tg_{p['telegram_id']}_premium":
+                        stats["wrong_username"] += 1  # НЕ premium-энтити — не трогаем
+                    elif dt is None or dt <= cutoff:
+                        stats["sane"] += 1            # уже в норме — не трогаем
+                    else:
+                        stats["phantom"] += 1
+                        verified.append({**p, "verified": True,
+                                         "panel_id": u.get("id")})
+            await asyncio.sleep(_FIX_THROTTLE_S)
 
-    resolved = stat["resolved"]
-    rate = (stat["phantom"] / resolved) if resolved else None
-    estimate = int(round(rate * total)) if rate is not None else None
-    return {
-        "sample": len(pool), "resolved": resolved,
-        "phantom": stat["phantom"], "rate": rate, "estimate": estimate,
-    }
+    await asyncio.gather(*[_one(p) for p in plan])
+    return verified, stats
 
 
-def _format_dry_run(checked: int, plan: list, est: "dict | None" = None) -> str:
+def _format_dry_run(checked: int, plan: list, stats: "dict | None" = None) -> str:
     by_source: dict = {}
     for p in plan:
         by_source.setdefault(p["source"], []).append(p)
@@ -289,25 +289,25 @@ def _format_dry_run(checked: int, plan: list, est: "dict | None" = None) -> str:
         "",
         f"Кандидатов в БД (bypass-only +10y маркер): <b>{checked}</b>",
     ]
-    if est and est.get("estimate") is not None and est.get("resolved"):
-        pct = round((est["rate"] or 0) * 100, 1)
+    if stats is not None:
         lines.append(
-            f"🔎 Выборка {est['sample']} (ответили {est['resolved']}): "
-            f"<b>{est['phantom']}</b> реальных фантомов = <b>{pct}%</b>"
+            f"✅ Проверено в панели: <b>{stats.get('done', 0)}</b> из {checked}"
         )
         lines.append(
-            f"➡️ Оценка РЕАЛЬНЫХ фантомов в панели (expireAt &gt; 5 лет): "
-            f"<b>≈ {est['estimate']}</b> из {checked}"
+            f"🎯 РЕАЛЬНЫХ фантомов (tg_*_premium, expireAt &gt; 5 лет): "
+            f"<b>{stats.get('phantom', 0)}</b>"
         )
         lines.append(
-            "<i>Остальные — premium уже корректно истёк; Apply их пропустит "
-            "(SAFETY CHECK по каждой энтити).</i>"
+            f"<i>Отсеяно: не tg_*_premium <b>{stats.get('wrong_username', 0)}</b> · "
+            f"уже в норме <b>{stats.get('sane', 0)}</b> · "
+            f"нет в панели <b>{stats.get('gone', 0)}</b> · "
+            f"ошибок <b>{stats.get('error', 0)}</b></i>"
         )
-    else:
-        lines.append(
-            "⚠️ <i>Панель недоступна для выборки — реальное число не оценено. "
-            "Apply всё равно самопроверяется и патчит только фантомы.</i>"
-        )
+        if stats.get("wrong_username", 0):
+            lines.append(
+                f"⚠️ <i>{stats['wrong_username']} кандидатов оказались НЕ premium-"
+                "энтити — они в план НЕ включены, патчиться не будут.</i>"
+            )
     lines += [
         "",
         "<i>По источнику истины (берём MAX по всем):</i>",
@@ -348,19 +348,16 @@ def _format_dry_run(checked: int, plan: list, est: "dict | None" = None) -> str:
             lines.append(f"  {emoji} <code>{s['telegram_id']}</code> → {stamp}{extra}")
 
     if n_total == 0:
-        lines.append("\n✅ Изменений не требуется.")
+        lines.append("\n✅ Реальных фантомов нет — откатывать нечего.")
     else:
-        est_n = (est or {}).get("estimate")
-        real_txt = f"≈ <b>{est_n}</b>" if est_n is not None else "<b>?</b>"
         lines.append(
-            f"\nApply пройдёт по <b>{n_total}</b> кандидатам, но откатит "
-            f"ТОЛЬКО реальные фантомы ({real_txt}); у остальных premium уже "
-            "истёк → SKIP. Bypass entities <b>не трогаются</b>. Idempotent."
+            f"\nПри подтверждении: <b>{n_total}</b> реальных фантомов "
+            "(все — tg_*_premium, проверены поштучно) откатятся к корректной "
+            "дате. Bypass entities <b>не трогаются</b>. Idempotent."
         )
         eta_min = max(1, int(n_total * 0.5 / _FIX_CONCURRENCY / 60))
         lines.append(
-            f"\n⏱ Apply ~{eta_min} мин ({_FIX_CONCURRENCY} parallel) — "
-            "проходит по всему пулу, патчит только фантомы."
+            f"\n⏱ Apply ~{eta_min} мин ({_FIX_CONCURRENCY} parallel)."
         )
 
     return "\n".join(lines)
@@ -419,50 +416,49 @@ async def callback_premium_recovery(callback: CallbackQuery):
         )
         return
 
-    # Estimate the REAL phantom count via a small panel sample (the full
-    # stream is too heavy / rate-limited). Heads-up only — apply GETs every
-    # candidate and patches just the real phantoms.
-    est = None
+    # Verify EVERY candidate against the panel: keep only genuine
+    # tg_*_premium entities with expireAt > 5y. Per-candidate GET (paced) —
+    # the full stream hits the rate-limit, paced GETs don't. ~15-25 min.
+    db_pool = checked
+    stats = None
     try:
-        progress["phase"] = "sample"
-        progress["sample_done"] = 0
-        sample_n = min(_SAMPLE_SIZE, len(plan))
-        est_task = asyncio.create_task(_estimate_phantoms_by_sample(plan, progress))
-        while not est_task.done():
+        progress["phase"] = "verify"
+        progress["done"] = 0
+        verify_task = asyncio.create_task(_verify_all_against_panel(plan, progress))
+        while not verify_task.done():
             await asyncio.sleep(_PROGRESS_INTERVAL)
-            if est_task.done():
+            if verify_task.done():
                 break
             try:
                 await safe_edit_text(
                     callback.message,
-                    "🩹 Оцениваю реальное число (выборка по панели)…\n\n"
-                    f"Проверено: <b>{progress.get('sample_done', 0)}</b> / {sample_n}\n"
-                    f"Кандидатов из БД: {len(plan)}",
+                    "🩹 Проверяю КАЖДОГО кандидата в панели…\n\n"
+                    f"Проверено: <b>{progress.get('done', 0)}</b> / {db_pool}\n"
+                    "<i>(оставляю только tg_*_premium с expireAt &gt; 5 лет)</i>",
                     bot=callback.bot, parse_mode="HTML",
                 )
             except Exception:
                 pass
-        est = await est_task
+        verified_plan, stats = await verify_task
     except Exception as e:
-        logger.warning("PREMIUM_RECOVERY: sample estimate failed: %s", e)
-        est = None
+        logger.warning("PREMIUM_RECOVERY: panel verify failed: %s — using DB plan", e)
+        verified_plan, stats = plan, None
 
-    # Apply works off the full DB plan; it GETs each entity and patches ONLY
-    # real phantoms (SAFETY CHECK 3). The estimate above is just a preview.
-    _last_plan[callback.from_user.id] = plan
+    # Apply works off the VERIFIED plan (only real tg_*_premium phantoms).
+    _last_plan[callback.from_user.id] = verified_plan
 
-    actionable = [p for p in plan if p["action"] == "patch"]
+    actionable = [p for p in verified_plan if p["action"] == "patch"]
     rows = []
     if actionable:
         rows.append([InlineKeyboardButton(
-            text=f"🩹 Применить (пул {len(actionable)}, фантомов ≈{(est or {}).get('estimate', '?')})",
+            text=f"🩹 Применить ({len(actionable)} фантомов)",
             callback_data="admin:premium_recovery_apply",
         )])
     rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")])
 
     await safe_edit_text(
         callback.message,
-        _format_dry_run(checked, plan, est=est),
+        _format_dry_run(db_pool, verified_plan, stats=stats),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         bot=callback.bot, parse_mode="HTML",
     )
