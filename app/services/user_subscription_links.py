@@ -213,10 +213,16 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
             samopis_uuid_raw = sub.get("uuid")
             samopis_uuid = samopis_uuid_raw.strip() if samopis_uuid_raw else ""
             is_trial = (sub.get("source") == "trial")
+            # ⚠️ bypass-only строка держит expires_at = NOW+10y как маркер
+            # (премиум истёк, остался только bypass). НЕЛЬЗЯ создавать по ней
+            # premium-энтити — иначе минтим фантомный premium на 10 лет
+            # (ровно инцидент «Откат premium ×10y»). Премиум провижиним только
+            # для НЕ-bypass-only строк.
+            is_bypass_only = bool(sub.get("is_bypass_only"))
 
             # ── Premium entity ────────────────────────────────────────
             existing_premium = (sub.get("remnawave_premium_uuid") or "").strip()
-            if not existing_premium and getattr(config, "REMNAWAVE_MAIN_SQUAD_UUID", ""):
+            if not existing_premium and not is_bypass_only and getattr(config, "REMNAWAVE_MAIN_SQUAD_UUID", ""):
                 from app.services import remnawave_premium
                 presult = await remnawave_premium.create_premium_user_entity(
                     telegram_id,
