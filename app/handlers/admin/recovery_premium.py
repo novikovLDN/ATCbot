@@ -263,30 +263,35 @@ async def _verify_all_against_panel(plan: list, progress: "dict | None" = None):
     if not all_users:
         return plan, None
 
-    by_uuid: dict = {}
+    # Match by USERNAME (tg_{id}_premium) — deterministic and robust. The DB
+    # remnawave_premium_uuid is often stale (entity recreated with a new uuid),
+    # so matching by that uuid missed real phantoms → "нет в панели". Username
+    # never drifts. We also grab the panel entity's REAL uuid/id for the patch.
+    by_username: dict = {}
     for u in all_users:
-        uid = u.get("uuid") or u.get("vlessUuid")
-        if uid:
-            by_uuid[str(uid)] = u
+        un = (u.get("username") or "").strip()
+        if un:
+            by_username[un] = u
 
     verified: list = []
     stats = {"done": 0, "phantom": 0, "wrong_username": 0,
              "sane": 0, "gone": 0, "error": 0, "panel_seen": len(all_users)}
     for p in plan:
         stats["done"] += 1
-        u = by_uuid.get(str(p["panel_uuid"]))
+        u = by_username.get(f"tg_{p['telegram_id']}_premium")
         if u is None:
-            stats["gone"] += 1
+            stats["gone"] += 1             # реально нет premium-энтити в панели
             continue
-        uname = (u.get("username") or "").strip()
         dt = _parse_rmn_dt(u.get("expireAt"))
-        if uname != f"tg_{p['telegram_id']}_premium":
-            stats["wrong_username"] += 1   # НЕ premium-энтити — исключаем
-        elif dt is None or dt <= cutoff:
+        if dt is None or dt <= cutoff:
             stats["sane"] += 1             # уже в норме — исключаем
         else:
             stats["phantom"] += 1
-            verified.append({**p, "verified": True, "panel_id": u.get("id")})
+            verified.append({
+                **p, "verified": True,
+                "panel_uuid": u.get("uuid") or u.get("vlessUuid") or p["panel_uuid"],
+                "panel_id": u.get("id"),
+            })
     return verified, stats
 
 
@@ -314,7 +319,10 @@ def _format_dry_run(checked: int, plan: list, stats: "dict | None" = None) -> st
     ]
     if stats is not None:
         lines.append(
-            f"✅ Проверено в панели: <b>{stats.get('done', 0)}</b> из {checked}"
+            f"📡 Стрим панели вернул: <b>{stats.get('panel_seen', 0)}</b> энтити"
+        )
+        lines.append(
+            f"✅ Сопоставлено кандидатов: <b>{stats.get('done', 0)}</b> из {checked}"
         )
         lines.append(
             f"🎯 РЕАЛЬНЫХ фантомов (tg_*_premium, expireAt &gt; 5 лет): "
