@@ -235,20 +235,24 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
     return len(candidates), plan
 
 
-async def _verify_all_against_panel(plan: list, progress: "dict | None" = None):
-    """Verify EVERY candidate via ONE paced panel stream (not N GETs).
+async def _scan_panel_first(progress: "dict | None" = None):
+    """PANEL-FIRST scan — the correct source of truth.
 
-    One get_all_users() pass with page pacing + long 429-backoff walks the
-    whole panel (~hundreds of pages) without bursting into the rate-limit —
-    far cheaper than 14k individual GETs (which hammered the limit). Then we
-    index by uuid and keep ONLY genuine tg_{id}_premium with expireAt > NOW+5y.
+    Stream the WHOLE panel (paced, rate-limit-safe) and take EVERY
+    tg_{id}_premium whose expireAt > NOW+5y — the real 10-year phantoms,
+    regardless of what our DB says. Then compute each user's correct end from
+    our purchase signals (subscription_history / paid pending_purchases /
+    activated gifts / payments-join), MAX across them, floored to tomorrow if
+    already in the past.
 
-    Returns (verified_plan, stats) or (plan, None) if the stream failed
-    (panel unreachable) — apply's per-entity SAFETY CHECK still guards.
+    Returns (panel_seen, plan) or (0, None) if the panel is unreachable.
+    Each plan item carries the panel entity's REAL uuid/id for the patch.
     """
+    import re
     from app.services import remnawave_api
 
     cutoff = datetime.now(timezone.utc) + timedelta(days=365 * 5)
+    rx = re.compile(r"^tg_(\d+)_premium$")
 
     def _cb(collected, total):
         if progress is not None:
@@ -256,46 +260,80 @@ async def _verify_all_against_panel(plan: list, progress: "dict | None" = None):
             if total:
                 progress["panel_total"] = total
 
-    # Paced stream: ~0.7s between pages, up to 6 retries on a 429 page.
     all_users = await remnawave_api.get_all_users(
         page_delay=0.7, max_retries=6, progress_cb=_cb,
     )
     if not all_users:
-        return plan, None
+        return 0, None
 
-    # Match by USERNAME (tg_{id}_premium) — deterministic and robust. The DB
-    # remnawave_premium_uuid is often stale (entity recreated with a new uuid),
-    # so matching by that uuid missed real phantoms → "нет в панели". Username
-    # never drifts. We also grab the panel entity's REAL uuid/id for the patch.
-    by_username: dict = {}
+    phantoms: list = []  # (tg, panel_uuid, panel_id)
     for u in all_users:
-        un = (u.get("username") or "").strip()
-        if un:
-            by_username[un] = u
-
-    verified: list = []
-    stats = {"done": 0, "phantom": 0, "wrong_username": 0,
-             "sane": 0, "gone": 0, "error": 0, "panel_seen": len(all_users)}
-    for p in plan:
-        stats["done"] += 1
-        u = by_username.get(f"tg_{p['telegram_id']}_premium")
-        if u is None:
-            stats["gone"] += 1             # реально нет premium-энтити в панели
+        m = rx.match((u.get("username") or "").strip())
+        if not m:
             continue
         dt = _parse_rmn_dt(u.get("expireAt"))
         if dt is None or dt <= cutoff:
-            stats["sane"] += 1             # уже в норме — исключаем
+            continue
+        phantoms.append((
+            int(m.group(1)),
+            u.get("uuid") or u.get("vlessUuid"),
+            u.get("id"),
+        ))
+
+    if progress is not None:
+        progress["phase"] = "compute"
+        progress["phantoms"] = len(phantoms)
+
+    tg_ids = [t for (t, _, _) in phantoms]
+    history_ends = await database.get_max_subscription_end_bulk(tg_ids)
+    paid = await database.get_paid_subscription_history_bulk(tg_ids)
+    gifts = await database.get_activated_gifts_bulk(tg_ids)
+    payments_hist = await database.get_paid_payments_via_purchases_bulk(tg_ids)
+
+    now = datetime.now(timezone.utc)
+    floor_end = now + timedelta(days=1)
+    plan: list = []
+    for tg, p_uuid, p_id in phantoms:
+        signals: list = []
+        he = history_ends.get(tg)
+        if he is not None:
+            if he.tzinfo is None:
+                he = he.replace(tzinfo=timezone.utc)
+            signals.append(("history", he))
+        ge = _compute_real_end([
+            {"created_at": g["activated_at"], "period_days": g["period_days"]}
+            for g in gifts.get(tg, [])
+        ])
+        if ge is not None:
+            signals.append(("gift", ge))
+        pe = _compute_real_end(paid.get(tg, []))
+        if pe is not None:
+            signals.append(("paid", pe))
+        pye = _compute_real_end(payments_hist.get(tg, []))
+        if pye is not None:
+            signals.append(("payments", pye))
+
+        if signals:
+            best_source, real_end = max(signals, key=lambda s: s[1])
+            if real_end < floor_end:
+                real_end = floor_end
+                source = "%s+floor" % best_source
+            else:
+                source = best_source
         else:
-            stats["phantom"] += 1
-            verified.append({
-                **p, "verified": True,
-                "panel_uuid": u.get("uuid") or u.get("vlessUuid") or p["panel_uuid"],
-                "panel_id": u.get("id"),
-            })
-    return verified, stats
+            real_end = floor_end
+            source = "none"
+
+        plan.append({
+            "telegram_id": tg, "panel_uuid": p_uuid, "panel_id": p_id,
+            "real_end": real_end, "source": source,
+            "action": "patch", "verified": True,
+        })
+
+    return len(all_users), plan
 
 
-def _format_dry_run(checked: int, plan: list, stats: "dict | None" = None) -> str:
+def _format_dry_run(panel_seen: int, plan: list) -> str:
     by_source: dict = {}
     for p in plan:
         by_source.setdefault(p["source"], []).append(p)
@@ -313,32 +351,12 @@ def _format_dry_run(checked: int, plan: list, stats: "dict | None" = None) -> st
     n_total = n_hist + n_paid + n_gift + n_pay + n_none
 
     lines = [
-        "🩹 <b>Откат premium-подписок (Dry-run)</b>",
+        "🩹 <b>Откат premium-подписок (Dry-run, panel-first)</b>",
         "",
-        f"Кандидатов в БД (bypass-only +10y маркер): <b>{checked}</b>",
+        f"📡 Стрим панели вернул: <b>{panel_seen}</b> энтити",
+        f"🎯 РЕАЛЬНЫХ фантомов (tg_*_premium, expireAt &gt; 5 лет): <b>{n_total}</b>",
+        "<i>Взято прямо из панели по username; сверено с покупками.</i>",
     ]
-    if stats is not None:
-        lines.append(
-            f"📡 Стрим панели вернул: <b>{stats.get('panel_seen', 0)}</b> энтити"
-        )
-        lines.append(
-            f"✅ Сопоставлено кандидатов: <b>{stats.get('done', 0)}</b> из {checked}"
-        )
-        lines.append(
-            f"🎯 РЕАЛЬНЫХ фантомов (tg_*_premium, expireAt &gt; 5 лет): "
-            f"<b>{stats.get('phantom', 0)}</b>"
-        )
-        lines.append(
-            f"<i>Отсеяно: не tg_*_premium <b>{stats.get('wrong_username', 0)}</b> · "
-            f"уже в норме <b>{stats.get('sane', 0)}</b> · "
-            f"нет в панели <b>{stats.get('gone', 0)}</b> · "
-            f"ошибок <b>{stats.get('error', 0)}</b></i>"
-        )
-        if stats.get("wrong_username", 0):
-            lines.append(
-                f"⚠️ <i>{stats['wrong_username']} кандидатов оказались НЕ premium-"
-                "энтити — они в план НЕ включены, патчиться не будут.</i>"
-            )
     lines += [
         "",
         "<i>По источнику истины (берём MAX по всем):</i>",
@@ -395,9 +413,10 @@ def _format_dry_run(checked: int, plan: list, stats: "dict | None" = None) -> st
 
 
 async def _run_scan_bg(bot, chat_id: int, msg_id: int, admin_id: int) -> None:
-    """Background: DB scan → paced panel verify → edit the message with the
-    final report. Runs detached so the 25s webhook budget can't kill it."""
-    progress: dict = {"phase": "compute", "total": 0, "done": 0, "panel_seen": 0}
+    """Background: PANEL-FIRST scan (stream panel → tg_*_premium >5y → compute
+    real end from purchases) → edit the message with the report. Detached so
+    the 25s webhook budget can't kill it."""
+    progress: dict = {"phase": "stream", "panel_seen": 0}
     stop = asyncio.Event()
 
     async def _tick():
@@ -407,33 +426,38 @@ async def _run_scan_bg(bot, chat_id: int, msg_id: int, admin_id: int) -> None:
                 break
             except asyncio.TimeoutError:
                 pass
-            if progress.get("phase") == "verify":
-                seen = progress.get("panel_seen", 0)
-                pt = progress.get("panel_total")
-                tail = f" / ~{pt}" if pt else ""
+            seen = progress.get("panel_seen", 0)
+            pt = progress.get("panel_total")
+            tail = f" / ~{pt}" if pt else ""
+            if progress.get("phase") == "compute":
                 txt = (
-                    "🩹 Сверяю с панелью (медленный стрим, без упора в лимит)…\n\n"
-                    f"Просмотрено энтити: <b>{seen}</b>{tail}\n"
-                    "<i>Паузы между страницами — это норма, не зависание.</i>"
+                    "🩹 Стрим панели завершён — считаю корректные сроки по покупкам…\n\n"
+                    f"Фантомов найдено: <b>{progress.get('phantoms', 0)}</b>\n"
+                    f"Просмотрено энтити: <b>{seen}</b>{tail}"
                 )
             else:
                 txt = (
-                    "🩹 Считаю план из БД…\n\n"
-                    f"Обработано: <b>{progress.get('done', 0)}</b> / "
-                    f"{progress.get('total', 0)}"
+                    "🩹 Тяну ВСЕХ tg_*_premium из панели (медленный стрим, без упора "
+                    "в лимит)…\n\n"
+                    f"Просмотрено энтити: <b>{seen}</b>{tail}\n"
+                    "<i>Паузы между страницами — это норма, не зависание.</i>"
                 )
             await _edit(bot, chat_id, msg_id, txt)
 
     tick = asyncio.ensure_future(_tick())
     try:
-        checked, plan = await _scan(progress)
-        progress["phase"] = "verify"
-        progress["done"] = 0
-        verified_plan, stats = await _verify_all_against_panel(plan, progress)
-        final_plan = verified_plan if stats is not None else plan
-        _last_plan[admin_id] = final_plan
+        panel_seen, plan = await _scan_panel_first(progress)
+        if plan is None:
+            stop.set()
+            await _edit(
+                bot, chat_id, msg_id,
+                "❌ Панель недоступна (стрим не удался) — попробуйте позже.",
+                get_admin_back_keyboard(),
+            )
+            return
+        _last_plan[admin_id] = plan
 
-        actionable = [p for p in final_plan if p["action"] == "patch"]
+        actionable = [p for p in plan if p["action"] == "patch"]
         rows = []
         if actionable:
             rows.append([InlineKeyboardButton(
@@ -444,7 +468,7 @@ async def _run_scan_bg(bot, chat_id: int, msg_id: int, admin_id: int) -> None:
         stop.set()
         await _edit(
             bot, chat_id, msg_id,
-            _format_dry_run(checked, final_plan, stats=stats),
+            _format_dry_run(panel_seen, plan),
             InlineKeyboardMarkup(inline_keyboard=rows),
         )
     except Exception as e:
