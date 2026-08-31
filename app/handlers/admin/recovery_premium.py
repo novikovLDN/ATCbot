@@ -208,62 +208,57 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
 
 
 async def _verify_all_against_panel(plan: list, progress: "dict | None" = None):
-    """GET EVERY candidate from the panel and keep ONLY genuine phantoms:
-    username == tg_{id}_premium AND panel expireAt > NOW+5y.
+    """Verify EVERY candidate via ONE paced panel stream (not N GETs).
 
-    Per-candidate GET at low concurrency + throttle (same pattern the apply
-    uses — the full get_all_users() stream hits the panel rate-limit, but
-    paced individual GETs don't). Slow (~pool/13 per second) but exact, and
-    it guarantees every kept entity is really a premium entity.
+    One get_all_users() pass with page pacing + long 429-backoff walks the
+    whole panel (~hundreds of pages) without bursting into the rate-limit —
+    far cheaper than 14k individual GETs (which hammered the limit). Then we
+    index by uuid and keep ONLY genuine tg_{id}_premium with expireAt > NOW+5y.
 
-    Returns (verified_plan, stats). stats keys: done, phantom, wrong_username,
-    sane, gone, error.
+    Returns (verified_plan, stats) or (plan, None) if the stream failed
+    (panel unreachable) — apply's per-entity SAFETY CHECK still guards.
     """
     from app.services import remnawave_api
 
     cutoff = datetime.now(timezone.utc) + timedelta(days=365 * 5)
-    sem = asyncio.Semaphore(_FIX_CONCURRENCY)
-    lock = asyncio.Lock()
+
+    def _cb(collected, total):
+        if progress is not None:
+            progress["panel_seen"] = collected
+            if total:
+                progress["panel_total"] = total
+
+    # Paced stream: ~0.7s between pages, up to 6 retries on a 429 page.
+    all_users = await remnawave_api.get_all_users(
+        page_delay=0.7, max_retries=6, progress_cb=_cb,
+    )
+    if not all_users:
+        return plan, None
+
+    by_uuid: dict = {}
+    for u in all_users:
+        uid = u.get("uuid") or u.get("vlessUuid")
+        if uid:
+            by_uuid[str(uid)] = u
+
     verified: list = []
     stats = {"done": 0, "phantom": 0, "wrong_username": 0,
-             "sane": 0, "gone": 0, "error": 0}
-
-    async def _one(p: dict) -> None:
-        async with sem:
-            try:
-                u = await asyncio.wait_for(
-                    remnawave_api.get_user(p["panel_uuid"]),
-                    timeout=_FIX_HTTP_TIMEOUT_S,
-                )
-            except Exception:
-                async with lock:
-                    stats["error"] += 1
-                    stats["done"] += 1
-                    if progress is not None:
-                        progress["done"] = stats["done"]
-                await asyncio.sleep(_FIX_THROTTLE_S)
-                return
-
-            async with lock:
-                stats["done"] += 1
-                if progress is not None:
-                    progress["done"] = stats["done"]
-                if not u:
-                    stats["gone"] += 1
-                else:
-                    uname = (u.get("username") or "").strip()
-                    dt = _parse_rmn_dt(u.get("expireAt"))
-                    if uname != f"tg_{p['telegram_id']}_premium":
-                        stats["wrong_username"] += 1  # НЕ premium-энтити — не трогаем
-                    elif dt is None or dt <= cutoff:
-                        stats["sane"] += 1            # уже в норме — не трогаем
-                    else:
-                        stats["phantom"] += 1
-                        verified.append({**p, "verified": True,
-                                         "panel_id": u.get("id")})
-            await asyncio.sleep(_FIX_THROTTLE_S)
-
-    await asyncio.gather(*[_one(p) for p in plan])
+             "sane": 0, "gone": 0, "error": 0, "panel_seen": len(all_users)}
+    for p in plan:
+        stats["done"] += 1
+        u = by_uuid.get(str(p["panel_uuid"]))
+        if u is None:
+            stats["gone"] += 1
+            continue
+        uname = (u.get("username") or "").strip()
+        dt = _parse_rmn_dt(u.get("expireAt"))
+        if uname != f"tg_{p['telegram_id']}_premium":
+            stats["wrong_username"] += 1   # НЕ premium-энтити — исключаем
+        elif dt is None or dt <= cutoff:
+            stats["sane"] += 1             # уже в норме — исключаем
+        else:
+            stats["phantom"] += 1
+            verified.append({**p, "verified": True, "panel_id": u.get("id")})
     return verified, stats
 
 
@@ -430,11 +425,16 @@ async def callback_premium_recovery(callback: CallbackQuery):
             if verify_task.done():
                 break
             try:
+                seen = progress.get("panel_seen", 0)
+                ptotal = progress.get("panel_total")
+                tail = f" / ~{ptotal}" if ptotal else ""
                 await safe_edit_text(
                     callback.message,
-                    "🩹 Проверяю КАЖДОГО кандидата в панели…\n\n"
-                    f"Проверено: <b>{progress.get('done', 0)}</b> / {db_pool}\n"
-                    "<i>(оставляю только tg_*_premium с expireAt &gt; 5 лет)</i>",
+                    "🩹 Сверяю с панелью (медленный стрим, без упора в лимит)…\n\n"
+                    f"Просмотрено энтити: <b>{seen}</b>{tail}\n"
+                    f"Кандидатов из БД: {db_pool}\n"
+                    "<i>Оставлю только tg_*_premium с expireAt &gt; 5 лет. "
+                    "Идёт медленно (паузы между страницами) — это норма.</i>",
                     bot=callback.bot, parse_mode="HTML",
                 )
             except Exception:

@@ -397,13 +397,19 @@ async def _resolve_to_int_id(value: Union[str, int]) -> Optional[int]:
 async def get_all_users(
     page_size: int = 250,
     progress_cb=None,
+    page_delay: float = 0.0,
+    max_retries: int = 3,
 ) -> Optional[list]:
     """GET /api/users/stream с курсорной пагинацией (3.x).
 
     3.x перевёл общий scan на stream-endpoint. Default size = 250,
     max = 1000. Пагинация через `nextCursor` (integer, был string в 2.x).
 
-    Retries: 3 попытки на страницу с exponential backoff.
+    Retries: `max_retries` попыток на страницу с exponential backoff.
+    `page_delay` — пауза (сек) МЕЖДУ успешными страницами. Без неё стрим
+    бёрстит и упирается в rate-limit панели (аборт после ретраев). Для
+    больших/загруженных панелей передавай page_delay≈0.5-1.0 и max_retries≈6
+    — «долго, но без упора в лимит».
 
     progress_cb (опциональный, sync или async) вызывается после каждой
     страницы с (collected, total_or_none).
@@ -420,18 +426,20 @@ async def get_all_users(
         if cursor is not None:
             params += f"&cursor={cursor}"
         page = None
-        for attempt in range(3):
+        for attempt in range(max(1, max_retries)):
             page = await _request("GET", f"/api/users/stream?{params}")
             if page is not None:
                 break
-            backoff = 1.5 ** attempt
+            # Длиннее ждём при устойчивом 429 — чтобы дождаться окна лимита,
+            # а не аборт. cap ~30с.
+            backoff = min(30.0, 1.7 ** attempt)
             logger.warning(
                 "REMNAWAVE_STREAM: cursor=%s attempt=%s failed, retrying in %.1fs",
                 cursor, attempt + 1, backoff,
             )
             await asyncio.sleep(backoff)
         if page is None:
-            logger.error("REMNAWAVE_STREAM: cursor=%s failed after 3 attempts", cursor)
+            logger.error("REMNAWAVE_STREAM: cursor=%s failed after %s attempts", cursor, max_retries)
             return None
         if isinstance(page, dict):
             batch = page.get("users") or []
@@ -459,6 +467,9 @@ async def get_all_users(
         if safety_pages > 8000:  # 8000 * 250 = 2M records safety
             logger.error("REMNAWAVE_STREAM: aborted at 8000 pages")
             break
+        # Пауза между страницами — чтобы не бёрстить в rate-limit панели.
+        if page_delay > 0:
+            await asyncio.sleep(page_delay)
     return collected
 
 
