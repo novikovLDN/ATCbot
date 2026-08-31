@@ -207,7 +207,52 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
     return len(candidates), plan
 
 
-def _format_dry_run(checked: int, plan: list) -> str:
+async def _verify_plan_against_panel(plan: list, progress: "dict | None" = None):
+    """Intersect the DB plan with the LIVE panel and keep only entities whose
+    premium expireAt is ACTUALLY > NOW+5y (the real phantoms).
+
+    DB candidates match on the bypass-only +10y marker in `expires_at`, so
+    most are NOT affected — their premium entity already expired correctly.
+    The panel is the source of truth. One get_all_users() stream (not N GETs).
+
+    Returns (verified_plan, panel_ok). panel_ok=False → panel unreachable, we
+    DO NOT filter (return plan unchanged) so real phantoms are never dropped;
+    apply's per-entity SAFETY CHECK 3 still guards against shortening anyone.
+    """
+    from app.services import remnawave_api
+    cutoff = datetime.now(timezone.utc) + timedelta(days=365 * 5)
+
+    def _cb(collected, _total):
+        if progress is not None:
+            progress["panel_seen"] = collected
+
+    all_users = await remnawave_api.get_all_users(progress_cb=_cb)
+    if not all_users:
+        return plan, False
+
+    exp_by_uuid: dict = {}
+    exp_by_username: dict = {}
+    for u in all_users:
+        dt = _parse_rmn_dt(u.get("expireAt"))
+        uid = u.get("uuid") or u.get("vlessUuid")
+        if uid:
+            exp_by_uuid[str(uid)] = dt
+        un = (u.get("username") or "").strip()
+        if un:
+            exp_by_username[un] = dt
+
+    verified: list = []
+    for p in plan:
+        dt = exp_by_uuid.get(str(p["panel_uuid"]))
+        if dt is None:
+            dt = exp_by_username.get(f"tg_{p['telegram_id']}_premium")
+        # Keep ONLY entities the panel actually shows as far-future premium.
+        if dt is not None and dt > cutoff:
+            verified.append(p)
+    return verified, True
+
+
+def _format_dry_run(checked: int, plan: list, panel_ok: bool = True) -> str:
     by_source: dict = {}
     for p in plan:
         by_source.setdefault(p["source"], []).append(p)
@@ -227,7 +272,21 @@ def _format_dry_run(checked: int, plan: list) -> str:
     lines = [
         "🩹 <b>Откат premium-подписок (Dry-run)</b>",
         "",
-        f"Кандидатов в БД: <b>{checked}</b>",
+        f"Кандидатов в БД (bypass-only +10y маркер): <b>{checked}</b>",
+    ]
+    if panel_ok:
+        lines.append(
+            f"✅ Из них РЕАЛЬНО фантомов в панели (expireAt &gt; 5 лет): <b>{n_total}</b>"
+        )
+        lines.append(
+            "<i>Остальные — их premium-энтити уже корректно истёк, панель их не тронет.</i>"
+        )
+    else:
+        lines.append(
+            "⚠️ <i>Панель недоступна — показан пул из БД без сверки. "
+            "Apply всё равно самопроверяется по каждой энтити.</i>"
+        )
+    lines += [
         "",
         "<i>По источнику истины (берём MAX по всем):</i>",
         f"  📜 <b>{n_hist}</b> — subscription_history (главный ledger)",
@@ -334,9 +393,39 @@ async def callback_premium_recovery(callback: CallbackQuery):
         )
         return
 
-    _last_plan[callback.from_user.id] = plan
+    # Panel verification: stream the panel ONCE and keep only entities whose
+    # premium expireAt is actually > 5y — the REAL phantoms. Turns the scary
+    # DB-pool number into the truth (panel-first, as requested).
+    panel_ok = True
+    try:
+        progress["phase"] = "panel"
+        progress["panel_seen"] = 0
+        verify_task = asyncio.create_task(_verify_plan_against_panel(plan, progress))
+        while not verify_task.done():
+            await asyncio.sleep(_PROGRESS_INTERVAL)
+            if verify_task.done():
+                break
+            try:
+                await safe_edit_text(
+                    callback.message,
+                    "🩹 Сверяю с панелью (стрим Remnawave)…\n\n"
+                    f"Просмотрено энтити: <b>{progress.get('panel_seen', 0)}</b>\n"
+                    f"Кандидатов из БД: {len(plan)}",
+                    bot=callback.bot, parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        verified_plan, panel_ok = await verify_task
+    except Exception as e:
+        logger.warning("PREMIUM_RECOVERY: panel verify failed: %s — using DB plan", e)
+        verified_plan, panel_ok = plan, False
 
-    actionable = [p for p in plan if p["action"] == "patch"]
+    # Apply works off the VERIFIED plan (real phantoms only). If the panel was
+    # unreachable we fall back to the DB plan — apply's per-entity check guards.
+    render_plan = verified_plan if panel_ok else plan
+    _last_plan[callback.from_user.id] = render_plan
+
+    actionable = [p for p in render_plan if p["action"] == "patch"]
     rows = []
     if actionable:
         rows.append([InlineKeyboardButton(
@@ -347,7 +436,7 @@ async def callback_premium_recovery(callback: CallbackQuery):
 
     await safe_edit_text(
         callback.message,
-        _format_dry_run(checked, plan),
+        _format_dry_run(checked, render_plan, panel_ok=panel_ok),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         bot=callback.bot, parse_mode="HTML",
     )
