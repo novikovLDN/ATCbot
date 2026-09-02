@@ -1096,7 +1096,7 @@ async def _apply_promo_reward(
             return False, ""
         return True, i18n_get_text(
             language, "promo_link.reward_discount_traffic",
-            "🎁 <b>Твой подарок активирован</b>\n\n<blockquote>— Скидка <b>{percent}%</b> на пакеты Pro-трафика\n— Действует ещё <b>{hours} часов</b></blockquote>\n\nВыбери подходящий тариф ниже ↓",
+            "🎁 <b>Твой подарок активирован</b>\n\n<blockquote>— Скидка <b>{percent}%</b> на пакеты ГБ обхода\n— Действует ещё <b>{hours} часов</b></blockquote>\n\nВыбери подходящий тариф ниже ↓",
             percent=reward_value, hours=hours,
         )
 
@@ -1125,7 +1125,7 @@ async def _apply_promo_reward(
             return False, ""
         return True, i18n_get_text(
             language, "promo_link.reward_bypass_gb",
-            "📊 <b>+{gb} ГБ</b> Pro-трафика начислено\n\nПакет ГБ не сгорает — тратится только при работе на LTE-серверах.",
+            "📊 <b>+{gb} ГБ</b> обхода начислено\n\nПакет ГБ не сгорает — тратится только при работе на LTE-серверах.",
             gb=gb,
         )
 
