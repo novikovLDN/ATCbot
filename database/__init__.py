@@ -286,6 +286,8 @@ from database.admin import (  # noqa: F401
     get_broadcast,
     save_broadcast_discount,
     save_broadcast_gift_reveal_percent,
+    claim_broadcast_trial_key,
+    release_broadcast_trial_key,
     get_broadcast_discount,
     get_analytics_by_period,
     get_active_paid_subscriptions_count,

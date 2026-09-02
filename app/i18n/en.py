@@ -639,6 +639,11 @@ LANG = {
     'trial.activated': "✅ <b>Trial access activated</b>\n\n📦 Plan: Basic · 3 days\n📅 Until: {expires_date}\n\nTo get started — tap <b>📲 Set up device</b> and follow the simple step-by-step guide.",
     'trial.activated_btn_connect': "🚀 Connect",
     'trial.activated_btn_profile': "👤 My Profile",
+
+    # === BROADCAST: «🎁 Get trial key» ===
+    'broadcast.trial_key_activated': "🎁 <b>Gift activated!</b>\n\nYou've received: <b>1 day</b> of subscription access and <b>1 GB</b> of whitelist-bypass traffic.\n\nLet's connect your device 👇",
+    'broadcast.trial_key_already': "🎁 Gift already claimed",
+    'broadcast.trial_key_error': "Couldn't activate the gift, please try again later.",
     'trial.expired': "🔓 <b>Trial access ended</b>\n\nYour trial period has expired.\n\n🎟 Use promo code <b>YABX30</b> for 30% discount on your first subscription.\n\nSubscribe now to continue using secure access.",
     'trial.notification_6h': "✨ Just a reminder\n\nVPN is better to keep on all the time to protect your data.",
     'trial.notification_60h': "🛡 VPN will be disabled soon\n\n12 hours of trial access remaining.\n\nContinue using protection — subscribe now.",
