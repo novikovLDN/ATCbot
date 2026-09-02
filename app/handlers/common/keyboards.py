@@ -131,9 +131,9 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             icon_custom_emoji_id=buy_icon,
             style="success",
         )])
-        # Row 2: Докупить Pro-трафик (📡)
+        # Row 2: Докупить ГБ обхода (📡)
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.btn_buy_gb", "Докупить Pro-трафик"),
+            text=i18n_get_text(language, "main.btn_buy_gb", "Докупить ГБ обхода"),
             callback_data="buy_traffic",
             icon_custom_emoji_id=CE["traffic"],
             style="success",
@@ -187,7 +187,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         # «Только обход блокировок» — только для юзеров без истории
         if not has_bypass_history:
             buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, "main.btn_bypass_only", "🌐 Только Pro-режим"),
+                text=i18n_get_text(language, "main.btn_bypass_only", "🌐 Только обход блокировок"),
                 callback_data="buy_bypass_only",
                 style=primary_cta_style,
             )])
@@ -375,9 +375,9 @@ def get_profile_keyboard(
         style="success",
     )])
 
-    # Row 2: Докупить Pro-трафик (📡)
+    # Row 2: Докупить ГБ обхода (📡)
     buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.btn_buy_gb", "Докупить Pro-трафик"),
+        text=i18n_get_text(language, "main.btn_buy_gb", "Докупить ГБ обхода"),
         callback_data="buy_traffic",
         icon_custom_emoji_id=CE["traffic"],
         style="success",
