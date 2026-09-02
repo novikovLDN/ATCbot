@@ -2090,6 +2090,49 @@ async def get_users_by_segment(segment: str) -> list:
                 days + 1, days,
             )
             return [row["telegram_id"] for row in rows]
+        elif segment == "expired_within_1y":
+            # Любая подписка (триал ∪ платная ∪ gift ∪ admin_grant) БЫЛА и
+            # истекла в течение последних 365 дней, а СЕЙЧАС активной подписки
+            # нет. Максимальная годовая реактивационная аудитория «всех, кто
+            # был с нами за год и ушёл».
+            #
+            # Источник — UNION истории и текущего состояния:
+            #   • subscription_history.end_date — все прошлые окончания (renewal
+            #     перезаписывает subscriptions.expires_at, старое значение живёт
+            #     только тут; триалы пишутся с action_type='trial');
+            #   • subscriptions.expires_at — текущая (возможно уже истёкшая) строка.
+            # MAX(end_date) по юзеру → последнее окончание любой подписки.
+            # BETWEEN NOW-365d AND NOW гарантирует «истекло в пределах года» и
+            # «сейчас не активен» (у активного max был бы в будущем). NOT EXISTS —
+            # defensive-дубль гарантии неактивности.
+            #
+            # tz: `(NOW() AT TIME ZONE 'UTC')` для стабильного сравнения с
+            # TIMESTAMP-без-TZ в любой session-TZ (см. коммент в expired_1d).
+            rows = await conn.fetch(
+                """WITH last_end AS (
+                       SELECT telegram_id, MAX(end_date) AS last_end
+                       FROM (
+                           SELECT telegram_id, end_date
+                           FROM subscription_history
+                           WHERE end_date IS NOT NULL
+                           UNION ALL
+                           SELECT telegram_id, expires_at AS end_date
+                           FROM subscriptions
+                           WHERE expires_at IS NOT NULL
+                       ) e
+                       GROUP BY telegram_id
+                   )
+                   SELECT le.telegram_id FROM last_end le
+                   WHERE le.last_end BETWEEN
+                             (NOW() AT TIME ZONE 'UTC') - INTERVAL '365 days'
+                         AND (NOW() AT TIME ZONE 'UTC')
+                     AND NOT EXISTS (
+                         SELECT 1 FROM subscriptions s
+                         WHERE s.telegram_id = le.telegram_id
+                           AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                     )"""
+            )
+            return [row["telegram_id"] for row in rows]
         else:
             logging.warning(f"Unknown segment: {segment}, returning empty list")
             return []
