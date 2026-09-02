@@ -490,6 +490,7 @@ _BUTTON_TYPES = {
     "my_proxy",
     "gift_combo",
     "beta_apply",
+    "trial_key",
 }
 
 
@@ -920,6 +921,15 @@ def _build_reply_markup(
             rows.append([InlineKeyboardButton(
                 text="🧪 Оставить заявку",
                 callback_data=f"beta_apply:{broadcast_id}",
+            )])
+        elif btn == "trial_key":
+            # «🎁 Получить пробный ключ»: +1 день подписки и +1 ГБ обхода.
+            # Один раз на рассылку (broadcast_id, telegram_id). После выдачи —
+            # «Подарок активирован» + экран подключения устройства через ~1.5с.
+            # Handler: app/handlers/callbacks/broadcast_trial_key.py.
+            rows.append([InlineKeyboardButton(
+                text="🎁 Получить пробный ключ",
+                callback_data=f"broadcast_trial_key:{broadcast_id}",
             )])
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 

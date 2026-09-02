@@ -552,6 +552,89 @@ async def save_broadcast_gift_reveal_percent(broadcast_id: int, gift_reveal_perc
                 raise
 
 
+async def claim_broadcast_trial_key(broadcast_id: int, telegram_id: int) -> bool:
+    """Атомарно застолбить подарок «🎁 Получить пробный ключ» за юзером.
+
+    Ограничение: ОДИН раз на рассылку (broadcast_id, telegram_id). Возвращает
+    True, если это ПЕРВЫЙ клик (подарок нужно выдать), False — если юзер уже
+    забирал подарок в этой рассылке (повторный клик → ничего не выдаём).
+
+    Идемпотентность через PRIMARY KEY (broadcast_id, telegram_id) +
+    INSERT ... ON CONFLICT DO NOTHING RETURNING (migration 080). При гонке
+    двух кликов выиграет ровно один INSERT.
+
+    Fail-safe: если таблица ещё не создана миграцией — не блокируем выдачу
+    (лениво создаём таблицу и повторяем INSERT). Никогда не бросает наверх —
+    при непреодолимой ошибке возвращает True (лучше выдать подарок, чем
+    оставить юзера ни с чем из-за инфры), полагаясь на rate-limit хендлера.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            row = await conn.fetchrow(
+                """INSERT INTO broadcast_trial_key_claims (broadcast_id, telegram_id)
+                   VALUES ($1, $2)
+                   ON CONFLICT (broadcast_id, telegram_id) DO NOTHING
+                   RETURNING telegram_id""",
+                int(broadcast_id), int(telegram_id),
+            )
+            return row is not None
+        except Exception as e:
+            # Таблица могла ещё не накатиться — создаём лениво и повторяем.
+            logger.warning(
+                "CLAIM_TRIAL_KEY: INSERT failed broadcast_id=%s tg=%s err=%s "
+                "— пробую создать таблицу лениво",
+                broadcast_id, telegram_id, e,
+            )
+            try:
+                await conn.execute(
+                    """CREATE TABLE IF NOT EXISTS broadcast_trial_key_claims (
+                           broadcast_id BIGINT NOT NULL,
+                           telegram_id  BIGINT NOT NULL,
+                           claimed_at   TIMESTAMP WITHOUT TIME ZONE NOT NULL
+                                        DEFAULT (now() AT TIME ZONE 'utc'),
+                           PRIMARY KEY (broadcast_id, telegram_id)
+                       )"""
+                )
+                row = await conn.fetchrow(
+                    """INSERT INTO broadcast_trial_key_claims (broadcast_id, telegram_id)
+                       VALUES ($1, $2)
+                       ON CONFLICT (broadcast_id, telegram_id) DO NOTHING
+                       RETURNING telegram_id""",
+                    int(broadcast_id), int(telegram_id),
+                )
+                return row is not None
+            except Exception as e2:
+                logger.error(
+                    "CLAIM_TRIAL_KEY_TOTAL_FAIL broadcast_id=%s tg=%s: %s "
+                    "— fail-open (выдаём подарок)",
+                    broadcast_id, telegram_id, e2,
+                )
+                return True
+
+
+async def release_broadcast_trial_key(broadcast_id: int, telegram_id: int) -> None:
+    """Снять claim подарка (откат claim_broadcast_trial_key).
+
+    Вызывается, если выдача подарка упала ПОСЛЕ успешного claim — чтобы юзер
+    не сжёг свою единственную попытку из-за инфра-ошибки и мог кликнуть снова.
+    Best-effort, никогда не бросает наверх.
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """DELETE FROM broadcast_trial_key_claims
+                   WHERE broadcast_id = $1 AND telegram_id = $2""",
+                int(broadcast_id), int(telegram_id),
+            )
+    except Exception as e:
+        logger.warning(
+            "RELEASE_TRIAL_KEY_FAIL broadcast_id=%s tg=%s: %s",
+            broadcast_id, telegram_id, e,
+        )
+
+
 async def get_broadcast_discount(broadcast_id: int) -> Optional[Dict[str, Any]]:
     """Get discount info for a broadcast promo button."""
     pool = await get_pool()

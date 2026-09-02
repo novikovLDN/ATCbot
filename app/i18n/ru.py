@@ -860,6 +860,12 @@ LANG = {
     'trial.activated_btn_connect': "⚡️ Подключиться — это быстро",
     'trial.activated_btn_support': "💬 Нужна помощь",
 
+    # === BROADCAST: «🎁 Получить пробный ключ» ===
+    'broadcast.trial_key_activated': "🎁 <b>Подарок активирован!</b>\n\nВам активировано: доступ на <b>1 день</b> подписки и <b>1 ГБ</b> трафика обхода белых списков.\n\nПодключите устройство по кнопке ниже 👇",
+    'broadcast.trial_key_connect_btn': "⚡️ Подключить устройство",
+    'broadcast.trial_key_already': "🎁 Подарок уже получен",
+    'broadcast.trial_key_error': "Не удалось активировать подарок, попробуйте позже.",
+
     # === PURCHASE CONFIRMATION ===
     'purchase.success_first': "🎉 <b>Подписка оформлена!</b>\n\n{tariff_name}\n⏳ Срок: {period}\n📅 До: {expires_date}\n\nОсталось подключиться — нажмите кнопку ниже.\n\n📲 <b>Подключиться</b> — настроить VPN за минуту\n👤 <b>Личный кабинет</b> — баланс, срок, автопродление\n📊 <b>Мой трафик</b> — контроль обхода белых списков\n\n🤍 Ваш трафик под защитой Atlas Secure.",
 
