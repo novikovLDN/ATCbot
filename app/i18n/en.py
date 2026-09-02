@@ -946,16 +946,16 @@ LANG = {
     ),
 
     # combo
-    'combo.screen_title': "🚀 <b>Combo Subscription</b>\n\nMain servers + traffic in one pack.\nChoose a plan:",
-    'combo.tariff_basic': "⚡ <b>Combo Basic</b>\n\n<blockquote>🌐 Main servers (unlimited) · up to 25 Gbps\n🌐 Traffic included\n👨‍👩‍👧‍👦 One subscription for the whole family — up to 10 devices</blockquote>\n\n📊 <b>The pack is your personal GB balance</b>\n<blockquote>It doesn't expire and isn't tied to a subscription — it only depletes when you actually use servers marked <b>LTE</b>.</blockquote>\n\n<i>When it runs out — top up whenever it's convenient</i> ⭐️",
-    'combo.tariff_plus': "👑 <b>Combo Plus</b>\n\n<blockquote>🌐 Priority servers (unlimited) · up to 75 Gbps\n🔄 Backup channels · connection always works\n🌐 Traffic included\n👨‍👩‍👧‍👦 One subscription for the whole family — up to 14 devices</blockquote>\n\n📊 <b>The pack is your personal GB balance</b>\n<blockquote>It doesn't expire and isn't tied to a subscription — it only depletes when you actually use servers marked <b>LTE</b>.</blockquote>\n\n<i>When it runs out — top up whenever it's convenient</i> ⭐️",
+    'combo.screen_title': "🚀 <b>Combo Subscription</b>\n\nMain servers + whitelist bypass in one pack.\nChoose a plan:",
+    'combo.tariff_basic': "⚡ <b>Combo Basic</b>\n\n<blockquote>🌐 Main servers (unlimited) · up to 25 Gbps\n🌐 Whitelist bypass + traffic included\n👨‍👩‍👧‍👦 One subscription for the whole family — up to 10 devices</blockquote>\n\n📊 <b>The pack is your personal GB balance</b>\n<blockquote>It doesn't expire and isn't tied to a subscription — it only depletes when you actually use servers marked <b>LTE</b>.</blockquote>\n\n<i>When it runs out — top up whenever it's convenient</i> ⭐️",
+    'combo.tariff_plus': "👑 <b>Combo Plus</b>\n\n<blockquote>🌐 Priority servers (unlimited) · up to 75 Gbps\n🔄 Backup channels · connection always works\n🌐 Whitelist bypass + traffic included\n👨‍👩‍👧‍👦 One subscription for the whole family — up to 14 devices</blockquote>\n\n📊 <b>The pack is your personal GB balance</b>\n<blockquote>It doesn't expire and isn't tied to a subscription — it only depletes when you actually use servers marked <b>LTE</b>.</blockquote>\n\n<i>When it runs out — top up whenever it's convenient</i> ⭐️",
     'combo.select_basic': "⚡ Combo Basic",
     'combo.select_plus': "👑 Combo Plus",
-    'combo.period_1': "1 mo · {gb} GB traffic · {price} ₽",
-    'combo.period_3': "3 mo · {gb} GB traffic · {price} ₽",
-    'combo.period_6': "6 mo · {gb} GB traffic · {price} ₽",
-    'combo.period_12': "12 mo · {gb} GB traffic · {price} ₽",
-    'combo.period_24': "24 mo · {gb} GB traffic · {price} ₽",
+    'combo.period_1': "1 mo · {gb} GB bypass · {price} ₽",
+    'combo.period_3': "3 mo · {gb} GB bypass · {price} ₽",
+    'combo.period_6': "6 mo · {gb} GB bypass · {price} ₽",
+    'combo.period_12': "12 mo · {gb} GB bypass · {price} ₽",
+    'combo.period_24': "24 mo · {gb} GB bypass · {price} ₽",
     'combo.purchase_success': "✅ <b>Combo subscription activated!</b>\n\n📦 Plan: <b>Combo {tariff}</b> · {months} mo.\n🌐 Bypass: <b>{gb} GB</b> credited\n\nTap «Connect» to set up your device.",
 
     # help / FAQ
@@ -1300,10 +1300,10 @@ LANG = {
     'traffic.gb_price_label': "{gb} GB — {price} ₽",
 
     # buy screen
-    'buy.combo_button': "🚀 Combo (VPN + traffic)",
+    'buy.combo_button': "🚀 Combo (VPN + bypass)",
     'buy.have_promo_button': "I have a promo code",
-    'buy.select_tariff_new': '<tg-emoji emoji-id="5427168083074628963">💎</tg-emoji> <b>Choose a plan</b>\n\n{tariffs}\n\n<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Combo</b> — VPN + traffic in one pack\n<blockquote>Traffic included · from 329 ₽/mo</blockquote>',
-    'buy.select_tariff_bypass_active': "🌐 <b>Extra traffic is active for you</b>\n\nChoose a plan for the main subscription:\n\n{tariffs}\n\n<tg-emoji emoji-id=\"5445284980978621387\">🚀</tg-emoji> <b>Combo</b> — VPN + traffic in one pack\n<blockquote>Traffic included · from 329 ₽/mo</blockquote>",
+    'buy.select_tariff_new': '<tg-emoji emoji-id="5427168083074628963">💎</tg-emoji> <b>Choose a plan</b>\n\n{tariffs}\n\n<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Combo</b> — VPN + bypass in one pack\n<blockquote>Bypass traffic included · from 329 ₽/mo</blockquote>',
+    'buy.select_tariff_bypass_active': "🌐 <b>Bypass is active for you</b>\n\nChoose a plan for the main subscription:\n\n{tariffs}\n\n<tg-emoji emoji-id=\"5445284980978621387\">🚀</tg-emoji> <b>Combo</b> — VPN + bypass in one pack\n<blockquote>Bypass traffic included · from 329 ₽/mo</blockquote>",
 
     # profile screen (personal cabinet)
     'profile.info_active_until': "📆 Subscription: active until {date}",
