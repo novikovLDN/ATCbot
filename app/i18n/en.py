@@ -641,8 +641,7 @@ LANG = {
     'trial.activated_btn_profile': "👤 My Profile",
 
     # === BROADCAST: «🎁 Get trial key» ===
-    'broadcast.trial_key_activated': "🎁 <b>Gift activated!</b>\n\nYou've received: <b>1 day</b> of subscription access and <b>1 GB</b> of whitelist-bypass traffic.\n\nConnect your device with the button below 👇",
-    'broadcast.trial_key_connect_btn': "⚡️ Connect device",
+    'broadcast.trial_key_activated': "🎁 <b>Gift activated!</b>\n\nYou've received: <b>1 day</b> of subscription access and <b>1 GB</b> of whitelist-bypass traffic.\n\nLet's connect your device 👇",
     'broadcast.trial_key_already': "🎁 Gift already claimed",
     'broadcast.trial_key_error': "Couldn't activate the gift, please try again later.",
     'trial.expired': "🔓 <b>Trial access ended</b>\n\nYour trial period has expired.\n\n🎟 Use promo code <b>YABX30</b> for 30% discount on your first subscription.\n\nSubscribe now to continue using secure access.",

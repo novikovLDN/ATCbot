@@ -221,19 +221,11 @@ async def callback_broadcast_trial_key(callback: CallbackQuery) -> None:
             pass
         return
 
-    # Сообщение «Подарок активирован» + кнопка подключения.
+    # Сообщение «Подарок активирован» БЕЗ кнопок — следом (через ~1.5с)
+    # придёт экран выбора устройства.
     activated_text = i18n_get_text(language, "broadcast.trial_key_activated")
-    connect_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "broadcast.trial_key_connect_btn"),
-            callback_data="connect_instruction",
-            style="primary",
-        )],
-    ])
     try:
-        await callback.message.answer(
-            activated_text, parse_mode="HTML", reply_markup=connect_kb,
-        )
+        await callback.message.answer(activated_text, parse_mode="HTML")
     except Exception as e:
         logger.warning("TRIAL_KEY_ACTIVATED_MSG_FAIL tg=%s: %s", telegram_id, e)
 
