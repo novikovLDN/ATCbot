@@ -445,7 +445,7 @@ async def callback_traffic_info(callback: CallbackQuery):
         )])
     else:
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.buy_gb_btn", "📈 Докупить ГБ обхода"),
+            text=i18n_get_text(language, "traffic.buy_gb_btn", "📈 Докупить Pro-трафик"),
             callback_data="buy_traffic",
             icon_custom_emoji_id=CE["traffic"],
             style="success",
@@ -623,7 +623,7 @@ async def show_traffic_info_message(message):
         )])
     else:
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.buy_gb_btn", "📈 Докупить ГБ обхода"),
+            text=i18n_get_text(language, "traffic.buy_gb_btn", "📈 Докупить Pro-трафик"),
             callback_data="buy_traffic",
             icon_custom_emoji_id=CE["traffic"],
             style="success",
