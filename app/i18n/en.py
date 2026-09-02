@@ -10,7 +10,7 @@ LANG = {
     'admin.activation_error_error': "Error: `{error_msg}`",
     'admin.activation_error_status': "Subscription marked as `failed`.",
     'admin.activation_error_subscription_id': "Subscription ID: `{subscription_id}`",
-    'admin.activation_error_title': "⚠️ **VPN SUBSCRIPTION ACTIVATION ERROR**",
+    'admin.activation_error_title': "⚠️ **VPS SUBSCRIPTION ACTIVATION ERROR**",
     'admin.activation_error_user': "User: `{telegram_id}`",
     'admin.analytics': "💰 Analytics",
     'admin.approve': "Approve",
@@ -82,13 +82,13 @@ LANG = {
     'admin.grant_days_14': "14 days",
     'admin.grant_days_7': "7 days",
     'admin.grant_days_prompt': "Select access period:",
-    'admin.grant_fail_no_keys': "❌ No free VPN keys available",
+    'admin.grant_fail_no_keys': "❌ No free VPS keys available",
     'admin.grant_minutes_10': "⏱ 10 minutes",
     'admin.grant_success': "✅ Access granted for {days} days.\n\nAccess activated by administrator.",
     'admin.grant_unit_days': "📅 Days",
     'admin.grant_unit_hours': "🕐 Hours",
     'admin.grant_unit_minutes': "⏱ Minutes",
-    'admin.grant_user_notification': "✅ You have been granted access to Atlas Secure for {days} days.\nVPN key: {sub_url}\nExpires: {date}",
+    'admin.grant_user_notification': "✅ You have been granted access to Atlas Secure for {days} days.\nVPS key: {sub_url}\nExpires: {date}",
     'admin.grant_user_notification_10m': "⏱ Access activated for 10 minutes.\n\nYou can connect immediately.\nAccess will be suspended automatically when it expires.",
     'admin.grant_vip': "👑 Grant VIP",
     'admin.incident_disable': "❌ Disable",
@@ -100,7 +100,7 @@ LANG = {
     'admin.incident_text_label': "Incident text:",
     'admin.incident_text_prompt': "Enter incident text (or send /cancel to cancel):",
     'admin.incident_title': "🚨 Incident",
-    'admin.keys': "🔑 VPN Keys",
+    'admin.keys': "🔑 VPS Keys",
     'admin.metrics': "📈 Metrics",
     'admin.my_profile': "👤 My Profile",
     'admin.next_page': "➡️ Next",
@@ -112,7 +112,7 @@ LANG = {
     'admin.operation_cancelled': "❌ Operation cancelled",
     'admin.payment_notification': "💰 New payment\nUser: @{username}\nTelegram ID: {telegram_id}\nTariff: {tariff} months\nPrice: {price} ₽",
     'admin.pending_activations_row': "{idx}. ID: `{subscription_id}` | User: `{telegram_id}` | Attempts: {attempts} | Since {pending_since}\n   Error: `{error}`\n",
-    'admin.pending_activations_title': "⚠️ **PENDING VPN ACTIVATIONS**\n",
+    'admin.pending_activations_title': "⚠️ **PENDING VPS ACTIVATIONS**\n",
     'admin.pending_activations_top': "\n**Top 5 oldest:**\n",
     'admin.pending_activations_total': "Total pending subscriptions: **{count}**\n",
     'admin.prev': "⬅️ Back",
@@ -131,7 +131,7 @@ LANG = {
     'admin.reissue_key': "🔁 Reissue Key",
     'admin.reissue_success': "Key successfully reissued",
     'admin.reissue_usage': "Usage: /reissue_key <telegram_id>",
-    'admin.reissue_user_notification': "🔐 VPN key updated\n\nYour VPN connection key has been updated.\n\n🔑 <b>New key:</b>\n<code>{sub_url}</code>\n\nUse this key in your VPN app.\n\nThe old key is no longer valid.",
+    'admin.reissue_user_notification': "🔐 VPS key updated\n\nYour VPS connection key has been updated.\n\n🔑 <b>New key:</b>\n<code>{sub_url}</code>\n\nUse this key in your VPS app.\n\nThe old key is no longer valid.",
     'admin.reject': "Reject",
     'admin.revoke_access': "🔴 Revoke Access",
     'admin.revoke_confirm_text': "❌ Revoke access\n\nNotify user?",
@@ -213,7 +213,7 @@ LANG = {
     'buy.enter_promo': "🎟 Enter promo code",
     'buy.enter_promo_button': "🎟 Enter promo code",
     'buy.enter_promo_text': "Enter promo code:",
-    'buy.invoice_description': "Atlas Secure VPN {tariff_name} tariff, {months}-month subscription",
+    'buy.invoice_description': "Atlas Secure VPS {tariff_name} tariff, {months}-month subscription",
     'buy.invoice_label': "To pay",
     'buy.period_1': "1 month",
     'buy.period_2_4': "{months} months",
@@ -244,9 +244,9 @@ LANG = {
     'buy.tariff_corporate': "🏗 Corporate access\n\nSolution for teams of any size\n\n🖥 Dedicated server for your company\n👥 Employee access control\n🛠 Tailored setup and support\n\n👉 Message us — we’ll pick the right setup for your needs",
     'buy.tariff_label_basic': "🪙 Basic",
     'buy.tariff_label_plus': "👑 Plus",
-    'buy.tariff_plus': "👑 Plus\nAlways online — even when other VPNs fail\nBypass any blocks with priority speed ⚡️",
-    'buy.tariff_plus_desc': "👑 Tariff: Plus\n\nAlways online — even when other VPNs fail\n\n⚡ Priority speed for streaming and gaming\n🛡 Bypasses any blocks including whitelists\n🇪🇺 Dedicated servers in multiple countries\n🔄 Backup routes — VPN keeps working even under load\n\n👉 Maximum reliability and freedom with no compromises",
-    'buy.tariff_plus_description': "👑 Tariff: Plus\n\nAlways online — even when other VPNs fail\n\n⚡ Priority speed for streaming and gaming\n🛡 Bypasses any blocks including whitelists\n🇪🇺 Dedicated servers in multiple countries\n🔄 Backup routes — VPN keeps working even under load\n\n👉 Maximum reliability and freedom with no compromises",
+    'buy.tariff_plus': "👑 Plus\nAlways online — even when other VPS apps fail\nAccess to any sites with priority speed ⚡️",
+    'buy.tariff_plus_desc': "👑 Tariff: Plus\n\nAlways online — even when other VPS apps fail\n\n⚡ Priority speed for streaming and gaming\n🛡 Access to any sites and services\n🇪🇺 Dedicated servers in multiple countries\n🔄 Backup routes — VPS keeps working even under load\n\n👉 Maximum reliability and freedom with no compromises",
+    'buy.tariff_plus_description': "👑 Tariff: Plus\n\nAlways online — even when other VPS apps fail\n\n⚡ Priority speed for streaming and gaming\n🛡 Access to any sites and services\n🇪🇺 Dedicated servers in multiple countries\n🔄 Backup routes — VPS keeps working even under load\n\n👉 Maximum reliability and freedom with no compromises",
     'buy.tariff_plus_selected': "🔐 Plus tariff selected\nWhat period are you interested in?",
     'buy.tariff_select_basic_button': "⚡️ Select Basic",
     'buy.tariff_select_plus_button': "👑 Select Plus",
@@ -293,7 +293,7 @@ LANG = {
     'errors.tariff': "Tariff error",
     'errors.top_referrers': "Error fetching top referrers",
     'errors.try_later': "⚠️ An error occurred. Please try again later.",
-    'errors.vpn_key_creation': "Error creating VPN key. Check logs.",
+    'errors.vpn_key_creation': "Error creating VPS key. Check logs.",
     'get_key.download_happ': "📲 Download Happ",
     'get_key.download_v2raytun': "📲 Download V2RayTun",
     'get_key.instruction_text': "📖 <b>Connection Guide</b>\n\nTap the «📲 Set up device» button below and follow all setup steps.\n\nIf something goes wrong — you can always contact support for help.\n\n⸻\n\n👇 Tap the key to copy:",
@@ -308,16 +308,16 @@ LANG = {
     'setup.autosetup_windows': "🪟 <b>Auto setup — Windows</b>\n\n⚡️ Tap the button below with the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.",
     'setup.manual_button': "📖 Manual setup",
     'setup.copy_key_label': "👇 Tap the key to copy:",
-    'setup.key_vpn_label': "🔑 <b>VPN key</b> (regular servers):",
-    'setup.key_bypass_label': "🔑 <b>Bypass key</b> (RU whitelists):",
+    'setup.key_vpn_label': "🔑 <b>VPS key</b> (regular servers):",
+    'setup.key_bypass_label': "🔑 <b>Pro key</b>:",
     'setup.device_button': "📲 Set up device",
     'setup.done_button': "✅ Done",
     'setup.help_button': "❓ Need help",
     'setup.qr_button': "📲 Add device",
     'setup.qr_choose_type': "📲 <b>Add device</b>\n\nChoose connection type:",
     'setup.qr_standard_btn': "Standard servers (unlimited)",
-    'setup.qr_bypass_btn': "Bypass whitelist",
-    'setup.qr_bypass_unavailable': "❌ Whitelist bypass is not available.\n\nMake sure you have an active subscription and bypass traffic.",
+    'setup.qr_bypass_btn': "Pro",
+    'setup.qr_bypass_unavailable': "❌ Pro is not available.\n\nMake sure you have an active subscription and Pro traffic.",
     'setup.qr_instruction': "📲 <b>Add device</b>\n\n<b>Via QR code:</b>\nScan the code above in Happ → 📸 camera icon.\n\n<b>Manually:</b>\nTap the key below — it will be copied, then in Happ → clipboard icon at bottom.",
     'setup.download_happ': "📲 Download Happ",
     'setup.download_v2rayn': "📲 Download v2rayN",
@@ -328,10 +328,10 @@ LANG = {
     'setup.instruction_macos': "🍎 <b>macOS Setup</b>\n\nDownload one of the apps below and proceed to the next step.\n\n❗️ If the app is not available in your region — choose <b>Happ</b>.",
     'setup.instruction_windows': "🪟 <b>Windows Setup</b>\n\nDownload one of the apps below and proceed to the next step.",
     'setup.select_device': "📱 <b>Select your device:</b>",
-    'setup.combined_ios': "📱 <b>Connect on iOS</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (whitelist bypass)",
-    'setup.combined_android': "🤖 <b>Connect on Android</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (whitelist bypass)",
-    'setup.combined_macos': "🍎 <b>Connect on macOS</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (whitelist bypass)",
-    'setup.combined_windows': "🪟 <b>Connect on Windows</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (whitelist bypass)",
+    'setup.combined_ios': "📱 <b>Connect on iOS</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (Pro)",
+    'setup.combined_android': "🤖 <b>Connect on Android</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (Pro)",
+    'setup.combined_macos': "🍎 <b>Connect on macOS</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (Pro)",
+    'setup.combined_windows': "🪟 <b>Connect on Windows</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (Pro)",
     'incident.banner': "⚠️ Technical work in progress",
     'instruction._device_android': "🤖 Android",
     'instruction._device_desktop': "💻 Windows / macOS",
@@ -417,7 +417,7 @@ LANG = {
     'games.bomber_mine_exploded': "💥 BOOM! You blew up on a bot mine!\n\nGame over. Try again!",
     'games.bomber_safe_exit': "😮‍💨 You exited the game safely!\n\nBombs survived: {count}",
     'main.profile': "👤 Dashboard",
-    'main.profile_active': "👤 Access Profile\n\nAccess status: Active\nAccess paid until {date}\n\nYou are connected. Access works stably.\n\nPersonal access key\nUsed for connection in VPN app.\nConnection persists while access is active.\n\n{sub_url}\n\nWhen renewing, the selected period\nis automatically added to current access.\n\nUntil the period ends, you can\nnot return to settings and payment.",
+    'main.profile_active': "👤 Access Profile\n\nAccess status: Active\nAccess paid until {date}\n\nYou are connected. Access works stably.\n\nPersonal access key\nUsed for connection in VPS app.\nConnection persists while access is active.\n\n{sub_url}\n\nWhen renewing, the selected period\nis automatically added to current access.\n\nUntil the period ends, you can\nnot return to settings and payment.",
     'main.profile_auto_renew_disabled': "🔁 Auto-renewal: disabled",
     'main.profile_auto_renew_enabled': "🔁 Auto-renewal: {next_billing_date}",
     'main.profile_buy_hint': "Click «Buy Subscription» in the menu to get started.",
@@ -432,8 +432,8 @@ LANG = {
     'main.promo_applied': "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Promo code applied. Discount already included in price.",
     'main.promo_discount_label': "🎟 Promo code",
     'main.referral': "💎 Loyalty Program",
-    'main.reissue_notification_text': "Your VPN key has been updated\nand migrated to a new server version.\n\nFor proper operation:\n— remove the old key from VPN app\n— add the new access key\n\nKey:\n\n{sub_url}\n\nUpdate is necessary to maintain\nstability and connection performance.",
-    'main.reissue_notification_title': "🔐 VPN Key Update",
+    'main.reissue_notification_text': "Your VPS key has been updated\nand migrated to a new server version.\n\nFor proper operation:\n— remove the old key from VPS app\n— add the new access key\n\nKey:\n\n{sub_url}\n\nUpdate is necessary to maintain\nstability and connection performance.",
+    'main.reissue_notification_title': "🔐 VPS Key Update",
     'main.reminder_admin_1day_6h': "⏳ Temporary Atlas Secure access expires in 6 hours.\n\nWe recommend purchasing a full subscription\nto maintain stable access without interruption.",
     'main.reminder_admin_7days_24h': "⏳ Temporary Atlas Secure access expires in 24 hours.\n\nWe recommend purchasing a 1-month subscription\nfor continuous and stable connection.",
     'main.reminder_paid_24h': "⏳ Your Atlas Secure access expires in 24 hours.\n\nWe recommend renewing your subscription in advance\nto maintain continuous connection.",
@@ -479,9 +479,9 @@ LANG = {
     'main.trial_button': "🎁 3-Day Trial Period",
     'main.trial_expired_text': "🔓 <b>Trial access ended</b>\n\nYour trial period has expired.\n\n🎟 Use promo code <b>YAbx30</b> for 30% discount on your first subscription.\n\nSubscribe now to continue using secure access.",
     'main.trial_not_available': "❌ Trial period is not available. You have already used it or have an active subscription.",
-    'main.trial_notification_6h': "👋 Glad to have you with us!\n\nYour VPN is active and protecting you right now. Try opening YouTube, Instagram or any blocked site — everything works without limits 🌍",
+    'main.trial_notification_6h': "👋 Glad to have you with us!\n\nYour VPS is active and protecting you right now. Try opening YouTube, Instagram or any blocked site — everything works without limits 🌍",
     'main.trial_notification_60h': "⏰ 24 hours left of your trial\n\nYou've already seen the speed and stability of Atlas Secure. To keep protection running without interruption, start a subscription 🔥",
-    'main.trial_notification_71h': "🔔 In 6 hours your trial access will end and VPN will turn off\n\nDon't lose protection — get a subscription from 199₽ and use it without limits 💎",
+    'main.trial_notification_71h': "🔔 In 6 hours your trial access will end and VPS will turn off\n\nDon't lose protection — get a subscription from 199₽ and use it without limits 💎",
     'main.user_fallback': "user",
     'main.vip_access_button': "👑 Upgrade Access Level",
     'main.vip_access_text': "👑 VIP Access Atlas Secure\n\nVIP is an extended support level\nfor those who value stability and priority.\n\nWhat VIP provides:\n⚡️ Priority infrastructure and minimal delay\n🛠 Personal access configuration\n💬 Priority support without waiting\n🚀 Early access to updates\n\nVIP is suitable if you:\n• use access daily\n• don't want to deal with settings\n• value predictable operation\n\nPrice:\n1,990 ₽ / month\nor 9,990 ₽ / 6 months\n\nVIP is activated with active subscription.\nLeave a request — we'll do everything for you.\n\nVIP — when access simply exists,\nand you don't think about it.",
@@ -490,7 +490,7 @@ LANG = {
     'main.vip_status_badge': "👑 VIP status active",
     'main.welcome': "🔐 Atlas Secure\n\n🧩 Private digital access\n⚙️ Stable operation of familiar services\n🛡 Privacy by default\n\nYou connect —\neverything else works in the background.",
     'main.legal_footer': "\n\n<a href=\"https://telegra.ph/Politika-konfidencialnosti-08-06-86\">Privacy Policy</a>\n<a href=\"https://telegra.ph/Polzovatelskoe-soglashenie-08-06-50\">Terms of Service</a>",
-    'main.welcome_bypass': "💎 <b>Atlas Secure</b> — your digital shield\n\n🌐 Bypass — active\n\n⚡️ Lightning-fast connection\n🛡 Traffic protected 24/7\n🌍 The internet as it should be",
+    'main.welcome_bypass': "💎 <b>Atlas Secure</b> — your digital shield\n\n🌐 Pro — active\n\n⚡️ Lightning-fast connection\n🛡 Traffic protected 24/7\n🌍 The internet as it should be",
     'main.welcome_discount_label': "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Welcome Discount",
     'main.yes': "YES",
     'payment.already_processed': "✅ This payment has already been processed.",
@@ -499,7 +499,7 @@ LANG = {
     'payment.card': "💳 Bank Card",
     'payment.stars': "⭐ Telegram Stars",
     'payment.stars_invoice_label': "Stars payment",
-    'payment.stars_invoice_description': "Atlas Secure VPN {tariff_name} — {months} mo. (⭐ Stars)",
+    'payment.stars_invoice_description': "Atlas Secure VPS {tariff_name} — {months} mo. (⭐ Stars)",
     'payment.invoice_timeout': "⏱ Please pay within 15 minutes. The invoice will be cancelled after expiration.",
     'payment.expired': "❌ Payment expired. Please create a new payment.",
     'payment.fallback_first': "🎉 Subscription successfully activated\n\n📅 Valid until: {date}\n\n🔐 Your connection key will be sent in the next message.",
@@ -507,7 +507,7 @@ LANG = {
     'payment.label': "Payment",
     'payment.paid_button': "Confirm payment",
     'payment.pending': "Confirmation in process\n\nPayment registered.\nVerification takes up to 5 minutes.\nAccess activation is performed automatically.",
-    'payment.pending_activation': "✅ Subscription created!\n\n📅 Valid until: {date}\n\n⏳ Activation is in progress. VPN key will be sent to you shortly.\n\nIf the key doesn't arrive within an hour, please contact support.",
+    'payment.pending_activation': "✅ Subscription created!\n\n📅 Valid until: {date}\n\n⏳ Activation is in progress. VPS key will be sent to you shortly.\n\nIf the key doesn't arrive within an hour, please contact support.",
     'payment.rejected': "❌ Payment not confirmed.\n\nIf you are sure you paid —\ncontact support.",
     'payment.sbp': "🏦 SBP (+11%)",
     'payment.sbp_waiting': "🏦 <b>SBP Payment</b>\n\nAmount: {amount:.2f} ₽\n\nTap the button below to open the payment form.\n\nWaiting for payment <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Processing takes up to 5 minutes — depends on the bank.</i>",
@@ -530,7 +530,7 @@ LANG = {
     'payment.crypto_success': "🎉 Payment received!\n{tariff_icon} Plan: {tariff}\n📅 Until: {date}",
     'payment.select_method': "Choose payment method:\n\nAmount: {price:.2f} ₽",
     'payment.success': "✅ Payment processed successfully!",
-    'payment.success_first': "🎉 <b>Subscription successfully activated</b>\n\n📅 <b>Valid until:</b> {date}\n\n🔐 <b>Your connection key:</b>\n<code>{sub_url}</code>\n\nYou can use it in the VPN app.",
+    'payment.success_first': "🎉 <b>Subscription successfully activated</b>\n\n📅 <b>Valid until:</b> {date}\n\n🔐 <b>Your connection key:</b>\n<code>{sub_url}</code>\n\nYou can use it in the VPS app.",
     'payment.success_renewal': "🔄 <b>Subscription renewed</b>\n\n📅 <b>New validity:</b> until {date}\n\n🔐 <b>Your current key</b> (same UUID):\n<code>{sub_url}</code>\n\nYou can continue using your current connection key.",
     'payment.success_renewal_compact': "✅ Subscription renewed\n{tariff_icon} Tariff: {tariff}\n📅 Until: {date}",
     'payment.success_welcome_plus': "🎉 Welcome to Atlas Secure!\n⭐️ Tariff: Plus\n📅 Until: {date}",
@@ -557,7 +557,7 @@ LANG = {
     'profile.subscription_pending': "Subscription:\n— ⏳ Pending activation\n\nValid until: {date}",
     'profile.topup_balance': "➕ Top Up Balance",
     'profile.withdraw_funds': "💸 Withdraw funds",
-    'profile.vpn_key_copied_toast': "🔑 VPN key copied",
+    'profile.vpn_key_copied_toast': "🔑 VPS key copied",
     'profile.welcome_full': "Welcome to Atlas Secure!\n\n👤 {username}\n\n💰 Balance: {balance:.2f} ₽",
     'referral.action_purchase': "purchase",
     'referral.action_renewal': "renewal",
@@ -641,24 +641,24 @@ LANG = {
     'trial.activated_btn_profile': "👤 My Profile",
 
     # === BROADCAST: «🎁 Get trial key» ===
-    'broadcast.trial_key_activated': "🎁 <b>Gift activated!</b>\n\nYou've received: <b>1 day</b> of subscription access and <b>1 GB</b> of whitelist-bypass traffic.\n\nLet's connect your device 👇",
+    'broadcast.trial_key_activated': "🎁 <b>Gift activated!</b>\n\nYou've received: <b>1 day</b> of subscription access and <b>1 GB</b> of Pro traffic.\n\nLet's connect your device 👇",
     'broadcast.trial_key_already': "🎁 Gift already claimed",
     'broadcast.trial_key_error': "Couldn't activate the gift, please try again later.",
     'trial.expired': "🔓 <b>Trial access ended</b>\n\nYour trial period has expired.\n\n🎟 Use promo code <b>YABX30</b> for 30% discount on your first subscription.\n\nSubscribe now to continue using secure access.",
-    'trial.notification_6h': "✨ Just a reminder\n\nVPN is better to keep on all the time to protect your data.",
-    'trial.notification_60h': "🛡 VPN will be disabled soon\n\n12 hours of trial access remaining.\n\nContinue using protection — subscribe now.",
-    'trial.notification_71h': "🚨 Last hour of trial access\n\nVPN will be disabled in one hour.\n\nSubscribe now to continue using secure access.",
+    'trial.notification_6h': "✨ Just a reminder\n\nVPS is better to keep on all the time to protect your data.",
+    'trial.notification_60h': "🛡 VPS will be disabled soon\n\n12 hours of trial access remaining.\n\nContinue using protection — subscribe now.",
+    'trial.notification_71h': "🚨 Last hour of trial access\n\nVPS will be disabled in one hour.\n\nSubscribe now to continue using secure access.",
     'reminder.admin_1day_6h': "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Your free access to Atlas Secure ends in 6 hours\n\nLiked it? Get a subscription and use it without limits 💙",
     'reminder.admin_7days_24h': "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Your free access to Atlas Secure expires in 24 hours\n\nDuring this time your traffic has been safely protected. Enable a subscription from 199₽/month 🤍",
     'reminder.paid_3d': "📅 Your Atlas Secure subscription is active for 3 more days\n\nRenew in advance so your access never stops for a second 🤍",
-    'reminder.paid_24h': "⚡️ Less than 24 hours of subscription left\n\nRenew now with one tap so VPN keeps working without interruption 🛡",
+    'reminder.paid_24h': "⚡️ Less than 24 hours of subscription left\n\nRenew now with one tap so VPS keeps working without interruption 🛡",
     'reminder.paid_3h': "🚨 Your subscription expires in 3 hours!\n\nRenew right now so you don't lose access to a protected internet 🔒",
     'connect.press_button': "📲 <b>Connection</b>\n\nTap <b>«Connect»</b> and follow the instructions — setup takes just a couple of minutes.",
     'connect.setup_device_button': "📲 Set up device",
     'connect.instruction_screen': "📖 <b>Connection Instructions</b>\n\nTap «Connect» or\n«🌐 Open Mini App» below and follow all setup steps.\n\nIf something goes wrong — you can always contact support for help.\n\n⸻\n\n👇",
     'connect.autosetup_btn': "📲 Connect",
     'connect.open_miniapp_btn': "🌐 Open Mini App",
-    'connect.autosetup_screen': "📱 <b>Auto Setup</b>\n\nTap the button for the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.\n\n🌐 — regular servers with basic bypass\n🤍 — servers for bypassing RU whitelists\n\nYou can install both keys at once.",
+    'connect.autosetup_screen': "📱 <b>Auto Setup</b>\n\nTap the button for the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.\n\n🌐 — regular servers\n🤍 — Pro servers\n\nYou can install both keys at once.",
 
     # Gift subscription
     'main.gift_subscription': "🎁 Gift Subscription",
@@ -782,7 +782,7 @@ LANG = {
 
     # profile
     'profile.key_atlas': '🇩🇪 Copy Atlas DE',
-    'profile.key_whitelist': '⚪️ Copy White List',
+    'profile.key_whitelist': '⚪️ Copy Pro key',
 
     # referral
     'referral.cashback_referred': '👤 Referral: {referred}',
@@ -819,15 +819,15 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 My Traffic",
-    'traffic.info': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Until: {expires}\n\n🔗 <b>Key for Happ</b> <i>(tap to copy)</i>\n<blockquote expandable><code>{happ_url}</code></blockquote>\n\n🔗 <b>Key for Incy</b> <i>(tap to copy)</i>\n<blockquote expandable><code>{incy_url}</code></blockquote>\n\n<b>One-tap install</b>\nTap a button below — the app opens and imports the key automatically.\n\n<i>If auto-import fails:</i>\n└ <b>Happ:</b> Home → <b>+</b> → Paste from clipboard\n└ <b>Incy:</b> Settings → Import → From clipboard",
-    'traffic.no_subscription': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 No active subscription.",
-    'traffic.trial_no_bypass': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 Bypass is available on Basic and Plus plans.",
+    'traffic.info': "📊 <b>Pro</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Until: {expires}\n\n🔗 <b>Key for Happ</b> <i>(tap to copy)</i>\n<blockquote expandable><code>{happ_url}</code></blockquote>\n\n🔗 <b>Key for Incy</b> <i>(tap to copy)</i>\n<blockquote expandable><code>{incy_url}</code></blockquote>\n\n<b>One-tap install</b>\nTap a button below — the app opens and imports the key automatically.\n\n<i>If auto-import fails:</i>\n└ <b>Happ:</b> Home → <b>+</b> → Paste from clipboard\n└ <b>Incy:</b> Settings → Import → From clipboard",
+    'traffic.no_subscription': "📊 <b>Pro</b> 🇷🇺\n\n🔒 No active subscription.",
+    'traffic.trial_no_bypass': "📊 <b>Pro</b> 🇷🇺\n\n🔒 Pro is available on Basic and Plus plans.",
     'traffic.trial_upgrade_hint': "Get Basic or Plus subscription to unlock more GB and traffic purchases",
-    'traffic.not_provisioned': "📊 Bypass is not set up yet. Try again later.",
+    'traffic.not_provisioned': "📊 Pro is not set up yet. Try again later.",
     'traffic.fetch_error': "⚠️ Failed to load traffic data. Try again later.",
-    'traffic.warning_low': "{remaining} of bypass traffic remaining",
-    'traffic.warning_critical': "Bypass traffic is almost depleted!",
-    'traffic.subscription_expired_bypass_active': "⚠️ <b>Your main subscription has expired</b>\n\nBypass continues to work — your GB are intact.\n\nDon't forget to buy more traffic if it's running low 👇",
+    'traffic.warning_low': "{remaining} of Pro traffic remaining",
+    'traffic.warning_critical': "Pro traffic is almost depleted!",
+    'traffic.subscription_expired_bypass_active': "⚠️ <b>Your main subscription has expired</b>\n\nPro continues to work — your GB are intact.\n\nDon't forget to buy more traffic if it's running low 👇",
     'traffic.buy_subscription': "📈 Buy Subscription",
     'traffic.buy_traffic_btn': "💳 Buy Traffic",
     'traffic.install_insy_btn': "📥 Install in Incy",
@@ -848,27 +848,27 @@ LANG = {
     'traffic.insufficient_balance': "❌ Insufficient balance",
     'traffic.purchase_success': "✅ <b>Traffic added!</b>\n\n📦 +{gb} GB\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ Error adding traffic. Funds returned to balance.",
-    'traffic.notify_3gb': "⚠️ {remaining} of bypass traffic remaining 🇷🇺\n\nBuy additional traffic to keep bypass working.",
-    'traffic.notify_1gb': "🔴 Less than 1 GB of bypass traffic! Bypass will stop soon.",
-    'traffic.notify_500mb': "❗️ Only {remaining} of bypass traffic left!",
-    'traffic.notify_zero': "🚫 Bypass traffic depleted.\n\nAtlas Fast 🇩🇪 continues working without limits.",
+    'traffic.notify_3gb': "⚠️ {remaining} of Pro traffic remaining 🇷🇺\n\nBuy additional traffic to keep Pro working.",
+    'traffic.notify_1gb': "🔴 Less than 1 GB of Pro traffic! Pro will stop soon.",
+    'traffic.notify_500mb': "❗️ Only {remaining} of Pro traffic left!",
+    'traffic.notify_zero': "🚫 Pro traffic depleted.\n\nAtlas Fast 🇩🇪 continues working without limits.",
 
     # Bypass gift links — user-facing redemption messages
-    'bypass_gift.activated': "🎁 <b>Gift activated!</b>\n\nYou received <b>{gb} GB</b> of bypass traffic.\n\nThese GB are now available and work independently of your subscription. Open «Enable bypass» to use them.",
+    'bypass_gift.activated': "🎁 <b>Gift activated!</b>\n\nYou received <b>{gb} GB</b> of Pro traffic.\n\nThese GB are now available and work independently of your subscription. Open «Enable Pro» to use them.",
     'bypass_gift.error_already_redeemed': "🎁 <b>This link was already redeemed by your account.</b>\n\nEach link can be used only once per account. If you need more traffic, ask the sender for a new link.",
     'bypass_gift.error_not_found': "❌ <b>Gift link not found.</b>\n\nCheck that the link is correct or contact the sender.",
     'bypass_gift.error_expired': "⏰ <b>This gift link has expired.</b>\n\nAsk the sender to create a new one.",
     'bypass_gift.error_max_uses': "🚫 <b>Redemption limit reached.</b>\n\nThis link has already been used the maximum number of times. Ask the sender for a new link.",
     'bypass_gift.error_remnawave': "⚠️ <b>Could not credit your GB — please try again later.</b>\n\nIf the problem persists, contact support.",
-    'bypass_gift.connect_btn': "🌐 Connect Bypass",
+    'bypass_gift.connect_btn': "🌐 Connect Pro",
 
     # Bypass gift — dedicated setup flow (only reachable from gift link)
-    'bgift_setup.select_device': "📱 <b>Choose your device</b>\n\nWe'll set up bypass in two short steps. First, pick the device you'll use.",
+    'bgift_setup.select_device': "📱 <b>Choose your device</b>\n\nWe'll set up Pro in two short steps. First, pick the device you'll use.",
     'bgift_setup.connect_screen': (
         "⚡️ <b>Connect in one tap</b>\n\n"
-        "Add the key to start using bypass.\n\n"
-        "🌐 <b>Bypass</b> — Russian whitelist routing, the internet works from anywhere in the world.\n\n"
-        "<b>Your bypass key:</b>\n"
+        "Add the key to start using Pro.\n\n"
+        "🌐 <b>Pro</b> — the internet works from anywhere in the world.\n\n"
+        "<b>Your Pro key:</b>\n"
         "<blockquote><code>{sub_url}</code></blockquote>\n"
         "<i>Tap the key to copy it.</i>\n\n"
         "━━━━━━━━━━━━━━━━━\n"
@@ -882,8 +882,8 @@ LANG = {
     ),
     'bgift_setup.connect_no_key': (
         "⚡️ <b>Connect in one tap</b>\n\n"
-        "🌐 <b>Bypass</b> — Russian whitelist routing, the internet works from anywhere in the world.\n\n"
-        "⚠️ We couldn't fetch your bypass key. "
+        "🌐 <b>Pro</b> — the internet works from anywhere in the world.\n\n"
+        "⚠️ We couldn't fetch your Pro key. "
         "Wait a minute and tap «Back → Next» again. "
         "If the error persists, please contact support."
     ),
@@ -891,8 +891,8 @@ LANG = {
     # === Sync with ru.py — missing translations ===
 
     # main
-    'main.welcome_no_sub': "<tg-emoji emoji-id=\"5462902520215002477\">💎</tg-emoji> <b>Atlas Secure</b> — free, fast and secure internet\n\n<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> Bypass whitelists\n<tg-emoji emoji-id=\"5188481279963715781\">🚀</tg-emoji> Speed up to 75 Gbps\n<tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> Connect in a minute — no setup, no headaches\n📱 One subscription — the whole family covered\n\n<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> In our shop — top up Steam, buy Telegram Premium and more\n\n100,000+ users trust us.",
-    'main.welcome_expired': "<tg-emoji emoji-id=\"5462902520215002477\">💎</tg-emoji> <b>Atlas Secure</b>\n\nYour subscription ended — but bringing it back is easy.\n\nYour key and settings are saved.\nTap the button — VPN will work again.\n\n<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> In our shop — top up Steam, buy Telegram Premium and more\n\n<blockquote>100,000+ users trust us</blockquote>",
+    'main.welcome_no_sub': "<tg-emoji emoji-id=\"5462902520215002477\">💎</tg-emoji> <b>Atlas Secure</b> — free, fast and secure internet\n\n<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> Pro\n<tg-emoji emoji-id=\"5188481279963715781\">🚀</tg-emoji> Speed up to 75 Gbps\n<tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> Connect in a minute — no setup, no headaches\n📱 One subscription — the whole family covered\n\n<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> In our shop — top up Steam, buy Telegram Premium and more\n\n100,000+ users trust us.",
+    'main.welcome_expired': "<tg-emoji emoji-id=\"5462902520215002477\">💎</tg-emoji> <b>Atlas Secure</b>\n\nYour subscription ended — but bringing it back is easy.\n\nYour key and settings are saved.\nTap the button — VPS will work again.\n\n<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> In our shop — top up Steam, buy Telegram Premium and more\n\n<blockquote>100,000+ users trust us</blockquote>",
 
     # buy
     'buy.button_price_badge': "{period} — {price} ₽ {badge}",
@@ -900,34 +900,34 @@ LANG = {
     'buy.tariff_business': "👨‍💻 <b>Business</b> — your dedicated server\nPriority channel, full control and personal support",
 
     # bypass
-    'bypass.buy_title': "🌐 <b>Whitelist Bypass 🇷🇺</b>\n\nAccess blocked sites via the latest bypass protocol.\nPay only for traffic — no monthly fees.\n\n<blockquote>📊 Estimated usage:\n├ 15 GB — ~1.5 months\n├ 25 GB — ~2.5 months\n├ 45 GB — ~4 months\n├ 60 GB — ~6 months\n└ 120 GB — ~1 year</blockquote>\n\n💡 Text and photos — light. Video and Reels — heavier.",
+    'bypass.buy_title': "🌐 <b>Pro 🇷🇺</b>\n\nAccess blocked sites via the latest Pro protocol.\nPay only for traffic — no monthly fees.\n\n<blockquote>📊 Estimated usage:\n├ 15 GB — ~1.5 months\n├ 25 GB — ~2.5 months\n├ 45 GB — ~4 months\n├ 60 GB — ~6 months\n└ 120 GB — ~1 year</blockquote>\n\n💡 Text and photos — light. Video and Reels — heavier.",
     'bypass.buy_title_trial': "\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> <b>Bonus:</b> 3 days of free access to the main servers!",
-    'bypass.purchase_success': "✅ <b>Whitelist bypass activated!</b>\n\n📦 +{gb} GB of traffic added",
-    'bypass.trial_activated': "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> <b>Bonus:</b> Trial period of the main subscription (3 days) activated!\n\nAfter the trial expires, whitelist bypass will keep working.\nThe main subscription can be purchased separately.",
+    'bypass.purchase_success': "✅ <b>Pro activated!</b>\n\n📦 +{gb} GB of traffic added",
+    'bypass.trial_activated': "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> <b>Bonus:</b> Trial period of the main subscription (3 days) activated!\n\nAfter the trial expires, Pro will keep working.\nThe main subscription can be purchased separately.",
 
     # bypass_setup
     'bypass_setup.title': (
-        "🌐 <b>Set up bypass</b>\n\n"
+        "🌐 <b>Set up Pro</b>\n\n"
         "Open one of the clients below — setup takes 30 seconds, "
         "the key is already generated and assigned to you.\n\n"
         "<b>📲 Happ</b> — universal, works on iOS / Android / Mac / Windows.\n"
         "<b>💚 Incy</b> — fast iOS client with great UX.\n\n"
         "<b>How to connect:</b>\n"
         "1. Make sure the client is installed (if not — install from App Store / Play Market).\n"
-        "2. Tap <b>«➕ Add bypass»</b> — Telegram will open the client "
+        "2. Tap <b>«➕ Add Pro»</b> — Telegram will open the client "
         "and import the key automatically.\n"
         "3. Didn't open? Tap <b>«🔑 Show key manually»</b>, "
         "copy the key and paste it into the client from clipboard."
     ),
-    'bypass_setup.add_happ_btn': "➕ Add bypass to Happ",
-    'bypass_setup.add_incy_btn': "➕ Add bypass to Incy",
+    'bypass_setup.add_happ_btn': "➕ Add Pro to Happ",
+    'bypass_setup.add_incy_btn': "➕ Add Pro to Incy",
     'bypass_setup.manual_btn': "🔑 Show key manually",
     'bypass_setup.no_key_yet': (
-        "⏳ <b>Bypass key not ready yet</b>\n\n"
+        "⏳ <b>Pro key not ready yet</b>\n\n"
         "Usually it takes less than a minute — check back shortly."
     ),
     'bypass_setup.manual_screen_header': (
-        "🔑 <b>Bypass keys</b>\n\n"
+        "🔑 <b>Pro keys</b>\n\n"
         "Tap the key below — it will <b>copy to clipboard</b>. Then "
         "open the client → paste / clipboard button."
     ),
@@ -941,7 +941,7 @@ LANG = {
     ),
     'bypass_setup.manual_screen_footer': (
         "💡 If the key didn't import — go back and try "
-        "the <b>«➕ Add bypass»</b> button. It opens the client directly "
+        "the <b>«➕ Add Pro»</b> button. It opens the client directly "
         "via deeplink."
     ),
 
@@ -956,30 +956,30 @@ LANG = {
     'combo.period_6': "6 mo · {gb} GB traffic · {price} ₽",
     'combo.period_12': "12 mo · {gb} GB traffic · {price} ₽",
     'combo.period_24': "24 mo · {gb} GB traffic · {price} ₽",
-    'combo.purchase_success': "✅ <b>Combo subscription activated!</b>\n\n📦 Plan: <b>Combo {tariff}</b> · {months} mo.\n🌐 Bypass: <b>{gb} GB</b> credited\n\nTap «Connect» to set up your device.",
+    'combo.purchase_success': "✅ <b>Combo subscription activated!</b>\n\n📦 Plan: <b>Combo {tariff}</b> · {months} mo.\n🌐 Pro: <b>{gb} GB</b> credited\n\nTap «Connect» to set up your device.",
 
     # help / FAQ
-    'help.menu_title': "❓ <b>Help</b>\n\nChoose an option below:\n\n<blockquote>📖 <b>Frequently asked questions</b>\nShort solutions to common issues</blockquote>\n\n<blockquote>📲 <b>Service guides</b>\nHow to set up VPN on your device</blockquote>\n\n<blockquote>📞 <b>Contacts</b>\nSupport and sales emails</blockquote>\n\n<blockquote>💬 <b>Help</b>\nMessage a live operator in Telegram</blockquote>",
+    'help.menu_title': "❓ <b>Help</b>\n\nChoose an option below:\n\n<blockquote>📖 <b>Frequently asked questions</b>\nShort solutions to common issues</blockquote>\n\n<blockquote>📲 <b>Service guides</b>\nHow to set up VPS on your device</blockquote>\n\n<blockquote>📞 <b>Contacts</b>\nSupport and sales emails</blockquote>\n\n<blockquote>💬 <b>Help</b>\nMessage a live operator in Telegram</blockquote>",
     'help.contacts_title': "📞 <b>Contacts</b>\n\nReach us by email — <b>tap an address to copy it</b>.\n\n<blockquote>📧 <b>Technical support</b></blockquote>\n<code>support@atlassecure.uk</code>\nAtlas Secure and QoDev projects\n\n<blockquote>💼 <b>Sales</b></blockquote>\n<code>sales@atlassecure.uk</code>\nAtlas Secure infrastructure solutions",
     'help.faq_title': "📖 <b>Frequently asked questions</b>\n\nPick your question — we'll show a short solution.",
-    'help.faq_q1': "🚫 VPN not working",
+    'help.faq_q1': "🚫 VPS not working",
     'help.faq_q2': "📲 How to connect / set up",
     'help.faq_q3': "🐌 Slow speed",
     'help.faq_q4': "💳 Payment failed",
     'help.faq_q5': "📱 How to add another device",
     'help.faq_q6': "🔑 How to update the key",
-    'help.faq_q7': "🌐 How bypass servers work",
-    'help.faq_q8': "📊 How bypass gigabytes work",
+    'help.faq_q7': "🌐 How Pro servers work",
+    'help.faq_q8': "📊 How Pro gigabytes work",
     'help.faq_q9': "⚠️ Happ — Xray core error",
-    'help.faq_a1': "🚫 <b>VPN not working</b>\n\nWalk through these steps — usually one of them fixes it.\n\n<blockquote>1️⃣ <b>Check the internet without VPN</b>\nTurn off VPN, open any site. If it doesn't work — the problem is with your provider, not us.</blockquote>\n\n<blockquote>2️⃣ <b>Is mobile connectivity being throttled in your area?</b>\nIn the app pick a server marked <b>LTE</b> — it's built specifically to bypass mobile carrier restrictions.</blockquote>\n\n<blockquote>3️⃣ <b>Restart the app</b>\nFully close <b>Happ</b> (swipe it away) → open again → toggle connection on.</blockquote>\n\n<blockquote>4️⃣ <b>Re-import the key</b>\nIn the bot: <b>«📲 Connect»</b> → your device → <b>«Import key»</b>. The subscription URL may have updated.</blockquote>\n\n<i>Still stuck? Message the operator — we reply within 5–10 minutes.</i> 💬",
-    'help.faq_a2': "📲 <b>How to connect</b>\n\nIt takes less than a minute.\n\n<blockquote>1️⃣ In the bot tap <b>«📲 Connect»</b>\n\n2️⃣ Pick your device — <b>iPhone · Android · Mac · Windows</b>\n\n3️⃣ Install the app via our link\n\n4️⃣ Tap <b>«Import key»</b> — subscription will be added automatically\n\n5️⃣ Turn on VPN in the app 🚀</blockquote>\n\n<i>💡 Every step is illustrated — hard to get lost. If anything doesn't work — message the operator.</i> 💬",
-    'help.faq_a3': "🐌 <b>Slow speed</b>\n\nWalk through these steps.\n\n<blockquote>1️⃣ <b>Check speed without VPN</b>\nMeasure at <a href=\"https://fast.com\">fast.com</a> with VPN off. If your base internet is slow — VPN physically cannot make it faster.</blockquote>\n\n<blockquote>2️⃣ <b>Switch server</b>\nIn the app pick another one — sometimes neighboring countries are faster (e.g. Germany instead of Netherlands).</blockquote>\n\n<blockquote>3️⃣ <b>On LTE / 5G?</b>\nMobile speed depends on tower load and time of day. Evening — slower, night — faster.</blockquote>\n\n<blockquote>4️⃣ <b>Reboot your Wi-Fi router</b>\nSometimes the router itself hangs, not the VPN. Unplug for 30 seconds → plug back in.</blockquote>\n\n<i>Consistently slow on every server? Message the operator.</i> 💬",
+    'help.faq_a1': "🚫 <b>VPS not working</b>\n\nWalk through these steps — usually one of them fixes it.\n\n<blockquote>1️⃣ <b>Check the internet without VPS</b>\nTurn off VPS, open any site. If it doesn't work — the problem is with your provider, not us.</blockquote>\n\n<blockquote>2️⃣ <b>Is mobile connectivity being throttled in your area?</b>\nIn the app pick a server marked <b>LTE</b> — it's built specifically to Pro mobile carrier restrictions.</blockquote>\n\n<blockquote>3️⃣ <b>Restart the app</b>\nFully close <b>Happ</b> (swipe it away) → open again → toggle connection on.</blockquote>\n\n<blockquote>4️⃣ <b>Re-import the key</b>\nIn the bot: <b>«📲 Connect»</b> → your device → <b>«Import key»</b>. The subscription URL may have updated.</blockquote>\n\n<i>Still stuck? Message the operator — we reply within 5–10 minutes.</i> 💬",
+    'help.faq_a2': "📲 <b>How to connect</b>\n\nIt takes less than a minute.\n\n<blockquote>1️⃣ In the bot tap <b>«📲 Connect»</b>\n\n2️⃣ Pick your device — <b>iPhone · Android · Mac · Windows</b>\n\n3️⃣ Install the app via our link\n\n4️⃣ Tap <b>«Import key»</b> — subscription will be added automatically\n\n5️⃣ Turn on VPS in the app 🚀</blockquote>\n\n<i>💡 Every step is illustrated — hard to get lost. If anything doesn't work — message the operator.</i> 💬",
+    'help.faq_a3': "🐌 <b>Slow speed</b>\n\nWalk through these steps.\n\n<blockquote>1️⃣ <b>Check speed without VPS</b>\nMeasure at <a href=\"https://fast.com\">fast.com</a> with VPS off. If your base internet is slow — VPS physically cannot make it faster.</blockquote>\n\n<blockquote>2️⃣ <b>Switch server</b>\nIn the app pick another one — sometimes neighboring countries are faster (e.g. Germany instead of Netherlands).</blockquote>\n\n<blockquote>3️⃣ <b>On LTE / 5G?</b>\nMobile speed depends on tower load and time of day. Evening — slower, night — faster.</blockquote>\n\n<blockquote>4️⃣ <b>Reboot your Wi-Fi router</b>\nSometimes the router itself hangs, not the VPS. Unplug for 30 seconds → plug back in.</blockquote>\n\n<i>Consistently slow on every server? Message the operator.</i> 💬",
     'help.faq_a4': "💳 <b>Payment failed</b>\n\nWalk through these steps.\n\n<blockquote>1️⃣ <b>Switch payment method</b>\n<b>SBP → card → Telegram Stars → bot balance</b>. If one doesn't work — try another.</blockquote>\n\n<blockquote>2️⃣ <b>Payment hangs?</b>\nWait 10–15 minutes. Money will either be charged and the subscription activated, or refunded to the card automatically — we don't hold anything.</blockquote>\n\n<blockquote>3️⃣ <b>Charged but no subscription?</b>\nJust message the operator — we'll definitely help.</blockquote>\n\n<i>💬 Support replies within 5–10 minutes.</i>",
     'help.faq_a5': "📱 <b>How to add another device</b>\n\nOne subscription — several devices simultaneously:\n\n<blockquote>• <b>Basic</b> — up to 10 devices\n• <b>Plus</b> — up to 14 devices</blockquote>\n\n<b>How to add a new device</b>\n\n<blockquote>1️⃣ In the bot on the <b>main</b> device tap the <b>«Menu»</b> button (blue icon left of the input field) → <b>«📲 Add device»</b>\n\n2️⃣ Choose the type of device you want to add\n\n3️⃣ The bot will send a <b>QR code</b> and a short guide</blockquote>\n\n<blockquote>4️⃣ On the <b>new</b> device install the <b>Happ</b> app and open it\n\n5️⃣ Tap <b>«+»</b> in the top-right corner → <b>«Scan QR code»</b>\n\n6️⃣ Point the camera at the QR from your main device</blockquote>\n\nDone 🚀\n\n<i>💡 No extra charge — it's the <b>same</b> subscription, just on another device.</i>",
-    'help.faq_a6': "🔑 <b>How to update the key</b>\n\nIf in <b>Happ</b> you see <i>«Update key in the bot»</i> or <i>«This version is not supported»</i> — you need to reinstall the key.\n\n<blockquote>1️⃣ Tap the <b>«Menu»</b> button 🔵 (blue icon left of the input field)\n\n2️⃣ Select <b>«📲 Connect»</b>\n\n3️⃣ Pick your device\n\n4️⃣ Install the <b>Happ</b> app\n<i>If the app is already installed — tap «Next» and skip this step.</i>\n\n5️⃣ Import the key — go through the standard setup</blockquote>\n\n<b>Which key to pick?</b>\n\n<blockquote>🌐 <b>Add VPN</b> — main unlimited servers\n\n🛡 <b>Add bypass</b> — whitelist bypass servers</blockquote>\n\n<i>Didn't work? Message the operator — we'll help.</i> 💬",
-    'help.faq_a7': "🌐 <b>How bypass servers work</b>\n\nWhitelist bypass servers come in two flavors:\n\n<blockquote>🇷🇺 <b>With Russian flag</b>\n🇪🇺 <b>With European flag</b></blockquote>\n\n<b>Which to pick?</b>\n\n<blockquote>We recommend <b>European-flag servers</b> — they're more stable and work better with <b>Telegram</b>, <b>Instagram</b> and other RU-blocked services.</blockquote>\n\n<b>Connected but server doesn't work?</b>\n\n<blockquote>1️⃣ Pick a different server and try again\n\n2️⃣ Toggle airplane mode on and off ✈️\n\n3️⃣ Close the app and reopen it\n\n4️⃣ Check mobile connectivity and make sure the connection is fine</blockquote>\n\n<i>Didn't help? Message the operator.</i> 💬",
-    'help.faq_a8': "📊 <b>How bypass gigabytes work</b>\n\nGigabytes for bypass servers are a <b>separate traffic pack</b>. Buy once and spend at your own pace.\n\n<blockquote>♾ <b>No expiration</b>\nThey don't burn. Not tied to a month, day or subscription. What you use is what's deducted, the rest stays yours.</blockquote>\n\n<blockquote>🔓 <b>Independent of subscription</b>\nIt's <b>not</b> part of the main VPN subscription. Subscription ended — bypass gigabytes stay in your account waiting for you.</blockquote>\n\n<b>Example</b>\n\n<blockquote>💰 You bought <b>30 GB</b>\n📉 In a week you used <b>5 GB</b>\n✅ Remaining — <b>25 GB</b>\n\nThose 25 GB aren't going anywhere: use them tomorrow, in a month or in six months.</blockquote>\n\n<b>Where to see the remainder</b>\n\n<blockquote>📱 In <b>Happ</b> — next to the bypass server connection\n\n👤 In the <b>bot</b> — <b>«👤 Profile»</b> section</blockquote>\n\n<i>Ran out? Top up any time — new GB simply add to the remainder.</i> 💬",
-    'help.faq_a9': "⚠️ <b>Happ — Xray core error</b>\n\nCommon issue, fixed in a minute.\n\n<b>Why it happens</b>\n\n<blockquote>Many VPN services automatically push <b>routing files</b> onto your device — without your knowledge. We don't do that: <b>all settings live on our servers</b>, not on your phone.\n\nBut sometimes files left behind by other VPNs conflict with our core — and Happ shows the Xray error.</blockquote>\n\n<b>How to fix it</b>\n\n<blockquote>1️⃣ Open <b>Happ</b>\n\n2️⃣ Tap the <b>gear ⚙️</b> in the top-left corner\n\n3️⃣ Choose <b>«Routing»</b>\n\n4️⃣ Delete <b>every</b> routing file from the list\n\n5️⃣ Restart the app</blockquote>\n\nConnection will work normally 🚀\n\n<i>Didn't help? Message the operator — we'll sort it out in 5–10 minutes.</i> 💬",
+    'help.faq_a6': "🔑 <b>How to update the key</b>\n\nIf in <b>Happ</b> you see <i>«Update key in the bot»</i> or <i>«This version is not supported»</i> — you need to reinstall the key.\n\n<blockquote>1️⃣ Tap the <b>«Menu»</b> button 🔵 (blue icon left of the input field)\n\n2️⃣ Select <b>«📲 Connect»</b>\n\n3️⃣ Pick your device\n\n4️⃣ Install the <b>Happ</b> app\n<i>If the app is already installed — tap «Next» and skip this step.</i>\n\n5️⃣ Import the key — go through the standard setup</blockquote>\n\n<b>Which key to pick?</b>\n\n<blockquote>🌐 <b>Add VPS</b> — main unlimited servers\n\n🛡 <b>Add Pro</b> — Pro servers</blockquote>\n\n<i>Didn't work? Message the operator — we'll help.</i> 💬",
+    'help.faq_a7': "🌐 <b>How Pro servers work</b>\n\nPro servers come in two flavors:\n\n<blockquote>🇷🇺 <b>With Russian flag</b>\n🇪🇺 <b>With European flag</b></blockquote>\n\n<b>Which to pick?</b>\n\n<blockquote>We recommend <b>European-flag servers</b> — they're more stable and work better with <b>Telegram</b>, <b>Instagram</b> and other RU-blocked services.</blockquote>\n\n<b>Connected but server doesn't work?</b>\n\n<blockquote>1️⃣ Pick a different server and try again\n\n2️⃣ Toggle airplane mode on and off ✈️\n\n3️⃣ Close the app and reopen it\n\n4️⃣ Check mobile connectivity and make sure the connection is fine</blockquote>\n\n<i>Didn't help? Message the operator.</i> 💬",
+    'help.faq_a8': "📊 <b>How Pro gigabytes work</b>\n\nGigabytes for Pro servers are a <b>separate traffic pack</b>. Buy once and spend at your own pace.\n\n<blockquote>♾ <b>No expiration</b>\nThey don't burn. Not tied to a month, day or subscription. What you use is what's deducted, the rest stays yours.</blockquote>\n\n<blockquote>🔓 <b>Independent of subscription</b>\nIt's <b>not</b> part of the main VPS subscription. Subscription ended — Pro gigabytes stay in your account waiting for you.</blockquote>\n\n<b>Example</b>\n\n<blockquote>💰 You bought <b>30 GB</b>\n📉 In a week you used <b>5 GB</b>\n✅ Remaining — <b>25 GB</b>\n\nThose 25 GB aren't going anywhere: use them tomorrow, in a month or in six months.</blockquote>\n\n<b>Where to see the remainder</b>\n\n<blockquote>📱 In <b>Happ</b> — next to the Pro server connection\n\n👤 In the <b>bot</b> — <b>«👤 Profile»</b> section</blockquote>\n\n<i>Ran out? Top up any time — new GB simply add to the remainder.</i> 💬",
+    'help.faq_a9': "⚠️ <b>Happ — Xray core error</b>\n\nCommon issue, fixed in a minute.\n\n<b>Why it happens</b>\n\n<blockquote>Many VPS services automatically push <b>routing files</b> onto your device — without your knowledge. We don't do that: <b>all settings live on our servers</b>, not on your phone.\n\nBut sometimes files left behind by other VPS apps conflict with our core — and Happ shows the Xray error.</blockquote>\n\n<b>How to fix it</b>\n\n<blockquote>1️⃣ Open <b>Happ</b>\n\n2️⃣ Tap the <b>gear ⚙️</b> in the top-left corner\n\n3️⃣ Choose <b>«Routing»</b>\n\n4️⃣ Delete <b>every</b> routing file from the list\n\n5️⃣ Restart the app</blockquote>\n\nConnection will work normally 🚀\n\n<i>Didn't help? Message the operator — we'll sort it out in 5–10 minutes.</i> 💬",
 
     # payment
     'payment.card_pl': "Bank card",
@@ -1014,31 +1014,31 @@ LANG = {
     'promo_tpl.privacy_day_title': "🔐 Privacy Day",
 
     # purchase
-    'purchase.success_first': "🎉 <b>Subscription activated!</b>\n\n{tariff_name}\n⏳ Period: {period}\n📅 Until: {expires_date}\n\nJust one step left — tap the button below to connect.\n\n📲 <b>Connect</b> — set up VPN in a minute\n👤 <b>Dashboard</b> — balance, expiry, auto-renewal\n📊 <b>My traffic</b> — track whitelist bypass\n\n🤍 Your traffic is protected by Atlas Secure.",
-    'purchase.success_renewal': "✅ <b>Subscription renewed!</b>\n\n{tariff_name}\n⏳ Period: {period}\n📅 Until: {expires_date}\n\nVPN keeps working — nothing to configure.\n\n🤍 Thanks for staying with Atlas Secure!",
-    'purchase.auto_renewal_success': "<tg-emoji emoji-id=\"5456140674028019486\">🔄</tg-emoji> <b>Subscription auto-renewed</b>\n\n📦 Plan: {tariff_name}\n<tg-emoji emoji-id=\"5454415424319931791\">⏳</tg-emoji> Period: {days} days\n📅 Valid until: {expires_date}\n💳 Charged from balance: {amount:.2f} ₽\n\nYour VPN keeps working without interruption.\n\n🛡 Thanks for trusting Atlas Secure!",
+    'purchase.success_first': "🎉 <b>Subscription activated!</b>\n\n{tariff_name}\n⏳ Period: {period}\n📅 Until: {expires_date}\n\nJust one step left — tap the button below to connect.\n\n📲 <b>Connect</b> — set up VPS in a minute\n👤 <b>Dashboard</b> — balance, expiry, auto-renewal\n📊 <b>My traffic</b> — track Pro\n\n🤍 Your traffic is protected by Atlas Secure.",
+    'purchase.success_renewal': "✅ <b>Subscription renewed!</b>\n\n{tariff_name}\n⏳ Period: {period}\n📅 Until: {expires_date}\n\nVPS keeps working — nothing to configure.\n\n🤍 Thanks for staying with Atlas Secure!",
+    'purchase.auto_renewal_success': "<tg-emoji emoji-id=\"5456140674028019486\">🔄</tg-emoji> <b>Subscription auto-renewed</b>\n\n📦 Plan: {tariff_name}\n<tg-emoji emoji-id=\"5454415424319931791\">⏳</tg-emoji> Period: {days} days\n📅 Valid until: {expires_date}\n💳 Charged from balance: {amount:.2f} ₽\n\nYour VPS keeps working without interruption.\n\n🛡 Thanks for trusting Atlas Secure!",
 
     # reminder (paid)
     'reminder.paid_7d': "<tg-emoji emoji-id=\"5454415424319931791\">📅</tg-emoji> Subscription ends in 7 days. Renew in advance — access won't be interrupted.",
     'reminder.paid_7d_btn': "🔁 Renew subscription",
     'reminder.paid_3d_new': "<tg-emoji emoji-id=\"5456140674028019486\">⚡</tg-emoji> Subscription expires in 3 days. Renew now — your key and settings stay.",
     'reminder.paid_3d_btn': "🔁 Renew",
-    'reminder.paid_1d': "<tg-emoji emoji-id=\"5190806721286657692\">🔴</tg-emoji> Subscription ends tomorrow. Renew now to keep VPN running.",
+    'reminder.paid_1d': "<tg-emoji emoji-id=\"5190806721286657692\">🔴</tg-emoji> Subscription ends tomorrow. Renew now to keep VPS running.",
     'reminder.paid_1d_btn': "🔁 Renew",
-    'reminder.paid_3h_special': "<tg-emoji emoji-id=\"5190806721286657692\">🚨</tg-emoji> <b>3 hours until shutdown</b>\n\nAfter that VPN will stop working. Sites and apps will return to blocks.\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Don't miss out — <b>15% off</b> renewal. Valid for 3 hours.",
+    'reminder.paid_3h_special': "<tg-emoji emoji-id=\"5190806721286657692\">🚨</tg-emoji> <b>3 hours until shutdown</b>\n\nAfter that VPS will stop working. Sites and apps will return to blocks.\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Don't miss out — <b>15% off</b> renewal. Valid for 3 hours.",
     'reminder.paid_3h_discount_btn': "🔥 Buy with 15% off",
 
     # retention
-    'retention.inactive_3d': "👋 <b>Haven't seen you in a while!</b>\n\nYou haven't opened Atlas Secure for 3 days. Your VPN is waiting!\n\n🛡 Turn VPN on every time you connect — it's the best security habit.",
-    'retention.inactive_3d_title': "👋 Come back — VPN is waiting",
+    'retention.inactive_3d': "👋 <b>Haven't seen you in a while!</b>\n\nYou haven't opened Atlas Secure for 3 days. Your VPS is waiting!\n\n🛡 Turn VPS on every time you connect — it's the best security habit.",
+    'retention.inactive_3d_title': "👋 Come back — VPS is waiting",
     'retention.inactive_7d': "🔓 <b>7 days without protection!</b>\n\nDuring this time your traffic could have been compromised.\n\nTurn on Atlas Secure and take back control of your data.\n\n💡 One click — and you're protected again.",
     'retention.inactive_7d_title': "🔓 7 days without protection",
-    'retention.inactive_14d': "😟 <b>We're worried about your security</b>\n\nTwo weeks without VPN. Your data, passwords and messages could have been intercepted.\n\n🛡 Come back to Atlas Secure — connection takes 10 seconds.",
+    'retention.inactive_14d': "😟 <b>We're worried about your security</b>\n\nTwo weeks without VPS. Your data, passwords and messages could have been intercepted.\n\n🛡 Come back to Atlas Secure — connection takes 10 seconds.",
     'retention.inactive_14d_title': "😟 2 weeks without protection",
-    'retention.expired_no_renew': "⏰ <b>Subscription expired</b>\n\nYour VPN is off. Without protection your internet traffic is open to interception.\n\n💡 Bring protection back — renew right now.",
+    'retention.expired_no_renew': "⏰ <b>Subscription expired</b>\n\nYour VPS is off. Without protection your internet traffic is open to interception.\n\n💡 Bring protection back — renew right now.",
     'retention.expired_no_renew_title': "⏰ Subscription expired",
     'retention.expired_no_renew_btn': "🔁 Restore subscription",
-    'retention.usage_tip': "💡 <b>Tip from Atlas Secure</b>\n\nDid you know? VPN protects you not only from hackers, but also from:\n\n• Provider tracking\n• Password leaks in cafés/airports\n• Website blocking\n\n🛡 Turn Atlas Secure on every time you connect to Wi-Fi.",
+    'retention.usage_tip': "💡 <b>Tip from Atlas Secure</b>\n\nDid you know? VPS protects you not only from hackers, but also from:\n\n• Provider tracking\n• Password leaks in cafés/airports\n• Website blocking\n\n🛡 Turn Atlas Secure on every time you connect to Wi-Fi.",
     'retention.usage_tip_title': "💡 Security tip",
     'retention.milestone_30d': "🏆 <b>30 days with Atlas Secure!</b>\n\nCongrats! Over this month we protected your traffic and kept your privacy.\n\n🛡 Thanks for trusting us with your security.\n\n💡 Invite a friend — and get cashback to your balance!",
     'retention.milestone_30d_title': "🏆 30 days together!",
@@ -1048,11 +1048,11 @@ LANG = {
     # setup (missing)
     'setup.auto_install_header': "",
     'setup.manual_install_header': "",
-    'setup.key_vpn': "🔑 <b>VPN key</b> (regular servers — unlimited):",
-    'setup.key_bypass': "🔑 <b>Bypass key</b> (RU whitelists — for Russian sites):",
-    'setup.key_vpn_incy_label': "💚 <b>VPN key for Incy</b> (regular unlimited servers):",
-    'setup.key_bypass_incy_label': "💚 <b>Bypass key for Incy</b> (RU whitelists):",
-    'setup.key_install_title': "⚡️ <b>Connect in one tap</b>\n\nTap the buttons below — keys will be added automatically.\nAdd both for full functionality.\n\n<blockquote>🔑 VPN — main servers, all the internet without blocks\n🌐 Bypass — RU whitelists, internet works anywhere in the world</blockquote>",
+    'setup.key_vpn': "🔑 <b>VPS key</b> (regular servers — unlimited):",
+    'setup.key_bypass': "🔑 <b>Pro key</b> (for the sites you need):",
+    'setup.key_vpn_incy_label': "💚 <b>VPS key for Incy</b> (regular unlimited servers):",
+    'setup.key_bypass_incy_label': "💚 <b>Pro key for Incy</b>:",
+    'setup.key_install_title': "⚡️ <b>Connect in one tap</b>\n\nTap the buttons below — keys will be added automatically.\nAdd both for full functionality.\n\n<blockquote>🔑 VPS — main servers, all the internet without blocks\n🌐 Pro — internet works anywhere in the world</blockquote>",
     'setup.key_install_title_agg': "⚡️ <b>Connect in one tap</b>\n\nTap <b>«Add key»</b> for your app — the subscription will be imported automatically.\n\nIf it didn't open — tap <b>«Manual setup»</b> below.\n\n<blockquote>🌐 Traffic is used <b>only</b> on servers marked <b>LTE</b>.\n🚀 Unlimited servers work without using your GB.</blockquote>",
     'setup.btn_add_happ': "📥 Add key to Happ",
     'setup.btn_add_incy': "💚 Add key to Incy",
@@ -1063,7 +1063,7 @@ LANG = {
     'setup.btn_done': "✅ Done",
     'setup.btn_manual': "📋 Install manually",
     'setup.btn_need_help': "💬 Need help",
-    'setup.install_app': "📲 <b>Just install the app</b>\n\nIncy — a free VPN app.\nAlternative — Happ.\nTap the button — the app store will open.\n\n<blockquote>Already have Happ or Incy? Tap «Next».</blockquote>",
+    'setup.install_app': "📲 <b>Just install the app</b>\n\nIncy — a free VPS app.\nAlternative — Happ.\nTap the button — the app store will open.\n\n<blockquote>Already have Happ or Incy? Tap «Next».</blockquote>",
     'setup.install_happ_ru': "📲 Download Happ (Russia)",
     'setup.install_happ_global': "📲 Download Happ (other region)",
     'setup.install_happ_android': "📲 Download Happ",
@@ -1104,7 +1104,7 @@ LANG = {
     ),
 
     # shop
-    'shop.title': "<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> <b>Mini Shop</b>\n\nBuy useful digital goods here — quick, painless, no hassle.\n\n<blockquote><tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> <b>Telegram Premium</b> — unlock the full messenger\n<tg-emoji emoji-id=\"5422545633112249830\">🍎</tg-emoji> <b>Apple ID top-up</b> — top up App Store in any region\n<tg-emoji emoji-id=\"5319247469165433798\">🎮</tg-emoji> <b>Steam top-up</b> — Steam wallet without a VPN\n<tg-emoji emoji-id=\"5226639745106330551\">🧠</tg-emoji> <b>Claude Pro/Max</b> <i>(soon)</i> — the most powerful AI assistant for work and creativity</blockquote>\n\nPick what interests you:",
+    'shop.title': "<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> <b>Mini Shop</b>\n\nBuy useful digital goods here — quick, painless, no hassle.\n\n<blockquote><tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> <b>Telegram Premium</b> — unlock the full messenger\n<tg-emoji emoji-id=\"5422545633112249830\">🍎</tg-emoji> <b>Apple ID top-up</b> — top up App Store in any region\n<tg-emoji emoji-id=\"5319247469165433798\">🎮</tg-emoji> <b>Steam top-up</b> — Steam wallet without a VPS\n<tg-emoji emoji-id=\"5226639745106330551\">🧠</tg-emoji> <b>Claude Pro/Max</b> <i>(soon)</i> — the most powerful AI assistant for work and creativity</blockquote>\n\nPick what interests you:",
     'shop.claude_coming_soon': "💪 Working hard to bring this online sooner",
     'shop.apple_title': "🍎 <b>Apple ID top-up</b>\n\nSelect your Apple ID region:\n\n<blockquote>Not sure of your region?\nOpen <b>Settings → Apple ID → Media & Purchases → View</b> — country/region is shown there.</blockquote>",
     'shop.apple_amount_title': "🍎 <b>Apple ID top-up</b>\n\nRegion: {region}\n\nChoose top-up amount:",
@@ -1170,26 +1170,26 @@ LANG = {
     ),
 
     # traffic (missing)
-    'traffic.bypass_activated': "✅ <b>Whitelist bypass activated!</b>\n\n📦 +{gb} GB of traffic added\n\n💡 <i>Traffic doesn't expire — it accumulates between purchases.</i>\n\nOpen <b>Dashboard</b> to get your connection key.",
-    'traffic.bypass_activated_trial': "✅ <b>Whitelist bypass activated!</b>\n\n📦 +{gb} GB of traffic added\n\n🎁 <b>Bonus:</b> VPN trial period (3 days) activated!\n\n💡 <i>Traffic doesn't expire — it accumulates between purchases.</i>\n\nOpen <b>Dashboard</b> to get your connection key.",
-    'traffic.bypass_provisioning': "⏳ Setting up whitelist bypass...\nTap 🔄 in a few seconds.",
-    'traffic.notify_8gb': "<tg-emoji emoji-id=\"5456140674028019486\">💡</tg-emoji> {remaining} of bypass traffic left.\n\nYou can top up in advance — traffic doesn't expire.",
-    'traffic.notify_5gb': "<tg-emoji emoji-id=\"5190806721286657692\">📉</tg-emoji> {remaining} of bypass traffic left.\n\nWe recommend topping up so bypass keeps working.",
+    'traffic.bypass_activated': "✅ <b>Pro activated!</b>\n\n📦 +{gb} GB of traffic added\n\n💡 <i>Traffic doesn't expire — it accumulates between purchases.</i>\n\nOpen <b>Dashboard</b> to get your connection key.",
+    'traffic.bypass_activated_trial': "✅ <b>Pro activated!</b>\n\n📦 +{gb} GB of traffic added\n\n🎁 <b>Bonus:</b> VPS trial period (3 days) activated!\n\n💡 <i>Traffic doesn't expire — it accumulates between purchases.</i>\n\nOpen <b>Dashboard</b> to get your connection key.",
+    'traffic.bypass_provisioning': "⏳ Setting up Pro...\nTap 🔄 in a few seconds.",
+    'traffic.notify_8gb': "<tg-emoji emoji-id=\"5456140674028019486\">💡</tg-emoji> {remaining} of Pro traffic left.\n\nYou can top up in advance — traffic doesn't expire.",
+    'traffic.notify_5gb': "<tg-emoji emoji-id=\"5190806721286657692\">📉</tg-emoji> {remaining} of Pro traffic left.\n\nWe recommend topping up so Pro keeps working.",
 
     # trial (missing)
     'trial.activated_btn_support': "💬 Need help",
     'trial.bypass_activated': (
-        "🛡 <b>Whitelist bypass connected</b>\n\n"
-        "We've gifted you <b>500 MB of bypass traffic</b> — with it "
-        "sites and services filtered by whitelists open up.\n\n"
+        "🛡 <b>Pro connected</b>\n\n"
+        "We've gifted you <b>500 MB of Pro traffic</b> — with it "
+        "the sites and services you need open up.\n\n"
         "To start using it — install the key in Happ or Incy "
         "by tapping the button below."
     ),
-    'trial.bypass_activated_btn_setup': "🌐 Enable bypass",
+    'trial.bypass_activated_btn_setup': "🌐 Enable Pro",
     'trial.bypass_activated_btn_help': "💬 Need help",
     'trial.expired_discount_btn': "🔥 Buy with 30% off",
     'trial.reminder_24h': "⏳ <b>Trial ends tomorrow</b>\n\nTomorrow access will turn off — sites and apps will return to blocks.\n\nStart your subscription now — your key and settings stay, nothing to reinstall.",
-    'trial.reminder_3h': "🔥 <b>3 hours until shutdown</b>\n\nAfter that VPN will stop working. Sites, streaming, messengers — all back to blocks.\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Don't miss out — <b>15% off</b> valid until the trial ends.",
+    'trial.reminder_3h': "🔥 <b>3 hours until shutdown</b>\n\nAfter that VPS will stop working. Sites, streaming, messengers — all back to blocks.\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Don't miss out — <b>15% off</b> valid until the trial ends.",
     'trial.reminder_3h_discount_btn': "🔥 Buy with 15% off",
 
     # admin notif (kept in RU — admin-facing per instructions to leave admin RU alone,
@@ -1236,12 +1236,12 @@ LANG = {
     'main.btn_connect': "🚀 Connect",
     'main.btn_connect_short': "⚡️ Connect",
     'main.btn_need_help': "💬 Need help",
-    'main.btn_buy_vpn': "Buy VPN",
-    'main.btn_renew_vpn': "Renew VPN",
-    'main.btn_buy_gb': "Top up bypass GB",
+    'main.btn_buy_vpn': "Buy VPS",
+    'main.btn_renew_vpn': "Renew VPS",
+    'main.btn_buy_gb': "Top up Pro GB",
     'main.btn_trial_free': "Try free — 3 days",
     'main.btn_renew_discount_15': "Renew with 15% off | ⏳ {remaining}",
-    'main.btn_bypass_only': "🌐 Bypass only",
+    'main.btn_bypass_only': "🌐 Pro only",
     'main.btn_my_subscription': "My subscription",
     'main.btn_invite_friends': "Invite friends",
     'main.btn_my_profile': "My profile",
@@ -1267,10 +1267,10 @@ LANG = {
     'setup.install_incy_btn': "📲 Download Incy",
     'setup.install_happ_btn': "📲 Install Happ",
     'setup.download_happ_btn': "📲 Download Happ",
-    'setup.happ_vpn_label': "Happ VPN",
-    'setup.incy_vpn_label': "Incy VPN",
-    'setup.happ_bypass_label': "Happ Bypass",
-    'setup.incy_bypass_label': "Incy Bypass",
+    'setup.happ_vpn_label': "Happ VPS",
+    'setup.incy_vpn_label': "Incy VPS",
+    'setup.happ_bypass_label': "Happ Pro",
+    'setup.incy_bypass_label': "Incy Pro",
     'setup.key_hint_press': "One-tap key install 👇",
 
     # biz control panel toasts
@@ -1300,10 +1300,10 @@ LANG = {
     'traffic.gb_price_label': "{gb} GB — {price} ₽",
 
     # buy screen
-    'buy.combo_button': "🚀 Combo (VPN + traffic)",
+    'buy.combo_button': "🚀 Combo (VPS + traffic)",
     'buy.have_promo_button': "I have a promo code",
-    'buy.select_tariff_new': '<tg-emoji emoji-id="5427168083074628963">💎</tg-emoji> <b>Choose a plan</b>\n\n{tariffs}\n\n<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Combo</b> — VPN + traffic in one pack\n<blockquote>Traffic included · from 329 ₽/mo</blockquote>',
-    'buy.select_tariff_bypass_active': "🌐 <b>Extra traffic is active for you</b>\n\nChoose a plan for the main subscription:\n\n{tariffs}\n\n<tg-emoji emoji-id=\"5445284980978621387\">🚀</tg-emoji> <b>Combo</b> — VPN + traffic in one pack\n<blockquote>Traffic included · from 329 ₽/mo</blockquote>",
+    'buy.select_tariff_new': '<tg-emoji emoji-id="5427168083074628963">💎</tg-emoji> <b>Choose a plan</b>\n\n{tariffs}\n\n<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Combo</b> — VPS + traffic in one pack\n<blockquote>Traffic included · from 329 ₽/mo</blockquote>',
+    'buy.select_tariff_bypass_active': "🌐 <b>Extra traffic is active for you</b>\n\nChoose a plan for the main subscription:\n\n{tariffs}\n\n<tg-emoji emoji-id=\"5445284980978621387\">🚀</tg-emoji> <b>Combo</b> — VPS + traffic in one pack\n<blockquote>Traffic included · from 329 ₽/mo</blockquote>",
 
     # profile screen (personal cabinet)
     'profile.info_active_until': "📆 Subscription: active until {date}",
@@ -1324,10 +1324,10 @@ LANG = {
     'main.my_sub_bypass_none': "Traffic: —",
     'main.my_sub_bypass_left': "Traffic left: {remaining} of {limit}",
     'main.my_sub_bypass_unlimited': "Traffic: unlimited",
-    'main.my_sub_btn_connect': "Connect VPN",
+    'main.my_sub_btn_connect': "Connect VPS",
     'main.my_sub_btn_renew': "Renew subscription",
-    'main.my_sub_btn_buy_vpn': "Buy VPN",
-    'main.my_sub_btn_topup_gb': "Top up bypass GB",
+    'main.my_sub_btn_buy_vpn': "Buy VPS",
+    'main.my_sub_btn_topup_gb': "Top up Pro GB",
     'main.my_sub_btn_my_proxy': "My proxy",
     'main.my_sub_btn_mt_proxy': "Telegram MT Proxy",
 
@@ -1350,7 +1350,7 @@ LANG = {
     'referral.header': "🎖 <b>Ambassadors Circle</b>\n<i>From guide to ambassador</i>\n\n",
 
     # Invoice descriptions & minor payment strings
-    'buy.renewal_invoice_description': "Atlas Secure VPN subscription renewal for {period_text}",
+    'buy.renewal_invoice_description': "Atlas Secure VPS subscription renewal for {period_text}",
     'buy.period_text_1': "1 month",
     'buy.period_text_2_4': "{months} months",
     'buy.period_text_5_plus': "{months} months",
@@ -1387,8 +1387,8 @@ LANG = {
     'promo_link.header_activated': "🎉 <b>Reward activated!</b>\n\n",
     'promo_link.reward_subscription': "📦 <b>Subscription</b> · {tariff}\n⏳ <b>{days} days</b>\n📅 Until: <b>{end}</b>",
     'promo_link.reward_discount_subscription': "🎁 <b>Your gift is activated</b>\n\n<blockquote>— <b>{percent}%</b> off any plan\n— Valid for <b>{hours} more hours</b></blockquote>\n\nPick a plan below ↓",
-    'promo_link.reward_discount_traffic': "🎁 <b>Your gift is activated</b>\n\n<blockquote>— <b>{percent}%</b> off bypass GB packs\n— Valid for <b>{hours} more hours</b></blockquote>\n\nPick a plan below ↓",
-    'promo_link.reward_bypass_gb': "📊 <b>+{gb} GB</b> bypass traffic added\n\nThe GB pack doesn't expire — it's spent only on LTE servers.",
+    'promo_link.reward_discount_traffic': "🎁 <b>Your gift is activated</b>\n\n<blockquote>— <b>{percent}%</b> off Pro GB packs\n— Valid for <b>{hours} more hours</b></blockquote>\n\nPick a plan below ↓",
+    'promo_link.reward_bypass_gb': "📊 <b>+{gb} GB</b> Pro traffic added\n\nThe GB pack doesn't expire — it's spent only on LTE servers.",
     'promo_link.fallback_success_hint': "Open «Buy subscription» — the discount will apply automatically.",
 
     # stage-only user picker
