@@ -16,6 +16,17 @@ STAGE не менялся (file_id привязан к боту — prod-id на
 
 Откат: вернуть PROD-значение в `MAIN_PHOTO_FILE_ID` на оригинал выше.
 
+## Фото экрана «Выберите устройство» (`_DEVICE_SELECT_PHOTO`, prod)
+
+Экран: `setup.select_device` — «📱 Выберите устройство для подключения».
+Константа: `_DEVICE_SELECT_PHOTO["prod"]` в `app/handlers/callbacks/navigation.py`.
+
+- **Сейчас (под модерацию):** `AgACAgQAAxkBAAGILxxqmR0_PvCYoxmnbSy0GkxfWtpEgwACeRBrGzE2yFDWIFQarSx5SwEAAwIAA3kAAz0E`
+- **Вернуть ПОСЛЕ модерации (без модерации):** `AgACAgQAAxkBAAGILwVqmR0AATCd8V0czJQwFMVtbGWP97IAAncQaxsxNshQ3NkHkfgoXUwBAAMCAAN5AAM9BA`
+- Прежний prod-file_id (ретайрнут): `AgACAgQAAxkBAAFU07NqGqUXEmVZ5SivuY0gwUhd7TBCeAACXw9rGxA30FCkvieRMzznwwEAAwIAA3kAAzsE`
+
+STAGE не менялся (file_id привязан к боту).
+
 ---
 
 
