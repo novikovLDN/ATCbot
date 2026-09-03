@@ -1,5 +1,21 @@
 # Changeset: модерационные правки VPN / обход (для повторного применения)
 
+## Фото главного экрана (замена под модерацию) — СОХРАНЁННЫЕ ОРИГИНАЛЫ
+
+Экран: `main.welcome*` (главное меню, в т.ч. без подписки) — «💎 Atlas Secure /
+Интернет без блокировок… / 🏆 Премия «Надежный VPS 2026»».
+Константа: `MAIN_PHOTO_FILE_ID` в `app/handlers/callbacks/language.py`.
+
+Оригинальные Telegram file_id (вернуть эти значения, чтобы откатить фото):
+- **PROD:** `AgACAgQAAxkBAAF_xmlqfao80Yz-rdiEyVKfdz5s49Qd7gACLhFrG3NR8VO3FeagisF3hQEAAwIAA3kAAz0E`
+- **STAGE:** `AgACAgQAAxkBAAIhcWoZ_p3HPwnRbry9fgbsOMMREvaVAAJeD2sbEDfQUDIWtf_E5Dx0AQADAgADeQADOwQ`
+
+Под модерацию фото будет заменено на другое (новый file_id придёт отдельно).
+Откат: вернуть оба значения выше в `MAIN_PHOTO_FILE_ID`.
+
+---
+
+
 Этот файл — самодостаточная запись всех копирайт-правок под модерацию сторов
 (**VPN→VPS**, **обход→Pro/Pro-режим**, удаление **«белых списков»**). Правки
 были **откачены** по просьбе владельца; файл нужен, чтобы позже **корректно
