@@ -398,7 +398,10 @@ async def callback_connect_instead_of_copy(callback: CallbackQuery):
 # ── Connect instruction ──────────────────────────────────────────
 
 _DEVICE_SELECT_PHOTO = {
-    "prod": "AgACAgQAAxkBAAFU07NqGqUXEmVZ5SivuY0gwUhd7TBCeAACXw9rGxA30FCkvieRMzznwwEAAwIAA3kAAzsE",
+    # prod: сейчас МОДЕРАЦИОННОЕ фото. После модерации вернуть на "без модерации":
+    # AgACAgQAAxkBAAGILwVqmR0AATCd8V0czJQwFMVtbGWP97IAAncQaxsxNshQ3NkHkfgoXUwBAAMCAAN5AAM9BA
+    # (см. docs/MODERATION_VPN_BYPASS_CHANGESET.md)
+    "prod": "AgACAgQAAxkBAAGILxxqmR0_PvCYoxmnbSy0GkxfWtpEgwACeRBrGzE2yFDWIFQarSx5SwEAAwIAA3kAAz0E",
     "stage": "AgACAgQAAxkBAAIhc2oZ_tiD1jsG8eB-9HrSgTTiyjEUAAJfD2sbEDfQUDPuD983y47VAQADAgADeQADOwQ",
 }
 
