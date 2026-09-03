@@ -1,129 +1,86 @@
-# Changeset: модерационные правки VPN / обход (для повторного применения)
+# Re-apply модерации: VPN/обход + фото (МОДЕРАЦИЯ ПЕРЕНЕСЕНА)
 
-## Фото главного экрана (замена под модерацию) — СОХРАНЁННЫЕ ОРИГИНАЛЫ
+Статус: **модерация перенесена**, всё возвращено в обычное состояние
+(обход/VPN в текстах восстановлены, экранные фото — обычные). Этот файл —
+как **заново применить** модерацию, когда она возобновится.
 
-Экран: `main.welcome*` (главное меню, в т.ч. без подписки) — «💎 Atlas Secure /
-Интернет без блокировок… / 🏆 Премия «Надежный VPS 2026»».
-Константа: `MAIN_PHOTO_FILE_ID` в `app/handlers/callbacks/language.py`.
-
-Оригинальные Telegram file_id (вернуть эти значения, чтобы откатить фото):
-- **PROD:** `AgACAgQAAxkBAAF_xmlqfao80Yz-rdiEyVKfdz5s49Qd7gACLhFrG3NR8VO3FeagisF3hQEAAwIAA3kAAz0E`
-- **STAGE:** `AgACAgQAAxkBAAIhcWoZ_p3HPwnRbry9fgbsOMMREvaVAAJeD2sbEDfQUDIWtf_E5Dx0AQADAgADeQADOwQ`
-
-**Заменено (PROD)** на модерационное фото:
-`AgACAgQAAxkBAAGILrJqmRrKIHhd_2TdSxWC4mSlBw34PAACdBBrGzE2yFAI7ugMrp-k_QEAAwIAA3kAAz0E`
-STAGE не менялся (file_id привязан к боту — prod-id на stage-боте не работает).
-
-Откат: вернуть PROD-значение в `MAIN_PHOTO_FILE_ID` на оригинал выше.
-
-## Фото экрана «Выберите устройство» (`_DEVICE_SELECT_PHOTO`, prod)
-
-Экран: `setup.select_device` — «📱 Выберите устройство для подключения».
-Константа: `_DEVICE_SELECT_PHOTO["prod"]` в `app/handlers/callbacks/navigation.py`.
-
-- **Сейчас (под модерацию):** `AgACAgQAAxkBAAGILxxqmR0_PvCYoxmnbSy0GkxfWtpEgwACeRBrGzE2yFDWIFQarSx5SwEAAwIAA3kAAz0E`
-- **Вернуть ПОСЛЕ модерации (без модерации):** `AgACAgQAAxkBAAGILwVqmR0AATCd8V0czJQwFMVtbGWP97IAAncQaxsxNshQ3NkHkfgoXUwBAAMCAAN5AAM9BA`
-- Прежний prod-file_id (ретайрнут): `AgACAgQAAxkBAAFU07NqGqUXEmVZ5SivuY0gwUhd7TBCeAACXw9rGxA30FCkvieRMzznwwEAAwIAA3kAAzsE`
-
-STAGE не менялся (file_id привязан к боту).
-
-## Фото экрана «❓ Помощь» (`SUPPORT_PHOTO_FILE_ID`)
-
-Экран: `_open_help_screen` (`help.menu_title`). Константа
-`SUPPORT_PHOTO_FILE_ID` в `app/handlers/common/screens.py` (единая, без prod/stage;
-используется только здесь).
-
-- **Сейчас (под модерацию):** `AgACAgQAAxkBAAGIL6ZqmSBb2kWmNnZwEz4dec4wlhJ4NQACfRBrGzE2yFC1E_y6lGWUTAEAAwIAA3kAAz0E`
-- **Вернуть ПОСЛЕ модерации (без модерации):** `AgACAgQAAxkBAAGIL6NqmSBPEGLHLGql0JtCj85HJAerwQACfBBrGzE2yFCoJX6favSQxQEAAwIAA3kAAz0E`
-- Прежний file_id (ретайрнут): `AgACAgQAAxkBAAFU07dqGqVLNGYWl3jMGShmNxuNUgvkpAACGw5rG4Qv2VBVBIqM5lqnCgEAAwIAA3kAAzsE`
+Текущее (обычное) состояние получено ревертом хендлеров + восстановлением
+pre-moderation i18n; НЕ откачены (остаются): новые legal-ссылки, фикс
+/start-коллизии referral_code, экран «Правила» на /docs.
 
 ---
 
+## A. ТЕКСТ (VPN→VPS, обход→Pro/Pro-режим, убрать «белые списки»)
 
-Этот файл — самодостаточная запись всех копирайт-правок под модерацию сторов
-(**VPN→VPS**, **обход→Pro/Pro-режим**, удаление **«белых списков»**). Правки
-были **откачены** по просьбе владельца; файл нужен, чтобы позже **корректно
-вернуть** их обратно.
-
-> Важно: этот файл лежит ВНЕ откатываемых коммитов, поэтому переживает revert.
-> Ранее детальные таблицы дублировались в `docs/MODERATION_COPY_ROLLBACK.md`,
-> но тот файл добавлялся в откатываемых коммитах и после отката исчезнет —
-> вся нужная информация продублирована здесь.
-
-## Коммиты правок (хронологический порядок)
+Исходные копирайт-коммиты модерации (хронологически):
 
 | # | Commit | Что делал | Файлы |
 |---|--------|-----------|-------|
-| 1 | `e8358c7` | Витрина тарифов: «обход» → «трафик» | `app/i18n/ru.py`, `app/i18n/en.py` |
-| 2 | `20ec13c` | Модерация: **VPN→VPS**, обход→Pro, убрать «белые списки»/whitelist (ru+en) | `app/i18n/ru.py`, `app/i18n/en.py` |
-| 3 | `46a355d` | Уточнение (только ru): «Pro» → «Pro-режим» и т.п. | `app/i18n/ru.py` |
-| 4 | `00afce8` | Hardcoded-строки хендлеров (ru): убрать «обход» | `app/handlers/**` (см. ниже) |
+| 1 | `0c347a0` | витрина тарифов: обход→трафик | `app/i18n/ru.py`, `en.py` |
+| 2 | `4ad1930` | **VPN→VPS**, обход→Pro, убрать whitelist/белые списки (ru+en) | `app/i18n/ru.py`, `en.py` |
+| 3 | `3a87776` | уточнение (ru): Pro→**Pro-режим** | `app/i18n/ru.py` |
+| 4 | `58a8e2d` | hardcoded-строки хендлеров: обход | `app/handlers/**` |
+| 5 | `f38bacf` | кнопки: VPN→VPS | `app/handlers/{proxy,common/keyboards,common/screens,callbacks/navigation}.py` |
 
-Hardcoded-хендлеры из коммита 4: `common/screens.py`, `common/keyboards.py`,
-`traffic.py`, `user/start.py`, `callbacks/bypass_setup.py`,
-`callbacks/payments_callbacks.py`, `payments/callbacks.py`.
+**Как применить заново:**
+- Вариант А (git): `git cherry-pick 0c347a0 4ad1930 3a87776 58a8e2d f38bacf`.
+  Если конфликт в `app/i18n/ru.py` (частый случай) — разрешить по таблице
+  терминов ниже (в i18n значениях: VPN→VPS, обход-формы→Pro/Pro-режим, убрать
+  «белые списки»), затем `git cherry-pick --continue`.
+- Вариант Б (скрипт): повторить замены по таблицам терминов ниже (только
+  ЗНАЧЕНИЯ i18n и hardcoded-строки хендлеров; ключи/callback_data/`необходимо`
+  не трогать). Критерий приёмки: 0 вхождений VPN/обход/белые списки/whitelist/
+  bypass в пользовательских значениях i18n.
 
-## Как ВЕРНУТЬ правки обратно (re-apply)
-
-Вариант А — вернуть исходные правки поверх текущего (после отката) состояния:
-```
-git cherry-pick e8358c7 20ec13c 46a355d 00afce8
-```
-Вариант Б — если откат сделан через `git revert`, отменить сами revert-коммиты:
-```
-git log --oneline --grep "Revert"   # найти хеши revert-коммитов
-git revert <revert1> <revert2> <revert3> <revert4>
-```
-После возврата — прогнать проверку: `python -m compileall app/i18n app/handlers`
-и `grep -c` на отсутствие VPN/обход в значениях (см. критерии в истории).
-
-## Карта терминов (что на что менялось)
-
-### RU
-| Исходный (как было / вернётся после отката) | Модерационный (что вернуть) |
+### Карта терминов — RU
+| было (обычное) | стало (модерация) |
 |---|---|
 | VPN | VPS |
-| обход белых списков / «Обход» (фича) | Pro-режим |
-| обход блокировок | Pro-режим |
+| обход белых списков / «Обход» (фича) / обход блокировок | Pro-режим |
 | трафик(а) обхода | Pro-трафик(а) |
 | ГБ обхода | Pro-трафик / ГБ Pro-трафика |
-| сервера/серверов обхода | Pro-серверы / Pro-серверов |
-| ключ(и) обхода / «Обход ключ» | Pro-ключ / Pro-ключи |
-| «Добавить обход» | «Добавить Pro-ключ» |
-| «Включить обход» | «Включить Pro-режим» |
-| гигабайты обхода | гигабайты Pro-трафика |
+| сервера/серверов обхода | Pro-серверы/-ов |
+| ключ(и) обхода / «Обход ключ» | Pro-ключ(и) |
+| «Добавить обход» → «Добавить Pro-ключ»; «Включить обход» → «Включить Pro-режим» | |
 | «Купить ГБ обхода» (кнопка) | «Купить Pro-трафик» |
-| «Только обход блокировок» | «Только Pro-режим» |
 | «🚀 Happ/Incy обход» | «🚀 Happ/Incy Pro» |
-| белые списки РФ / «(белые списки РФ)» | убрано / перефразировано |
-| «которые фильтруются по белым спискам» | «которые обычно недоступны» |
+| белые списки РФ / «(белые списки РФ)» | убрать / перефразировать |
+| «фильтруются по белым спискам» | «которые обычно недоступны» |
 
-### EN (менялось только в коммите 20ec13c)
-| Исходный | Модерационный |
+### Карта терминов — EN
+| было | стало |
 |---|---|
 | VPN / VPNs | VPS / VPS apps |
 | whitelist bypass / Bypass (фича) | Pro |
 | bypass traffic / servers / key(s) / gigabytes | Pro traffic / servers / key(s) / gigabytes |
 | Add/Enable/Connect bypass | Add/Enable/Connect Pro |
 | «Bypasses any blocks including whitelists» | «Access to any sites and services» |
-| RU whitelists / whitelist(s) | убрано / перефразировано |
+| RU whitelists / whitelist(s) | убрать / перефразировать |
 | «Copy White List» | «Copy Pro key» |
 
-## НЕ входило в откат (осталось как есть)
+---
 
-Эти изменения этой сессии — НЕ про обход/VPN-копирайт, откату не подлежат:
-- `4c9348f` — фикс доставки bypass-ГБ для combo/renewal (create-if-missing).
-- `7f0acd1`, `c5a31fc` — фича «🎁 Получить пробный ключ».
-- `85e5323` — сегмент рассылки «expired_within_1y».
-- `6b86020` — `/docs` → экран «Правила».
+## B. ФОТО ЭКРАНОВ (prod). Постановка file_id.
 
-## НЕ трогалось при модерации (и не тронется при возврате)
+file_id привязан к боту → значения только для prod-бота. STAGE не менять.
 
-- Имена ключей-идентификаторов (`*_bypass_*`, `key_whitelist`, `biz_pro`…),
-  `callback_data`, код, слово «необходимо».
-- Легитимные «Pro»: бизнес-тариф Pro, Claude Pro/Max.
-- Уведомления `traffic.notify_*` (в проходе-уточнении не менялись).
-- Английский в проходе-уточнении (46a355d) не менялся.
-- Standalone hardcoded «VPN» (proxy.py, devices.py, инвойс-заголовки
-  «Atlas Secure VPN», beta_apply «VPN-Инноватор») — до модерации не дошли,
-  отдельный вопрос.
+| Экран | Константа (файл) | ОБЫЧНОЕ (сейчас) | МОДЕРАЦИЯ (ставить) |
+|---|---|---|---|
+| Главный/приветствие `main.welcome*` | `MAIN_PHOTO_FILE_ID` prod (`app/handlers/callbacks/language.py`) | `AgACAgQAAxkBAAF_xmlqfao80Yz-rdiEyVKfdz5s49Qd7gACLhFrG3NR8VO3FeagisF3hQEAAwIAA3kAAz0E` | `AgACAgQAAxkBAAGILrJqmRrKIHhd_2TdSxWC4mSlBw34PAACdBBrGzE2yFAI7ugMrp-k_QEAAwIAA3kAAz0E` |
+| «Выберите устройство» `setup.select_device` | `_DEVICE_SELECT_PHOTO["prod"]` (`app/handlers/callbacks/navigation.py`) | `AgACAgQAAxkBAAGILwVqmR0AATCd8V0czJQwFMVtbGWP97IAAncQaxsxNshQ3NkHkfgoXUwBAAMCAAN5AAM9BA` | `AgACAgQAAxkBAAGILxxqmR0_PvCYoxmnbSy0GkxfWtpEgwACeRBrGzE2yFDWIFQarSx5SwEAAwIAA3kAAz0E` |
+| «❓ Помощь» `help.menu_title` | `SUPPORT_PHOTO_FILE_ID` (`app/handlers/common/screens.py`) | `AgACAgQAAxkBAAGIL6NqmSBPEGLHLGql0JtCj85HJAerwQACfBBrGzE2yFCoJX6favSQxQEAAwIAA3kAAz0E` | `AgACAgQAAxkBAAGIL6ZqmSBb2kWmNnZwEz4dec4wlhJ4NQACfRBrGzE2yFC1E_y6lGWUTAEAAwIAA3kAAz0E` |
+
+Прежний prod-file_id «Выберите устройство» (ретайрнут, не использовать):
+`AgACAgQAAxkBAAFU07NqGqUXEmVZ5SivuY0gwUhd7TBCeAACXw9rGxA30FCkvieRMzznwwEAAwIAA3kAAzsE`
+
+---
+
+## Что НЕ трогать (при обоих переключениях)
+
+- Имена ключей/`callback_data`/код, слово «необходимо».
+- Легитимные «Pro» (бизнес-тариф Pro, Claude Pro/Max, Happ/Incy Pro-метки).
+- Уведомления `traffic.notify_*` (в проходе-уточнении Pro-режим не применялся).
+- Английский в проходе-уточнении (3a87776) — только ru.
+- STAGE-файлы фото (bot-specific file_id).
+- Standalone hardcoded «VPN» вне кнопок (инвойс-заголовки «Atlas Secure VPN»,
+  текст proxy-экрана и т.п.) — до модерации не доводили, отдельный вопрос.

@@ -39,11 +39,9 @@ logger = logging.getLogger(__name__)
 # bad file_id never breaks a screen — it just degrades to text.
 PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAF_0eZqfhvhiUZBdALxqV1bT5M-U0GPGgAC6BFrG3NR8VOGYtduypInugEAAwIAA3cAAz0E"
 
-# Фото экрана «❓ Помощь» (_open_help_screen). Сейчас МОДЕРАЦИОННОЕ фото.
-# После модерации вернуть на "без модерации":
-# AgACAgQAAxkBAAGIL6NqmSBPEGLHLGql0JtCj85HJAerwQACfBBrGzE2yFCoJX6favSQxQEAAwIAA3kAAz0E
-# (см. docs/MODERATION_VPN_BYPASS_CHANGESET.md)
-SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAGIL6ZqmSBb2kWmNnZwEz4dec4wlhJ4NQACfRBrGzE2yFC1E_y6lGWUTAEAAwIAA3kAAz0E"
+# Фото экрана «❓ Помощь» (_open_help_screen) — ОБЫЧНОЕ (модерация перенесена).
+# Модерационный file_id — в docs/MODERATION_VPN_BYPASS_CHANGESET.md.
+SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAGIL6NqmSBPEGLHLGql0JtCj85HJAerwQACfBBrGzE2yFCoJX6favSQxQEAAwIAA3kAAz0E"
 
 CONTACTS_PHOTO_FILE_ID = "AgACAgQAAxkBAAFaMrhqIIn_mXiy0317JBGMgFkHl6d9DQACvhZrG8kkCVH3VeBvZR6bxAEAAwIAA3kAAzsE"
 
@@ -83,8 +81,8 @@ async def _render_bypass_line(
     *,
     none_key: str = "main.my_sub_bypass_none",
     left_key: str = "main.my_sub_bypass_left",
-    none_default: str = "Трафик: —",
-    left_default: str = "Осталось трафика: {remaining} из {limit}",
+    none_default: str = "Трафик обхода: —",
+    left_default: str = "Трафик обхода: {remaining} из {limit}",
 ) -> str:
     """Единый рендер строки «Трафик обхода» для profile и my_subscription.
 
@@ -115,7 +113,7 @@ async def _render_bypass_line(
         if limit_bytes == 0:
             return i18n_get_text(
                 language, "main.my_sub_bypass_unlimited",
-                "Трафик: безлимит",
+                "Трафик обхода: безлимит",
             )
         remaining = max(0, limit_bytes - used)
         return i18n_get_text(
@@ -536,8 +534,8 @@ async def show_profile(message_or_query, language: str):
             telegram_id, language,
             none_key="profile.info_bypass_none",
             left_key="profile.info_bypass_left",
-            none_default="💎 Трафик: —",
-            left_default="💎 Осталось трафика: {remaining} из {limit}",
+            none_default="💎 Трафик обхода: —",
+            left_default="💎 Трафик обхода: {remaining} из {limit}",
         )
         info_lines.append(bypass_line)
 
@@ -682,8 +680,8 @@ async def _open_buy_screen(
         (
             f'<tg-emoji emoji-id="5427168083074628963">💎</tg-emoji> <b>Выберите тариф</b>\n\n'
             f"{_tariffs_block}\n\n"
-            f'<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPS + трафик в одном пакете\n'
-            f"<blockquote>Трафик включён · от 329 ₽/мес</blockquote>"
+            f'<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPN + обход в одном пакете\n'
+            f"<blockquote>Трафик обхода включён · от 329 ₽/мес</blockquote>"
         ),
         tariffs=_tariffs_block,
     )
@@ -698,11 +696,11 @@ async def _open_buy_screen(
         text = i18n_get_text(
             language, "buy.select_tariff_bypass_active",
             (
-                f"🌐 <b>У вас активен Pro-режим</b>\n\n"
+                f"🌐 <b>У вас активен обход блокировок</b>\n\n"
                 f"Для основной подписки выберите тариф:\n\n"
                 f"{_tariffs_block}\n\n"
-                f'<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPS + трафик в одном пакете\n'
-                f"<blockquote>Трафик включён · от 329 ₽/мес</blockquote>"
+                f'<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPN + обход в одном пакете\n'
+                f"<blockquote>Трафик обхода включён · от 329 ₽/мес</blockquote>"
             ),
             tariffs=_tariffs_block,
         )
@@ -739,7 +737,7 @@ async def _open_buy_screen(
             **plus_extra,
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "buy.combo_button", "🚀 Комбо (VPS + трафик)"),
+            text=i18n_get_text(language, "buy.combo_button", "🚀 Комбо (VPN + обход)"),
             callback_data="buy_combo",
             style="primary",
         )],
@@ -849,8 +847,8 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
         telegram_id, language,
         none_key="main.my_sub_bypass_none",
         left_key="main.my_sub_bypass_left",
-        none_default="Трафик: —",
-        left_default="Осталось трафика: {remaining} из {limit}",
+        none_default="Трафик обхода: —",
+        left_default="Трафик обхода: {remaining} из {limit}",
     )
 
     # Есть ли доступ к обходу (bypass entity с трафиком)? Если строка НЕ
@@ -881,7 +879,7 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
     # Bypass-only юзеру (трафик есть, тарифа нет) тоже нужен ключ обхода.
     if (has_active_subscription and not is_bypass_only) or has_bypass_access:
         kb_rows.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.my_sub_btn_connect", "Подключить VPS"),
+            text=i18n_get_text(language, "main.my_sub_btn_connect", "Подключить VPN"),
             callback_data="connect_instruction",
             icon_custom_emoji_id=CE["connect"],
             style="danger",
@@ -891,7 +889,7 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
         renew_text = i18n_get_text(language, "main.my_sub_btn_renew", "Продлить подписку")
         renew_icon = CE["renew"]
     else:
-        renew_text = i18n_get_text(language, "main.my_sub_btn_buy_vpn", "Купить VPS")
+        renew_text = i18n_get_text(language, "main.my_sub_btn_buy_vpn", "Купить VPN")
         renew_icon = CE["buy"]
     kb_rows.append([InlineKeyboardButton(
         text=renew_text,

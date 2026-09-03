@@ -398,10 +398,9 @@ async def callback_connect_instead_of_copy(callback: CallbackQuery):
 # ── Connect instruction ──────────────────────────────────────────
 
 _DEVICE_SELECT_PHOTO = {
-    # prod: сейчас МОДЕРАЦИОННОЕ фото. После модерации вернуть на "без модерации":
-    # AgACAgQAAxkBAAGILwVqmR0AATCd8V0czJQwFMVtbGWP97IAAncQaxsxNshQ3NkHkfgoXUwBAAMCAAN5AAM9BA
-    # (см. docs/MODERATION_VPN_BYPASS_CHANGESET.md)
-    "prod": "AgACAgQAAxkBAAGILxxqmR0_PvCYoxmnbSy0GkxfWtpEgwACeRBrGzE2yFDWIFQarSx5SwEAAwIAA3kAAz0E",
+    # prod: ОБЫЧНОЕ фото (модерация перенесена). Модерационный file_id —
+    # в docs/MODERATION_VPN_BYPASS_CHANGESET.md (ставить при возобновлении).
+    "prod": "AgACAgQAAxkBAAGILwVqmR0AATCd8V0czJQwFMVtbGWP97IAAncQaxsxNshQ3NkHkfgoXUwBAAMCAAN5AAM9BA",
     "stage": "AgACAgQAAxkBAAIhc2oZ_tiD1jsG8eB-9HrSgTTiyjEUAAJfD2sbEDfQUDPuD983y47VAQADAgADeQADOwQ",
 }
 
@@ -722,13 +721,13 @@ async def callback_setup_step2(callback: CallbackQuery):
         # Ряд 1: VPN-ключ (Happ + Incy) — только если есть основная подписка.
         if sub_url:
             row_vpn = [InlineKeyboardButton(
-                text=i18n_get_text(language, "setup.happ_vpn_label", "Happ VPS"),
+                text=i18n_get_text(language, "setup.happ_vpn_label", "Happ VPN"),
                 url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
                 style="primary",
             )]
             if show_incy:
                 row_vpn.append(InlineKeyboardButton(
-                    text=i18n_get_text(language, "setup.incy_vpn_label", "Incy VPS"),
+                    text=i18n_get_text(language, "setup.incy_vpn_label", "Incy VPN"),
                     url=f"{base_url}/open/incy?url={quote(sub_url, safe='')}",
                     style="success",
                 ))

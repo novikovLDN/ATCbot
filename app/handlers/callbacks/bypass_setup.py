@@ -167,11 +167,11 @@ async def callback_broadcast_bypass(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="🚀 Happ Pro",
+                text="🚀 Happ обход",
                 url=_redirect_url("happ", bypass_url),
             ),
             InlineKeyboardButton(
-                text="🚀 Incy Pro",
+                text="🚀 Incy обход",
                 url=_redirect_url("incy", bypass_url),
             ),
         ],
