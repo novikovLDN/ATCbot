@@ -10,8 +10,11 @@
 - **PROD:** `AgACAgQAAxkBAAF_xmlqfao80Yz-rdiEyVKfdz5s49Qd7gACLhFrG3NR8VO3FeagisF3hQEAAwIAA3kAAz0E`
 - **STAGE:** `AgACAgQAAxkBAAIhcWoZ_p3HPwnRbry9fgbsOMMREvaVAAJeD2sbEDfQUDIWtf_E5Dx0AQADAgADeQADOwQ`
 
-Под модерацию фото будет заменено на другое (новый file_id придёт отдельно).
-Откат: вернуть оба значения выше в `MAIN_PHOTO_FILE_ID`.
+**Заменено (PROD)** на модерационное фото:
+`AgACAgQAAxkBAAGILrJqmRrKIHhd_2TdSxWC4mSlBw34PAACdBBrGzE2yFAI7ugMrp-k_QEAAwIAA3kAAz0E`
+STAGE не менялся (file_id привязан к боту — prod-id на stage-боте не работает).
+
+Откат: вернуть PROD-значение в `MAIN_PHOTO_FILE_ID` на оригинал выше.
 
 ---
 
