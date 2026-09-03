@@ -79,8 +79,8 @@ async def _render_bypass_line(
     *,
     none_key: str = "main.my_sub_bypass_none",
     left_key: str = "main.my_sub_bypass_left",
-    none_default: str = "Трафик обхода: —",
-    left_default: str = "Трафик обхода: {remaining} из {limit}",
+    none_default: str = "Трафик: —",
+    left_default: str = "Осталось трафика: {remaining} из {limit}",
 ) -> str:
     """Единый рендер строки «Трафик обхода» для profile и my_subscription.
 
@@ -111,7 +111,7 @@ async def _render_bypass_line(
         if limit_bytes == 0:
             return i18n_get_text(
                 language, "main.my_sub_bypass_unlimited",
-                "Трафик обхода: безлимит",
+                "Трафик: безлимит",
             )
         remaining = max(0, limit_bytes - used)
         return i18n_get_text(
@@ -532,8 +532,8 @@ async def show_profile(message_or_query, language: str):
             telegram_id, language,
             none_key="profile.info_bypass_none",
             left_key="profile.info_bypass_left",
-            none_default="💎 Трафик обхода: —",
-            left_default="💎 Трафик обхода: {remaining} из {limit}",
+            none_default="💎 Трафик: —",
+            left_default="💎 Осталось трафика: {remaining} из {limit}",
         )
         info_lines.append(bypass_line)
 
@@ -678,8 +678,8 @@ async def _open_buy_screen(
         (
             f'<tg-emoji emoji-id="5427168083074628963">💎</tg-emoji> <b>Выберите тариф</b>\n\n'
             f"{_tariffs_block}\n\n"
-            f'<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPN + обход в одном пакете\n'
-            f"<blockquote>Трафик обхода включён · от 329 ₽/мес</blockquote>"
+            f'<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPS + трафик в одном пакете\n'
+            f"<blockquote>Трафик включён · от 329 ₽/мес</blockquote>"
         ),
         tariffs=_tariffs_block,
     )
@@ -694,11 +694,11 @@ async def _open_buy_screen(
         text = i18n_get_text(
             language, "buy.select_tariff_bypass_active",
             (
-                f"🌐 <b>У вас активен обход блокировок</b>\n\n"
+                f"🌐 <b>У вас активен Pro-режим</b>\n\n"
                 f"Для основной подписки выберите тариф:\n\n"
                 f"{_tariffs_block}\n\n"
-                f'<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPN + обход в одном пакете\n'
-                f"<blockquote>Трафик обхода включён · от 329 ₽/мес</blockquote>"
+                f'<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPS + трафик в одном пакете\n'
+                f"<blockquote>Трафик включён · от 329 ₽/мес</blockquote>"
             ),
             tariffs=_tariffs_block,
         )
@@ -735,7 +735,7 @@ async def _open_buy_screen(
             **plus_extra,
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "buy.combo_button", "🚀 Комбо (VPN + обход)"),
+            text=i18n_get_text(language, "buy.combo_button", "🚀 Комбо (VPS + трафик)"),
             callback_data="buy_combo",
             style="primary",
         )],
@@ -845,8 +845,8 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
         telegram_id, language,
         none_key="main.my_sub_bypass_none",
         left_key="main.my_sub_bypass_left",
-        none_default="Трафик обхода: —",
-        left_default="Трафик обхода: {remaining} из {limit}",
+        none_default="Трафик: —",
+        left_default="Осталось трафика: {remaining} из {limit}",
     )
 
     # Есть ли доступ к обходу (bypass entity с трафиком)? Если строка НЕ
@@ -877,7 +877,7 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
     # Bypass-only юзеру (трафик есть, тарифа нет) тоже нужен ключ обхода.
     if (has_active_subscription and not is_bypass_only) or has_bypass_access:
         kb_rows.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.my_sub_btn_connect", "Подключить VPN"),
+            text=i18n_get_text(language, "main.my_sub_btn_connect", "Подключить VPS"),
             callback_data="connect_instruction",
             icon_custom_emoji_id=CE["connect"],
             style="danger",
@@ -887,7 +887,7 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
         renew_text = i18n_get_text(language, "main.my_sub_btn_renew", "Продлить подписку")
         renew_icon = CE["renew"]
     else:
-        renew_text = i18n_get_text(language, "main.my_sub_btn_buy_vpn", "Купить VPN")
+        renew_text = i18n_get_text(language, "main.my_sub_btn_buy_vpn", "Купить VPS")
         renew_icon = CE["buy"]
     kb_rows.append([InlineKeyboardButton(
         text=renew_text,
@@ -951,11 +951,11 @@ async def _open_legal_screen(event: Union[Message, CallbackQuery], bot: Bot):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.legal_terms_btn", "Пользовательское соглашение"),
-            url="https://telegra.ph/Polzovatelskoe-soglashenie-08-06-50",
+            url="https://telegra.ph/Polzovatelskoe-soglashenie-09-03-24",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.legal_privacy_btn", "Политика конфиденциальности"),
-            url="https://telegra.ph/Politika-konfidencialnosti-08-06-86",
+            url="https://telegra.ph/Politika-konfidencialnosti-09-03-71",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back", "Назад"),
