@@ -9,6 +9,8 @@ import base64
 import hashlib
 import json
 import logging
+import secrets
+import string
 import uuid as uuid_lib
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, List
@@ -708,12 +710,29 @@ def generate_referral_code(telegram_id: int) -> str:
     
     # Берем первые 6 символов и приводим к верхнему регистру
     code = encoded[:6].upper()
-    
+
     return code
 
 
+_REFERRAL_ALPHABET = string.ascii_uppercase + string.digits
+
+
+def _random_referral_code(length: int = 8) -> str:
+    """Случайный referral_code (A-Z0-9) — для разрешения коллизий детерминированного кода."""
+    return "".join(secrets.choice(_REFERRAL_ALPHABET) for _ in range(length))
+
+
 async def create_user(telegram_id: int, username: Optional[str] = None, language: str = "ru"):
-    """Создать нового пользователя с автоматической генерацией referral_code"""
+    """Создать нового пользователя с автоматической генерацией referral_code.
+
+    referral_code уникален (idx_users_referral_code). Детерминированный
+    generate_referral_code() (6 симв. из sha256) у РАЗНЫХ telegram_id может
+    коллизиться — при этом ON CONFLICT (telegram_id) НЕ гасит конфликт по
+    referral_code, и INSERT падал UniqueViolationError, роняя /start
+    (прод-инцидент 2026-09). Теперь на коллизии referral_code регенерируем
+    код (случайный 8-симв.) и повторяем; при исчерпании попыток — вставляем
+    без кода (NULL), чтобы регистрация не падала.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         referral_code = generate_referral_code(telegram_id)
@@ -721,20 +740,58 @@ async def create_user(telegram_id: int, username: Optional[str] = None, language
         # RETURNING distinguishes a real INSERT from ON CONFLICT DO NOTHING —
         # we only fire user:registered when a new row actually appeared, so
         # the dashboard counter doesn't tick on a return-visit /start.
-        inserted_id = await conn.fetchval(
-            """INSERT INTO users (telegram_id, username, language, referral_code)
-               VALUES ($1, $2, $3, $4)
-               ON CONFLICT (telegram_id) DO NOTHING
-               RETURNING telegram_id""",
-            telegram_id, username, language, referral_code
-        )
+        inserted_id = None
+        insert_ok = False
+        for _attempt in range(6):
+            try:
+                inserted_id = await conn.fetchval(
+                    """INSERT INTO users (telegram_id, username, language, referral_code)
+                       VALUES ($1, $2, $3, $4)
+                       ON CONFLICT (telegram_id) DO NOTHING
+                       RETURNING telegram_id""",
+                    telegram_id, username, language, referral_code
+                )
+                insert_ok = True
+                break
+            except asyncpg.UniqueViolationError as e:
+                # ON CONFLICT (telegram_id) уже гасит дубль по telegram_id —
+                # сюда попадаем ТОЛЬКО при коллизии referral_code с другим юзером.
+                if "referral_code" not in str(e).lower():
+                    raise
+                logger.warning(
+                    "CREATE_USER_REFCODE_COLLISION tg=%s code=%s attempt=%s — регенерирую",
+                    telegram_id, referral_code, _attempt,
+                )
+                referral_code = _random_referral_code()
+        if not insert_ok:
+            # Крайне маловероятно (6 коллизий случайного 8-симв. кода). Не роняем
+            # регистрацию — вставляем без referral_code, добэкфилл позже.
+            logger.error(
+                "CREATE_USER_REFCODE_EXHAUSTED tg=%s — вставляю без referral_code", telegram_id,
+            )
+            referral_code = None
+            inserted_id = await conn.fetchval(
+                """INSERT INTO users (telegram_id, username, language)
+                   VALUES ($1, $2, $3)
+                   ON CONFLICT (telegram_id) DO NOTHING
+                   RETURNING telegram_id""",
+                telegram_id, username, language
+            )
 
         # If user already existed (ON CONFLICT DO NOTHING), ensure referral_code is set.
-        # Reuse the same connection — no extra pool.acquire().
-        await conn.execute(
-            "UPDATE users SET referral_code = $1 WHERE telegram_id = $2 AND referral_code IS NULL",
-            referral_code, telegram_id
-        )
+        # Reuse the same connection — no extra pool.acquire(). На коллизии кода
+        # (гонка / чужой код) не падаем — оставляем NULL, добэкфилл позже.
+        if referral_code is not None:
+            try:
+                await conn.execute(
+                    "UPDATE users SET referral_code = $1 WHERE telegram_id = $2 AND referral_code IS NULL",
+                    referral_code, telegram_id
+                )
+            except asyncpg.UniqueViolationError:
+                logger.warning(
+                    "CREATE_USER_REFCODE_UPDATE_COLLISION tg=%s code=%s — оставляю NULL",
+                    telegram_id, referral_code,
+                )
 
     if inserted_id is not None:
         try:
