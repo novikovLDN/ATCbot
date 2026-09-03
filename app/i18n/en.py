@@ -489,7 +489,7 @@ LANG = {
     'main.vip_status_active': "👑 Your VIP status is active",
     'main.vip_status_badge': "👑 VIP status active",
     'main.welcome': "🔐 Atlas Secure\n\n🧩 Private digital access\n⚙️ Stable operation of familiar services\n🛡 Privacy by default\n\nYou connect —\neverything else works in the background.",
-    'main.legal_footer': "\n\n<a href=\"https://telegra.ph/Politika-konfidencialnosti-08-06-86\">Privacy Policy</a>\n<a href=\"https://telegra.ph/Polzovatelskoe-soglashenie-08-06-50\">Terms of Service</a>",
+    'main.legal_footer': "\n\n<a href=\"https://telegra.ph/Politika-konfidencialnosti-09-03-71\">Privacy Policy</a>\n<a href=\"https://telegra.ph/Polzovatelskoe-soglashenie-09-03-24\">Terms of Service</a>",
     'main.welcome_bypass': "💎 <b>Atlas Secure</b> — your digital shield\n\n🌐 Pro — active\n\n⚡️ Lightning-fast connection\n🛡 Traffic protected 24/7\n🌍 The internet as it should be",
     'main.welcome_discount_label': "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Welcome Discount",
     'main.yes': "YES",

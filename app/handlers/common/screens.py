@@ -951,11 +951,11 @@ async def _open_legal_screen(event: Union[Message, CallbackQuery], bot: Bot):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.legal_terms_btn", "Пользовательское соглашение"),
-            url="https://telegra.ph/Polzovatelskoe-soglashenie-08-06-50",
+            url="https://telegra.ph/Polzovatelskoe-soglashenie-09-03-24",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.legal_privacy_btn", "Политика конфиденциальности"),
-            url="https://telegra.ph/Politika-konfidencialnosti-08-06-86",
+            url="https://telegra.ph/Politika-konfidencialnosti-09-03-71",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back", "Назад"),
