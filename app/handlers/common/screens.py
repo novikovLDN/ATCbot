@@ -39,7 +39,11 @@ logger = logging.getLogger(__name__)
 # bad file_id never breaks a screen — it just degrades to text.
 PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAF_0eZqfhvhiUZBdALxqV1bT5M-U0GPGgAC6BFrG3NR8VOGYtduypInugEAAwIAA3cAAz0E"
 
-SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU07dqGqVLNGYWl3jMGShmNxuNUgvkpAACGw5rG4Qv2VBVBIqM5lqnCgEAAwIAA3kAAzsE"
+# Фото экрана «❓ Помощь» (_open_help_screen). Сейчас МОДЕРАЦИОННОЕ фото.
+# После модерации вернуть на "без модерации":
+# AgACAgQAAxkBAAGIL6NqmSBPEGLHLGql0JtCj85HJAerwQACfBBrGzE2yFCoJX6favSQxQEAAwIAA3kAAz0E
+# (см. docs/MODERATION_VPN_BYPASS_CHANGESET.md)
+SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAGIL6ZqmSBb2kWmNnZwEz4dec4wlhJ4NQACfRBrGzE2yFC1E_y6lGWUTAEAAwIAA3kAAz0E"
 
 CONTACTS_PHOTO_FILE_ID = "AgACAgQAAxkBAAFaMrhqIIn_mXiy0317JBGMgFkHl6d9DQACvhZrG8kkCVH3VeBvZR6bxAEAAwIAA3kAAzsE"
 

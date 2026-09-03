@@ -27,6 +27,16 @@ STAGE не менялся (file_id привязан к боту — prod-id на
 
 STAGE не менялся (file_id привязан к боту).
 
+## Фото экрана «❓ Помощь» (`SUPPORT_PHOTO_FILE_ID`)
+
+Экран: `_open_help_screen` (`help.menu_title`). Константа
+`SUPPORT_PHOTO_FILE_ID` в `app/handlers/common/screens.py` (единая, без prod/stage;
+используется только здесь).
+
+- **Сейчас (под модерацию):** `AgACAgQAAxkBAAGIL6ZqmSBb2kWmNnZwEz4dec4wlhJ4NQACfRBrGzE2yFC1E_y6lGWUTAEAAwIAA3kAAz0E`
+- **Вернуть ПОСЛЕ модерации (без модерации):** `AgACAgQAAxkBAAGIL6NqmSBPEGLHLGql0JtCj85HJAerwQACfBBrGzE2yFCoJX6favSQxQEAAwIAA3kAAz0E`
+- Прежний file_id (ретайрнут): `AgACAgQAAxkBAAFU07dqGqVLNGYWl3jMGShmNxuNUgvkpAACGw5rG4Qv2VBVBIqM5lqnCgEAAwIAA3kAAzsE`
+
 ---
 
 
