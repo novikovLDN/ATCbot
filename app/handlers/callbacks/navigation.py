@@ -719,13 +719,13 @@ async def callback_setup_step2(callback: CallbackQuery):
         # Ряд 1: VPN-ключ (Happ + Incy) — только если есть основная подписка.
         if sub_url:
             row_vpn = [InlineKeyboardButton(
-                text=i18n_get_text(language, "setup.happ_vpn_label", "Happ VPN"),
+                text=i18n_get_text(language, "setup.happ_vpn_label", "Happ VPS"),
                 url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
                 style="primary",
             )]
             if show_incy:
                 row_vpn.append(InlineKeyboardButton(
-                    text=i18n_get_text(language, "setup.incy_vpn_label", "Incy VPN"),
+                    text=i18n_get_text(language, "setup.incy_vpn_label", "Incy VPS"),
                     url=f"{base_url}/open/incy?url={quote(sub_url, safe='')}",
                     style="success",
                 ))

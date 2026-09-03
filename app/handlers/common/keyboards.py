@@ -120,10 +120,10 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         # === Активная подписка ===
         # Row 1: Продлить VPN (🔄) / Купить VPN (🛒 — для bypass-only)
         if is_bypass_only:
-            buy_text = i18n_get_text(language, "main.btn_buy_vpn", "Купить VPN")
+            buy_text = i18n_get_text(language, "main.btn_buy_vpn", "Купить VPS")
             buy_icon = CE["buy"]
         else:
-            buy_text = i18n_get_text(language, "main.btn_renew_vpn", "Продлить VPN")
+            buy_text = i18n_get_text(language, "main.btn_renew_vpn", "Продлить VPS")
             buy_icon = CE["renew"]
         buttons.append([InlineKeyboardButton(
             text=buy_text,
@@ -178,7 +178,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
 
         # Row 1: Купить VPN (🛒)
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.btn_buy_vpn", "Купить VPN"),
+            text=i18n_get_text(language, "main.btn_buy_vpn", "Купить VPS"),
             callback_data="menu_buy_vpn",
             icon_custom_emoji_id=CE["buy"],
             style=primary_cta_style,
@@ -363,10 +363,10 @@ def get_profile_keyboard(
 
     # Row 1: Продлить VPN (🔄) / Купить VPN (🛒)
     if has_active_subscription and not is_bypass_only:
-        buy_text = i18n_get_text(language, "main.btn_renew_vpn", "Продлить VPN")
+        buy_text = i18n_get_text(language, "main.btn_renew_vpn", "Продлить VPS")
         buy_icon = CE["renew"]
     else:
-        buy_text = i18n_get_text(language, "main.btn_buy_vpn", "Купить VPN")
+        buy_text = i18n_get_text(language, "main.btn_buy_vpn", "Купить VPS")
         buy_icon = CE["buy"]
     buttons.append([InlineKeyboardButton(
         text=buy_text,

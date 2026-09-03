@@ -877,7 +877,7 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
     # Bypass-only юзеру (трафик есть, тарифа нет) тоже нужен ключ обхода.
     if (has_active_subscription and not is_bypass_only) or has_bypass_access:
         kb_rows.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.my_sub_btn_connect", "Подключить VPN"),
+            text=i18n_get_text(language, "main.my_sub_btn_connect", "Подключить VPS"),
             callback_data="connect_instruction",
             icon_custom_emoji_id=CE["connect"],
             style="danger",
@@ -887,7 +887,7 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
         renew_text = i18n_get_text(language, "main.my_sub_btn_renew", "Продлить подписку")
         renew_icon = CE["renew"]
     else:
-        renew_text = i18n_get_text(language, "main.my_sub_btn_buy_vpn", "Купить VPN")
+        renew_text = i18n_get_text(language, "main.my_sub_btn_buy_vpn", "Купить VPS")
         renew_icon = CE["buy"]
     kb_rows.append([InlineKeyboardButton(
         text=renew_text,
