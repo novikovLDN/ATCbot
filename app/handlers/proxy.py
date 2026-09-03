@@ -82,7 +82,7 @@ def _sales_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📱 СБП", callback_data="proxy_pay_sbp", style="primary")],
         [InlineKeyboardButton(text="💳 Банковская карта", callback_data="proxy_pay_lava", style="primary")],
         [InlineKeyboardButton(
-            text="Купить VPS",
+            text="Купить VPN",
             callback_data="menu_buy_vpn",
             icon_custom_emoji_id=CE["buy"],
             style="success",
@@ -103,7 +103,7 @@ def _delivery_keyboard() -> InlineKeyboardMarkup:
         for idx, link in enumerate(_PROXY_LINKS, start=1)
     ]
     rows.append([InlineKeyboardButton(
-        text="Купить VPS",
+        text="Купить VPN",
         callback_data="menu_buy_vpn",
         icon_custom_emoji_id=CE["buy"],
         style="success",
