@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 
 import config as _cfg
 MAIN_PHOTO_FILE_ID = (
-    "AgACAgQAAxkBAAF_xmlqfao80Yz-rdiEyVKfdz5s49Qd7gACLhFrG3NR8VO3FeagisF3hQEAAwIAA3kAAz0E"
+    # Модерационное фото главного экрана (prod). Оригинал сохранён в
+    # docs/MODERATION_VPN_BYPASS_CHANGESET.md для отката.
+    "AgACAgQAAxkBAAGILrJqmRrKIHhd_2TdSxWC4mSlBw34PAACdBBrGzE2yFAI7ugMrp-k_QEAAwIAA3kAAz0E"
     if _cfg.IS_PROD else
     "AgACAgQAAxkBAAIhcWoZ_p3HPwnRbry9fgbsOMMREvaVAAJeD2sbEDfQUDIWtf_E5Dx0AQADAgADeQADOwQ"
 )
