@@ -203,6 +203,7 @@ async def process_confirmed_payment(
         expires_at = result.get("expires_at")
         is_balance_topup = result.get("is_balance_topup", False)
         is_traffic_pack = result.get("is_traffic_pack", False)
+        is_gift = result.get("is_gift", False)
 
         # Notification failure must NOT fail the payment — DB is already committed.
         # add_bypass_traffic имеет self-heal → в 99% случаев первый заход успешен.
@@ -210,7 +211,18 @@ async def process_confirmed_payment(
         # GB вручную через Traffic Audit dashboard (retry опасен: add_bypass_traffic
         # НЕ идемпотентен по purchase_id, ретрай = double-add).
         try:
-            if is_traffic_pack:
+            if is_gift:
+                # Подарочная подписка (внешняя оплата): finalize_purchase уже
+                # создал gift_code, здесь шлём покупателю share-ссылку.
+                await _handle_gift_confirmation(
+                    provider=provider,
+                    bot=bot,
+                    telegram_id=telegram_id,
+                    payment_id=payment_id,
+                    purchase_id=purchase_id,
+                    result=result,
+                )
+            elif is_traffic_pack:
                 await _handle_traffic_pack_confirmation(
                     provider=provider,
                     bot=bot,
@@ -262,7 +274,7 @@ async def process_confirmed_payment(
         # Site sync (fire-and-forget — must not fail the payment)
         try:
             from app.services.site_sync import full_sync_after_payment, is_enabled as site_sync_enabled
-            if site_sync_enabled() and not is_balance_topup and not is_traffic_pack:
+            if site_sync_enabled() and not is_balance_topup and not is_traffic_pack and not is_gift:
                 period_days = result.get("period_days", 30)
                 tariff_type = result.get("tariff_type", "basic")
                 asyncio.ensure_future(full_sync_after_payment(
@@ -705,6 +717,76 @@ async def _send_confirmation(
                     ))
                 except Exception:
                     pass
+
+
+async def _handle_gift_confirmation(
+    provider: str,
+    bot: Bot,
+    telegram_id: int,
+    payment_id: int,
+    purchase_id: str,
+    result: dict,
+) -> None:
+    """Доставка подарочной подписки покупателю после ВНЕШНЕЙ оплаты.
+
+    finalize_purchase уже атомарно создал строку gift_subscriptions + gift_code
+    (result['is_gift']=True). Здесь идемпотентно отправляем покупателю экран с
+    share-ссылкой t.me/<bot>?start=gift_<code>, чтобы он переслал подарок.
+
+    Telegram-native путь (Stars/Payments) делает то же в
+    payments_messages.py::process_successful_payment — этот хелпер закрывает
+    внешних провайдеров (platega/lava/cryptobot/wata), для которых confirmation.py
+    раньше слал обычное «подписка активирована» и терял ссылку-подарок.
+
+    Идемпотентность: mark_payment_notification_sent (как в _send_confirmation) —
+    повторный вебхук не задваивает сообщение. Если отправка упадёт — код уже в
+    БД, покупатель достанет ссылку через «Мои подарки».
+    """
+    gift_code = result.get("gift_code")
+    if not gift_code:
+        logger.error(
+            "GIFT_CONFIRMATION_NO_CODE: provider=%s user=%s purchase_id=%s",
+            provider, telegram_id, purchase_id,
+        )
+        return
+
+    try:
+        sent = await database.mark_payment_notification_sent(payment_id)
+    except Exception as _flag_err:  # noqa: BLE001
+        logger.warning(
+            "GIFT_NOTIFICATION_FLAG_FAIL provider=%s user=%s payment_id=%s err=%s — fail-open",
+            provider, telegram_id, payment_id, _flag_err,
+        )
+        sent = True
+    if not sent:
+        logger.info(
+            "GIFT_NOTIFICATION_IDEMPOTENT_SKIP: provider=%s user=%s purchase_id=%s",
+            provider, telegram_id, purchase_id,
+        )
+        return
+
+    # Убрать экран «ждём оплату» перед отправкой подтверждения-подарка.
+    try:
+        from app.handlers.callbacks.payments_callbacks import delete_invoice_message_for_purchase
+        await delete_invoice_message_for_purchase(bot, purchase_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+    from app.services.language_service import resolve_user_language
+    language = await resolve_user_language(telegram_id)
+    from app.handlers.callbacks.gift import _send_gift_success
+    await _send_gift_success(
+        bot=bot,
+        telegram_id=telegram_id,
+        language=language,
+        gift_code=gift_code,
+        tariff=result.get("gift_tariff") or "basic",
+        period_days=int(result.get("gift_period_days") or 30),
+    )
+    logger.info(
+        "GIFT_PAYMENT_FINALIZED: provider=%s user=%s purchase_id=%s code=%s",
+        provider, telegram_id, purchase_id, gift_code,
+    )
 
 
 async def _handle_traffic_pack_confirmation(

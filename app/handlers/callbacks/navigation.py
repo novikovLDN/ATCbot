@@ -1093,13 +1093,6 @@ async def callback_setup_manual(callback: CallbackQuery):
             except Exception:
                 logger.exception("SETUP_MANUAL incy_crypto failed for agg_url")
         text = f"{connect_text}\n{keys_section}"
-        # Внизу — альтернативный ключ: сырая ссылка подписки (без шифрования),
-        # подходит для любого клиента (V2Box / Incy / Happ и др.).
-        if agg_url:
-            text += (
-                "\n\n" + i18n_get_text(language, "setup.manual_alt_key_hint")
-                + f"\n<blockquote expandable><code>{agg_url}</code></blockquote>"
-            )
 
         buttons = [
             [InlineKeyboardButton(
@@ -1172,15 +1165,6 @@ async def callback_setup_manual(callback: CallbackQuery):
         text = f"{connect_text}\n{keys_section}"
     else:
         text = connect_text
-
-    # Внизу — альтернативный ключ: сырая ссылка подписки без шифрования,
-    # подходит для любого клиента (V2Box / Incy / Happ и др.).
-    _alt_raw = sub_url or bypass_url
-    if _alt_raw:
-        text += (
-            "\n\n" + i18n_get_text(language, "setup.manual_alt_key_hint")
-            + f"\n<blockquote expandable><code>{_alt_raw}</code></blockquote>"
-        )
 
     buttons = [
         [InlineKeyboardButton(
