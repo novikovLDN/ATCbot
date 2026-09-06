@@ -355,6 +355,12 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
                 url=share_url,
                 style="success",
             )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "main.gift_subscription"),
+                callback_data="gift_subscription",
+                icon_custom_emoji_id=CE["gift"],
+                style="success",
+            )],
             [
                 InlineKeyboardButton(
                     text=i18n_get_text(language, "referral.stats_button"),
