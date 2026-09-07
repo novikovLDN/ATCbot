@@ -1170,16 +1170,20 @@ async def callback_setup_manual(callback: CallbackQuery):
     # subscriptionUrl уже указывает на sub.atlassecure.ru), БЕЗ подмен хоста.
     # Тянем свежий панельный URL, а не возможно устаревший кеш из БД.
     from app.services import remnawave_api
+    # ПРЕМИУМ резолвим по каноничному username `tg_{id}_premium`, а НЕ по
+    # numeric id из БД: id-колонки premium/bypass могли быть скорраплены
+    # (backfill), из-за чего премиум-ссылка = обход-ссылка. Username-резолв
+    # гарантирует, что это именно premium-сущность (≠ bypass `str(id)`).
     alt_premium = None
     try:
-        _pid = await database.get_remnawave_premium_id(telegram_id)
-        if _pid is not None:
-            _pent = await remnawave_api.get_user(int(_pid))
-            alt_premium = ((_pent or {}).get("subscriptionUrl") or "").strip() or None
+        from app.services.remnawave_premium import build_premium_username
+        _pent = await remnawave_api.find_user_by_username(build_premium_username(telegram_id))
+        alt_premium = ((_pent or {}).get("subscriptionUrl") or "").strip() or None
     except Exception as _e:  # noqa: BLE001
         logger.warning("SETUP_MANUAL alt-premium fetch failed tg=%s: %s", telegram_id, _e)
     alt_premium = alt_premium or sub_url
 
+    # ОБХОД — username-verified (get_bypass_entity_safe проверяет username==str(id)).
     alt_bypass = None
     try:
         _bent = await remnawave_api.get_bypass_entity_safe(telegram_id)
