@@ -91,38 +91,6 @@ def _rewrite_sub_host(url: Optional[str]) -> Optional[str]:
 rewrite_sub_host = _rewrite_sub_host
 
 
-def _panel_sub_host() -> str:
-    """Host панели подписок (rmnw.atlassecure.ru из REMNAWAVE_SUB_BASE_URL),
-    который НЕ должен уходить юзеру как публичная ссылка."""
-    try:
-        from urllib.parse import urlsplit
-        return (urlsplit(getattr(config, "REMNAWAVE_SUB_BASE_URL", "") or "").hostname or "").lower()
-    except Exception:
-        return ""
-
-
-def rewrite_to_public_sub_host(url: Optional[str]) -> Optional[str]:
-    """Подменить ПАНЕЛЬНЫЙ host (rmnw…) на публичный sub-host для СЫРЫХ ссылок
-    подписки, отдаваемых юзеру (premium/bypass «альтернативный ключ»).
-
-    sub.atlassecure.ru — реверс-прокси к той же панели, path/shortuuid тот же →
-    достаточно подменить host. Хосты, отличные от панельного, не трогаем."""
-    if not url:
-        return url
-    try:
-        from urllib.parse import urlsplit, urlunsplit
-        parts = urlsplit(url)
-        host = (parts.hostname or "").lower()
-        panel = _panel_sub_host()
-        if host and panel and host == panel:
-            live = _live_sub_host()
-            netloc = f"{live}:{parts.port}" if parts.port else live
-            return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
-    except Exception:
-        pass
-    return url
-
-
 def _legacy_sub_url(telegram_id: int) -> str:
     """Fallback to the existing samopis-style URL. Sync so it always works."""
     from vpn_utils import build_sub_url
@@ -478,6 +446,4 @@ __all__ = [
     "get_user_premium_url",
     "get_user_bypass_url",
     "get_user_primary_subscription_url",
-    "rewrite_sub_host",
-    "rewrite_to_public_sub_host",
 ]
