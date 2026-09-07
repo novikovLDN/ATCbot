@@ -1167,21 +1167,17 @@ async def callback_setup_manual(callback: CallbackQuery):
         text = connect_text
 
     # Альтернативный ключ — СЫРЫЕ ссылки подписки (без шифрования) для любого
-    # клиента (V2Box и др.): 2 ключа — премиум и обход. Панельный host (rmnw…)
-    # подменяем на публичный sub-host, чтобы юзеру уходила ссылка sub.*, а не rmnw.*
-    from app.services.user_subscription_links import rewrite_to_public_sub_host
+    # клиента (V2Box и др.): 2 ключа — премиум и обход.
     alt_section = ""
     if sub_url:
-        _premium_raw = rewrite_to_public_sub_host(sub_url)
         alt_section += (
             "\n" + i18n_get_text(language, "setup.alt_key_premium")
-            + f"\n<blockquote expandable><code>{_premium_raw}</code></blockquote>"
+            + f"\n<blockquote expandable><code>{sub_url}</code></blockquote>"
         )
     if bypass_url:
-        _bypass_raw = rewrite_to_public_sub_host(bypass_url)
         alt_section += (
             "\n" + i18n_get_text(language, "setup.alt_key_bypass")
-            + f"\n<blockquote expandable><code>{_bypass_raw}</code></blockquote>"
+            + f"\n<blockquote expandable><code>{bypass_url}</code></blockquote>"
         )
     if alt_section:
         text += "\n\n" + i18n_get_text(language, "setup.manual_alt_hint") + alt_section
