@@ -1166,6 +1166,22 @@ async def callback_setup_manual(callback: CallbackQuery):
     else:
         text = connect_text
 
+    # Альтернативный ключ — СЫРЫЕ ссылки подписки (без шифрования) для любого
+    # клиента (V2Box и др.): 2 ключа — премиум и обход.
+    alt_section = ""
+    if sub_url:
+        alt_section += (
+            "\n" + i18n_get_text(language, "setup.alt_key_premium")
+            + f"\n<blockquote expandable><code>{sub_url}</code></blockquote>"
+        )
+    if bypass_url:
+        alt_section += (
+            "\n" + i18n_get_text(language, "setup.alt_key_bypass")
+            + f"\n<blockquote expandable><code>{bypass_url}</code></blockquote>"
+        )
+    if alt_section:
+        text += "\n\n" + i18n_get_text(language, "setup.manual_alt_hint") + alt_section
+
     buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "setup.done_button"),
