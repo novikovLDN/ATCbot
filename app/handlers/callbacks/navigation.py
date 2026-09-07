@@ -1166,18 +1166,38 @@ async def callback_setup_manual(callback: CallbackQuery):
     else:
         text = connect_text
 
-    # Альтернативный ключ — СЫРЫЕ ссылки подписки (без шифрования) для любого
-    # клиента (V2Box и др.): 2 ключа — премиум и обход.
+    # Альтернативный ключ — РЕАЛЬНЫЕ сырые ссылки подписки С ПАНЕЛИ (там
+    # subscriptionUrl уже указывает на sub.atlassecure.ru), БЕЗ подмен хоста.
+    # Тянем свежий панельный URL, а не возможно устаревший кеш из БД.
+    from app.services import remnawave_api
+    alt_premium = None
+    try:
+        _pid = await database.get_remnawave_premium_id(telegram_id)
+        if _pid is not None:
+            _pent = await remnawave_api.get_user(int(_pid))
+            alt_premium = ((_pent or {}).get("subscriptionUrl") or "").strip() or None
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("SETUP_MANUAL alt-premium fetch failed tg=%s: %s", telegram_id, _e)
+    alt_premium = alt_premium or sub_url
+
+    alt_bypass = None
+    try:
+        _bent = await remnawave_api.get_bypass_entity_safe(telegram_id)
+        alt_bypass = ((_bent or {}).get("subscriptionUrl") or "").strip() or None
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("SETUP_MANUAL alt-bypass fetch failed tg=%s: %s", telegram_id, _e)
+    alt_bypass = alt_bypass or bypass_url
+
     alt_section = ""
-    if sub_url:
+    if alt_premium:
         alt_section += (
             "\n" + i18n_get_text(language, "setup.alt_key_premium")
-            + f"\n<blockquote expandable><code>{sub_url}</code></blockquote>"
+            + f"\n<blockquote expandable><code>{alt_premium}</code></blockquote>"
         )
-    if bypass_url:
+    if alt_bypass:
         alt_section += (
             "\n" + i18n_get_text(language, "setup.alt_key_bypass")
-            + f"\n<blockquote expandable><code>{bypass_url}</code></blockquote>"
+            + f"\n<blockquote expandable><code>{alt_bypass}</code></blockquote>"
         )
     if alt_section:
         text += "\n\n" + i18n_get_text(language, "setup.manual_alt_hint") + alt_section
