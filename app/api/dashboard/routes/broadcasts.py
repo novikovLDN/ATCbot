@@ -863,7 +863,7 @@ def _build_reply_markup(
         elif btn == "happ_ios":
             rows.append([InlineKeyboardButton(
                 text="📲 Скачать Happ для iOS ⚡️",
-                url="https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6788279553?l=en-GB",
+                url="https://apps.apple.com/ru/app/happ-lite/id6799917773",
             )])
         elif btn == "happ_android":
             rows.append([InlineKeyboardButton(

@@ -824,11 +824,11 @@ _SETUP_PHOTOS = {
 }
 
 _IOS_HAPP_LINKS = {
-    # 2026-XX: старая ссылка happ-proxy-utility/id6783623643 перестала
-    # быть актуальной — App Store переехал на «Happ Proxy Utility Plus»
-    # id6788279553. Единая точка правды для iOS-инсталляции и всех
-    # broadcast-кнопок «Happ iOS».
-    "ru": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6788279553?l=en-GB",
+    # 2026-09: RU iOS-ссылка переехала на «Happ Lite» id6799917773
+    # (ранее happ-proxy-utility-plus/id6788279553). Единая точка правды для
+    # iOS-инсталляции и broadcast-кнопок «Happ iOS» (дублируется в
+    # admin/broadcast.py и dashboard/broadcasts.py — обновлять вместе).
+    "ru": "https://apps.apple.com/ru/app/happ-lite/id6799917773",
     "global": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215",
 }
 
