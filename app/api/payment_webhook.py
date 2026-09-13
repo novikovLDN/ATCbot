@@ -4,7 +4,7 @@ Payment Webhook API (FastAPI)
 Webhook endpoints for payment providers:
 - POST /webhooks/platega — Platega (SBP) payment notifications
 - POST /webhooks/cryptobot — CryptoBot (Crypto Pay) payment notifications
-- POST /webhooks/lava — Lava (Card) payment notifications
+- POST /webhooks/lava — DISABLED: logs + admin alert only, never credits (security hotfix)
 
 Security:
 - Signature/auth verification required per provider.
@@ -258,53 +258,54 @@ async def cryptobot_webhook(request: Request):
 
 
 async def _handle_lava_webhook(request: Request):
-    """Handle Lava (Card) webhook callback."""
-    if _bot is None:
-        logger.critical("Lava webhook received but bot is not initialized — setup() not called")
-        await _log_pe("setup_missing", "lava", error_message="bot not initialized")
-        return JSONResponse({"status": "error"}, status_code=500)
+    """Lava webhook — DISABLED (security hotfix).
+
+    lava_service.process_webhook_data never verified the webhook signature,
+    and lookup_pending_purchase accepts any provider's pending purchase, so
+    an unsigned POST could finalize any purchase (incl. balance top-ups
+    credited with the amount from the request body). Lava is no longer
+    used, so nothing is credited here anymore: the request is logged to
+    payment_errors and the admin is alerted to verify a genuine payment
+    in the Lava dashboard and grant it manually.
+
+    lava_service.is_enabled() and the LAVA_* env vars are intentionally
+    left untouched: several payment screens use it to show the WATA button.
+    """
     try:
-        import lava_service
-        if not lava_service.is_enabled():
-            logger.warning("Lava webhook received but service is disabled")
-            return JSONResponse({"status": "disabled"})
+        raw_body = await request.body()
+    except Exception:  # noqa: BLE001
+        raw_body = b""
+    preview = raw_body[:500].decode("utf-8", "replace")
+    logger.critical("LAVA_WEBHOOK_REJECTED (disabled): body=%s", preview)
+    await _log_pe("lava_webhook_disabled", "lava", error_message=preview[:300])
 
-        headers = {k.lower(): v for k, v in request.headers.items()}
+    if _bot is not None:
+        order_id = amount = status = None
         try:
-            body = await request.json()
-        except Exception as e:
-            logger.error(f"Lava webhook: invalid JSON: {e}")
-            await _log_pe("webhook_invalid_json", "lava", error_message=str(e)[:300])
-            return JSONResponse({"status": "invalid"}, status_code=400)
+            import json
+            data = json.loads(raw_body or b"{}")
+            if isinstance(data, dict):
+                order_id = data.get("order_id")
+                amount = data.get("amount")
+                status = data.get("status")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from app.services.admin_alerts import send_alert
+            await send_alert(
+                _bot,
+                "payment",
+                "Lava webhook получен, но Lava отключена — НИЧЕГО НЕ ЗАЧИСЛЕНО.\n"
+                f"order_id: {order_id}\n"
+                f"amount: {amount}\n"
+                f"status: {status}\n"
+                "Если это настоящая оплата — сверить в кабинете Lava и выдать вручную. "
+                "Все такие запросы пишутся в payment_errors (stage=lava_webhook_disabled).",
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Lava disabled-webhook admin alert failed: %s", e)
 
-        result = await asyncio.wait_for(
-            lava_service.process_webhook_data(headers, body, _bot),
-            timeout=_WEBHOOK_TIMEOUT,
-        )
-        return JSONResponse(result)
-
-    except ImportError:
-        logger.error("lava_service not available")
-        await _log_pe("service_missing", "lava")
-        return JSONResponse({"status": "error"}, status_code=500)
-    except ValueError as e:
-        # Idempotency: already-processed payment — return 200 so provider stops retrying
-        logger.info(f"Lava webhook: already processed: {e}")
-        return JSONResponse({"status": "already_processed"})
-    except TransientPaymentError as e:
-        logger.error(f"Lava webhook transient error (returning 500 for retry): {e}")
-        await _log_pe("transient", "lava", error_message=str(e)[:500])
-        return JSONResponse({"status": "transient_error"}, status_code=500)
-    except asyncio.TimeoutError:
-        logger.error("Lava webhook timeout (returning 500 for retry)")
-        await _log_pe("timeout", "lava", error_message=f">{_WEBHOOK_TIMEOUT}s")
-        return JSONResponse({"status": "timeout"}, status_code=500)
-    except Exception as e:
-        logger.exception(f"Lava webhook error: {e}")
-        await _log_pe("unhandled_exception", "lava",
-                      error_code=type(e).__name__,
-                      error_message=str(e)[:500])
-        return JSONResponse({"status": "error"}, status_code=500)
+    return JSONResponse({"status": "disabled"})
 
 
 @router.post("/webhooks/lava")
