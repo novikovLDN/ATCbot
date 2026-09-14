@@ -642,6 +642,24 @@ SELECT count(*) FROM subscriptions WHERE activation_status='pending';
 12. **`TRIAL_BYPASS_GB`** — исправлено: `.env.example` теперь задаёт `TRIAL_BYPASS_MB`, код читает её же (`config.py:558`).
 13. **Нет `railway.json`/`railway.toml`:** healthcheck-путь и автодеплой настроены в UI Railway, кодом это не проверить. Владельцу: в UI сервиса убедиться, что healthcheck = `/health`, и включён «Wait for CI» или автодеплой выключен (`docs/ci.md`).
 14. **Сырой ключ `errors.database_unavailable`** (нет ни в `ru`, ни в `en`) показывается в 11 местах игры (`app/handlers/game.py`), только при недоступной БД. Было и на `main`.
+15. **Premium с `expireAt` на 10 лет вперёд (2026-09-14).** У части строк bypass-колонки `subscriptions.remnawave_id` / `remnawave_uuid` указывали на premium-сущность (`tg_{id}_premium`), и старые bypass-хелперы (`remnawave_service.extend_remnawave_for_bypass`, `disable_remnawave_user`, `renew_remnawave_user`) продлевали premium на +10 лет или отключали его. Исправлено: bypass ищется по `username == str(telegram_id)`, кеш перезаписывается сам (лог `REMNAWAVE_BYPASS_CACHE_HEALED`), а `remnawave_api` не отправляет premium `expireAt` дальше 5 лет (лог `REMNAWAVE_PREMIUM_FAR_EXPIRE_BLOCKED` и алерт `vpn_api`). Уже выданные +10 лет код **не откатывает**: это решение владельца.
+    Сколько строк заражено (только чтение):
+    ```sql
+    SELECT count(*) FILTER (WHERE remnawave_id = remnawave_premium_id)       AS id_is_premium,
+           count(*) FILTER (WHERE remnawave_uuid = remnawave_premium_uuid)   AS uuid_is_premium,
+           count(*) FILTER (WHERE remnawave_id = remnawave_premium_id
+                               OR remnawave_uuid = remnawave_premium_uuid)   AS contaminated_rows
+      FROM subscriptions;
+    ```
+    Список для разбора (сравнить с панелью: у premium `expireAt` > сейчас + 5 лет):
+    ```sql
+    SELECT telegram_id, status, is_bypass_only, expires_at,
+           remnawave_id, remnawave_premium_id, remnawave_uuid, remnawave_premium_uuid
+      FROM subscriptions
+     WHERE remnawave_id = remnawave_premium_id OR remnawave_uuid = remnawave_premium_uuid
+     ORDER BY telegram_id;
+    ```
+    Строки лечатся сами при следующем обращении бота к bypass (экран подключения, трафик, продление, истечение). Число должно убывать; `NULL` в колонках под условие не попадает.
 
 ---
 
