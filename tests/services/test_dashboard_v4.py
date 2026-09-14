@@ -328,3 +328,28 @@ def test_overview_survives_a_failing_section(monkeypatch):
     assert body["payments"]["status"] == "unknown"
     assert body["subscribers"]["pipeline"] is None
     assert body["health"]["status"] == "ok"
+
+
+def test_overview_panel_counts_disabled_nodes_apart(monkeypatch):
+    """v5 overview: disabled nodes are reported apart and are not an alert;
+    one offline node of several is a warning, not critical."""
+    totals = rev.empty_totals()
+    monkeypatch.setattr(rev, "totals", AsyncMock(return_value=totals))
+    monkeypatch.setattr(rev, "payers", AsyncMock(return_value={"payers": 0, "new": 0, "returning": 0}))
+    monkeypatch.setattr(rev, "series", AsyncMock(return_value=[]))
+    monkeypatch.setattr(mx, "new_users", AsyncMock(return_value=0))
+    monkeypatch.setattr(mx, "active_subscriptions", AsyncMock(return_value=mx.summarize_active([])))
+    monkeypatch.setattr(mx, "renewals", AsyncMock(return_value=mx.summarize_renewals({}, 3)))
+    monkeypatch.setattr(mx, "renewal_pipeline", AsyncMock(return_value=None))
+    monkeypatch.setattr(mx, "payments_health", AsyncMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(mx, "delivery_health", AsyncMock(return_value={
+        "queue": {"available": False}, "activations": {"pending": 0}, "errors_24h": {}, "dead_jobs": []}))
+    monkeypatch.setattr(sh, "collect", AsyncMock(return_value={"overall": {"status": "ok", "reasons": []}}))
+    nodes = {"available": True, "nodes": [], "total": 7, "enabled": 6, "disabled": 1, "online": 5, "offline": 1}
+    monkeypatch.setattr(routes, "_panel_quick",
+                        AsyncMock(return_value=({"available": True, "online_now": 10}, nodes)))
+    body = _client().get("/metrics/overview?days=7").json()
+    p = body["panel"]
+    assert (p["nodes_total"], p["nodes_enabled"], p["nodes_disabled"], p["nodes_offline"], p["nodes_online"]) == (7, 6, 1, 1, 5)
+    node_alerts = [a for a in body["alerts"] if a["key"] == "nodes_offline"]
+    assert [a["level"] for a in node_alerts] == ["warning"]
