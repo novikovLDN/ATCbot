@@ -355,12 +355,32 @@ def renew_remnawave_user_bg(telegram_id: int, tariff: str, subscription_end: dat
 
 # ── Disable (subscription expired) ─────────────────────────────────────
 
+def _parse_expire_at(value) -> Optional[datetime]:
+    """Panel expireAt (ISO, 'Z' suffix) → aware UTC datetime; None if absent/bad."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+# An ACTIVE bypass entity whose expireAt is further away than this needs no PATCH.
+_BYPASS_EXTEND_IF_WITHIN = timedelta(days=365)
+
+
 async def extend_remnawave_for_bypass(telegram_id: int) -> None:
     """Extend Remnawave expiry to far future for bypass-only mode.
 
     When main subscription expires but user has bypass traffic,
     Remnawave user must stay ACTIVE with a far-future expireAt.
     Otherwise Remnawave marks user as expired and bypass stops working.
+
+    Called on every open of the setup screen and on trial / expiry
+    transitions: PATCH only when needed (not ACTIVE, or expireAt within
+    _BYPASS_EXTEND_IF_WITHIN / unknown). An ACTIVE entity with a far-future
+    expireAt is left alone.
     """
     if not config.REMNAWAVE_ENABLED:
         return
@@ -372,6 +392,18 @@ async def extend_remnawave_for_bypass(telegram_id: int) -> None:
         if not user_data:
             return
         api_uuid = user_data.get("uuid") or rmn_uuid
+
+        expire_at = _parse_expire_at(user_data.get("expireAt"))
+        if (
+            user_data.get("status") == "ACTIVE"
+            and expire_at is not None
+            and expire_at > datetime.now(timezone.utc) + _BYPASS_EXTEND_IF_WITHIN
+        ):
+            logger.debug(
+                "REMNAWAVE_BYPASS_EXTEND_SKIPPED: tg=%s — ACTIVE, expireAt %s",
+                telegram_id, expire_at.date().isoformat(),
+            )
+            return
 
         from datetime import timedelta
         far_future = (datetime.now(timezone.utc) + timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%SZ")
