@@ -1,65 +1,24 @@
 /**
- * Shell — the device the whole admin lives in.
- *
- * A single rounded "device" floats on the lit wall. Its top bar holds the
- * brand mark, the section tabs as capsules inside a darker capsule, and
- * circular controls on the right (live status, theme, settings, sign out).
- * Secondary tools sit behind "Ещё" so the primary row stays short enough
- * for a phone.
+ * Shell — the app frame, laid out like a native iOS app:
+ *   - a compact navigation bar that shows the screen title (and a back
+ *     button on pushed screens) once the large title scrolls away;
+ *   - a bottom tab bar: Обзор, Деньги, Подписчики, Здоровье, Ещё;
+ *   - on wide screens (≥ 1024px) a sidebar with every section instead
+ *     of the tab bar, like an iPad app.
+ * Safe-area insets keep everything clear of the notch and home indicator.
  */
 import { useEffect, useRef, useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
-import { LogOut, Moon, MoreHorizontal, Settings as SettingsIcon, ShieldCheck, Sun } from "lucide-react";
-import { endpoints } from "@/lib/api";
-import { auth } from "@/lib/auth";
+import { Link, NavLink, useLocation } from "react-router-dom";
+import { ChevronLeft, LogOut, MoreHorizontal, ShieldCheck } from "lucide-react";
 import { useBranding } from "@/lib/branding";
 import { useEventStream } from "@/lib/ws";
-import { usePrefs } from "@/store/prefs";
+import { MORE_GROUPS, TABS, backFor, inMore, logout, titleFor } from "@/lib/nav";
+import { cn } from "@/lib/cn";
 import { InstallHint } from "./InstallHint";
 import { RouteTransition } from "./RouteTransition";
-import { IconButton, StatusDot } from "./ui/controls";
+import { StatusDot } from "./ui/controls";
 
-export const PRIMARY_NAV = [
-  { to: "/", label: "Обзор", end: true },
-  { to: "/money", label: "Деньги" },
-  { to: "/subscribers", label: "Подписчики" },
-  { to: "/health", label: "Здоровье" },
-  { to: "/panel", label: "Панель" },
-  { to: "/users", label: "Пользователи" },
-];
-
-export const MORE_NAV = [
-  { to: "/engagement", label: "Вовлечённость" },
-  { to: "/broadcasts", label: "Рассылки" },
-  { to: "/statistics", label: "Продажи по тарифам" },
-  { to: "/automated-notifications", label: "Автоуведомления" },
-  { to: "/pricing", label: "Цены и скидки" },
-  { to: "/promo", label: "Промокоды" },
-  { to: "/links", label: "Ссылки" },
-  { to: "/referrals", label: "Рефералы" },
-  { to: "/bgift", label: "Гифт-ГБ" },
-  { to: "/beta-applications", label: "VPN-Инноватор" },
-  { to: "/audit", label: "Журнал действий" },
-  { to: "/bypass-audit", label: "Bypass-аудит" },
-  { to: "/traffic-audit", label: "Аудит трафика" },
-  { to: "/service", label: "Сервис" },
-];
-
-function BrandMark() {
-  const brand = useBranding();
-  return (
-    <NavLink to="/" className="flex min-w-0 items-center gap-3" aria-label={`${brand.admin_title}: обзор`}>
-      <span className="icon-btn overflow-hidden">
-        {brand.logo_url ? (
-          <img src={brand.logo_url} alt="" className="h-full w-full object-cover" />
-        ) : (
-          <ShieldCheck className="h-[18px] w-[18px] text-accent" strokeWidth={2} />
-        )}
-      </span>
-      <span className="on-shell hidden truncate text-[15px] font-semibold lg:block">{brand.short}</span>
-    </NavLink>
-  );
-}
+export { PRIMARY_NAV, MORE_NAV } from "@/lib/nav";
 
 function LiveDot() {
   const [status, setStatus] = useState<"connecting" | "live" | "offline">("connecting");
@@ -77,138 +36,139 @@ function LiveDot() {
   const label =
     status === "live" ? "Живые события подключены" : status === "offline" ? "Нет связи с событиями" : "Подключение…";
   return (
-    <span className="icon-btn cursor-default" role="status" aria-label={label} title={label}>
+    <span className="grid h-11 w-11 place-items-center" role="status" aria-label={label} title={label}>
       <StatusDot tone={status === "live" ? "ok" : status === "offline" ? "err" : "warn"} />
     </span>
   );
 }
 
-function MoreMenu() {
-  const [open, setOpen] = useState(false);
+function TabBar() {
   const loc = useLocation();
-  const ref = useRef<HTMLDivElement>(null);
-  const firstLink = useRef<HTMLAnchorElement>(null);
-  const inMore = MORE_NAV.some((i) => loc.pathname.startsWith(i.to));
-
-  useEffect(() => setOpen(false), [loc.pathname]);
-  useEffect(() => {
-    if (!open) return;
-    firstLink.current?.focus();
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
+  const more = inMore(loc.pathname);
   return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        className="capsule-tab"
-        aria-expanded={open}
-        aria-controls="more-nav"
-        aria-pressed={inMore}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-        Ещё
-      </button>
-      {open && (
-        // Phones: the nav row scrolls horizontally, which clipped an
-        // absolute dropdown to one visible item. Below md the menu is a
-        // fixed bottom sheet (outside that clip, above the home indicator).
-        <button
-          type="button"
-          aria-label="Закрыть меню"
-          className="fixed inset-0 z-40 bg-black/40 md:hidden"
-          onClick={() => setOpen(false)}
-        />
-      )}
-      {open && (
-        <div
-          id="more-nav"
-          className="tile fixed inset-x-2 bottom-[max(0.5rem,env(safe-area-inset-bottom))] z-50 max-h-[75dvh] overflow-y-auto p-2 shadow-[0_24px_48px_-16px_rgb(0_0_0/0.5)] animate-fade-in md:absolute md:inset-x-auto md:bottom-auto md:right-0 md:mt-2 md:max-h-[calc(100dvh-8rem)] md:w-[280px]"
-        >
-          <ul className="flex flex-col gap-1">
-            {MORE_NAV.map((it, i) => (
-              <li key={it.to}>
-                <NavLink
-                  ref={i === 0 ? firstLink : undefined}
-                  to={it.to}
-                  className="list-row min-h-[44px] bg-transparent text-[14px] aria-[current=page]:bg-tile-3"
-                >
-                  {it.label}
+    <nav aria-label="Разделы" className="tabbar bar-material lg:hidden">
+      {TABS.map(({ to, label, icon: Icon, end }) => (
+        <NavLink key={to} to={to} end={end} className="tab">
+          <Icon className="h-6 w-6" strokeWidth={1.8} aria-hidden="true" />
+          <span>{label}</span>
+        </NavLink>
+      ))}
+      <Link to="/more" className="tab" data-active={more} aria-current={more ? "page" : undefined}>
+        <MoreHorizontal className="h-6 w-6" strokeWidth={1.8} aria-hidden="true" />
+        <span>Ещё</span>
+      </Link>
+    </nav>
+  );
+}
+
+function Sidebar() {
+  const brand = useBranding();
+  return (
+    <aside
+      aria-label="Разделы"
+      className="sidebar fixed inset-y-0 left-0 z-20 hidden w-[272px] flex-col overflow-y-auto border-r border-sep/80 bg-app px-3 pb-4 pt-[max(1rem,env(safe-area-inset-top))] lg:flex"
+    >
+      <Link to="/" className="mb-4 flex items-center gap-3 rounded-[10px] px-2 py-1.5">
+        <span className="grid h-9 w-9 flex-none place-items-center overflow-hidden rounded-[9px] bg-accent text-onaccent">
+          {brand.logo_url ? (
+            <img src={brand.logo_url} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <ShieldCheck className="h-5 w-5" strokeWidth={2} aria-hidden="true" />
+          )}
+        </span>
+        <span className="min-w-0 truncate text-[17px] font-semibold">{brand.admin_title}</span>
+      </Link>
+      <ul className="flex flex-col gap-0.5">
+        {TABS.map(({ to, label, icon: Icon, end }) => (
+          <li key={to}>
+            <NavLink to={to} end={end} className="nav-row">
+              <span className="nav-icon h-7 w-7">
+                <Icon className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+              </span>
+              <span className="nav-row-label">{label}</span>
+            </NavLink>
+          </li>
+        ))}
+      </ul>
+      {MORE_GROUPS.map((g) => (
+        <div key={g.title} className="mt-5">
+          <p className="section-h mb-1 px-2.5 text-[12px]">{g.title}</p>
+          <ul className="flex flex-col gap-0.5">
+            {g.items.map(({ to, label, icon: Icon }) => (
+              <li key={to}>
+                <NavLink to={to} className="nav-row">
+                  <span className="nav-icon h-7 w-7">
+                    <Icon className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+                  </span>
+                  <span className="nav-row-label">{label}</span>
                 </NavLink>
               </li>
             ))}
           </ul>
         </div>
-      )}
-    </div>
+      ))}
+      <button type="button" className="nav-row mt-5 text-danger" onClick={() => void logout()}>
+        <span className="nav-icon h-7 w-7 bg-danger/12 text-danger">
+          <LogOut className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+        </span>
+        <span className="nav-row-label text-left">Выйти</span>
+      </button>
+    </aside>
   );
 }
 
 export function Shell() {
-  const theme = usePrefs((s) => s.theme);
-  const setTheme = usePrefs((s) => s.setTheme);
+  const loc = useLocation();
+  const [scrolled, setScrolled] = useState(false);
 
-  const logout = async () => {
-    try {
-      await endpoints.authLogout();
-    } catch {
-      //
-    }
-    auth.clear();
-    window.location.assign("/dashboard/");
-  };
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 40);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  // Each screen opens at its top, like a pushed view controller.
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [loc.pathname]);
+
+  const title = titleFor(loc.pathname);
+  const back = backFor(loc.pathname);
 
   return (
-    <div className="min-h-[100svh] p-2 sm:p-4 lg:p-6" style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}>
-      <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 btn-primary">
+    <div className="min-h-[100dvh]">
+      <a href="#main" className="btn-primary sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50">
         К содержимому
       </a>
-      <div className="device mx-auto flex min-h-[calc(100svh-1rem)] max-w-[1480px] flex-col p-3 sm:min-h-[calc(100svh-2rem)] sm:p-4 lg:min-h-[calc(100svh-3rem)] lg:p-5">
-        <header className="flex flex-wrap items-center gap-3">
-          <BrandMark />
-          <nav
-            aria-label="Разделы"
-            className="order-last -mx-1 w-full overflow-x-auto px-1 scrollbar-none md:order-none md:mx-0 md:w-auto md:flex-1 md:overflow-visible md:px-0"
-          >
-            <div className="capsule-nav">
-              {PRIMARY_NAV.map((it) => (
-                <NavLink key={it.to} to={it.to} end={it.end} className="capsule-tab">
-                  {it.label}
-                </NavLink>
-              ))}
-              <MoreMenu />
+      <Sidebar />
+      <div className="lg:pl-[272px]">
+        <header className={cn("navbar", scrolled && "bar-material")} data-scrolled={scrolled}>
+          <div className="mx-auto grid h-11 max-w-[1240px] grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-1 sm:px-3 lg:px-6">
+            <div className="flex min-w-0 items-center">
+              {back && (
+                <Link to={back.to} className="nav-back lg:hidden">
+                  <ChevronLeft className="h-7 w-7 flex-none" strokeWidth={2.2} aria-hidden="true" />
+                  <span className="truncate">{back.label}</span>
+                </Link>
+              )}
             </div>
-          </nav>
-          <div className="ml-auto flex items-center gap-2">
-            <LiveDot />
-            <IconButton
-              label={theme === "dark" ? "Светлая тема" : "Тёмная тема"}
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            >
-              {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </IconButton>
-            <NavLink to="/settings" className="icon-btn aria-[current=page]:icon-btn-accent" aria-label="Настройки" title="Настройки">
-              <SettingsIcon className="h-4 w-4" />
-            </NavLink>
-            <IconButton label="Выйти" onClick={logout}>
-              <LogOut className="h-4 w-4" />
-            </IconButton>
+            <div className="navbar-title max-w-[56vw] truncate text-center" aria-hidden={!scrolled}>
+              {title}
+            </div>
+            <div className="flex items-center justify-end">
+              <LiveDot />
+            </div>
           </div>
         </header>
-        <main id="main" className="mt-5 flex-1 pb-[env(safe-area-inset-bottom)]" tabIndex={-1}>
+        <main
+          id="main"
+          tabIndex={-1}
+          className="mx-auto max-w-[1240px] px-4 pb-[calc(var(--tabbar-h)+env(safe-area-inset-bottom)+2rem)] pt-1 outline-none sm:px-6 lg:px-8 lg:pb-12"
+        >
           <RouteTransition />
         </main>
       </div>
+      <TabBar />
       <InstallHint />
     </div>
   );

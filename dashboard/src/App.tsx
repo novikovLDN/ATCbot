@@ -41,6 +41,7 @@ const MarketingLinks = page(() => import("@/pages/MarketingLinks"), "MarketingLi
 const AutomatedNotifications = page(() => import("@/pages/AutomatedNotifications"), "AutomatedNotifications");
 const Statistics = page(() => import("@/pages/Statistics"), "Statistics");
 const Pricing = page(() => import("@/pages/Pricing"), "Pricing");
+const More = page(() => import("@/pages/More"), "More");
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -143,6 +144,7 @@ function Gate() {
         <Route path="links" element={<MarketingLinks />} />
         <Route path="service" element={<Service />} />
         <Route path="settings" element={<SettingsScreen />} />
+        <Route path="more" element={<More />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
@@ -163,9 +165,9 @@ export default function App() {
 function Splash() {
   return (
     <div className="grid min-h-[100svh] place-items-center">
-      <div className="capsule-nav px-4 py-2 text-[13px] text-mute" role="status">
-        <span className="dot dot-accent animate-pulse-live" aria-hidden="true" />
-        <span className="ml-2">Подключаюсь…</span>
+      <div className="flex items-center gap-2 text-[15px] text-mute" role="status">
+        <span className="dot dot-idle animate-pulse-live" aria-hidden="true" />
+        Подключаюсь…
       </div>
     </div>
   );
