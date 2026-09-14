@@ -112,25 +112,130 @@ def get_tariff_1_month_keyboard(language: str) -> InlineKeyboardMarkup:
 
 
 
+# Paid reminders registered in the dashboard (enable toggle, custom text, segment).
+_NOTIF_KEYS = {
+    ReminderType.REMINDER_7D: "subscription.reminder_7d",
+    ReminderType.REMINDER_3D: "subscription.reminder_3d",
+    ReminderType.REMINDER_1D: "subscription.reminder_1d",
+    ReminderType.REMINDER_24H: "subscription.reminder_24h",
+    ReminderType.REMINDER_3H: "subscription.reminder_3h",
+}
+_AUDIT_MESSAGES = {
+    ReminderType.ADMIN_1DAY_6H: "Admin 1-day reminder (6h before expiry)",
+    ReminderType.ADMIN_7DAYS_24H: "Admin grant reminder (24h before expiry)",
+    ReminderType.REMINDER_7D: "Paid subscription reminder (7d before expiry)",
+    ReminderType.REMINDER_3D: "Paid subscription reminder (3d before expiry)",
+    ReminderType.REMINDER_1D: "Paid subscription reminder (1d before expiry)",
+    ReminderType.REMINDER_24H: "Paid subscription reminder (24h before expiry)",
+    ReminderType.REMINDER_3H: "Paid subscription reminder (3h before expiry) with 15% discount",
+}
+
+
+async def _claim_reminder(telegram_id: int, reminder_type: ReminderType, expires_at) -> bool:
+    """#16 / #24: claim the reminder for THIS period before sending it."""
+    from database.subscriptions import claim_reminder_flag
+    flag = notification_service.get_reminder_flag_name(reminder_type)
+    return await claim_reminder_flag(telegram_id, flag, expires_at)
+
+
+async def _release_reminder(telegram_id: int, reminder_type: ReminderType, expires_at) -> None:
+    from database.subscriptions import release_reminder_flag
+    try:
+        await release_reminder_flag(telegram_id, notification_service.get_reminder_flag_name(reminder_type), expires_at)
+    except Exception as e:  # noqa: BLE001 — worst case the reminder is lost, never sent twice
+        logger.warning("reminder_release_failed: user=%s type=%s %s", telegram_id, reminder_type.value, type(e).__name__)
+
+
+async def _build_reminder(subscription: dict, reminder_type: ReminderType, language: str,
+                          notif_key: str | None, *, enabled: bool):
+    """(text, keyboard) of one reminder, in the user's language."""
+    from app.services.automated_notifications import get_notification_text
+    telegram_id = subscription["telegram_id"]
+    if reminder_type == ReminderType.ADMIN_1DAY_6H:
+        return i18n.get_text(language, "reminder.admin_1day_6h"), get_subscription_keyboard(language)
+    if reminder_type == ReminderType.ADMIN_7DAYS_24H:
+        from app.services.notifications.special_offer import from_price_rub
+        return (i18n.get_text(language, "reminder.admin_7days_24h", price=await from_price_rub()),
+                get_tariff_1_month_keyboard(language))
+    if reminder_type == ReminderType.REMINDER_7D:
+        text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_7d")
+        return text, get_renewal_keyboard_7d(language)
+    if reminder_type == ReminderType.REMINDER_3D:
+        text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_3d")
+        return text, get_renewal_keyboard_3d(language)
+    if reminder_type == ReminderType.REMINDER_1D:
+        text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_1d")
+        return text, get_renewal_keyboard_1d(language)
+    if reminder_type == ReminderType.REMINDER_24H:
+        text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_24h")
+        return text, get_renewal_keyboard(language)
+    if reminder_type == ReminderType.REMINDER_3H:
+        # Owner 2026-09-14: this reminder opens the period's ONE 72 h −15 %
+        # window (or shows the one already open); the text names its end (MSK).
+        # Only when enabled — a disabled reminder never gets here.
+        offer = None
+        if enabled:
+            from database.subscriptions import claim_special_offer
+            offer = await claim_special_offer(telegram_id, subscription.get("expires_at"))
+        if offer:
+            from app.services.notifications.special_offer import format_deadline
+            deadline = format_deadline(language, offer["expires_at"])
+            text = (await get_notification_text(notif_key, language=language, params={"deadline": deadline})) \
+                or i18n.get_text(language, "reminder.paid_3h_special", deadline=deadline)
+            return text, get_renewal_discount_keyboard(language)
+        return i18n.get_text(language, "reminder.paid_3h_no_offer"), get_renewal_keyboard(language)
+    return None, None
+
+
+async def _send_reminder(bot: Bot, telegram_id: int, reminder_type: ReminderType, text: str, keyboard):
+    """3-day reminder gets a photo header on prod; everything else plain text.
+    The photo send falls back to text on any error (stale file_id, blocked …)."""
+    sent = None
+    if reminder_type == ReminderType.REMINDER_3D:
+        photo_id = _REMINDER_3D_PHOTO.get("prod" if config.IS_PROD else "stage", "")
+        if photo_id:
+            try:
+                sent = await bot.send_photo(
+                    chat_id=telegram_id, photo=photo_id, caption=text,
+                    reply_markup=keyboard, parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.warning(
+                    "REMINDER_3D photo send failed user=%s err=%s — falling back to plain text",
+                    telegram_id, type(e).__name__,
+                )
+                sent = None
+    if sent is None:
+        sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
+    return sent
+
+
 async def send_smart_reminders(bot: Bot):
-    """Отправить умные напоминания пользователям (старая логика для совместимости)"""
+    """Отправить напоминания об окончании подписки (платной / бесплатных дней).
+
+    Each reminder: decision on the pass snapshot → dashboard toggle / segment →
+    CLAIM for the snapshot's period (#16, #24) → text → send → a temporary
+    failure releases the claim (the next pass retries), a block keeps it.
+    """
+    from app.services.automated_notifications import (
+        is_notification_enabled, log_notification_send, get_trigger_config, is_user_in_segment,
+    )
     try:
         subscriptions = await database.get_subscriptions_for_reminders()
-        
+
         if not subscriptions:
             return
-        
+
         logger.info("Found %d subscriptions for reminders check", len(subscriptions))
-        
+
         for subscription in subscriptions:
             telegram_id = subscription["telegram_id"]
-            
+
             try:
                 # Use notification service to determine if reminder should be sent
                 decision = notification_service.should_send_reminder(subscription)
-                
+
                 if not decision.should_send:
-                    # Skip this subscription (already sent, not in time window, etc.)
                     if decision.reason:
                         logger.debug("Skipping reminder for user %s: %s", telegram_id, decision.reason)
                     continue
@@ -148,188 +253,80 @@ async def send_smart_reminders(bot: Bot):
                     except (TypeError, AttributeError) as e:
                         logger.warning("Invalid last_reminder_at for user %s: %s", telegram_id, e)
 
-                language = await resolve_user_language(telegram_id)
-
-                # Determine reminder text and keyboard based on reminder type.
-                # Для paid-reminder'ов (7d/3d/1d/24h/3h) сначала спрашиваем
-                # automated_notifications — если админ отключил через дашборд,
-                # пропускаем + логируем как skipped_disabled. Кастомный текст
-                # админа берётся первым, fallback на i18n-дефолт.
-                from app.services.automated_notifications import (
-                    is_notification_enabled, get_notification_text,
-                    log_notification_send,
-                )
                 reminder_type = decision.reminder_type
-                text = None
-                keyboard = None
-                audit_message = None
-                notif_key = None  # registry-key для логирования и enable-check
+                notif_key = _NOTIF_KEYS.get(reminder_type)
 
-                if reminder_type == ReminderType.ADMIN_1DAY_6H:
-                    text = i18n.get_text(language, "reminder.admin_1day_6h")
-                    keyboard = get_subscription_keyboard(language)
-                    audit_message = "Admin 1-day reminder (6h before expiry)"
-
-                elif reminder_type == ReminderType.ADMIN_7DAYS_24H:
-                    from app.services.notifications.special_offer import from_price_rub
-                    text = i18n.get_text(language, "reminder.admin_7days_24h", price=await from_price_rub())
-                    keyboard = get_tariff_1_month_keyboard(language)
-                    audit_message = "Admin 7-day reminder (24h before expiry)"
-
-                elif reminder_type == ReminderType.REMINDER_7D:
-                    notif_key = "subscription.reminder_7d"
-                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_7d")
-                    keyboard = get_renewal_keyboard_7d(language)
-                    audit_message = "Paid subscription reminder (7d before expiry)"
-
-                elif reminder_type == ReminderType.REMINDER_3D:
-                    notif_key = "subscription.reminder_3d"
-                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_3d")
-                    keyboard = get_renewal_keyboard_3d(language)
-                    audit_message = "Paid subscription reminder (3d before expiry)"
-
-                elif reminder_type == ReminderType.REMINDER_1D:
-                    notif_key = "subscription.reminder_1d"
-                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_1d")
-                    keyboard = get_renewal_keyboard_1d(language)
-                    audit_message = "Paid subscription reminder (1d before expiry)"
-
-                elif reminder_type == ReminderType.REMINDER_24H:
-                    notif_key = "subscription.reminder_24h"
-                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_24h")
-                    keyboard = get_renewal_keyboard(language)
-                    audit_message = "Paid subscription reminder (24h before expiry)"
-
-                elif reminder_type == ReminderType.REMINDER_3H:
-                    notif_key = "subscription.reminder_3h"
-                    # Owner 2026-09-14: this reminder opens the period's ONE 72 h −15 %
-                    # window (or shows the one already open); the text names its end
-                    # (MSK). Only when enabled — a disabled reminder is skipped below.
-                    offer = None
-                    if await is_notification_enabled(notif_key):
-                        from database.subscriptions import claim_special_offer
-                        offer = await claim_special_offer(telegram_id, subscription.get("expires_at"))
-                    if offer:
-                        from app.services.notifications.special_offer import format_deadline
-                        deadline = format_deadline(language, offer["expires_at"])
-                        text = (await get_notification_text(notif_key, language=language, params={"deadline": deadline})) \
-                            or i18n.get_text(language, "reminder.paid_3h_special", deadline=deadline)
-                        keyboard = get_renewal_discount_keyboard(language)
-                    else:
-                        text = i18n.get_text(language, "reminder.paid_3h_no_offer")
-                        keyboard = get_renewal_keyboard(language)
-                    audit_message = "Paid subscription reminder (3h before expiry) with 15% discount"
-
-                # Если админ выключил через дашборд — мгновенный skip.
-                # Помечаем reminder_sent, чтобы next-cycle тоже не спамил.
+                # Disabled in the dashboard — mark it for this period and skip.
                 if notif_key and not await is_notification_enabled(notif_key):
                     try:
                         await notification_service.mark_reminder_sent(telegram_id, reminder_type)
-                        await log_notification_send(
-                            notif_key, telegram_id, status="skipped_disabled",
-                        )
+                        await log_notification_send(notif_key, telegram_id, status="skipped_disabled")
                     except Exception:
                         pass
-                    logger.info(
-                        "reminder_skipped_disabled: user=%s key=%s",
-                        telegram_id, notif_key,
-                    )
+                    logger.info("reminder_skipped_disabled: user=%s key=%s", telegram_id, notif_key)
                     continue
 
-                # Опциональный segment_filter из trigger_config: если
-                # админ задал сегмент, шлём только тем, кто в него входит.
-                # Пример: reminder_7d + segment_filter='paid_expires_in_7d'
-                # → отправится только тем, у кого сейчас платная активна.
+                # Optional segment_filter from the dashboard trigger config: not in
+                # the segment now → skip this pass WITHOUT marking (may enter later).
                 if notif_key:
-                    from app.services.automated_notifications import (
-                        get_trigger_config, is_user_in_segment,
-                    )
                     _tcfg = await get_trigger_config(notif_key) or {}
                     _seg = str(_tcfg.get("segment_filter") or "").strip()
                     if _seg and not await is_user_in_segment(telegram_id, _seg):
-                        # Пропускаем на этом цикле — юзер может войти в сегмент
-                        # позже (изменится состояние). НЕ помечаем reminder_sent,
-                        # чтобы дать шанс сработать после апдейта.
                         try:
-                            await log_notification_send(
-                                notif_key, telegram_id, status="skipped_disabled",
-                            )
+                            await log_notification_send(notif_key, telegram_id, status="skipped_disabled")
                         except Exception:
                             pass
-                        logger.info(
-                            "reminder_skipped_segment: user=%s key=%s seg=%s",
-                            telegram_id, notif_key, _seg,
-                        )
+                        logger.info("reminder_skipped_segment: user=%s key=%s seg=%s", telegram_id, notif_key, _seg)
                         continue
-                
-                if text and keyboard:
-                    # 3-day reminder gets a photo header on prod; everything else
-                    # stays plain text.  Photo send falls back to text on any
-                    # error (stale file_id, blocked, etc.) via safe_send_message.
-                    sent = None
-                    if reminder_type == ReminderType.REMINDER_3D:
-                        photo_id = _REMINDER_3D_PHOTO.get(
-                            "prod" if config.IS_PROD else "stage", ""
-                        )
-                        if photo_id:
-                            try:
-                                sent = await bot.send_photo(
-                                    chat_id=telegram_id,
-                                    photo=photo_id,
-                                    caption=text,
-                                    reply_markup=keyboard,
-                                    parse_mode="HTML",
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    "REMINDER_3D photo send failed user=%s err=%s — "
-                                    "falling back to plain text",
-                                    telegram_id, type(e).__name__,
-                                )
-                                sent = None
-                    if sent is None:
-                        # Default path / photo fallback: plain text reminder.
-                        sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
-                    if sent is None:
-                        # Юзер заблокировал бота / чат недоступен.
-                        if notif_key:
-                            try:
-                                await log_notification_send(
-                                    notif_key, telegram_id, status="blocked",
-                                )
-                            except Exception:
-                                pass
-                        continue
-                    await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
 
-                    # Mark reminder as sent using notification service
-                    await notification_service.mark_reminder_sent(telegram_id, reminder_type)
+                # #16 / #24: claim for the period this pass saw. A renewal since
+                # the snapshot (new expires_at, flags reset) → nothing to claim.
+                expires_at = subscription.get("expires_at")
+                if not await _claim_reminder(telegram_id, reminder_type, expires_at):
+                    logger.info("reminder_skipped_not_claimed: user=%s type=%s", telegram_id, reminder_type.value)
+                    continue
 
-                    # Метрика для admin-stats (только для reminder-типов
-                    # обёрнутых в registry — admin/legacy остаются без).
+                language = await resolve_user_language(telegram_id)
+                text, keyboard = await _build_reminder(subscription, reminder_type, language, notif_key, enabled=True)
+                if not (text and keyboard):
+                    await _release_reminder(telegram_id, reminder_type, expires_at)
+                    continue
+
+                sent = await _send_reminder(bot, telegram_id, reminder_type, text, keyboard)
+                if sent is None:
+                    if await database.subscriptions.is_user_blocked(telegram_id):
+                        status = "blocked"          # blocked the bot: never retried
+                    else:
+                        status = "failed"           # transient: the next pass retries
+                        await _release_reminder(telegram_id, reminder_type, expires_at)
                     if notif_key:
                         try:
-                            await log_notification_send(
-                                notif_key, telegram_id, status="sent",
-                            )
+                            await log_notification_send(notif_key, telegram_id, status=status)
                         except Exception:
                             pass
+                    continue
+                await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
 
-                    # Log to audit_log
-                    await database._log_audit_event_atomic_standalone(
-                        "reminder_sent",
-                        telegram_id,
-                        telegram_id,
-                        audit_message
-                    )
+                if notif_key:
+                    try:
+                        await log_notification_send(notif_key, telegram_id, status="sent")
+                    except Exception:
+                        pass
 
-                    logger.info("Reminder (%s) sent to user %s", reminder_type.value, telegram_id)
-                
+                await database._log_audit_event_atomic_standalone(
+                    "reminder_sent",
+                    telegram_id,
+                    telegram_id,
+                    _AUDIT_MESSAGES.get(reminder_type, reminder_type.value),
+                )
+
+                logger.info("Reminder (%s) sent to user %s", reminder_type.value, telegram_id)
+
             except Exception as e:
                 # Ошибка для одного пользователя не должна ломать цикл
                 logger.error("Error sending reminder to user %s: %s", telegram_id, e, exc_info=True)
                 continue
-                
+
     except Exception as e:
         logger.exception(f"Error in send_smart_reminders: {e}")
 

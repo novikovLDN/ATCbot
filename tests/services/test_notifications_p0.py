@@ -340,6 +340,7 @@ def _patch_reminders(monkeypatch, language):
     monkeypatch.setattr(reminders, "safe_send_message", sent)
     monkeypatch.setattr(reminders, "resolve_user_language", AsyncMock(return_value=language))
     monkeypatch.setattr(notification_service, "mark_reminder_sent", AsyncMock())
+    monkeypatch.setattr(reminders, "_claim_reminder", AsyncMock(return_value=True))
     monkeypatch.setattr(an, "log_notification_send", AsyncMock())
     monkeypatch.setattr(an, "get_trigger_config", AsyncMock(return_value={}))
     monkeypatch.setattr(database, "_log_audit_event_atomic_standalone", AsyncMock(), raising=False)

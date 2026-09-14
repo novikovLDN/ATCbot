@@ -2603,6 +2603,62 @@ async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
         await conn.execute(query, telegram_id)
 
 
+# #16 / #24 (docs/notifications/matrix.md): a reminder is CLAIMED for the period
+# it was chosen for — bound to the expires_at the pass read. A renewal inside
+# the pass moved expires_at (and reset the flags): the claim matches nothing,
+# no reminder with the old date goes out and the new period keeps its own.
+# Claimed before the send: a restart after the send cannot send it twice.
+_PERIOD_REMINDER_FLAGS = ("reminder_7d_sent", "reminder_3d_sent", "reminder_1d_sent",
+                          "reminder_24h_sent", "reminder_3h_sent", "reminder_6h_sent")
+_REMINDER_CLAIM_QUERIES = {
+    flag: (
+        f"UPDATE subscriptions SET {flag} = TRUE, last_reminder_at = (NOW() AT TIME ZONE 'UTC') "
+        f"WHERE telegram_id = $1 AND expires_at = $2 AND status = 'active' "
+        f"AND COALESCE({flag}, FALSE) = FALSE"
+    )
+    for flag in _PERIOD_REMINDER_FLAGS
+}
+_REMINDER_RELEASE_QUERIES = {
+    flag: f"UPDATE subscriptions SET {flag} = FALSE WHERE telegram_id = $1 AND expires_at = $2"
+    for flag in _PERIOD_REMINDER_FLAGS
+}
+
+
+async def claim_reminder_flag(telegram_id: int, flag_name: str, expires_at) -> bool:
+    """True → this pass owns the reminder of the period ending at `expires_at`."""
+    query = _REMINDER_CLAIM_QUERIES.get(flag_name)
+    if query is None or expires_at is None:
+        raise ValueError(f"Invalid reminder claim: flag={flag_name!r} expires_at={expires_at!r}")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(query, telegram_id, _to_db_utc(_ensure_utc(expires_at)))
+    return str(result).endswith(" 1")
+
+
+async def release_reminder_flag(telegram_id: int, flag_name: str, expires_at) -> None:
+    """Undo a claim after a temporary send failure (the next pass retries)."""
+    query = _REMINDER_RELEASE_QUERIES.get(flag_name)
+    if query is None or expires_at is None:
+        return
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(query, telegram_id, _to_db_utc(_ensure_utc(expires_at)))
+
+
+async def is_user_blocked(telegram_id: int) -> bool:
+    """After a failed send: safe_send_message marks a user who blocked the bot /
+    whose chat is gone as unreachable. False on any doubt (→ retry, never lose)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            reachable = await conn.fetchval(
+                "SELECT COALESCE(is_reachable, TRUE) FROM users WHERE telegram_id = $1", telegram_id,
+            )
+        return reachable is False
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def remember_telegram_charge(payment_id: int, charge_id: str) -> None:
     """Store the Telegram charge id of a finalized Telegram purchase on its
     payments row (payments.telegram_payment_charge_id, unique, migration 012),

@@ -57,6 +57,67 @@ def test_one_free_day_keeps_its_6h_reminder():
     assert d.should_send and d.reminder_type == ns.ReminderType.ADMIN_1DAY_6H
 
 
+@pytest.fixture
+def paid_pass(monkeypatch):
+    """One paid subscription 7 days before its end; records claim / send / release."""
+    import reminders
+    import database.subscriptions as db_subs
+    from app.services import automated_notifications as an
+    st = {"order": [], "claim": True, "results": [], "blocked": False}
+    end = datetime.now(timezone.utc) + timedelta(days=7) - timedelta(minutes=10)
+
+    async def claim(tg, rtype, expires_at):
+        st["order"].append(("claim", rtype.value, expires_at))
+        return st["claim"]
+
+    async def release(tg, rtype, expires_at):
+        st["order"].append(("release", rtype.value, expires_at))
+
+    async def send(bot, tg, text, **kw):
+        st["order"].append(("send", text[:15]))
+        return st["results"].pop(0) if st["results"] else MagicMock()
+
+    monkeypatch.setattr(reminders, "_claim_reminder", claim)
+    monkeypatch.setattr(reminders, "_release_reminder", release)
+    monkeypatch.setattr(reminders, "safe_send_message", send)
+    monkeypatch.setattr(reminders, "resolve_user_language", AsyncMock(return_value="ru"))
+    monkeypatch.setattr(db_subs, "is_user_blocked", AsyncMock(side_effect=lambda tg: st["blocked"]))
+    monkeypatch.setattr(an, "is_notification_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(an, "get_notification_text", AsyncMock(return_value=None))
+    monkeypatch.setattr(an, "log_notification_send", AsyncMock())
+    monkeypatch.setattr(an, "get_trigger_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(database, "_log_audit_event_atomic_standalone", AsyncMock(), raising=False)
+    monkeypatch.setattr(database, "get_subscriptions_for_reminders",
+                        AsyncMock(return_value=[_row(expires_at=end)]))
+    st["end"] = end
+    return reminders, st
+
+
+async def test_paid_reminder_is_claimed_for_the_period_before_the_send(paid_pass):
+    reminders, st = paid_pass
+    await reminders.send_smart_reminders(MagicMock())
+    assert [o[0] for o in st["order"]] == ["claim", "send"]
+    assert st["order"][0][2] == st["end"], "claimed for the period this pass saw"
+
+
+async def test_renewed_inside_the_pass_no_old_date_reminder(paid_pass):
+    """#16: the claim is bound to the snapshot's expires_at — a renewal since then
+    (new date) leaves nothing to claim, so no reminder with the old date."""
+    reminders, st = paid_pass
+    st["claim"] = False
+    await reminders.send_smart_reminders(MagicMock())
+    assert [o[0] for o in st["order"]] == ["claim"]
+
+
+@pytest.mark.parametrize("blocked,released", [(False, True), (True, False)])
+async def test_failed_send_is_released_unless_blocked(paid_pass, blocked, released):
+    reminders, st = paid_pass
+    st["results"] = [None]
+    st["blocked"] = blocked
+    await reminders.send_smart_reminders(MagicMock())
+    assert ("release" in [o[0] for o in st["order"]]) is released
+
+
 @pytest.mark.parametrize("lang", ["ru", "en"])
 async def test_free_access_24h_text_has_the_price_from_the_table(monkeypatch, lang):
     import reminders
