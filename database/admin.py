@@ -3901,9 +3901,10 @@ async def get_bypass_overwrite_victims() -> List[Dict[str, Any]]:
             # применении fix'а будет NOW + 1 day (Remnawave не
             # принимает даты в прошлом как активную подписку).
             can_fix = last_paid_end is not None
-            now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+            # end_date may come back naive or tz-aware: compare in aware UTC.
             grace_will_apply = (
-                last_paid_end is not None and last_paid_end <= now_utc_naive
+                last_paid_end is not None
+                and _from_db_utc(last_paid_end) <= datetime.now(timezone.utc)
             )
             proposed_after_grace = (
                 _to_db_utc(datetime.now(timezone.utc) + timedelta(days=1))
