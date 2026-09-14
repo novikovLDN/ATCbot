@@ -55,9 +55,25 @@ async def _bypass_text(language: str, telegram_id: int) -> tuple[str, bool]:
     return _t(language, "subscription.expired_gb_works"), True
 
 
-async def expired_notice(language: str, telegram_id: int, *, has_bypass: bool) -> tuple[str, InlineKeyboardMarkup]:
+async def from_price_rub() -> int:
+    """«от N ₽/мес» — Basic for one month from the price table (with the
+    dashboard override / global discount when set), never a hardcoded number."""
+    try:
+        from app.services import pricing
+        price = await pricing.get_effective_price("basic", 30)
+        if price is not None:
+            return int(price.effective)
+    except Exception as e:  # noqa: BLE001 — fall back to the catalog
+        logger.debug("from_price_rub: pricing unavailable: %s", type(e).__name__)
+    import config
+    return int(config.TARIFFS["basic"][30]["price"])
+
+
+async def expired_notice(language: str, telegram_id: int, *, has_bypass: bool,
+                         free: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     """(text, keyboard) for «your subscription ended» — with the −15 % line and
-    button while the period's window is open."""
+    button while the period's window is open. `free`: free access (admin /
+    promo-link days) ended — its own text, the price from the table (#18)."""
     import database
     try:
         offer = await database.get_special_offer_info(telegram_id)
@@ -66,6 +82,8 @@ async def expired_notice(language: str, telegram_id: int, *, has_bypass: bool) -
     gb_left = False
     if has_bypass:
         text, gb_left = await _bypass_text(language, telegram_id)
+    elif free:
+        text = _t(language, "subscription.expired_free", price=await from_price_rub())
     else:
         text = _t(language, "subscription.expired_paid")
     rows = []
@@ -89,13 +107,13 @@ async def expired_notice(language: str, telegram_id: int, *, has_bypass: bool) -
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def notify_expired(bot, telegram_id: int, *, has_bypass: bool) -> bool:
+async def notify_expired(bot, telegram_id: int, *, has_bypass: bool, free: bool = False) -> bool:
     """Send the «subscription ended» notice. Call only after the expiry committed."""
     try:
         from app.services.language_service import resolve_user_language
         from app.utils.telegram_safe import safe_send_message
         language = await resolve_user_language(telegram_id)
-        text, keyboard = await expired_notice(language, telegram_id, has_bypass=has_bypass)
+        text, keyboard = await expired_notice(language, telegram_id, has_bypass=has_bypass, free=free)
         sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard, parse_mode="HTML")
         logger.info("EXPIRY_NOTICE_SENT user=%s bypass=%s sent=%s", telegram_id, has_bypass, sent is not None)
         return sent is not None
@@ -104,7 +122,7 @@ async def notify_expired(bot, telegram_id: int, *, has_bypass: bool) -> bool:
         return False
 
 
-def schedule_expired_notice(telegram_id: int, *, has_bypass: bool) -> bool:
+def schedule_expired_notice(telegram_id: int, *, has_bypass: bool, free: bool = False) -> bool:
     """Same, from code without a bot at hand (check_and_disable_expired_subscription,
     after its commit). False when there is no bot / event loop."""
     try:
@@ -115,7 +133,7 @@ def schedule_expired_notice(telegram_id: int, *, has_bypass: bool) -> bool:
         loop = asyncio.get_running_loop()
     except Exception:  # noqa: BLE001
         return False
-    task = loop.create_task(notify_expired(bot, telegram_id, has_bypass=has_bypass))
+    task = loop.create_task(notify_expired(bot, telegram_id, has_bypass=has_bypass, free=free))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
     return True

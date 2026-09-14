@@ -171,7 +171,8 @@ async def send_smart_reminders(bot: Bot):
                     audit_message = "Admin 1-day reminder (6h before expiry)"
 
                 elif reminder_type == ReminderType.ADMIN_7DAYS_24H:
-                    text = i18n.get_text(language, "reminder.admin_7days_24h")
+                    from app.services.notifications.special_offer import from_price_rub
+                    text = i18n.get_text(language, "reminder.admin_7days_24h", price=await from_price_rub())
                     keyboard = get_tariff_1_month_keyboard(language)
                     audit_message = "Admin 7-day reminder (24h before expiry)"
 

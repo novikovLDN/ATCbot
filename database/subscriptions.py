@@ -287,8 +287,15 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     expired_notice = "trial" if subscription.get("source") == "trial" else "bypass"
             else:
                 rows = await _expire_row_fully(conn, telegram_id, subscription, subscription_id, uuid_to_remove, now_db)
-                if rows > 0 and (subscription.get("source") or "") in _PAID_SUBSCRIPTION_SOURCES:
-                    expired_notice = "paid"
+                if rows > 0:
+                    # every ended access is told (#18 free days, #19 gift); a trial
+                    # gets its own one message (#1)
+                    if (subscription.get("source") or "") == "trial":
+                        expired_notice = "trial"
+                    elif subscription.get("admin_grant_days") is not None:
+                        expired_notice = "free"
+                    else:
+                        expired_notice = "paid"
     # Committed: tell the user (08_payments_ux P1 #5 — a paid subscription without
     # bypass used to end in silence). Once per period: the UPDATE above matches once.
     if expired_notice:
@@ -297,7 +304,9 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
             if expired_notice == "trial":
                 special_offer.schedule_trial_expired_notice(telegram_id)
             else:
-                special_offer.schedule_expired_notice(telegram_id, has_bypass=expired_notice == "bypass")
+                special_offer.schedule_expired_notice(
+                    telegram_id, has_bypass=expired_notice == "bypass", free=expired_notice == "free",
+                )
         except Exception as notify_err:  # noqa: BLE001
             logger.warning("EXPIRY_NOTICE_SCHEDULE_FAILED user=%s: %s", telegram_id, type(notify_err).__name__)
     return rows > 0

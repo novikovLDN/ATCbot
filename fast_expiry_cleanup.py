@@ -183,8 +183,9 @@ async def fast_expiry_cleanup_task(bot=None):
                             # POOL_STABILITY: Fetch batch with short-lived conn; release immediately (no HTTP inside).
                             async with acquire_connection(pool, "fast_expiry_fetch") as conn:
                                 rows = await conn.fetch(
-                                    """SELECT id, telegram_id, uuid, vpn_key, expires_at, status, source 
-                                       FROM subscriptions 
+                                    """SELECT id, telegram_id, uuid, vpn_key, expires_at, status, source,
+                                              admin_grant_days
+                                       FROM subscriptions
                                        WHERE status = 'active'
                                        AND expires_at < $1
                                        AND uuid IS NOT NULL
@@ -339,8 +340,14 @@ async def fast_expiry_cleanup_task(bot=None):
                                                             )
                                                         if update_result == "UPDATE 1":
                                                             trial_notice_pending = (source == "trial")
-                                                            if not has_remnawave and (source or "") in database.subscriptions._PAID_SUBSCRIPTION_SOURCES:
-                                                                expired_notice_pending = "paid"
+                                                            if not has_remnawave and source != "trial":
+                                                                # #18: free days (admin / promo link,
+                                                                # admin_grant_days set) end with their own
+                                                                # text; everything else as paid (#19 gift).
+                                                                expired_notice_pending = (
+                                                                    "free" if row.get("admin_grant_days") is not None
+                                                                    else "paid"
+                                                                )
                                                             # N7: a paid subscription ended → −15 % offer for
                                                             # 3 days, in this transaction, once per ended period.
                                                             await database.grant_expiry_special_offer(
@@ -405,6 +412,7 @@ async def fast_expiry_cleanup_task(bot=None):
                                         from app.services.notifications import special_offer
                                         await special_offer.notify_expired(
                                             bot, telegram_id, has_bypass=expired_notice_due == "bypass",
+                                            free=expired_notice_due == "free",
                                         )
 
                                 except ValueError as e:
