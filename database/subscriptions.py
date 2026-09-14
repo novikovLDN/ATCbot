@@ -1089,8 +1089,23 @@ _TRIAL_ENDED_BY_PAYMENT_SQL = (
 )
 
 
-async def _end_trial_on_payment(conn, telegram_id: int, now: datetime) -> None:
-    await conn.execute(_TRIAL_ENDED_BY_PAYMENT_SQL, _to_db_utc(now), telegram_id)
+# Grants that close a running trial: a purchase (Basic, Plus — the upgrade
+# branch too) and an activated gift. Day grants extend the trial instead (#4).
+_TRIAL_ENDING_SOURCES = frozenset({"payment", "gift"})
+
+
+async def _end_trial_on_payment(conn, telegram_id: int, now: datetime, subscription_end: datetime) -> None:
+    """End a running trial NOW and complete it (no trial reminders, no «пробный
+    завершён» after the purchase) — the same step on every grant branch."""
+    user_row = await conn.fetchrow("SELECT trial_expires_at FROM users WHERE telegram_id = $1", telegram_id)
+    old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
+    if old_trial_expires_at and _from_db_utc(old_trial_expires_at) > now:
+        await conn.execute(_TRIAL_ENDED_BY_PAYMENT_SQL, _to_db_utc(now), telegram_id)
+        logger.info(
+            f"TRIAL_OVERRIDDEN_BY_PAID_SUBSCRIPTION: user_id={telegram_id}, "
+            f"old_trial_expires_at={old_trial_expires_at.isoformat()}, "
+            f"paid_subscription_expires_at={subscription_end.isoformat()}"
+        )
 
 
 async def grant_access(
@@ -1313,6 +1328,8 @@ async def grant_access(
                     vpn_key_existing = subscription.get("vpn_key")
                     vpn_key_plus_existing = subscription.get("vpn_key_plus")
                     await _log_subscription_history_atomic(conn, telegram_id, vpn_key_existing or uuid, subscription_start, subscription_end, "renewal")
+                    # Plus bought during a trial closes it like Basic does.
+                    await _end_trial_on_payment(conn, telegram_id, now, subscription_end)
                     logger.info(
                         f"grant_access: BASIC_TO_PLUS_UPGRADE_SUCCESS [user={telegram_id}, uuid={uuid[:8]}..., "
                         f"new_expires={subscription_end.isoformat()}]"
@@ -1566,20 +1583,9 @@ async def grant_access(
                     logger.error(f"grant_access: RENEWAL_SAVE_FAILED [user={telegram_id}, error={str(e)}]")
                     raise Exception(f"Failed to renew subscription in database: {e}") from e
                 
-                # WHY: При оплате во время trial явно завершаем trial и логируем — trial_notifications/cleanup не должны трогать paid
-                if source == "payment":
-                    user_row = await conn.fetchrow("SELECT trial_expires_at FROM users WHERE telegram_id = $1", telegram_id)
-                    old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
-                    if old_trial_expires_at and _from_db_utc(old_trial_expires_at) > now:
-                        await conn.execute(
-                            _TRIAL_ENDED_BY_PAYMENT_SQL,
-                            _to_db_utc(now), telegram_id
-                        )
-                        logger.info(
-                            f"TRIAL_OVERRIDDEN_BY_PAID_SUBSCRIPTION: user_id={telegram_id}, "
-                            f"old_trial_expires_at={old_trial_expires_at.isoformat()}, "
-                            f"paid_subscription_expires_at={subscription_end.isoformat()}"
-                        )
+                # WHY: При оплате (или подарке) во время trial явно завершаем trial — trial_notifications/cleanup не должны трогать paid
+                if source in _TRIAL_ENDING_SOURCES:
+                    await _end_trial_on_payment(conn, telegram_id, now, subscription_end)
                 elif row_source == "trial" and _is_day_grant and _current_source == "trial":
                     # #4: days during a trial extend THE TRIAL — the trial worker
                     # reads users.trial_expires_at; its reminders go to the new end.
@@ -2137,20 +2143,9 @@ async def grant_access(
             )
             raise Exception(f"Failed to save subscription to database: {e}") from e
         
-        # WHY: При оплате во время trial явно завершаем trial и логируем — trial_notifications/cleanup не должны трогать paid
-        if source == "payment":
-            user_row = await conn.fetchrow("SELECT trial_expires_at FROM users WHERE telegram_id = $1", telegram_id)
-            old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
-            if old_trial_expires_at and _from_db_utc(old_trial_expires_at) > now:
-                await conn.execute(
-                    _TRIAL_ENDED_BY_PAYMENT_SQL,
-                    _to_db_utc(now), telegram_id
-                )
-                logger.info(
-                    f"TRIAL_OVERRIDDEN_BY_PAID_SUBSCRIPTION: user_id={telegram_id}, "
-                    f"old_trial_expires_at={old_trial_expires_at.isoformat()}, "
-                    f"paid_subscription_expires_at={subscription_end.isoformat()}"
-                )
+        # WHY: При оплате (или подарке) во время trial явно завершаем trial — trial_notifications/cleanup не должны трогать paid
+        if source in _TRIAL_ENDING_SOURCES:
+            await _end_trial_on_payment(conn, telegram_id, now, subscription_end)
         
         # Записываем в историю подписок
         await _log_subscription_history_atomic(conn, telegram_id, vless_url, subscription_start, subscription_end, history_action_type)

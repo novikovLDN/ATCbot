@@ -285,6 +285,10 @@ SCENARIOS = {
 # change is "is_bypass_only = FALSE" appended to the tariff-switch UPDATEs
 # (upgrade_standalone, downgrade_in_tx) — a paid Basic↔Plus switch on a
 # bypass-only row must leave a normal paid row. Other scenarios are unchanged.
+# Re-pinned for «Plus during a trial closes it» (docs/notifications/matrix.md
+# #1): the ONLY change is the Basic→Plus branch reading users.trial_expires_at
+# (upgrade_standalone; the fake has no trial, so nothing is written). Other
+# scenarios are unchanged.
 GOLDEN = {
     "admin_renewal_standalone": "b037660ab87d8642ccd39965c9bd4b3dca09d5375561cc7b1822fdc24b5d8060",
     "downgrade_in_tx": "a5cec62b43e816aaa713476ffe03ea8fd27975a6f2c0901afc51a8d262a55dff",
@@ -294,7 +298,7 @@ GOLDEN = {
     "pending_vpn_disabled": "239c159d080e07f4fb97610097eb51002fcf1d48f5f6bf128382c3a47d6b3858",
     "renewal_in_tx": "0ad3e5e0a18123be982d049e8e386b152c914d7efe118250c1fde88599015a0c",
     "renewal_standalone": "9dfe96c32cd30e343d54f1beb600c1b87b35f035f3a6a6f46082fb34983cc74a",
-    "upgrade_standalone": "5490cfd5811237ea78e2108dea216bbfef195ce7e306e52df1309f5352b72939",
+    "upgrade_standalone": "0e00bb8bd3a45364b5878033f9817fa4d7da6e3cf4defa689cf2e915e30d5d1c",
 }
 
 

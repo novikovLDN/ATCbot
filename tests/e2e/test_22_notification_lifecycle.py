@@ -149,6 +149,31 @@ async def test_trial_bought_during_the_trial_then_every_paid_message_once(e2e):
     assert (sub["is_bypass_only"], sub["uuid"]) == (True, None)
 
 
+@pytest.mark.parametrize("how", ["plus", "gift"])
+async def test_plus_or_gift_during_the_trial_closes_it_like_basic(e2e, how):
+    """Plus (the upgrade branch) and a gift did not close the trial: its
+    reminders and «пробный завершён» still came after the purchase."""
+    u = await trial_user(e2e)
+    await move_trial_end(e2e, u, timedelta(hours=24) - timedelta(minutes=5))
+    if how == "plus":
+        pending = await flows.buy(e2e, u, "plus", 30, "sbp")
+        assert (await flows.pay(e2e, u, pending, "sbp")).body["status"] == "ok"
+        assert (await e2e.sub(u.id))["subscription_type"] == "plus"
+    else:
+        buyer = new_user()
+        await e2e.register(buyer)
+        gift = await e2e.create_purchase(buyer, "basic", 30, provider="platega", purchase_type="gift")
+        assert (await flows.pay(e2e, buyer, gift, "sbp")).body["status"] == "ok"
+        code = await e2e.val("SELECT gift_code FROM gift_subscriptions WHERE buyer_telegram_id=$1", buyer.id)
+        await e2e.send(u, f"/start gift_{code}")
+        assert (await e2e.sub(u.id))["source"] == "gift"
+    assert await e2e.val("SELECT trial_completed_sent FROM users WHERE telegram_id=$1", u.id) is True
+    m = e2e.tg.mark()
+    await trial_pass(e2e)
+    await expiry_pass(e2e)
+    assert not [t for t in e2e.user_texts(u.id, m) if "Пробный" in t or TRIAL_ENDED in t], e2e.user_texts(u.id, m)
+
+
 async def test_paid_expiry_at_zero_gb_says_the_vpn_is_off(e2e):
     """#2: «ГБ на месте» at 0 GB was false."""
     u = new_user()

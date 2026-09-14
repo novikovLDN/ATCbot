@@ -253,6 +253,22 @@ async def test_a_purchase_during_the_trial_completes_it(frozen):
     assert len(ends) == 1 and "trial_completed_sent = true" in ends[0][1]
 
 
+@pytest.mark.parametrize("source, tariff", [
+    ("payment", "plus"),     # the Basic→Plus upgrade branch
+    ("gift", "basic"),       # a gift activated on top of the trial
+    ("gift", "plus"),
+])
+async def test_plus_purchase_or_gift_during_the_trial_completes_it_like_basic(frozen, source, tariff):
+    """Only a Basic purchase closed the trial: after Plus (the upgrade branch)
+    or a gift the trial reminders and «пробный завершён −30 %» still came."""
+    conn = _TrialUserConn(_row("basic", source="trial"), in_tx=True)
+    await db_subs.grant_access(telegram_id=TG, duration=timedelta(days=30), conn=conn, source=source,
+                               tariff=tariff, tariff_period_days=30,
+                               _caller_holds_transaction=True, defer_panel=True)
+    ends = [c for c in conn.calls if c[1].startswith("update users set trial_expires_at")]
+    assert len(ends) == 1 and "trial_completed_sent = true" in ends[0][1]
+
+
 async def test_paid_period_during_a_trial_still_ends_the_trial(frozen):
     row = _row("basic", source="trial")
     _result, conn = await _grant(row, source="payment", tariff="basic", tariff_period_days=30)
