@@ -140,6 +140,30 @@ async def _request_raw(
     return {"ok": ok, "status": resp.status_code, "body": body, "response": unwrapped}
 
 
+# Remnawave 3.4.3 answers a duplicate username on POST /api/users with
+# HTTP 400 {"errorCode": "A019", "message": "User username already exists"}
+# (libs/contract/constants/errors/errors.ts USER_USERNAME_ALREADY_EXISTS,
+# src/common/exception/http-exception.filter.ts) — never 409. 409 is kept for
+# a reverse proxy / older panel that might still send it (hotfix of e835827f).
+_USERNAME_CONFLICT_CODE = "A019"
+
+
+def is_username_conflict(raw: Optional[Dict[str, Any]]) -> bool:
+    """True when a _request_raw envelope of POST /api/users means "this
+    username is already taken" (a concurrent/interrupted run created it)."""
+    status = int((raw or {}).get("status") or 0)
+    if status == 409:
+        return True
+    if status != 400:
+        return False
+    body = (raw or {}).get("body")
+    if isinstance(body, dict):
+        if str(body.get("errorCode") or "") == _USERNAME_CONFLICT_CODE:
+            return True
+        return "username already exists" in str(body.get("message") or "").lower()
+    return "username already exists" in str(body or "").lower()
+
+
 # ── User CRUD ──────────────────────────────────────────────────────────
 
 async def create_user(

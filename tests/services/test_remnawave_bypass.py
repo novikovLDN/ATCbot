@@ -245,3 +245,31 @@ async def test_add_bypass_traffic_returns_false_when_no_existing_entity(monkeypa
     with patch.object(remnawave_bypass, "config", _cfg()):
         result = await remnawave_bypass.add_bypass_traffic(42, extra_bytes=10 * 1024**3)
     assert result is False
+
+
+# ── Hotfix (e835827f): 3.4.3 answers a taken username with 400 A019 ───
+
+@pytest.mark.asyncio
+async def test_create_bypass_recovers_on_post_400_a019():
+    """Preflight missed the entity → POST → 400 A019 → re-lookup → adopt
+    (the 409-only branch never fired on 3.4.3)."""
+    first_post = {
+        "ok": False, "status": 400,
+        "body": {"message": "User username already exists", "errorCode": "A019"},
+        "response": None,
+    }
+    recovered = {
+        "id": 77, "vlessUuid": PANEL_UUID, "username": "42", "telegramId": 42,
+        "subscriptionUrl": "u", "shortUuid": "s", "trafficLimitBytes": 0,
+    }
+    find = AsyncMock(side_effect=[None, recovered])
+    create = AsyncMock(return_value=first_post)
+    p_cfg, p_find, p_create, _, _ = _patch(_cfg(), find=find, create=create)
+    with p_cfg, p_find, p_create:
+        result = await remnawave_bypass.create_bypass_user_entity(
+            42, traffic_limit_bytes=10 * 1024**3,
+        )
+    assert result.ok is True
+    assert result.recovered is True
+    assert result.panel_id == 77
+    create.assert_called_once()

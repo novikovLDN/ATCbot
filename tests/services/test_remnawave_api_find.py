@@ -85,3 +85,20 @@ async def test_find_user_unwraps_response_user_key():
     with patch.object(remnawave_api, "_request", req_mock):
         out = await remnawave_api.find_user_by_username("tg_42_premium")
     assert out == user
+
+
+# ── Hotfix (e835827f): 3.4.3 answers a taken username with 400 A019 ───
+
+@pytest.mark.parametrize("raw,expected", [
+    ({"status": 400, "body": {"message": "User username already exists", "errorCode": "A019"}}, True),
+    ({"status": 400, "body": {"message": "whatever", "errorCode": "A019"}}, True),
+    ({"status": 400, "body": "User username already exists"}, True),
+    ({"status": 409, "body": "conflict"}, True),
+    ({"status": 400, "body": {"message": "User short UUID already exists", "errorCode": "A020"}}, False),
+    ({"status": 400, "body": {"message": "Validation failed", "errors": []}}, False),
+    ({"status": 500, "body": {"message": "User username already exists"}}, False),
+    ({"status": 0, "body": None}, False),
+    (None, False),
+])
+def test_is_username_conflict_matches_3_4_3_a019(raw, expected):
+    assert remnawave_api.is_username_conflict(raw) is expected

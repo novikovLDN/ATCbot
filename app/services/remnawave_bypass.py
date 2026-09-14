@@ -264,9 +264,10 @@ async def create_bypass_user_entity(
             panel_id=_extract_id(response),
         )
 
-    # 409 from POST — race between preflight and POST.
+    # Username conflict from POST — race between preflight and POST (3.4.3:
+    # HTTP 400 errorCode A019, see remnawave_api.is_username_conflict).
     first_status = int((raw or {}).get("status") or 0)
-    if first_status == 409:
+    if remnawave_api.is_username_conflict(raw):
         try:
             existing2 = await remnawave_api.find_user_by_username(username)
         except Exception:

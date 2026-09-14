@@ -379,11 +379,13 @@ async def create_premium_user_entity(
         )
 
     first_status = int((raw or {}).get("status") or 0)
+    # 3.4.3: a taken username is HTTP 400 errorCode A019 (not 409).
+    username_conflict = remnawave_api.is_username_conflict(raw)
 
-    # ── 2) 409 from POST — race between preflight and POST: another run
-    #      may have created the entity in between.  Re-check by username
-    #      and adopt if it's ours.
-    if first_status == 409:
+    # ── 2) Username conflict from POST — race between preflight and POST
+    #      (or a preflight that failed transiently): the entity exists.
+    #      Re-check by username and adopt if it's ours.
+    if username_conflict:
         try:
             existing = await remnawave_api.find_user_by_username(username)
         except Exception as e:
@@ -400,13 +402,13 @@ async def create_premium_user_entity(
             if not await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at):
                 return _adopt_patch_failed(result)
             return result
-        # 409 not from a username race we own — fall through to the
-        # forced-UUID retry below (might be uuid conflict).
+        # Username held by an entity that is not ours (or the re-lookup
+        # failed) — retrying without the uuid would hit the same conflict.
 
-    # ── 3) Forced-UUID rejection — retry without forced uuid.  We do NOT
-    #      retry on 409 unless the username turns out unrelated (handled
-    #      above); only 400/422 mean "uuid value not accepted".
-    retryable = force_uuid and first_status in (400, 422)
+    # ── 3) Forced-UUID rejection — retry without forced uuid.  Only a
+    #      400/422 that is NOT the username conflict means "uuid value not
+    #      accepted".
+    retryable = force_uuid and first_status in (400, 422) and not username_conflict
     if retryable:
         logger.warning(
             "REMNAWAVE_PREMIUM_FORCED_UUID_REJECTED: tg=%s requested=%s status=%s — retrying without uuid",
