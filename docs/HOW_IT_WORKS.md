@@ -1553,7 +1553,7 @@ Basic и Plus получают 10 ГБ обхода за любой период
 - **Двойной клик.** Заголовок `Idempotency-Key` (`app/api/dashboard/idempotency.py`): тот же ключ в течение 10 минут возвращает прежний ответ и не выполняет действие второй раз. Включено у роутеров:
   - `users` (выдачи, баланс, скидки);
   - `broadcasts`, `promo`, `bgift`, `links`;
-  - `activations`, `traffic-audit`, `bypass-audit`, `reconciliation`.
+  - `activations`, `traffic-audit`, `reconciliation`.
 
 ### 10.3. Что умеет дашборд (`app/api/dashboard/routes/`)
 
@@ -1569,7 +1569,7 @@ Basic и Plus получают 10 ГБ обхода за любой период
 | `payments` | KPI, выручка, разбивка по провайдерам, лента, ошибки платежей (`payment_errors`), поиск платежа |
 | `metrics`, `stats`, `panel` | метрики (`docs/dashboard/metrics.md`), старые графики, статистика панели Remnawave (только чтение) |
 | `activations` | зависшие активации и кнопка «повторить» |
-| `traffic-audit`, `bypass-audit`, `reconciliation` | сверка лимита трафика БД ↔ панель и починка; починка затёртого bypass; сверка подписок |
+| `traffic-audit`, `reconciliation` | сверка лимита трафика БД ↔ панель и починка; сверка подписок |
 | `remnawave` | backfill и нормализация premium-лимитов |
 | `settings` | какие уведомления получает админ, **переключатель СБП Platega / WATA / split**, web-push |
 | `referrals` | статистика партнёров |
