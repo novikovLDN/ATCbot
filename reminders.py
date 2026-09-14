@@ -215,6 +215,9 @@ async def _build_reminder(subscription: dict, reminder_type: ReminderType, langu
         text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_3d")
         return text, get_renewal_keyboard_3d(language)
     if reminder_type == ReminderType.REMINDER_1D:
+        gb_left = await _bypass_left_text(telegram_id, language)
+        if gb_left:
+            return i18n.get_text(language, "reminder.paid_1d_gb", remaining=gb_left), get_renewal_keyboard_1d(language)
         text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_1d")
         return text, get_renewal_keyboard_1d(language)
     if reminder_type == ReminderType.REMINDER_24H:
@@ -228,14 +231,31 @@ async def _build_reminder(subscription: dict, reminder_type: ReminderType, langu
         if enabled:
             from database.subscriptions import claim_special_offer
             offer = await claim_special_offer(telegram_id, subscription.get("expires_at"))
+        gb_left = await _bypass_left_text(telegram_id, language)
         if offer:
             from app.services.notifications.special_offer import format_deadline
             deadline = format_deadline(language, offer["expires_at"])
-            text = (await get_notification_text(notif_key, language=language, params={"deadline": deadline})) \
-                or i18n.get_text(language, "reminder.paid_3h_special", deadline=deadline)
+            if gb_left:
+                text = i18n.get_text(language, "reminder.paid_3h_special_gb", deadline=deadline, remaining=gb_left)
+            else:
+                text = (await get_notification_text(notif_key, language=language, params={"deadline": deadline})) \
+                    or i18n.get_text(language, "reminder.paid_3h_special", deadline=deadline)
             return text, get_renewal_discount_keyboard(language)
+        if gb_left:
+            return i18n.get_text(language, "reminder.paid_3h_no_offer_gb", remaining=gb_left), get_renewal_keyboard(language)
         return i18n.get_text(language, "reminder.paid_3h_no_offer"), get_renewal_keyboard(language)
     return None, None
+
+
+async def _bypass_left_text(telegram_id: int, language: str):
+    """#9: «VPN перестанет работать» is false when bypass GB remain — they keep
+    working after the premium ends. The amount left (from the panel), or None
+    (no GB left / panel unavailable → the usual text)."""
+    from app.services.subscriptions import live_state
+    bypass = await live_state.read_bypass(telegram_id)
+    if bypass.works and not bypass.unlimited:
+        return live_state.format_bytes(language, bypass.remaining)
+    return None
 
 
 async def _send_reminder(bot: Bot, telegram_id: int, reminder_type: ReminderType, text: str, keyboard):

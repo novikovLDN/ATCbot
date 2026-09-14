@@ -524,7 +524,10 @@ LANG = {
     # reminder (paid)
     'reminder.paid_7d': "<tg-emoji emoji-id=\"5454415424319931791\">📅</tg-emoji> Subscription ends in 7 days. Renew in advance — access won't be interrupted.",
     'reminder.paid_7d_btn': "🔁 Renew subscription",
-    'reminder.paid_autorenew_ok': "🔄 <b>Your subscription renews automatically</b>\n\nIt is active until {date}. Auto-renewal is on: before it ends we charge <b>{amount} ₽</b> from your balance — you have {balance} ₽, that is enough.\n\nNothing to do, VPN keeps working.",
+    'reminder.paid_1d_gb': "<tg-emoji emoji-id=\"5190806721286657692\">🔴</tg-emoji> Your subscription ends tomorrow.\n\nTomorrow the main servers turn off; bypass keeps working on your GB — {remaining} left.\n\nRenew now to keep the main servers.",
+    'reminder.paid_3h_special_gb': "<tg-emoji emoji-id=\"5190806721286657692\">🚨</tg-emoji> <b>3 hours until your subscription ends</b>\n\nThen the main servers turn off; bypass keeps working on your GB — {remaining} left.\n\n<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Don't miss out — <b>15% off</b> renewal. Valid until {deadline}.",
+    'reminder.paid_3h_no_offer_gb': "🚨 <b>3 hours until your subscription ends</b>\n\nThen the main servers turn off; bypass keeps working on your GB — {remaining} left.\n\nRenew your subscription to keep the main servers.",
+    'reminder.paid_autorenew_ok':"🔄 <b>Your subscription renews automatically</b>\n\nIt is active until {date}. Auto-renewal is on: before it ends we charge <b>{amount} ₽</b> from your balance — you have {balance} ₽, that is enough.\n\nNothing to do, VPN keeps working.",
     'reminder.paid_autorenew_topup': "📅 <b>Your subscription is active until {date}</b>\n\nAuto-renewal is on, but your balance is {balance} ₽ and the renewal costs {amount} ₽ — <b>{missing} ₽</b> short.\n\nTop up {missing} ₽ before {deadline} and the subscription renews by itself.",
     'reminder.paid_3d_btn': "🔁 Renew",
     'reminder.paid_1d': "<tg-emoji emoji-id=\"5190806721286657692\">🔴</tg-emoji> Subscription ends tomorrow. Renew now to keep VPN running.",

@@ -190,6 +190,48 @@ async def test_autorenew_off_keeps_the_renew_text(paid_pass, monkeypatch):
 
 
 @pytest.mark.parametrize("lang", ["ru", "en"])
+@pytest.mark.parametrize("left,offer,key", [
+    (timedelta(hours=24), None, "reminder.paid_1d_gb"),
+    (timedelta(hours=3), {"expires_at": datetime(2026, 9, 17, 11, 30, tzinfo=timezone.utc)}, "reminder.paid_3h_special_gb"),
+    (timedelta(hours=3), None, "reminder.paid_3h_no_offer_gb"),
+])
+@pytest.mark.parametrize("gb_left", [True, False])
+async def test_tomorrow_and_3h_say_the_gb_keep_working(paid_pass, monkeypatch, lang, left, offer, key, gb_left):
+    """#9: every Basic / Plus has bypass GB that outlive the premium — «VPN
+    перестанет работать» was false for them."""
+    import database.subscriptions as db_subs
+    from app.services.notifications.special_offer import format_deadline
+    from app.services.subscriptions import live_state
+    reminders, st = paid_pass
+    end = datetime.now(timezone.utc) + left - timedelta(minutes=10)
+    monkeypatch.setattr(database, "get_subscriptions_for_reminders", AsyncMock(return_value=[_row(expires_at=end)]))
+    monkeypatch.setattr(reminders, "resolve_user_language", AsyncMock(return_value=lang))
+    monkeypatch.setattr(db_subs, "claim_special_offer", AsyncMock(return_value=offer))
+    info = (live_state.BypassInfo("present", used=2 * 1024 ** 3, limit=10 * 1024 ** 3, status="ACTIVE")
+            if gb_left else live_state.BypassInfo("present", used=10 * 1024 ** 3, limit=10 * 1024 ** 3, status="LIMITED"))
+    monkeypatch.setattr(live_state, "read_bypass", AsyncMock(return_value=info))
+    texts = []
+
+    async def send(bot, tg, text, **kw):
+        texts.append(text)
+        return MagicMock()
+    monkeypatch.setattr(reminders, "safe_send_message", send)
+
+    await reminders.send_smart_reminders(MagicMock())
+
+    (text,) = texts
+    params = {"remaining": f"8 {i18n.get_text(lang, 'common.unit_gb')}"}
+    if offer:
+        params["deadline"] = format_deadline(lang, offer["expires_at"])
+    if gb_left:
+        assert text == i18n.get_text(lang, key, **params)
+    else:
+        plain = {"reminder.paid_1d_gb": "reminder.paid_1d", "reminder.paid_3h_special_gb": "reminder.paid_3h_special",
+                 "reminder.paid_3h_no_offer_gb": "reminder.paid_3h_no_offer"}[key]
+        assert text == i18n.get_text(lang, plain, **{k: v for k, v in params.items() if k == "deadline"})
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
 async def test_free_access_24h_text_has_the_price_from_the_table(monkeypatch, lang):
     import reminders
     from app.services import automated_notifications as an
