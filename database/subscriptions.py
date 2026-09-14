@@ -747,7 +747,9 @@ async def set_special_offer(telegram_id: int) -> bool:
         return False
 
 
-_PAID_SUBSCRIPTION_SOURCES = ("payment", "auto_renew")
+# A gifted subscription was paid for (by the giver): it ends like a bought one —
+# «подписка закончилась» + the −15 % window (#19, docs/notifications/matrix.md).
+_PAID_SUBSCRIPTION_SOURCES = ("payment", "auto_renew", "gift")
 
 # Owner 2026-09-14: ONE −15 % window of 72 h per subscription period, opened by
 # whatever offers it first — the pre-expiry reminder (paid 3 h / trial 3 h) or

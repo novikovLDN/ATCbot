@@ -339,7 +339,7 @@ async def fast_expiry_cleanup_task(bot=None):
                                                             )
                                                         if update_result == "UPDATE 1":
                                                             trial_notice_pending = (source == "trial")
-                                                            if not has_remnawave and (source or "") in ("payment", "auto_renew"):
+                                                            if not has_remnawave and (source or "") in database.subscriptions._PAID_SUBSCRIPTION_SOURCES:
                                                                 expired_notice_pending = "paid"
                                                             # N7: a paid subscription ended → −15 % offer for
                                                             # 3 days, in this transaction, once per ended period.

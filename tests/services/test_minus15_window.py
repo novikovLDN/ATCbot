@@ -220,14 +220,16 @@ async def test_fast_expiry_tells_a_paid_user_once(world, monkeypatch, bypass):
     assert store.offer_writes == 1
 
 
-@pytest.mark.parametrize("source", ["admin", "gift"])
-async def test_fast_expiry_unpaid_without_bypass_gets_no_paid_notice(world, monkeypatch, source):
-    store = world(source=source, bypass=False)
+async def test_gifted_subscription_end_is_told_with_the_offer(world, monkeypatch):
+    """#19: a gifted subscription ended in silence and without −15 %."""
+    store = world(source="gift", bypass=False)
     fec = _patch_fast_expiry(monkeypatch, store)
-    notify = AsyncMock()
+    notify = AsyncMock(return_value=True)
     monkeypatch.setattr(so, "notify_expired", notify)
     await _one_fast_expiry_pass(fec)
-    notify.assert_not_awaited()
+    notify.assert_awaited_once()
+    assert notify.await_args.kwargs["has_bypass"] is False
+    assert store.offer_writes == 1
 
 
 @pytest.mark.parametrize("bypass, source, expected", [
