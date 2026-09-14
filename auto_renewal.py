@@ -347,6 +347,123 @@ async def _send_autorenew_failure_notices(bot, notices: list) -> None:
             logger.warning("AUTORENEW_FAILURE_NOTICE_FAILED user=%s: %s", telegram_id, type(e).__name__)
 
 
+async def _run_phase_b(bot, pool, notifications_to_send: list) -> None:
+    """PHASE B of a committed batch: panel sync + «продлено» messages + the
+    notification flags — no financial mutation, and (#17) run AFTER the batch
+    connection went back to the pool: panel HTTP and Telegram hold no DB
+    connection (the flag write takes its own short one)."""
+    outbox_fast_path = True
+    for item in notifications_to_send:
+        # T12 (flag ON): the panel side is the committed outbox job. Fast path
+        # here; on failure the job stays queued (retry + alert in run_now) and
+        # the provisioning worker completes it. After one failed/skipped
+        # run_now the rest of this batch is left to the worker, so a panel
+        # outage cannot stall the batch for BATCH_SIZE × run_now timeout.
+        outbox_job_id = item.get("provisioning_job_id")
+        if outbox_job_id is not None and outbox_fast_path:
+            try:
+                from app.services import provisioning
+                outbox_fast_path = await provisioning.run_now(outbox_job_id, bot=bot)
+            except Exception as e:  # run_now never raises; belt and braces
+                outbox_fast_path = False
+                logger.error(
+                    "AUTO_RENEWAL_RUN_NOW_FAILED: job=%s user=%s %s: %s",
+                    outbox_job_id, item["telegram_id"], type(e).__name__, e,
+                )
+        # B0: Post-commit Remnawave sync (renewal_xray_sync_after_commit
+        # emitted by grant_access). ОБЯЗАТЕЛЬНО дёргаем
+        # purchase_flow.sync_renewal_to_remnawave — иначе premium
+        # expireAt в панели останется старым и ключ умрёт на
+        # предыдущей дате даже после успешной DB-renewal.
+        # Legacy vpn_utils.ensure_user_in_xray (samopis-мастер) —
+        # больше не нужен, samopis мёртв.
+        xray_sync = item.get("xray_sync")
+        if xray_sync:
+            try:
+                from app.services import purchase_flow
+                await purchase_flow.sync_renewal_to_remnawave(xray_sync)
+            except Exception as e:
+                logger.error(
+                    f"AUTO_RENEWAL_PREMIUM_SYNC_FAILED user={item['telegram_id']} error={e}"
+                )
+        # Fire-and-forget: renew Remnawave bypass user (extend expireAt
+        # для bypass entity — независимо от premium sync выше).
+        try:
+            from app.services.remnawave_service import renew_remnawave_user_bg
+            _ar_tariff = item.get("tariff_type", "basic")
+            _ar_expires = item.get("expires_at")
+            if outbox_job_id is None and _ar_tariff in ("basic", "plus") and _ar_expires:
+                renew_remnawave_user_bg(item["telegram_id"], _ar_tariff, _ar_expires, period_days=item.get("period_days", 30))
+        except Exception as rmn_err:
+            logger.warning("REMNAWAVE_AUTORENEW_FAIL: tg=%s %s", item["telegram_id"], rmn_err)
+        if outbox_job_id is None:  # legacy: delayed panel check, alert-only
+            from app.services.payments import verify_delivery
+            verify_delivery.schedule_legacy_check(item["telegram_id"], source="auto_renewal", expect_bypass=item.get("tariff_type") in ("basic", "plus"))
+
+        try:
+            _ar_is_combo = item.get("is_combo", False)
+            _ar_type = item.get("tariff_type", "basic")
+            user_lang = await resolve_user_language(item["telegram_id"])
+            # RU/EN tariff name and calendar period (08 #14/#21: «Комбо …» and
+            # «👤 Мой профиль» were hardcoded RU; «Срок: 30 дней» for a month).
+            from app.services.payments.success_message import period_display, tariff_display
+            # N-06: the rubles actually debited (both legacy and outbox payloads
+            # carry "amount_rubles"; the old item.get("amount") was always 0).
+            amount_val = item["amount_rubles"]
+            text = i18n.get_text(
+                user_lang, "purchase.auto_renewal_success",
+                tariff_name=tariff_display(user_lang, _ar_type, _ar_is_combo),
+                period=period_display(user_lang, item.get("period_days", 30)),
+                days=item.get("period_days", 30),
+                expires_date=item["expires_str"],
+                amount=amount_val
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=i18n.get_text(user_lang, "main.profile"), callback_data="menu_profile")],
+            ])
+            sent = await safe_send_message(bot, item["telegram_id"], text, reply_markup=keyboard)
+            if sent is None:
+                continue
+            await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
+            # Explicit timeout for notification connection acquire (pool timeout is 10s)
+            notify_cm = acquire_connection(pool, "auto_renewal_notify")
+            try:
+                notify_conn = await asyncio.wait_for(notify_cm.__aenter__(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.error("auto_renewal: pool.acquire() timed out for notify_conn after 10s")
+                continue
+            try:
+                marked = await notification_service.mark_notification_sent(item["payment_id"], conn=notify_conn)
+                if marked:
+                    logger.info(
+                        f"NOTIFICATION_SENT [type=auto_renewal, payment_id={item['payment_id']}, user={item['telegram_id']}]"
+                    )
+                else:
+                    logger.warning(
+                        f"NOTIFICATION_FLAG_ALREADY_SET [type=auto_renewal, payment_id={item['payment_id']}, user={item['telegram_id']}]"
+                    )
+            finally:
+                # Release notification connection
+                try:
+                    await notify_cm.__aexit__(None, None, None)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(
+                f"CRITICAL: Failed to send/mark auto-renewal notification: payment_id={item.get('payment_id')}, user={item.get('telegram_id')}, error={e}"
+            )
+            try:
+                from app.services.admin_alerts import send_alert
+                await send_alert(
+                    bot, "payment",
+                    f"Auto-renewal notification failed\n"
+                    f"User: {item.get('telegram_id')}\n"
+                    f"Payment: {item.get('payment_id')}\n"
+                    f"Error: {type(e).__name__}: {str(e)[:200]}"
+                )
+            except Exception:
+                pass
+
 INSUFFICIENT_BALANCE_KEY = "autorenew.insufficient_balance"
 
 
@@ -772,128 +889,19 @@ async def process_auto_renewals(bot: Bot):
                             f"Error: {type(e).__name__}: {str(e)[:200]}"
                         )
 
-            # PHASE B: после commit — xray sync + отправка уведомлений (без финансовых мутаций)
-            outbox_fast_path = True
-            for item in notifications_to_send:
-                # T12 (flag ON): the panel side is the committed outbox job. Fast path
-                # here; on failure the job stays queued (retry + alert in run_now) and
-                # the provisioning worker completes it. After one failed/skipped
-                # run_now the rest of this batch is left to the worker, so a panel
-                # outage cannot stall the batch for BATCH_SIZE × run_now timeout.
-                outbox_job_id = item.get("provisioning_job_id")
-                if outbox_job_id is not None and outbox_fast_path:
-                    try:
-                        from app.services import provisioning
-                        outbox_fast_path = await provisioning.run_now(outbox_job_id, bot=bot)
-                    except Exception as e:  # run_now never raises; belt and braces
-                        outbox_fast_path = False
-                        logger.error(
-                            "AUTO_RENEWAL_RUN_NOW_FAILED: job=%s user=%s %s: %s",
-                            outbox_job_id, item["telegram_id"], type(e).__name__, e,
-                        )
-                # B0: Post-commit Remnawave sync (renewal_xray_sync_after_commit
-                # emitted by grant_access). ОБЯЗАТЕЛЬНО дёргаем
-                # purchase_flow.sync_renewal_to_remnawave — иначе premium
-                # expireAt в панели останется старым и ключ умрёт на
-                # предыдущей дате даже после успешной DB-renewal.
-                # Legacy vpn_utils.ensure_user_in_xray (samopis-мастер) —
-                # больше не нужен, samopis мёртв.
-                xray_sync = item.get("xray_sync")
-                if xray_sync:
-                    try:
-                        from app.services import purchase_flow
-                        await purchase_flow.sync_renewal_to_remnawave(xray_sync)
-                    except Exception as e:
-                        logger.error(
-                            f"AUTO_RENEWAL_PREMIUM_SYNC_FAILED user={item['telegram_id']} error={e}"
-                        )
-                # Fire-and-forget: renew Remnawave bypass user (extend expireAt
-                # для bypass entity — независимо от premium sync выше).
-                try:
-                    from app.services.remnawave_service import renew_remnawave_user_bg
-                    _ar_tariff = item.get("tariff_type", "basic")
-                    _ar_expires = item.get("expires_at")
-                    if outbox_job_id is None and _ar_tariff in ("basic", "plus") and _ar_expires:
-                        renew_remnawave_user_bg(item["telegram_id"], _ar_tariff, _ar_expires, period_days=item.get("period_days", 30))
-                except Exception as rmn_err:
-                    logger.warning("REMNAWAVE_AUTORENEW_FAIL: tg=%s %s", item["telegram_id"], rmn_err)
-                if outbox_job_id is None:  # legacy: delayed panel check, alert-only
-                    from app.services.payments import verify_delivery
-                    verify_delivery.schedule_legacy_check(item["telegram_id"], source="auto_renewal", expect_bypass=item.get("tariff_type") in ("basic", "plus"))
-
-                try:
-                    _ar_is_combo = item.get("is_combo", False)
-                    _ar_type = item.get("tariff_type", "basic")
-                    user_lang = await resolve_user_language(item["telegram_id"])
-                    # RU/EN tariff name and calendar period (08 #14/#21: «Комбо …» and
-                    # «👤 Мой профиль» were hardcoded RU; «Срок: 30 дней» for a month).
-                    from app.services.payments.success_message import period_display, tariff_display
-                    # N-06: the rubles actually debited (both legacy and outbox payloads
-                    # carry "amount_rubles"; the old item.get("amount") was always 0).
-                    amount_val = item["amount_rubles"]
-                    text = i18n.get_text(
-                        user_lang, "purchase.auto_renewal_success",
-                        tariff_name=tariff_display(user_lang, _ar_type, _ar_is_combo),
-                        period=period_display(user_lang, item.get("period_days", 30)),
-                        days=item.get("period_days", 30),
-                        expires_date=item["expires_str"],
-                        amount=amount_val
-                    )
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text=i18n.get_text(user_lang, "main.profile"), callback_data="menu_profile")],
-                    ])
-                    sent = await safe_send_message(bot, item["telegram_id"], text, reply_markup=keyboard)
-                    if sent is None:
-                        continue
-                    await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
-                    # Explicit timeout for notification connection acquire (pool timeout is 10s)
-                    notify_cm = acquire_connection(pool, "auto_renewal_notify")
-                    try:
-                        notify_conn = await asyncio.wait_for(notify_cm.__aenter__(), timeout=10.0)
-                    except asyncio.TimeoutError:
-                        logger.error("auto_renewal: pool.acquire() timed out for notify_conn after 10s")
-                        continue
-                    try:
-                        marked = await notification_service.mark_notification_sent(item["payment_id"], conn=notify_conn)
-                        if marked:
-                            logger.info(
-                                f"NOTIFICATION_SENT [type=auto_renewal, payment_id={item['payment_id']}, user={item['telegram_id']}]"
-                            )
-                        else:
-                            logger.warning(
-                                f"NOTIFICATION_FLAG_ALREADY_SET [type=auto_renewal, payment_id={item['payment_id']}, user={item['telegram_id']}]"
-                            )
-                    finally:
-                        # Release notification connection
-                        try:
-                            await notify_cm.__aexit__(None, None, None)
-                        except Exception:
-                            pass
-                except Exception as e:
-                    logger.error(
-                        f"CRITICAL: Failed to send/mark auto-renewal notification: payment_id={item.get('payment_id')}, user={item.get('telegram_id')}, error={e}"
-                    )
-                    try:
-                        from app.services.admin_alerts import send_alert
-                        await send_alert(
-                            bot, "payment",
-                            f"Auto-renewal notification failed\n"
-                            f"User: {item.get('telegram_id')}\n"
-                            f"Payment: {item.get('payment_id')}\n"
-                            f"Error: {type(e).__name__}: {str(e)[:200]}"
-                        )
-                    except Exception:
-                        pass
-            # «Auto-renewal did not go through» (08 #14) — after the commit.
-            await _send_autorenew_failure_notices(bot, failure_notices)
-            due_notices, insufficient_notices[:] = list(insufficient_notices), []
-            await _send_insufficient_balance_notices(bot, pool, due_notices)
         finally:
             # Release connection (equivalent to __aexit__)
             try:
                 await cm.__aexit__(None, None, None)
             except Exception:
                 pass  # Ignore errors during cleanup
+
+        # PHASE B: после commit и после возврата соединения батча в пул (#17)
+        await _run_phase_b(bot, pool, notifications_to_send)
+        # «Auto-renewal did not go through» (08 #14) — after the commit.
+        await _send_autorenew_failure_notices(bot, failure_notices)
+        due_notices, insufficient_notices[:] = list(insufficient_notices), []
+        await _send_insufficient_balance_notices(bot, pool, due_notices)
 
         await asyncio.sleep(0)
 

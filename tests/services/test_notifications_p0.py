@@ -565,6 +565,53 @@ async def test_insufficient_balance_gives_the_attempt_back_and_tells_the_user(mo
     assert (n["telegram_id"], n["amount_rubles"], n["balance_rubles"]) == (h.TG, float(price), 50.0)
 
 
+async def test_autorenew_phase_b_holds_no_batch_connection(monkeypatch):
+    """#17: the batch connection stayed checked out during phase B — the panel
+    sync (HTTP) and the Telegram messages."""
+    import auto_renewal
+    w = h.install(monkeypatch)
+    w.seed_active_subscription(days_left=0)
+    w.sub["expires_at"] = h.naive(h.utcnow() + timedelta(hours=2))
+    held = {"n": 0, "during_send": []}
+
+    class _Counting:
+        def __init__(self, conn):
+            self.conn = conn
+
+        async def __aenter__(self):
+            held["n"] += 1
+            return self.conn
+
+        async def __aexit__(self, *exc):
+            held["n"] -= 1
+            return False
+
+    real_run = h.run_auto_renewal
+
+    async def run(w, mp, **kw):
+        orig_setattr = mp.setattr
+
+        def setattr_(target, name, value, *a, **k):
+            if target is auto_renewal and name == "acquire_connection":
+                value = lambda pool, _name: _Counting(w.conn)   # noqa: E731
+            if target is auto_renewal and name == "safe_send_message":
+                inner = value
+
+                async def value(*args, **kwargs):
+                    held["during_send"].append(held["n"])
+                    return await inner(*args, **kwargs)
+            return orig_setattr(target, name, value, *a, **k)
+        mp.setattr = setattr_
+        try:
+            return await real_run(w, mp, **kw)
+        finally:
+            mp.setattr = orig_setattr
+
+    out = await run(w, monkeypatch, last_payment_tariff="basic_30")
+    out["decrease_balance"].assert_awaited_once()
+    assert held["during_send"] == [0], held
+
+
 async def test_n06_auto_renewal_message_shows_charged_amount(monkeypatch):
     w = h.install(monkeypatch)
     w.seed_active_subscription(days_left=0)
