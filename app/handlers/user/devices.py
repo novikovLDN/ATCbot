@@ -9,6 +9,7 @@ Per-device listing requires HWID Device Limit to be enabled in the
 panel's Subscription Settings. Without it, /api/hwid/devices/{uuid}
 returns an empty list and the UI gracefully shows "нет устройств".
 """
+import html
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Tuple
@@ -65,11 +66,12 @@ def _fmt_relative(dt) -> str:
 
 
 def _device_label(d: dict) -> str:
+    """HTML-escaped: the values come from the VPN client's HWID headers."""
     model = d.get("deviceModel") or d.get("platform") or "Устройство"
     os_ver = d.get("osVersion")
     if os_ver and os_ver not in model:
-        return f"{model} · {os_ver}"
-    return model
+        return html.escape(f"{model} · {os_ver}")
+    return html.escape(model)
 
 
 # ── Main devices screen ────────────────────────────────────────────────

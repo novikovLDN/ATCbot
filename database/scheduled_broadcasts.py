@@ -16,7 +16,6 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-import database.core as _core
 from database.core import get_pool
 
 logger = logging.getLogger(__name__)
@@ -150,12 +149,20 @@ async def cancel_scheduled_broadcast(sched_id: int, cancelled_by: int) -> bool:
 
 
 def _next_run_after(
-    current_run_at: datetime, recurrence: str,
+    current_run_at: datetime, recurrence: str, now: Optional[datetime] = None,
 ) -> Optional[datetime]:
-    """Посчитать следующий запуск для повторяющейся задачи.
+    """Следующий запуск повторяющейся задачи — первый слот строго после `now`
+    (пропущенные за простой слоты не догоняются по одному в минуту).
     Возвращает None для 'once'."""
     if recurrence == "once":
         return None
+    nxt = _step(current_run_at, recurrence)
+    while nxt is not None and now is not None and nxt <= now:
+        nxt = _step(nxt, recurrence)
+    return nxt
+
+
+def _step(current_run_at: datetime, recurrence: str) -> Optional[datetime]:
     if recurrence == "daily":
         return current_run_at + timedelta(days=1)
     if recurrence == "weekly":
@@ -187,7 +194,7 @@ async def mark_ran_and_reschedule(
         recurrence = row["recurrence"]
         current_run = row["scheduled_at"]
         end_at = row["recurrence_end_at"]
-        next_run = _next_run_after(current_run, recurrence)
+        next_run = _next_run_after(current_run, recurrence, now=datetime.now(timezone.utc))
         if next_run is not None and end_at is not None and next_run > end_at:
             next_run = None
 
@@ -213,6 +220,53 @@ async def mark_ran_and_reschedule(
                    WHERE id = $1""",
                 sched_id, last_broadcast_id, error, next_run,
             )
+
+
+async def claim_scheduled_run(sched_id: int, expected_scheduled_at: datetime) -> bool:
+    """Claim ONE run of a due scheduled broadcast before it is sent
+    (HOW_IT_WORKS P2: it could go out twice — the SKIP LOCKED lock of
+    fetch_due_scheduled is released at once and the run used to be marked only
+    after the send started). One guarded UPDATE: succeeds only while the row is
+    active and still at the slot the worker read, moves it to the next slot
+    (or deactivates a 'once' row) and counts the run. True = send it."""
+    now = datetime.now(timezone.utc)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT recurrence, recurrence_end_at FROM scheduled_broadcasts WHERE id = $1", sched_id,
+        )
+        if not row:
+            return False
+        next_run = _next_run_after(expected_scheduled_at, row["recurrence"], now=now)
+        end_at = row["recurrence_end_at"]
+        if next_run is not None and end_at is not None and next_run > end_at:
+            next_run = None
+        result = await conn.execute(
+            """UPDATE scheduled_broadcasts
+               SET last_run_at = NOW(),
+                   run_count = run_count + 1,
+                   last_error = NULL,
+                   scheduled_at = COALESCE($3::timestamptz, scheduled_at),
+                   is_active = ($3::timestamptz IS NOT NULL)
+               WHERE id = $1 AND is_active AND scheduled_at = $2""",
+            sched_id, expected_scheduled_at, next_run,
+        )
+        return str(result).endswith(" 1")
+
+
+async def record_scheduled_result(
+    sched_id: int, *, last_broadcast_id: Optional[int], error: Optional[str] = None,
+) -> None:
+    """Outcome of a claimed run (the schedule itself was moved by claim_scheduled_run)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """UPDATE scheduled_broadcasts
+               SET last_run_broadcast_id = COALESCE($2, last_run_broadcast_id),
+                   last_error = $3
+               WHERE id = $1""",
+            sched_id, last_broadcast_id, error,
+        )
 
 
 async def fetch_due_scheduled(limit: int = 10) -> List[Dict[str, Any]]:

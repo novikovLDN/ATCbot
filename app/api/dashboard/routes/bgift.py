@@ -4,9 +4,11 @@ from pydantic import BaseModel, Field
 
 import database
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
+from app.api.dashboard.idempotency import IdempotentRoute
 from app.events import bus
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_admin)], route_class=IdempotentRoute)
 
 
 def _serialize(value):
@@ -26,7 +28,7 @@ async def bgift_summary():
     try:
         data = await database.get_bypass_gift_links_summary()
     except Exception as e:
-        raise HTTPException(500, f"summary_failed: {e}")
+        raise server_error("summary_failed") from e
     return _serialize(data or {})
 
 
@@ -43,7 +45,7 @@ async def bgift_list(
             offset=page * page_size,
         )
     except Exception as e:
-        raise HTTPException(500, f"list_failed: {e}")
+        raise server_error("list_failed") from e
     return _serialize(rows or [])
 
 
@@ -52,7 +54,7 @@ async def bgift_detail(link_id: int = Path(..., gt=0)):
     try:
         row = await database.get_bypass_gift_link_by_id(link_id)
     except Exception as e:
-        raise HTTPException(500, f"detail_failed: {e}")
+        raise server_error("detail_failed") from e
     if not row:
         raise HTTPException(404, "Link not found")
     return _serialize(row)
@@ -67,7 +69,7 @@ async def bgift_redemptions(
         rows = await database.get_bypass_gift_link_redemptions(link_id, limit)
         total = await database.count_bypass_gift_link_redemptions(link_id)
     except Exception as e:
-        raise HTTPException(500, f"redemptions_failed: {e}")
+        raise server_error("redemptions_failed") from e
     return {
         "rows": _serialize(rows or []),
         "total": total,
@@ -93,7 +95,7 @@ async def bgift_create(
             max_uses=body.max_uses,
         )
     except Exception as e:
-        raise HTTPException(500, f"create_failed: {e}")
+        raise server_error("create_failed") from e
     if not row:
         raise HTTPException(500, "create_failed")
     bus.publish({
@@ -113,7 +115,7 @@ async def bgift_delete(
     try:
         ok = await database.soft_delete_bypass_gift_link(link_id)
     except Exception as e:
-        raise HTTPException(500, f"delete_failed: {e}")
+        raise server_error("delete_failed") from e
     if not ok:
         raise HTTPException(404, "Link not found")
     bus.publish({

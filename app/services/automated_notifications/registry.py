@@ -144,9 +144,9 @@ register_notification(NotificationSpec(
         "После этого VPN перестанет работать. Сайты, стриминг, "
         "мессенджеры — всё вернётся к блокировкам.\n\n"
         "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> "
-        "Успейте — <b>скидка 15%</b> действует до конца триала."
+        "Успейте — <b>скидка 15%</b> действует до {deadline}."
     ),
-    template_vars=[],
+    template_vars=["deadline"],
     default_trigger={"before_expiry_hours": 3, "tolerance_hours": 1},
 ))
 
@@ -227,7 +227,8 @@ register_notification(NotificationSpec(
     title="Оплата: приветствие после первой покупки Basic",
     description=(
         "Отправляется юзеру сразу после успешной оплаты первой "
-        "подписки Basic (не renewal). Используется в payment webhook."
+        "подписки Basic (не renewal), любым способом оплаты. Без своего "
+        "текста бот шлёт общее сообщение об успехе (тариф, срок, дата, ГБ)."
     ),
     category="payment",
     default_text_ru=(
@@ -246,7 +247,8 @@ register_notification(NotificationSpec(
     title="Оплата: приветствие после первой покупки Plus",
     description=(
         "Отправляется юзеру сразу после успешной оплаты первой "
-        "подписки Plus (не renewal)."
+        "подписки Plus (не renewal), любым способом оплаты. Без своего "
+        "текста бот шлёт общее сообщение об успехе (тариф, срок, дата, ГБ)."
     ),
     category="payment",
     default_text_ru=(
@@ -265,7 +267,8 @@ register_notification(NotificationSpec(
     title="Оплата: продление (compact)",
     description=(
         "Отправляется при renewal — юзер продлил уже действующую "
-        "или недавно истёкшую подписку. Компактный формат."
+        "или недавно истёкшую подписку, любым способом оплаты. Без своего "
+        "текста бот шлёт общее сообщение об успехе (тариф, срок, дата, ГБ)."
     ),
     category="payment",
     default_text_ru=(
@@ -332,8 +335,8 @@ register_notification(NotificationSpec(
         "После этого VPN перестанет работать. Сайты и приложения "
         "вернутся к блокировкам.\n\n"
         "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> "
-        "Успейте — <b>скидка 15%</b> на продление. Действует 3 часа."
+        "Успейте — <b>скидка 15%</b> на продление. Действует до {deadline}."
     ),
-    template_vars=[],
+    template_vars=["deadline"],
     default_trigger={"before_expiry_hours": 3, "tolerance_hours": 1},
 ))

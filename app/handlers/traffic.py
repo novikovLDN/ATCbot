@@ -6,8 +6,7 @@ Callbacks:
 - traffic_refresh     — refresh traffic info
 - buy_traffic        — show available traffic packs
 - buy_traffic_pack:N — confirm purchase of N GB pack
-- traffic_pay_card:N / traffic_pay_stars:N / etc — pay for N GB pack
-- traffic_pay_card:N — pay for N GB pack via YooKassa (card)
+- traffic_pay_wata:N — pay for N GB pack via WATA
 - traffic_pay_sbp:N  — pay for N GB pack via SBP (Platega)
 """
 import asyncio
@@ -17,7 +16,7 @@ import math
 import config
 import database
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
@@ -29,14 +28,14 @@ from app.handlers.common.emoji import CE
 traffic_router = Router()
 logger = logging.getLogger(__name__)
 
-LAVA_INVOICE_TIMEOUT = 15 * 60  # 15 minutes
+INVOICE_MSG_TIMEOUT = 15 * 60  # 15 minutes
 
 
-async def _auto_delete_lava_msg(bot, chat_id: int, msg, purchase_id: str | None = None):
-    """Delete Lava invoice message after timeout.  Also чистит запись
+async def _auto_delete_invoice_msg(bot, chat_id: int, msg, purchase_id: str | None = None):
+    """Delete invoice message after timeout.  Also чистит запись
     из общего invoice-реестра, если она осталась."""
     try:
-        await asyncio.sleep(LAVA_INVOICE_TIMEOUT)
+        await asyncio.sleep(INVOICE_MSG_TIMEOUT)
         await bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
     except Exception:
         pass
@@ -112,10 +111,10 @@ async def callback_buy_bypass_only(callback: CallbackQuery):
     )])
 
     text = i18n_get_text(language, "bypass.buy_title")
-    # Add trial bonus text if trial is available
+    # The 3-day premium gift is promised only to users the purchase would give
+    # it to — the grant's own rule (owner, 2026-09-14; trial flag irrelevant).
     from app.services.trials import service as trial_service
-    trial_available = await trial_service.is_trial_available(telegram_id)
-    if trial_available:
+    if await trial_service.is_bypass_gift_available(telegram_id):
         text += i18n_get_text(language, "bypass.buy_title_trial")
     if discount_pct > 0:
         text += i18n_get_text(language, "traffic.promo_active_line", "\n\n🎁 Промо-скидка {discount_pct}% активна!", discount_pct=discount_pct)
@@ -492,7 +491,13 @@ async def show_traffic_info_message(message):
     if not rmn_uuid:
         expires_at = subscription.get("expires_at")
         if expires_at and config.REMNAWAVE_ENABLED:
-            override = 5 * 1024**3 if is_trial else 10 * 1024**3
+            # Trial → TRIAL_BYPASS_MB (default 500 MB, owner rule), paid → 10 GB.
+            # Same numbers as show_traffic_info above (was 5 GB for trial here).
+            if is_trial:
+                trial_mb = int(getattr(config, "TRIAL_BYPASS_MB", 500)) or 500
+                override = trial_mb * (1024 ** 2)
+            else:
+                override = 10 * 1024**3
             remnawave_service._fire_and_forget(
                 remnawave_service.create_remnawave_user(
                     telegram_id, sub_type, expires_at,
@@ -839,88 +844,6 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
 
 # ── Card payment (YooKassa via Telegram Payments) ────────────────────
 
-@traffic_router.callback_query(F.data.startswith("traffic_pay_card:"))
-async def callback_traffic_pay_card(callback: CallbackQuery):
-    """Pay for traffic pack via card (Telegram Payments / YooKassa)."""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    # «Банковская карта» → универсальный инвойс Wata (способ выбирается на
-    # странице Wata). Fallback на карту, если Wata не сконфигурирована.
-    import wata_service
-    if wata_service.is_enabled():
-        return await callback_traffic_pay_wata(callback)
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    try:
-        gb = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        return
-
-    pack = config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
-    if not pack:
-        return
-
-    if not config.TG_PROVIDER_TOKEN:
-        await callback.answer(i18n_get_text(language, "errors.payments_unavailable"), show_alert=True)
-        return
-
-    # Apply traffic promo discount
-    traffic_discount = await database.get_user_traffic_discount(telegram_id)
-    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
-    base_price = pack["price"]
-    price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
-    price_kopecks = price * 100
-
-    # Minimum Telegram payment: 64 RUB = 6400 kopecks
-    MIN_PAYMENT_AMOUNT_KOPECKS = 6400
-    if price_kopecks < MIN_PAYMENT_AMOUNT_KOPECKS:
-        await callback.answer(i18n_get_text(language, "errors.payment_min_amount"), show_alert=True)
-        return
-
-    try:
-        # Create pending_purchase with purchase_type='traffic_pack'
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff=f"traffic_{gb}gb",
-            period_days=0,
-            price_kopecks=price_kopecks,
-            purchase_type="traffic_pack",
-        )
-
-        payload = f"purchase:{purchase_id}"
-        description = f"Atlas Secure — {gb} GB traffic"
-        prices = [LabeledPrice(label=f"{gb} GB", amount=price_kopecks)]
-
-        invoice_msg = await callback.bot.send_invoice(
-            chat_id=telegram_id,
-            title=f"Atlas Secure — {gb} GB",
-            description=description,
-            payload=payload,
-            provider_token=config.TG_PROVIDER_TOKEN,
-            currency="RUB",
-            prices=prices,
-        )
-        _register_invoice_msg(purchase_id, telegram_id, invoice_msg.message_id)
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, invoice_msg, purchase_id))
-        try:
-            await callback.message.delete()
-        except Exception as _e:
-            logger.debug("delete traffic picker (card) failed: %s", _e)
-
-        logger.info(
-            "TRAFFIC_CARD_INVOICE_SENT user=%s purchase_id=%s gb=%s price=%s",
-            telegram_id, purchase_id, gb, price,
-        )
-        await callback.answer()
-
-    except Exception as e:
-        logger.exception("TRAFFIC_CARD_INVOICE_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-
-
 # ── SBP payment (Platega) ────────────────────────────────────────────
 
 @traffic_router.callback_query(F.data.startswith("traffic_pay_sbp:"))
@@ -973,6 +896,7 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
             amount_rubles=sbp_price_rubles,
             description=f"Atlas Secure — {gb} GB traffic",
             purchase_id=purchase_id,
+            telegram_id=telegram_id,
         )
 
         transaction_id = tx_data["transaction_id"]
@@ -980,7 +904,7 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
 
         # Save invoice_id
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id), provider="platega")
         except Exception as e:
             logger.error("Failed to save SBP transaction_id: purchase_id=%s error=%s", purchase_id, e)
 
@@ -1005,7 +929,7 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
 
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         _register_invoice_msg(purchase_id, telegram_id, msg.message_id)
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg, purchase_id))
+        asyncio.create_task(_auto_delete_invoice_msg(callback.bot, telegram_id, msg, purchase_id))
         try:
             await callback.message.delete()
         except Exception as _e:
@@ -1014,97 +938,6 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception("TRAFFIC_SBP_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-
-
-@traffic_router.callback_query(F.data.startswith("traffic_pay_lava:"))
-async def callback_traffic_pay_lava(callback: CallbackQuery):
-    """Pay for traffic pack via Lava (card)."""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    try:
-        gb = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        return
-
-    pack = config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
-    if not pack:
-        return
-
-    import lava_service
-    if not lava_service.is_enabled():
-        await callback.answer(i18n_get_text(language, "payment.lava_unavailable"), show_alert=True)
-        return
-
-    # Apply traffic promo discount
-    traffic_discount = await database.get_user_traffic_discount(telegram_id)
-    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
-    base_price = pack["price"]
-    price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
-    price_kopecks = price * 100
-
-    try:
-        # Create pending_purchase with purchase_type='traffic_pack'
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff=f"traffic_{gb}gb",
-            period_days=0,
-            price_kopecks=price_kopecks,
-            purchase_type="traffic_pack",
-        )
-
-        price_rubles = price_kopecks / 100.0
-
-        # Create Lava invoice
-        invoice_data = await lava_service.create_invoice(
-            amount_rubles=price_rubles,
-            purchase_id=purchase_id,
-            comment=f"Atlas Secure — {gb} GB traffic",
-        )
-
-        invoice_id = invoice_data["invoice_id"]
-        payment_url = invoice_data["payment_url"]
-
-        # Save invoice_id
-        try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
-        except Exception as e:
-            logger.error("Failed to save Lava invoice_id: purchase_id=%s error=%s", purchase_id, e)
-
-        logger.info(
-            "TRAFFIC_LAVA_INVOICE_SENT user=%s purchase_id=%s gb=%s price=%.2f invoice=%s",
-            telegram_id, purchase_id, gb, price_rubles, invoice_id,
-        )
-
-        text = i18n_get_text(language, "payment.lava_waiting", amount=price_rubles)
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "payment.lava_pay_button"),
-                url=payment_url,
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "common.back"),
-                callback_data="buy_traffic",
-                icon_custom_emoji_id=CE["back"],
-                style="primary",
-            )],
-        ])
-
-        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        _register_invoice_msg(purchase_id, telegram_id, lava_msg.message_id)
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, lava_msg, purchase_id))
-        try:
-            await callback.message.delete()
-        except Exception as _e:
-            logger.debug("delete traffic picker (lava) failed: %s", _e)
-        await callback.answer()
-
-    except Exception as e:
-        logger.exception("TRAFFIC_LAVA_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
@@ -1145,7 +978,7 @@ async def callback_traffic_pay_wata(callback: CallbackQuery):
             user_id=telegram_id,
         )
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]), provider="wata")
         except Exception:
             pass
         caption = (
@@ -1171,7 +1004,7 @@ async def callback_traffic_pay_wata(callback: CallbackQuery):
             parse_mode="HTML",
         )
         _register_invoice_msg(purchase_id, telegram_id, msg.message_id)
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg, purchase_id))
+        asyncio.create_task(_auto_delete_invoice_msg(callback.bot, telegram_id, msg, purchase_id))
         # Fast-path polling для этого invoice (35s интервал, ~8.75 мин).
         try:
             from app.handlers.callbacks.payments_callbacks import _poll_wata_invoice
@@ -1210,74 +1043,6 @@ async def _bypass_price(telegram_id: int, gb: int):
     base_price = pack["price"]
     price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
     return price, pack
-
-
-@traffic_router.callback_query(F.data.startswith("bypass_pay_card:"))
-async def callback_bypass_pay_card(callback: CallbackQuery):
-    """Pay for bypass-only pack via card (Telegram Payments)."""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    # «Банковская карта» → универсальный инвойс Wata. Fallback на карту, если выкл.
-    import wata_service
-    if wata_service.is_enabled():
-        return await callback_bypass_pay_wata(callback)
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    try:
-        gb = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        return
-
-    price, pack = await _bypass_price(telegram_id, gb)
-    if not price:
-        return
-
-    if not config.TG_PROVIDER_TOKEN:
-        await callback.answer(i18n_get_text(language, "errors.payments_unavailable"), show_alert=True)
-        return
-
-    price_kopecks = price * 100
-    MIN_PAYMENT_AMOUNT_KOPECKS = 6400
-    if price_kopecks < MIN_PAYMENT_AMOUNT_KOPECKS:
-        await callback.answer(i18n_get_text(language, "errors.payment_min_amount"), show_alert=True)
-        return
-
-    try:
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff=f"bypass_{gb}gb",
-            period_days=0,
-            price_kopecks=price_kopecks,
-            purchase_type="traffic_pack",
-        )
-
-        payload = f"purchase:{purchase_id}"
-        prices = [LabeledPrice(label=f"Bypass {gb} GB", amount=price_kopecks)]
-
-        invoice_msg = await callback.bot.send_invoice(
-            chat_id=telegram_id,
-            title=f"Atlas Secure — Bypass {gb} GB",
-            description=f"Bypass whitelist traffic — {gb} GB",
-            payload=payload,
-            provider_token=config.TG_PROVIDER_TOKEN,
-            currency="RUB",
-            prices=prices,
-        )
-        _register_invoice_msg(purchase_id, telegram_id, invoice_msg.message_id)
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, invoice_msg, purchase_id))
-        try:
-            await callback.message.delete()
-        except Exception as _e:
-            logger.debug("delete bypass picker (card) failed: %s", _e)
-        logger.info("BYPASS_CARD_INVOICE_SENT user=%s purchase_id=%s gb=%s price=%s", telegram_id, purchase_id, gb, price)
-        await callback.answer()
-
-    except Exception as e:
-        logger.exception("BYPASS_CARD_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
 @traffic_router.callback_query(F.data.startswith("bypass_pay_sbp:"))
@@ -1322,13 +1087,14 @@ async def callback_bypass_pay_sbp(callback: CallbackQuery):
             amount_rubles=sbp_price_rubles,
             description=f"Atlas Secure — Bypass {gb} GB",
             purchase_id=purchase_id,
+            telegram_id=telegram_id,
         )
 
         transaction_id = tx_data["transaction_id"]
         redirect_url = tx_data["redirect_url"]
 
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id), provider="platega")
         except Exception as e:
             logger.error("Failed to save SBP tx_id: purchase_id=%s error=%s", purchase_id, e)
 
@@ -1339,7 +1105,7 @@ async def callback_bypass_pay_sbp(callback: CallbackQuery):
         ])
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         _register_invoice_msg(purchase_id, telegram_id, msg.message_id)
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg, purchase_id))
+        asyncio.create_task(_auto_delete_invoice_msg(callback.bot, telegram_id, msg, purchase_id))
         try:
             await callback.message.delete()
         except Exception as _e:
@@ -1348,192 +1114,6 @@ async def callback_bypass_pay_sbp(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception("BYPASS_SBP_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-
-
-@traffic_router.callback_query(F.data.startswith("bypass_pay_stars:"))
-async def callback_bypass_pay_stars(callback: CallbackQuery):
-    """Pay for bypass-only pack via Telegram Stars."""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    try:
-        gb = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        return
-
-    price, pack = await _bypass_price(telegram_id, gb)
-    if not price:
-        return
-
-    # Convert RUB to Stars (+70% markup, ~1.85 RUB per star)
-    price_stars = math.ceil(price * 1.7 / 1.85)
-    if price_stars < 1:
-        price_stars = 1
-
-    try:
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff=f"bypass_{gb}gb",
-            period_days=0,
-            price_kopecks=price_stars,
-            purchase_type="traffic_pack",
-        )
-
-        payload = f"purchase:{purchase_id}"
-        prices = [LabeledPrice(label=f"Bypass {gb} GB", amount=price_stars)]
-
-        invoice_msg = await callback.bot.send_invoice(
-            chat_id=telegram_id,
-            title=f"Atlas Secure — Bypass {gb} GB",
-            description=f"Bypass whitelist traffic — {gb} GB",
-            payload=payload,
-            provider_token="",
-            currency="XTR",
-            prices=prices,
-        )
-        _register_invoice_msg(purchase_id, telegram_id, invoice_msg.message_id)
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, invoice_msg, purchase_id))
-        try:
-            await callback.message.delete()
-        except Exception as _e:
-            logger.debug("delete bypass picker (stars) failed: %s", _e)
-        logger.info("BYPASS_STARS_INVOICE_SENT user=%s purchase_id=%s gb=%s stars=%s", telegram_id, purchase_id, gb, price_stars)
-        await callback.answer()
-
-    except Exception as e:
-        logger.exception("BYPASS_STARS_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-
-
-@traffic_router.callback_query(F.data.startswith("bypass_pay_crypto:"))
-async def callback_bypass_pay_crypto(callback: CallbackQuery):
-    """Pay for bypass-only pack via CryptoBot."""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    try:
-        gb = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        return
-
-    price, pack = await _bypass_price(telegram_id, gb)
-    if not price:
-        return
-
-    import cryptobot_service
-    if not cryptobot_service.is_enabled():
-        await callback.answer(i18n_get_text(language, "payment.crypto_unavailable"), show_alert=True)
-        return
-
-    try:
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff=f"bypass_{gb}gb",
-            period_days=0,
-            price_kopecks=price * 100,
-            purchase_type="traffic_pack",
-        )
-
-        invoice = await cryptobot_service.create_invoice(
-            amount_rubles=float(price),
-            description=f"Atlas Secure — Bypass {gb} GB",
-            purchase_id=purchase_id,
-        )
-
-        pay_url = invoice.get("pay_url") or invoice.get("bot_invoice_url")
-        if not pay_url:
-            raise ValueError("No pay_url in CryptoBot response")
-
-        text = i18n_get_text(language, "payment.crypto_waiting", amount=float(price))
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=i18n_get_text(language, "payment.crypto_pay_button"), url=pay_url)],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only", icon_custom_emoji_id=CE["back"], style="primary")],
-        ])
-        msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        _register_invoice_msg(purchase_id, telegram_id, msg.message_id)
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg, purchase_id))
-        try:
-            await callback.message.delete()
-        except Exception as _e:
-            logger.debug("delete bypass picker (crypto) failed: %s", _e)
-        await callback.answer()
-
-    except Exception as e:
-        logger.exception("BYPASS_CRYPTO_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-
-
-@traffic_router.callback_query(F.data.startswith("bypass_pay_lava:"))
-async def callback_bypass_pay_lava(callback: CallbackQuery):
-    """Pay for bypass-only pack via Lava (card)."""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    try:
-        gb = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        return
-
-    price, pack = await _bypass_price(telegram_id, gb)
-    if not price:
-        return
-
-    import lava_service
-    if not lava_service.is_enabled():
-        await callback.answer(i18n_get_text(language, "payment.lava_unavailable"), show_alert=True)
-        return
-
-    try:
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff=f"bypass_{gb}gb",
-            period_days=0,
-            price_kopecks=price * 100,
-            purchase_type="traffic_pack",
-        )
-
-        price_rubles = float(price)
-
-        invoice_data = await lava_service.create_invoice(
-            amount_rubles=price_rubles,
-            purchase_id=purchase_id,
-            comment=f"Atlas Secure — Bypass {gb} GB",
-        )
-
-        invoice_id = invoice_data["invoice_id"]
-        payment_url = invoice_data["payment_url"]
-
-        try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
-        except Exception as e:
-            logger.error("Failed to save Lava invoice_id: purchase_id=%s error=%s", purchase_id, e)
-
-        text = i18n_get_text(language, "payment.lava_waiting", amount=price_rubles)
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button"), url=payment_url)],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only", icon_custom_emoji_id=CE["back"], style="primary")],
-        ])
-        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        _register_invoice_msg(purchase_id, telegram_id, lava_msg.message_id)
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, lava_msg, purchase_id))
-        try:
-            await callback.message.delete()
-        except Exception as _e:
-            logger.debug("delete bypass picker (lava) failed: %s", _e)
-        await callback.answer()
-
-    except Exception as e:
-        logger.exception("BYPASS_LAVA_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
@@ -1570,7 +1150,7 @@ async def callback_bypass_pay_wata(callback: CallbackQuery):
             user_id=telegram_id,
         )
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]), provider="wata")
         except Exception:
             pass
         caption = (
@@ -1596,7 +1176,7 @@ async def callback_bypass_pay_wata(callback: CallbackQuery):
             parse_mode="HTML",
         )
         _register_invoice_msg(purchase_id, telegram_id, msg.message_id)
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg, purchase_id))
+        asyncio.create_task(_auto_delete_invoice_msg(callback.bot, telegram_id, msg, purchase_id))
         try:
             from app.handlers.callbacks.payments_callbacks import _poll_wata_invoice
             asyncio.create_task(_poll_wata_invoice(

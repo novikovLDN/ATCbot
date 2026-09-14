@@ -17,11 +17,13 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 
 import database
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
+from app.api.dashboard.idempotency import IdempotentRoute
 from app.events import bus
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_admin)], route_class=IdempotentRoute)
 
 
 def _serialize_dt(v: Any) -> Any:
@@ -44,7 +46,7 @@ async def list_victims() -> Dict[str, Any]:
     try:
         victims = await database.get_bypass_overwrite_victims()
     except Exception as e:
-        raise HTTPException(500, f"list_failed: {e}")
+        raise server_error("list_failed") from e
 
     can_fix_count = sum(1 for v in victims if v.get("can_fix"))
     total_traffic_gb = sum(int(v.get("traffic_total_gb", 0) or 0) for v in victims)
@@ -65,7 +67,7 @@ async def fix_one(
     try:
         result = await database.fix_bypass_overwrite_victim(telegram_id)
     except Exception as e:
-        raise HTTPException(500, f"fix_failed: {e}")
+        raise server_error("fix_failed") from e
 
     if not result.get("ok"):
         raise HTTPException(400, f"cannot_fix: {result.get('reason')}")
@@ -92,7 +94,7 @@ async def fix_all(admin: dict = Depends(require_admin)) -> Dict[str, Any]:
     try:
         victims = await database.get_bypass_overwrite_victims()
     except Exception as e:
-        raise HTTPException(500, f"list_failed: {e}")
+        raise server_error("list_failed") from e
 
     results: List[Dict[str, Any]] = []
     fixed = 0

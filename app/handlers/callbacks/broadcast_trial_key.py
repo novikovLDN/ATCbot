@@ -36,6 +36,7 @@ from aiogram.types import (
 )
 
 from app.i18n import get_text as i18n_get_text
+from app.services import grant_outbox
 from app.services.language_service import resolve_user_language
 from app.core.rate_limit import check_rate_limit
 from app.handlers.common.guards import ensure_db_ready_callback
@@ -171,39 +172,61 @@ async def callback_broadcast_trial_key(callback: CallbackQuery) -> None:
         pass
 
     try:
-        # Снимок обхода ДО выдачи.
-        baseline = await _current_bypass_bytes(telegram_id)
+        if grant_outbox.is_on():
+            # T16: +1 day premium and exactly +1 GB bypass in ONE outbox job,
+            # keyed by the claim row (broadcast_id, telegram_id). Not a trial
+            # (500 MB / 3 days) — a gift, so for_grant + for_bypass_gift.
+            outcome = await grant_outbox.grant(
+                telegram_id=telegram_id,
+                key=f"btk:{broadcast_id}:{telegram_id}",
+                days=1,
+                gb=1,
+                tier="basic",
+                grant_source="trial",
+                grant_kwargs={"admin_telegram_id": None},
+                context={"kind": "broadcast_trial_key", "broadcast_id": broadcast_id},
+                bot=callback.bot,
+            )
+            logger.info(
+                "BROADCAST_TRIAL_KEY_GRANTED tg=%s broadcast_id=%s via=outbox job=%s "
+                "sub_end=%s applied=%s duplicate=%s",
+                telegram_id, broadcast_id, outcome.job_id,
+                outcome.subscription_end, outcome.applied, outcome.duplicate,
+            )
+        else:
+            # Снимок обхода ДО выдачи.
+            baseline = await _current_bypass_bytes(telegram_id)
 
-        # +1 день подписки. grant_access аддитивен: renewal (стабильный UUID)
-        # для активной подписки, либо new_issuance (создаёт юзера в панели).
-        result = await database.grant_access(
-            telegram_id=telegram_id,
-            duration=timedelta(days=1),
-            source="trial",
-            admin_telegram_id=None,
-        )
-        if not result or not result.get("subscription_end"):
-            raise RuntimeError("grant_access returned no subscription_end")
+            # +1 день подписки. grant_access аддитивен: renewal (стабильный UUID)
+            # для активной подписки, либо new_issuance (создаёт юзера в панели).
+            result = await database.grant_access(
+                telegram_id=telegram_id,
+                duration=timedelta(days=1),
+                source="trial",
+                admin_telegram_id=None,
+            )
+            if not result or not result.get("subscription_end"):
+                raise RuntimeError("grant_access returned no subscription_end")
 
-        # Доводим обход до baseline + 1 ГБ (у новичка = ровно 1 ГБ).
-        after = await _current_bypass_bytes(telegram_id)
-        base = baseline or 0
-        cur = after or 0
-        delta = (base + ONE_GB) - cur
-        if delta > 0:
-            ok = await _deliver_bypass_gb(telegram_id, delta)
-            if not ok:
-                logger.error(
-                    "TRIAL_KEY_BYPASS_NOT_DELIVERED tg=%s delta=%s baseline=%s after=%s",
-                    telegram_id, delta, baseline, after,
-                )
+            # Доводим обход до baseline + 1 ГБ (у новичка = ровно 1 ГБ).
+            after = await _current_bypass_bytes(telegram_id)
+            base = baseline or 0
+            cur = after or 0
+            delta = (base + ONE_GB) - cur
+            if delta > 0:
+                ok = await _deliver_bypass_gb(telegram_id, delta)
+                if not ok:
+                    logger.error(
+                        "TRIAL_KEY_BYPASS_NOT_DELIVERED tg=%s delta=%s baseline=%s after=%s",
+                        telegram_id, delta, baseline, after,
+                    )
 
-        logger.info(
-            "BROADCAST_TRIAL_KEY_GRANTED tg=%s broadcast_id=%s action=%s "
-            "sub_end=%s bypass_baseline=%s bypass_after=%s delta=%s",
-            telegram_id, broadcast_id, result.get("action"),
-            result.get("subscription_end"), baseline, after, max(0, delta),
-        )
+            logger.info(
+                "BROADCAST_TRIAL_KEY_GRANTED tg=%s broadcast_id=%s action=%s "
+                "sub_end=%s bypass_baseline=%s bypass_after=%s delta=%s",
+                telegram_id, broadcast_id, result.get("action"),
+                result.get("subscription_end"), baseline, after, max(0, delta),
+            )
     except Exception as e:
         # Выдача упала ПОСЛЕ claim — освобождаем claim, чтобы юзер мог повторить,
         # и показываем ошибку. Подписка/обход финансово не критичны (подарок),

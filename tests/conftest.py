@@ -10,11 +10,33 @@ os.environ.setdefault("STAGE_DATABASE_URL", "postgresql://test:test@localhost/te
 os.environ.setdefault("STAGE_ADMIN_TELEGRAM_ID", "1")
 os.environ.setdefault("STAGE_WEBHOOK_URL", "https://test.example/telegram/webhook")
 os.environ.setdefault("STAGE_WEBHOOK_SECRET", "test-secret")
+# Product default of USE_NEW_PROVISIONING is "on" (owner decision 2026-09-14).
+# Hermetic tests that never mention the flag keep exercising the legacy path;
+# tests of the new core set "on" explicitly, flag-semantics tests delenv it.
+os.environ.setdefault("STAGE_USE_NEW_PROVISIONING", "off")
+
+import sys
 
 import pytest
 from datetime import datetime
 from typing import Dict, Any, Optional
 from unittest.mock import AsyncMock, MagicMock
+
+
+def _reset_provisioning_alerts():
+    mod = sys.modules.get("app.services.provisioning")
+    if mod is not None and hasattr(mod, "reset_alert_state"):
+        mod.reset_alert_state()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_provisioning_alert_budget():
+    """app.services.provisioning keeps a process-local per-window alert budget
+    and digest buffer; without a reset one test's failures would exhaust the
+    next test's immediate alerts."""
+    _reset_provisioning_alerts()
+    yield
+    _reset_provisioning_alerts()
 
 
 @pytest.fixture
@@ -76,7 +98,6 @@ def mock_database():
     db.get_subscription = AsyncMock()
     db.get_subscription_any = AsyncMock()
     db.is_trial_available = AsyncMock()
-    db.is_vip_user = AsyncMock()
     db.get_user_discount = AsyncMock()
     db.get_user_extended_stats = AsyncMock()
     db.get_subscription_history = AsyncMock()

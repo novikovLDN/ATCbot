@@ -12,18 +12,15 @@ All functions are pure business logic:
 """
 
 import logging
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 
 import database
 import config
-import vpn_utils
 from app.core.pool_monitor import acquire_connection
 from app.services.activation.exceptions import (
-    ActivationServiceError,
     ActivationNotAllowedError,
-    ActivationMaxAttemptsReachedError,
     ActivationFailedError,
     VPNActivationError,
 )
@@ -125,46 +122,6 @@ def should_retry_activation(
     return activation_attempts < max_attempts
 
 
-def is_activation_allowed(
-    subscription: Dict[str, Any],
-    now: Optional[datetime] = None
-) -> Tuple[bool, Optional[str]]:
-    """
-    Check if activation is allowed for a subscription.
-    
-    Args:
-        subscription: Subscription dictionary from database
-        now: Current time (defaults to datetime.now(timezone.utc))
-        
-    Returns:
-        Tuple of (is_allowed, reason_if_not_allowed)
-    """
-    if now is None:
-        now = datetime.now(timezone.utc)
-    
-    # STEP 3 — PART C: SIDE-EFFECT SAFETY
-    # Check activation status - provides idempotency boundary
-    # Activation is only allowed if status is 'pending'
-    # If already activated (status='active'), side-effect is SKIPPED
-    activation_status = subscription.get("activation_status")
-    if activation_status != "pending":
-        # STEP 3 — PART C: SIDE-EFFECT SAFETY
-        # Activation side-effect SKIPPED due to idempotency (already activated)
-        return False, f"Subscription is not pending (status={activation_status})"
-    
-    # Check if subscription expired
-    expires_at = subscription.get("expires_at")
-    if is_subscription_expired(expires_at, now):
-        return False, "Subscription expired before activation"
-    
-    # Check max attempts
-    activation_attempts = subscription.get("activation_attempts", 0)
-    if not should_retry_activation(activation_attempts):
-        return False, f"Maximum activation attempts reached ({activation_attempts})"
-    
-    return True, None
-
-
 # ====================================================================================
 # Database Queries
 # ====================================================================================
@@ -198,12 +155,42 @@ async def get_pending_subscriptions(
         return await _fetch_pending_subscriptions(conn, max_attempts, limit)
 
 
+# Plan §B.6 (T7): users with an OPEN provisioning outbox job belong to the
+# provisioning worker — the activation worker must not provision them too.
+# P2-9: a DEAD job too — it belongs to the admin (the dead alert carries the
+# retry SQL); a legacy activation on top would add +10 GB, and the manual job
+# retry would add the GB again.
+# Migration 082 may not be applied yet (database/CLAUDE.md: code must not rely
+# on it), so the predicate is added only once to_regclass has seen the table.
+_PROVISIONING_JOBS_TABLE_EXISTS: Optional[bool] = None
+_OPEN_PROVISIONING_JOB_FILTER = """
+             AND NOT EXISTS (
+                 SELECT 1 FROM provisioning_jobs pj
+                 WHERE pj.telegram_id = s.telegram_id
+                   AND pj.status IN ('pending','running','dead')
+             )"""
+
+
+async def _provisioning_jobs_table_exists(conn: Any) -> bool:
+    """Probe once and cache; a failed probe is not cached (retried next cycle)."""
+    global _PROVISIONING_JOBS_TABLE_EXISTS
+    if _PROVISIONING_JOBS_TABLE_EXISTS is None:
+        try:
+            regclass = await conn.fetchval("SELECT to_regclass('public.provisioning_jobs')")
+        except Exception as e:
+            logger.warning("ACTIVATION_PROVISIONING_JOBS_PROBE_FAILED: %s: %s", type(e).__name__, e)
+            return False
+        _PROVISIONING_JOBS_TABLE_EXISTS = regclass is not None
+    return _PROVISIONING_JOBS_TABLE_EXISTS
+
+
 async def _fetch_pending_subscriptions(
     conn: Any,
     max_attempts: int,
     limit: int
 ) -> List[PendingSubscription]:
     """Internal helper to fetch pending subscriptions"""
+    open_job_filter = _OPEN_PROVISIONING_JOB_FILTER if await _provisioning_jobs_table_exists(conn) else ""
     rows = await conn.fetch(
         """SELECT s.telegram_id, s.id, s.activation_attempts, s.last_activation_error,
                   s.expires_at, s.activated_at, s.subscription_type,
@@ -218,7 +205,9 @@ async def _fetch_pending_subscriptions(
                LIMIT 1
            ) lp ON true
            WHERE s.activation_status = 'pending'
-             AND s.activation_attempts < $1
+             AND s.activation_attempts < $1"""
+        + open_job_filter
+        + """
            ORDER BY s.id ASC
            LIMIT $2""",
         max_attempts, limit
@@ -392,7 +381,8 @@ async def _attempt_activation_no_conn_hold(
     subscription_end = database._from_db_utc(subscription_end_raw)
 
     # Phase 2: HTTP call with NO DB connection held.
-    tariff = (subscription_row.get("subscription_type") or "basic").strip().lower()
+    from app.services.tariffs import normalize_tier
+    tariff = (normalize_tier(subscription_row.get("subscription_type")) or "basic").strip().lower()
     if tariff not in config.VALID_SUBSCRIPTION_TYPES:
         tariff = "basic"
     # Task 2 cut-over: provision via Remnawave (premium + bypass) instead of
@@ -423,7 +413,6 @@ async def _attempt_activation_no_conn_hold(
         "ACTIVATION_PHASE1_UUID_CREATED",
         extra={"subscription_id": subscription_id, "uuid": new_uuid[:8] + "..."}
     )
-    uuid_to_cleanup_on_failure = new_uuid
 
     # Phase 3: Acquire conn, advisory lock, re-check state (idempotency), then transaction.
     async with acquire_connection(pool, "activation_phase3_lock") as conn:
@@ -438,14 +427,6 @@ async def _attempt_activation_no_conn_hold(
             if not recheck_row:
                 raise ActivationFailedError(f"Subscription {subscription_id} not found")
             if recheck_row["activation_status"] == "active":
-                try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_PREVENTED",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "concurrent_activation"}
-                    )
-                except Exception:
-                    pass
                 return ActivationResult(
                     success=True,
                     uuid=recheck_row.get("uuid"),
@@ -455,14 +436,6 @@ async def _attempt_activation_no_conn_hold(
                     attempts=recheck_row.get("activation_attempts", current_attempts)
                 )
             if recheck_row["activation_status"] != "pending":
-                try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_PREVENTED",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "state_changed"}
-                    )
-                except Exception:
-                    pass
                 raise ActivationNotAllowedError(
                     f"Subscription {subscription_id} is not pending (status={recheck_row['activation_status']})"
                 )
@@ -482,17 +455,6 @@ async def _attempt_activation_no_conn_hold(
                     extra={"subscription_id": subscription_id, "uuid": new_uuid[:8] + "..."}
                 )
             except Exception as tx_err:
-                try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_PREVENTED",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "error": str(tx_err)[:200]}
-                    )
-                except Exception as remove_err:
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_PREVENTED_REMOVAL_FAILED",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "remove_error": str(remove_err)[:200]}
-                    )
                 raise ActivationFailedError(f"Failed to update subscription after VPN API success: {tx_err}") from tx_err
 
             rows_affected = int(result.split()[-1]) if result else 0
@@ -510,14 +472,6 @@ async def _attempt_activation_no_conn_hold(
                         activation_status="active",
                         attempts=updated_row.get("activation_attempts", current_attempts + 1)
                     )
-                try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    logger.critical(
-                        "ACTIVATION_ORPHAN_PREVENTED",
-                        extra={"subscription_id": subscription_id, "uuid": uuid_to_cleanup_on_failure[:8] + "...", "reason": "concurrent_activation"}
-                    )
-                except Exception:
-                    pass
                 raise ActivationFailedError(f"Failed to update subscription {subscription_id} (concurrent modification)")
             return ActivationResult(
                 success=True,
@@ -529,33 +483,6 @@ async def _attempt_activation_no_conn_hold(
             )
         finally:
             await conn.execute("SELECT pg_advisory_unlock($1)", subscription_id)
-
-
-async def _update_subscription_activated(
-    conn: Any,
-    subscription_id: int,
-    uuid: str,
-    vpn_key: str,
-    new_attempts: int
-) -> None:
-    """
-    Internal helper to update subscription after successful activation.
-    
-    NOTE: This function is now deprecated - idempotency check is handled in
-    _attempt_activation_two_phase_impl(). This function is kept for backward
-    compatibility but should not be called directly.
-    """
-    await conn.execute(
-        """UPDATE subscriptions
-           SET uuid = $1,
-               vpn_key = $2,
-               activation_status = 'active',
-               activation_attempts = $3,
-               last_activation_error = NULL
-           WHERE id = $4
-             AND activation_status = 'pending'""",
-        uuid, vpn_key, new_attempts, subscription_id
-    )
 
 
 async def mark_activation_failed(

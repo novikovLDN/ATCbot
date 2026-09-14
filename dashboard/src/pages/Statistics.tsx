@@ -1,17 +1,13 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  BarChart3,
-  CreditCard,
-  Megaphone,
-  Percent,
-  RefreshCcw,
-  ShoppingBag,
-  Users,
-} from "lucide-react";
-import { ApiError, endpoints } from "@/lib/api";
+import { RefreshCcw } from "lucide-react";
+import { endpoints } from "@/lib/api";
 import { fmtNum, fmtRub } from "@/lib/format";
 import { Spinner } from "@/components/Spinner";
+import { Bento, PageHeader, SectionHeader, Surface } from "@/components/ui/Surface";
+import { KpiTile } from "@/components/ui/KpiTile";
+import { ListRow, Segmented, type SegmentedOption } from "@/components/ui/controls";
+import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
 
 /**
  * Statistics hub — consolidated view всех метрик которые мы
@@ -22,9 +18,12 @@ import { Spinner } from "@/components/Spinner";
  * здесь всё раскрыто по умолчанию — scrolling wall of stats
  * для read-only обзора.
  */
+type Hours = 24 | 168 | 720;
+const label = (h: number) => (h === 24 ? "24 часа" : h === 168 ? "7 дней" : "30 дней");
+const HOURS: SegmentedOption<Hours>[] = ([24, 168, 720] as const).map((h) => ({ value: h, label: label(h) }));
+
 export function Statistics() {
-  const [hours, setHours] = useState<24 | 168 | 720>(168);
-  const label = (h: number) => (h === 24 ? "24 часа" : h === 168 ? "7 дней" : "30 дней");
+  const [hours, setHours] = useState<Hours>(168);
 
   const breakdown = useQuery({
     queryKey: ["statistics", "payments-breakdown", hours],
@@ -69,248 +68,220 @@ export function Statistics() {
     topReferrers.isFetching ||
     broadcasts.isFetching;
 
+  const total = breakdown.data?.total;
+
   return (
-    <div className="mx-auto max-w-6xl space-y-4 pb-8 pt-2 md:pt-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold text-fg">
-            <BarChart3 className="h-5 w-5 text-fg-muted" />
-            Статистика
-          </h1>
-          <p className="mt-1 max-w-xl text-sm text-fg-muted">
-            Полный срез: платежи по продуктам, топ-партнёры рефералки,
-            последние рассылки с конверсией, магазин по позициям.
-            Обновляется автоматически каждую минуту.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex overflow-hidden rounded-lg border border-border">
-            {[24, 168, 720].map((h) => (
-              <button
-                type="button"
-                key={h}
-                onClick={() => setHours(h as 24 | 168 | 720)}
-                className={
-                  hours === h
-                    ? "bg-accent px-3 py-1.5 text-xs font-semibold text-bg"
-                    : "bg-bg-card px-3 py-1.5 text-xs font-medium text-fg-muted hover:bg-bg-subtle/60"
-                }
-              >
-                {label(h)}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={refetchAll}
-            className="btn-secondary"
-            disabled={anyLoading}
-          >
-            {anyLoading ? <Spinner /> : <RefreshCcw className="h-3.5 w-3.5" />}
-            Обновить
-          </button>
-        </div>
-      </header>
+    <div>
+      <PageHeader
+        title="Статистика"
+        sub="Полный срез: платежи по продуктам, топ-партнёры рефералки, последние рассылки с конверсией, магазин по позициям. Обновляется автоматически каждую минуту."
+        actions={
+          <>
+            <Segmented label="Период" value={hours} options={HOURS} onChange={setHours} />
+            <button
+              type="button"
+              onClick={refetchAll}
+              className="btn-secondary"
+              disabled={anyLoading}
+            >
+              {anyLoading ? <Spinner /> : <RefreshCcw className="h-3.5 w-3.5" />}
+              Обновить
+            </button>
+          </>
+        }
+      />
 
       {/* Total revenue KPI */}
-      <SectionCard
-        icon={CreditCard}
-        title="Общий оборот"
-        subtitle={`За ${label(hours).toLowerCase()}`}
-      >
-        {breakdown.isLoading ? (
-          <Skeleton lines={3} />
-        ) : breakdown.isError ? (
-          <ErrorNote err={breakdown.error} />
-        ) : (
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <BigStat
-              label="Оплат"
-              value={fmtNum(breakdown.data?.total.count ?? 0)}
-            />
-            <BigStat
-              label="Выручка"
-              value={fmtRub(breakdown.data?.total.revenue_rubles ?? 0)}
-              accent
-            />
-            <BigStat
-              label="Средний чек"
-              value={fmtRub(
-                breakdown.data?.total.count
-                  ? breakdown.data.total.revenue_rubles /
-                      breakdown.data.total.count
-                  : 0,
-              )}
-            />
-            <BigStat
-              label="Продуктов в наличии"
-              value={fmtNum(breakdown.data?.by_type.length ?? 0)}
-            />
-          </div>
-        )}
-      </SectionCard>
+      <SectionHeader title="Общий оборот" sub={`За ${label(hours).toLowerCase()}`} />
+      {breakdown.isError ? (
+        <ErrorState error={breakdown.error} onRetry={() => breakdown.refetch()} />
+      ) : (
+        <Bento>
+          <KpiTile
+            className="sm:col-span-3 xl:col-span-3"
+            label="Оплат"
+            value={fmtNum(total?.count ?? 0)}
+            loading={breakdown.isLoading}
+          />
+          <KpiTile
+            className="sm:col-span-3 xl:col-span-3"
+            variant="accent"
+            label="Выручка"
+            value={fmtRub(total?.revenue_rubles ?? 0)}
+            loading={breakdown.isLoading}
+          />
+          <KpiTile
+            className="sm:col-span-3 xl:col-span-3"
+            variant="raised"
+            label="Средний чек"
+            value={fmtRub(total?.count ? total.revenue_rubles / total.count : 0)}
+            loading={breakdown.isLoading}
+          />
+          <KpiTile
+            className="sm:col-span-3 xl:col-span-3"
+            variant="raised"
+            label="Продуктов в наличии"
+            value={fmtNum(breakdown.data?.by_type.length ?? 0)}
+            loading={breakdown.isLoading}
+          />
+        </Bento>
+      )}
 
       {/* Payments by product / provider / tariff / apple-nominal */}
-      <SectionCard
-        icon={ShoppingBag}
-        title="Магазин · разбивка"
-        subtitle="что купили + как оплатили + Apple-номиналы"
-      >
-        {breakdown.isLoading ? (
-          <Skeleton lines={4} />
-        ) : breakdown.isError ? (
-          <ErrorNote err={breakdown.error} />
-        ) : !breakdown.data || breakdown.data.total.count === 0 ? (
-          <EmptyRow text="За период оплат не было." />
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2">
+      <SectionHeader title="Магазин · разбивка" sub="Что купили, как оплатили, Apple-номиналы" />
+      {breakdown.isLoading ? (
+        <Bento>
+          {[0, 1].map((i) => (
+            <Surface key={i} className="sm:col-span-6 xl:col-span-6">
+              <SkeletonLines lines={4} />
+            </Surface>
+          ))}
+        </Bento>
+      ) : breakdown.isError ? (
+        <ErrorState error={breakdown.error} onRetry={() => breakdown.refetch()} />
+      ) : !breakdown.data || breakdown.data.total.count === 0 ? (
+        <Surface>
+          <EmptyState title="За период оплат не было." />
+        </Surface>
+      ) : (
+        <Bento>
+          <BreakdownTable
+            title="По продукту"
+            rows={breakdown.data.by_type.map((r) => ({
+              label: PT_LABEL[r.purchase_type] ?? r.purchase_type,
+              count: r.count,
+              revenue: r.revenue_rubles,
+            }))}
+          />
+          <BreakdownTable
+            title="По провайдеру"
+            variant="raised"
+            rows={breakdown.data.by_provider.map((r) => ({
+              label: PROVIDER_LABEL[r.provider] ?? r.provider,
+              count: r.count,
+              revenue: r.revenue_rubles,
+            }))}
+          />
+          <BreakdownTable
+            title="Топ-15 тарифов"
+            variant="raised"
+            rows={breakdown.data.by_tariff.map((r) => ({
+              label: r.tariff,
+              count: r.count,
+              revenue: r.revenue_rubles,
+            }))}
+          />
+          {breakdown.data.by_apple_nominal.length > 0 && (
             <BreakdownTable
-              title="По продукту"
-              rows={breakdown.data.by_type.map((r) => ({
-                label: PT_LABEL[r.purchase_type] ?? r.purchase_type,
+              title="Apple ID · по номиналу"
+              rows={breakdown.data.by_apple_nominal.map((r) => ({
+                label: `${APPLE_REGION[r.region] ?? r.region} · ${r.nominal}${APPLE_CUR[r.region] ?? "$"}`,
                 count: r.count,
                 revenue: r.revenue_rubles,
               }))}
             />
-            <BreakdownTable
-              title="По провайдеру"
-              rows={breakdown.data.by_provider.map((r) => ({
-                label: PROVIDER_LABEL[r.provider] ?? r.provider,
-                count: r.count,
-                revenue: r.revenue_rubles,
-              }))}
-            />
-            <BreakdownTable
-              title="Топ-15 тарифов"
-              rows={breakdown.data.by_tariff.map((r) => ({
-                label: r.tariff,
-                count: r.count,
-                revenue: r.revenue_rubles,
-              }))}
-            />
-            {breakdown.data.by_apple_nominal.length > 0 && (
-              <BreakdownTable
-                title="Apple ID · по номиналу"
-                rows={breakdown.data.by_apple_nominal.map((r) => ({
-                  label: `${APPLE_REGION[r.region] ?? r.region} · ${r.nominal}${APPLE_CUR[r.region] ?? "$"}`,
-                  count: r.count,
-                  revenue: r.revenue_rubles,
-                }))}
-              />
-            )}
-          </div>
-        )}
-      </SectionCard>
+          )}
+        </Bento>
+      )}
 
       {/* Referrals */}
-      <SectionCard
-        icon={Percent}
-        title="Рефералы · сводка"
-        subtitle="общая выручка + топ-10 партнёров"
-      >
-        {referrals.isLoading || topReferrers.isLoading ? (
-          <Skeleton lines={4} />
+      <SectionHeader title="Рефералы · сводка" sub="Общая выручка и топ-10 партнёров" />
+      <Bento>
+        <KpiTile
+          className="sm:col-span-3 xl:col-span-3"
+          label="Приглашённых"
+          value={fmtNum(asNum(referrals.data?.referred_users_count) ?? 0)}
+          loading={referrals.isLoading}
+        />
+        <KpiTile
+          className="sm:col-span-3 xl:col-span-3"
+          label="Активных"
+          value={fmtNum(asNum(referrals.data?.active_referrals) ?? 0)}
+          loading={referrals.isLoading}
+        />
+        <KpiTile
+          className="sm:col-span-3 xl:col-span-3"
+          variant="steel"
+          label="Выручка от рефералов"
+          value={fmtRub(asNum(referrals.data?.referral_revenue) ?? 0)}
+          loading={referrals.isLoading}
+        />
+        <KpiTile
+          className="sm:col-span-3 xl:col-span-3"
+          variant="raised"
+          label="Выплачено кэшбэком"
+          value={fmtRub(asNum(referrals.data?.cashback_paid) ?? 0)}
+          loading={referrals.isLoading}
+        />
+        {topReferrers.isLoading ? (
+          <Surface className="sm:col-span-6 xl:col-span-12" label="Топ-10 партнёров по выручке">
+            <SkeletonLines lines={4} />
+          </Surface>
         ) : (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <BigStat
-                label="Приглашённых"
-                value={fmtNum(asNum(referrals.data?.referred_users_count) ?? 0)}
-              />
-              <BigStat
-                label="Активных"
-                value={fmtNum(asNum(referrals.data?.active_referrals) ?? 0)}
-              />
-              <BigStat
-                label="Выручка от рефералов"
-                value={fmtRub(asNum(referrals.data?.referral_revenue) ?? 0)}
-                accent
-              />
-              <BigStat
-                label="Выплачено кэшбэком"
-                value={fmtRub(asNum(referrals.data?.cashback_paid) ?? 0)}
-              />
-            </div>
-            {topReferrers.data && topReferrers.data.length > 0 && (
-              <div className="rounded-xl border border-border bg-bg-subtle/40 p-3">
-                <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-                  Топ-10 партнёров (по выручке)
-                </div>
-                <div className="space-y-1">
-                  {topReferrers.data.slice(0, 10).map((r, i) => {
-                    const id =
-                      asNum((r as { referrer_id?: unknown }).referrer_id) ??
-                      asNum((r as { telegram_id?: unknown }).telegram_id) ??
-                      0;
-                    const username =
-                      ((r as { username?: string }).username as string) || "—";
-                    const invited = asNum((r as { invited_count?: unknown }).invited_count) ?? 0;
-                    const trials = asNum((r as { trial_count?: unknown }).trial_count) ?? 0;
-                    const paid = asNum((r as { paid_count?: unknown }).paid_count) ?? 0;
-                    const revenue =
-                      asNum((r as { total_invited_revenue?: unknown }).total_invited_revenue) ??
-                      asNum((r as { total_revenue?: unknown }).total_revenue) ??
-                      0;
-                    return (
-                      <div
-                        key={id + "_" + i}
-                        className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-bg-elevated"
-                      >
-                        <span className="w-5 text-fg-subtle tabular-nums">{i + 1}.</span>
-                        <span className="min-w-0 flex-1 truncate font-medium text-fg">
-                          {username !== "—" ? `@${username}` : `tg:${id}`}
-                        </span>
-                        <span className="rounded bg-fg/5 px-1.5 py-0.5 text-[10px] text-fg-muted tabular-nums">
-                          👥 {fmtNum(invited)}
-                        </span>
-                        <span className="rounded bg-info/10 px-1.5 py-0.5 text-[10px] text-info tabular-nums">
-                          🎁 {fmtNum(trials)}
-                        </span>
-                        <span className="rounded bg-success/10 px-1.5 py-0.5 text-[10px] text-success tabular-nums">
-                          💳 {fmtNum(paid)}
-                        </span>
-                        <span className="min-w-[68px] text-right text-xs font-semibold tabular-nums text-fg">
-                          {fmtRub(revenue)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
+          topReferrers.data &&
+          topReferrers.data.length > 0 && (
+            <Surface className="sm:col-span-6 xl:col-span-12" label="Топ-10 партнёров по выручке">
+              <ol className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+                {topReferrers.data.slice(0, 10).map((r, i) => {
+                  const id =
+                    asNum((r as { referrer_id?: unknown }).referrer_id) ??
+                    asNum((r as { telegram_id?: unknown }).telegram_id) ??
+                    0;
+                  const username =
+                    ((r as { username?: string }).username as string) || "—";
+                  const invited = asNum((r as { invited_count?: unknown }).invited_count) ?? 0;
+                  const trials = asNum((r as { trial_count?: unknown }).trial_count) ?? 0;
+                  const paid = asNum((r as { paid_count?: unknown }).paid_count) ?? 0;
+                  const revenue =
+                    asNum((r as { total_invited_revenue?: unknown }).total_invited_revenue) ??
+                    asNum((r as { total_revenue?: unknown }).total_revenue) ??
+                    0;
+                  return (
+                    <li key={id + "_" + i}>
+                      <ListRow
+                        leading={<span className="t-mute tabular text-[12px]">{i + 1}</span>}
+                        title={username !== "—" ? `@${username}` : `tg:${id}`}
+                        meta={`Пригласил ${fmtNum(invited)} · триалов ${fmtNum(trials)} · оплатили ${fmtNum(paid)}`}
+                        value={fmtRub(revenue)}
+                        className="pr-4"
+                      />
+                    </li>
+                  );
+                })}
+              </ol>
+            </Surface>
+          )
         )}
-      </SectionCard>
+      </Bento>
 
-      {/* Broadcasts */}
-      <SectionCard
-        icon={Megaphone}
-        title="Последние рассылки"
-        subtitle="кто отправлено · доставлено · ошибок"
-      >
-        {broadcasts.isLoading ? (
-          <Skeleton lines={5} />
-        ) : broadcasts.isError ? (
-          <ErrorNote err={broadcasts.error} />
-        ) : !broadcasts.data || broadcasts.data.length === 0 ? (
-          <EmptyRow text="Рассылок ещё не было." />
-        ) : (
-          <div className="space-y-1">
-            {broadcasts.data.slice(0, 20).map((b, i) => (
-              <BroadcastRow key={i} row={b} />
-            ))}
-          </div>
-        )}
-      </SectionCard>
+      {/* Broadcasts + segments */}
+      <SectionHeader title="Рассылки и аудитория" />
+      <Bento>
+        <Surface className="sm:col-span-6 xl:col-span-7" label="Последние рассылки">
+          <p className="t-mute -mt-1 mb-3 text-[12px]">Всего получателей · доставлено · ошибок</p>
+          {broadcasts.isLoading ? (
+            <SkeletonLines lines={5} />
+          ) : broadcasts.isError ? (
+            <ErrorState error={broadcasts.error} onRetry={() => broadcasts.refetch()} className="bg-tile-3" />
+          ) : !broadcasts.data || broadcasts.data.length === 0 ? (
+            <EmptyState title="Рассылок ещё не было." />
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {broadcasts.data.slice(0, 20).map((b, i) => (
+                <li key={i}>
+                  <BroadcastRow row={b} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </Surface>
 
-      {/* Segments cross-ref */}
-      <SectionCard
-        icon={Users}
-        title="Сегменты аудитории"
-        subtitle="откройте на главной для управления"
-      >
-        <SegmentsMini />
-      </SectionCard>
+        {/* Segments cross-ref */}
+        <Surface className="sm:col-span-6 xl:col-span-5" variant="raised" label="Сегменты аудитории">
+          <p className="t-mute -mt-1 mb-3 text-[12px]">Откройте на главной для управления</p>
+          <SegmentsMini />
+        </Surface>
+      </Bento>
     </div>
   );
 }
@@ -321,26 +292,25 @@ function SegmentsMini() {
     queryFn: endpoints.broadcastSegments,
     refetchInterval: 120_000,
   });
-  if (segments.isLoading) return <Skeleton lines={2} />;
-  if (segments.isError || !segments.data) return null;
-  // Top-10 сегментов по размеру
+  // Top-10 сегментов по размеру. Hooks before the early returns: calling
+  // useMemo only once data arrived crashed the page ("more hooks").
   const sorted = useMemo(() => {
     return [...(segments.data ?? [])].sort((a, b) => b.count - a.count).slice(0, 10);
   }, [segments.data]);
+  if (segments.isLoading) return <SkeletonLines lines={2} />;
+  if (segments.isError || !segments.data) return null;
   return (
-    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+    <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
       {sorted.map((s) => (
-        <div
+        <li
           key={s.key}
-          className="flex items-center justify-between rounded-lg border border-border bg-bg-subtle/40 px-3 py-2 text-xs"
+          className="flex min-h-[44px] items-center justify-between gap-3 rounded-row bg-tile-3 px-4 py-2 text-[13px]"
         >
-          <span className="truncate text-fg-muted">{s.label}</span>
-          <span className="ml-2 shrink-0 rounded bg-accent/10 px-1.5 py-0.5 font-semibold text-accent tabular-nums">
-            {fmtNum(s.count)}
-          </span>
-        </div>
+          <span className="t-body min-w-0 truncate">{s.label}</span>
+          <span className="tabular flex-none font-semibold">{fmtNum(s.count)}</span>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
@@ -352,21 +322,18 @@ function BroadcastRow({ row }: { row: Record<string, unknown> }) {
   const total = asNum(row.total_recipients) ?? sent + failed;
   const created = String(row.created_at ?? "").slice(0, 16).replace("T", " ");
   return (
-    <a
-      href={`/dashboard/broadcasts?id=${id}`}
-      className="flex items-center gap-3 rounded-lg border border-border/60 bg-bg-card px-3 py-2 text-xs hover:border-accent/40"
-    >
-      <span className="w-8 shrink-0 text-fg-subtle tabular-nums">#{id}</span>
-      <span className="min-w-0 flex-1 truncate font-medium text-fg">{title}</span>
-      <span className="hidden shrink-0 text-fg-subtle sm:inline">{created}</span>
-      <span className="shrink-0 rounded bg-fg/5 px-1.5 py-0.5 text-fg-muted tabular-nums">
+    <a href={`/dashboard/broadcasts?id=${id}`} className="list-row gap-2 pr-3 text-[13px]">
+      <span className="t-mute tabular w-10 flex-none text-[12px]">#{id}</span>
+      <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{title}</span>
+      <span className="t-mute tabular hidden flex-none text-[12px] sm:inline">{created}</span>
+      <span className="badge-muted tabular flex-none" title="Получателей">
         {fmtNum(total)}
       </span>
-      <span className="shrink-0 rounded bg-success/10 px-1.5 py-0.5 text-success tabular-nums">
+      <span className="badge-success tabular flex-none" title="Доставлено">
         ✓ {fmtNum(sent)}
       </span>
       {failed > 0 && (
-        <span className="shrink-0 rounded bg-danger/10 px-1.5 py-0.5 text-danger tabular-nums">
+        <span className="badge-danger tabular flex-none" title="Ошибок">
           ✕ {fmtNum(failed)}
         </span>
       )}
@@ -376,116 +343,48 @@ function BroadcastRow({ row }: { row: Record<string, unknown> }) {
 
 // ── Helpers / small components ───────────────────────────────────────
 
-function SectionCard({
-  icon: Icon,
-  title,
-  subtitle,
-  children,
-}: {
-  icon: typeof BarChart3;
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-2xl border border-border bg-bg-card p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-            <Icon className="h-3 w-3" /> {title}
-          </div>
-          {subtitle && (
-            <div className="mt-0.5 text-[11px] text-fg-subtle">{subtitle}</div>
-          )}
-        </div>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function BigStat({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-}) {
-  return (
-    <div className="rounded-xl border border-border bg-bg-subtle/40 p-3">
-      <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
-        {label}
-      </div>
-      <div
-        className={`mt-0.5 text-xl font-semibold tabular-nums ${accent ? "text-accent" : "text-fg"}`}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
 function BreakdownTable({
   title,
   rows,
+  variant,
 }: {
   title: string;
   rows: Array<{ label: string; count: number; revenue: number }>;
+  variant?: "ink" | "raised";
 }) {
   const total = rows.reduce((a, r) => a + r.revenue, 0);
   return (
-    <div className="rounded-xl border border-border bg-bg-subtle/40 p-3">
-      <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-        {title}
-      </div>
-      <div className="space-y-1.5">
-        {rows.length === 0 && <div className="text-xs text-fg-subtle">Нет данных</div>}
+    <Surface className="sm:col-span-6 xl:col-span-6" variant={variant} label={title}>
+      {rows.length === 0 && <p className="t-mute text-[13px]">Нет данных</p>}
+      <ul className="flex flex-col gap-3">
         {rows.map((r) => {
           const pct = total > 0 ? (r.revenue / total) * 100 : 0;
           return (
-            <div key={r.label} className="text-xs">
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-fg-muted">{r.label}</span>
-                <span className="shrink-0 tabular-nums text-fg">
+            <li key={r.label}>
+              <div className="mb-1.5 flex items-baseline justify-between gap-3 text-[13px]">
+                <span className="t-body min-w-0 truncate">{r.label}</span>
+                <span className="tabular flex-none font-medium">
                   {fmtRub(r.revenue)}
-                  <span className="ml-1.5 text-[10px] text-fg-subtle">{fmtNum(r.count)}</span>
+                  <span className="t-mute ml-2 text-[12px] font-normal">{fmtNum(r.count)}</span>
                 </span>
               </div>
-              <div className="mt-1 h-1 overflow-hidden rounded-full bg-bg-elevated">
-                <div
-                  className="h-full bg-accent/70 transition-[width] duration-500"
-                  style={{ width: `${Math.max(2, pct)}%` }}
-                />
+              <div className="pill-track h-2">
+                <div className="pill-fill" style={{ width: `${Math.max(2, pct)}%` }} />
               </div>
-            </div>
+            </li>
           );
         })}
-      </div>
-    </div>
+      </ul>
+    </Surface>
   );
 }
 
-function Skeleton({ lines }: { lines: number }) {
+function SkeletonLines({ lines }: { lines: number }) {
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-2" role="status" aria-label="Загрузка">
       {Array.from({ length: lines }).map((_, i) => (
-        <div key={i} className="skeleton h-8" />
+        <Skeleton key={i} className="h-10 w-full rounded-row" />
       ))}
-    </div>
-  );
-}
-
-function EmptyRow({ text }: { text: string }) {
-  return <div className="py-3 text-center text-sm text-fg-subtle">{text}</div>;
-}
-
-function ErrorNote({ err }: { err: unknown }) {
-  const msg = (err as ApiError)?.detail ?? "Ошибка загрузки";
-  return (
-    <div className="rounded-lg border border-danger/30 bg-danger/5 p-3 text-xs text-danger">
-      {msg}
     </div>
   );
 }
@@ -518,6 +417,8 @@ const PROVIDER_LABEL: Record<string, string> = {
   platega: "Platega",
   cryptobot: "CryptoBot",
   telegram_stars: "Telegram Stars",
+  wata: "WATA",
+  // Historical rows only: Lava was removed, old payments still carry it.
   lava: "Lava",
   balance: "С баланса",
   unknown: "Прочее",

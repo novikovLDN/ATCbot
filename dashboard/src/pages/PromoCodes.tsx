@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Tag,
   Plus,
   RefreshCcw,
   Power,
@@ -11,10 +10,13 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
+import { useIdempotencyKeys } from "@/hooks/useIdempotencyKeys";
 import { fmtNum, fmtDate } from "@/lib/format";
 import { toast } from "@/store/toast";
 import { Spinner } from "@/components/Spinner";
-import { EmptyState } from "@/components/EmptyState";
+import { PageHeader, Surface } from "@/components/ui/Surface";
+import { IconButton } from "@/components/ui/controls";
+import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
 
 interface PromoRow extends Record<string, unknown> {
   id?: number;
@@ -38,75 +40,67 @@ export function PromoCodes() {
   });
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Маркетинг
-          </div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg md:text-3xl">
-            Промокоды
-          </h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => list.refetch()}
-            className="btn-secondary"
-          >
-            <RefreshCcw className="h-3.5 w-3.5" /> Обновить
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className="btn-primary"
-          >
-            <Plus className="h-3.5 w-3.5" /> Создать
-          </button>
-        </div>
-      </header>
+    <div>
+      <PageHeader
+        title="Промокоды"
+        sub="Маркетинг"
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() => list.refetch()}
+              className="btn-secondary"
+            >
+              <RefreshCcw className="h-3.5 w-3.5" /> Обновить
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowCreate(true)}
+              className="btn-primary"
+            >
+              <Plus className="h-3.5 w-3.5" /> Создать
+            </button>
+          </>
+        }
+      />
 
-      <div className="card p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Все коды
-          </div>
-          {list.isFetching && <Spinner />}
-        </div>
-
+      <Surface label="Все коды" aside={list.isFetching ? <Spinner /> : undefined}>
         {list.isLoading ? (
-          <div className="flex items-center gap-2 text-sm text-fg-muted">
-            <Spinner /> Загружаю...
+          <div className="flex flex-col gap-2" role="status" aria-label="Загрузка">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
           </div>
+        ) : list.isError && !list.data ? (
+          <ErrorState error={list.error} onRetry={() => list.refetch()} className="bg-tile-3" />
         ) : !list.data || list.data.length === 0 ? (
           <EmptyState
-            icon={Tag}
             title="Нет промокодов"
-            description="Создай первый — пользователи смогут применять его при покупке."
+            hint="Создай первый — пользователи смогут применять его при покупке."
             action={
               <button
                 type="button"
                 onClick={() => setShowCreate(true)}
-                className="btn-primary"
+                className="btn-secondary mt-2"
               >
                 <Plus className="h-3.5 w-3.5" /> Создать
               </button>
             }
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="-mx-2 overflow-x-auto px-2">
+            <table className="dtable min-w-[640px]">
               <thead>
-                <tr className="text-left text-[11px] uppercase tracking-wider text-fg-subtle">
-                  <th className="px-2 py-2 font-medium">Код</th>
-                  <th className="px-2 py-2 font-medium">Скидка</th>
-                  <th className="px-2 py-2 font-medium">Использовано</th>
-                  <th className="px-2 py-2 font-medium">Истекает</th>
-                  <th className="px-2 py-2 font-medium">Статус</th>
-                  <th className="px-2 py-2"></th>
+                <tr>
+                  <th>Код</th>
+                  <th>Скидка</th>
+                  <th className="num">Использовано</th>
+                  <th>Истекает</th>
+                  <th>Статус</th>
+                  <th aria-label="Действия"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border/60">
+              <tbody>
                 {list.data.map((p) => (
                   <PromoRowItem
                     key={Number(p.id ?? 0)}
@@ -120,7 +114,7 @@ export function PromoCodes() {
             </table>
           </div>
         )}
-      </div>
+      </Surface>
 
       {showCreate && (
         <CreateModal
@@ -172,30 +166,32 @@ function PromoRowItem({
   });
 
   return (
-    <tr className="hover:bg-accent/[0.04]">
-      <td className="px-2 py-2">
+    <tr>
+      <td>
         <button
           type="button"
           onClick={() => {
             navigator.clipboard.writeText(code);
             toast.info("Скопировано");
           }}
-          className="inline-flex items-center gap-1.5 font-mono font-semibold text-fg hover:text-accent"
+          className="tap-target inline-flex items-center gap-1.5 font-mono font-semibold hover:text-accent"
+          aria-label={`Скопировать код ${code}`}
+          title="Скопировать"
         >
           {code}
-          <Copy className="h-3 w-3 text-fg-subtle" />
+          <Copy className="t-mute h-3 w-3" aria-hidden="true" />
         </button>
       </td>
-      <td className="px-2 py-2 text-fg">
-        <span className="badge-accent">-{fmtNum(asNum(p.discount_percent))}%</span>
+      <td>
+        <span className="badge-accent tabular">-{fmtNum(asNum(p.discount_percent))}%</span>
       </td>
-      <td className="px-2 py-2 text-fg-muted">
+      <td className="num t-body">
         {uses} / {max || "∞"}
       </td>
-      <td className="px-2 py-2 text-fg-muted">
+      <td className="t-body tabular whitespace-nowrap">
         {typeof p.expires_at === "string" ? fmtDate(p.expires_at) : "—"}
       </td>
-      <td className="px-2 py-2">
+      <td>
         {active ? (
           <span className="badge-success">
             <CheckCircle2 className="h-3 w-3" /> активен
@@ -214,7 +210,7 @@ function PromoRowItem({
           </span>
         )}
       </td>
-      <td className="px-2 py-2 text-right">
+      <td className="text-right">
         {active ? (
           <button
             type="button"
@@ -267,15 +263,19 @@ function CreateModal({
       ? duration * 86400
       : duration * 30 * 86400;
 
+  const submitKeys = useIdempotencyKeys();
   const create = useMutation({
-    mutationFn: () =>
-      endpoints.promoCreate({
+    mutationFn: () => {
+      const body = {
         code: code.trim().toUpperCase(),
         discount_percent: percent,
         duration_seconds: seconds,
         max_uses: maxUses,
-      }),
+      };
+      return endpoints.promoCreate(body, submitKeys.opts("promo", body));
+    },
     onSuccess: (data) => {
+      submitKeys.settle("promo");
       toast.success(`Промокод ${data.code} создан`);
       onCreated();
     },
@@ -293,27 +293,24 @@ function CreateModal({
 
   return (
     <div className="fixed inset-0 z-40 grid place-items-center bg-black/50 p-4 backdrop-blur-sm">
-      <div className="card w-full max-w-md p-6 animate-slide-up">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <div className="text-xs uppercase tracking-wider text-fg-subtle">
-              Новый промокод
-            </div>
-            <h3 className="mt-1 text-lg font-semibold text-fg">Параметры</h3>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-ghost"
-            aria-label="Закрыть"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+      <div
+        className="tile w-full max-w-md p-5 animate-slide-up"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="promo-create-title"
+      >
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <h3 id="promo-create-title" className="text-[18px] font-semibold">
+            Новый промокод
+          </h3>
+          <IconButton label="Закрыть" small onClick={onClose} className="bg-tile-3">
+            <X className="h-4 w-4" />
+          </IconButton>
         </div>
 
-        <div className="space-y-3">
+        <div className="flex flex-col gap-4">
           <label className="block">
-            <div className="mb-1 text-xs text-fg-subtle">Код (A-Z 0-9)</div>
+            <span className="t-mute mb-1.5 block text-[13px]">Код (A-Z 0-9)</span>
             <input
               className="input font-mono uppercase"
               value={code}
@@ -323,14 +320,14 @@ function CreateModal({
               autoFocus
             />
             {code && !codeValid && (
-              <div className="mt-1 text-xs text-danger">
+              <span className="mt-1.5 block text-[12px] text-danger">
                 Только A-Z и 0-9, 3-32 символа
-              </div>
+              </span>
             )}
           </label>
 
           <label className="block">
-            <div className="mb-1 text-xs text-fg-subtle">Скидка %</div>
+            <span className="t-mute mb-1.5 block text-[13px]">Скидка %</span>
             <input
               className="input"
               type="number"
@@ -344,8 +341,8 @@ function CreateModal({
           </label>
 
           <div className="grid grid-cols-3 gap-2">
-            <label className="block col-span-2">
-              <div className="mb-1 text-xs text-fg-subtle">Длительность</div>
+            <label className="col-span-2 block">
+              <span className="t-mute mb-1.5 block text-[13px]">Длительность</span>
               <input
                 className="input"
                 type="number"
@@ -357,7 +354,7 @@ function CreateModal({
               />
             </label>
             <label className="block">
-              <div className="mb-1 text-xs text-fg-subtle">Единица</div>
+              <span className="t-mute mb-1.5 block text-[13px]">Единица</span>
               <select
                 className="input"
                 value={unit}
@@ -371,7 +368,7 @@ function CreateModal({
           </div>
 
           <label className="block">
-            <div className="mb-1 text-xs text-fg-subtle">Максимум применений</div>
+            <span className="t-mute mb-1.5 block text-[13px]">Максимум применений</span>
             <input
               className="input"
               type="number"
@@ -385,7 +382,7 @@ function CreateModal({
           </label>
         </div>
 
-        <div className="mt-6 flex items-center justify-between">
+        <div className="mt-6 flex items-center justify-between gap-2">
           <button
             type="button"
             onClick={onClose}

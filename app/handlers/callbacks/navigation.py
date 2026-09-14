@@ -28,7 +28,6 @@ from app.handlers.common.screens import (
 from app.handlers.common.keyboards import (
     get_main_menu_keyboard,
     get_about_keyboard,
-    get_service_status_keyboard,
     get_connect_keyboard,
 )
 from app.handlers.common.emoji import CE
@@ -53,7 +52,7 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
 
-    # Clear all FSM state on navigation (withdrawal, promo, etc.)
+    # Clear all FSM state on navigation (promo, top-up, etc.)
     current_state = await state.get_state()
     if current_state is not None:
         await state.clear()
@@ -80,16 +79,13 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
 
 
 async def _get_main_text(telegram_id: int, language: str) -> str:
-    """Определяет текст главного экрана: обычный, бизнес, bypass-only или без подписки.
+    """Определяет текст главного экрана: обычный, bypass-only или без подписки.
 
     Legal footer больше не приклеивается — ссылки на политику и соглашение
     живут в отдельном экране «Правила» (Мой профиль → Правила).
     """
     try:
         sub = await database.get_subscription(telegram_id)
-        sub_type = (sub.get("subscription_type") or "basic").strip().lower() if sub else None
-        if sub and sub_type and config.is_biz_tariff(sub_type):
-            return i18n_get_text(language, "biz.main_screen")
         if not sub:
             # Check if user ever had a subscription (expired vs new)
             user = await database.get_user(telegram_id)
@@ -106,145 +102,6 @@ async def _get_main_text(telegram_id: int, language: str) -> str:
         pass
     text = i18n_get_text(language, "main.welcome")
     return await format_text_with_incident(text, language)
-
-
-@router.callback_query(F.data == "menu_ecosystem")
-async def callback_ecosystem(callback: CallbackQuery):
-    """⚪️ Наша экосистема"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    language = await resolve_user_language(callback.from_user.id)
-    title = i18n_get_text(language, "main.ecosystem_title", "main.ecosystem_title")
-    text = i18n_get_text(language, "main.ecosystem_text", "main.ecosystem_text")
-    full_text = f"{title}\n\n{text}"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "main.about"), callback_data="menu_about", style="primary")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "main.tracker_only_btn", "✍️ Трекер Only"), url="https://t.me/ItsOnlyWbot")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
-    ])
-    await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
-
-
-@router.callback_query(F.data == "biz_profile")
-async def callback_biz_profile(callback: CallbackQuery):
-    """🏢 Мой бизнес — профиль бизнес-подписчика"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    language = await resolve_user_language(callback.from_user.id)
-    await show_profile(callback, language)
-
-
-@router.callback_query(F.data == "biz_ecosystem")
-async def callback_biz_ecosystem(callback: CallbackQuery):
-    """🌐 Экосистема для бизнес-пользователей"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    language = await resolve_user_language(callback.from_user.id)
-    text = i18n_get_text(language, "biz.ecosystem_text")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
-    ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-
-
-@router.callback_query(F.data == "biz_control_panel")
-async def callback_biz_control_panel(callback: CallbackQuery):
-    """🎛 Панель управления"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    text = i18n_get_text(language, "biz.control_panel_title")
-
-    sub = await database.get_subscription(telegram_id)
-    vpn_key = sub.get("vpn_key", "") if sub else ""
-    if vpn_key:
-        text += i18n_get_text(language, "biz.link_ready_suffix", "\n\n🔗 Ваша ссылка подключения готова.")
-
-    from app.handlers.common.keyboards import get_biz_control_panel_keyboard
-    keyboard = get_biz_control_panel_keyboard(language)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-
-
-@router.callback_query(F.data == "biz_copy_login")
-async def callback_biz_copy_login(callback: CallbackQuery):
-    """📋 Скопировать логин (VPN ключ)"""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    sub = await database.get_subscription(telegram_id)
-    vpn_key = sub.get("vpn_key", "") if sub else ""
-    if vpn_key:
-        await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-        await callback.answer(i18n_get_text(language, "biz.copy_link_alert", "Скопируйте ссылку выше"))
-    else:
-        await callback.answer(i18n_get_text(language, "biz.no_key_alert", "Ключ не найден"), show_alert=True)
-
-
-@router.callback_query(F.data == "biz_copy_password")
-async def callback_biz_copy_password(callback: CallbackQuery):
-    """🔑 Скопировать пароль (VPN ключ Plus)"""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    sub = await database.get_subscription(telegram_id)
-    vpn_key = sub.get("vpn_key", "") if sub else ""
-    if vpn_key:
-        await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-        await callback.answer(i18n_get_text(language, "biz.copy_link_alert", "Скопируйте ссылку выше"))
-    else:
-        await callback.answer(i18n_get_text(language, "biz.no_key_alert", "Ключ не найден"), show_alert=True)
-
-
-@router.callback_query(F.data == "menu_settings")
-async def callback_settings(callback: CallbackQuery):
-    """⚙️ Настройки"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    language = await resolve_user_language(callback.from_user.id)
-    title = i18n_get_text(language, "main.settings_title", "⚙️ Настройки")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "main.settings_change_language_btn", "🗣 Изменить язык"), callback_data="change_language", icon_custom_emoji_id=CE["language"], style="primary")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "main.settings_privacy_btn", "🔐 Политика конфиденциальности"), callback_data="about_privacy", style="primary")],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.ecosystem", "⚪️ Наша экосистема"),
-            callback_data="menu_ecosystem",
-            style="primary",
-        )],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
-    ])
-    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
-    if has_photo:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.bot.send_message(
-            chat_id=callback.from_user.id, text=title, reply_markup=keyboard, parse_mode="HTML",
-        )
-    else:
-        await safe_edit_text(callback.message, title, reply_markup=keyboard, bot=callback.bot)
-
-
-@router.callback_query(F.data == "menu_about")
-async def callback_about(callback: CallbackQuery):
-    """О сервисе. Entry from ecosystem."""
-    from app.handlers.common.screens import _open_about_screen
-    await _open_about_screen(callback, callback.bot)
 
 
 @router.callback_query(F.data == "about_privacy")
@@ -304,6 +161,40 @@ async def callback_special_offer_buy(callback: CallbackQuery, state: FSMContext)
     await _open_buy_screen(callback, callback.bot, state)
 
 
+async def _apply_minus_15_discount(callback: CallbackQuery, telegram_id: int, origin: str) -> None:
+    """−15 % from a reminder button (trial / paid subscription ending).
+
+    Owner 2026-09-14: ONE 72 h window per period, opened by whatever offered it
+    first (the 3 h reminder or the expiry). The button uses that window — it
+    never creates a new discount and never extends the window (pressing again,
+    or an old button, changes nothing); after the window the user is told it
+    expired. The text names the exact end (MSK). A bigger active personal
+    discount stays (the largest single discount wins at checkout)."""
+    try:
+        from database.subscriptions import claim_special_offer
+        from app.services.notifications.special_offer import format_deadline
+        language = await resolve_user_language(telegram_id)
+        offer = await database.get_special_offer_info(telegram_id)
+        if offer is None:
+            # The reminder normally opened it already; open it for this period
+            # if not (never re-opens a window that ran out).
+            sub = await database.get_subscription_any(telegram_id)
+            offer = await claim_special_offer(telegram_id, (sub or {}).get("expires_at"))
+        if offer is None:
+            text = i18n_get_text(language, "errors.special_offer_expired")
+        else:
+            current = await database.get_user_discount(telegram_id)
+            kept = int((current or {}).get("discount_percent") or 0)
+            if kept > 15:
+                text = i18n_get_text(language, "main.discount_bigger_kept", percent=kept)
+            else:
+                text = i18n_get_text(language, "main.discount_applied_choose_tariff",
+                                     deadline=format_deadline(language, offer["expires_at"]))
+        await callback.message.answer(text, parse_mode="HTML")
+    except Exception as e:
+        logger.warning(f"Failed to apply {origin} discount for {telegram_id}: {e}")
+
+
 @router.callback_query(F.data == "trial_discount_15")
 async def callback_trial_discount_15(callback: CallbackQuery, state: FSMContext):
     """Скидка 15% из уведомления за 3 часа до окончания триала — автоматически применяет скидку"""
@@ -314,23 +205,7 @@ async def callback_trial_discount_15(callback: CallbackQuery, state: FSMContext)
 
     telegram_id = callback.from_user.id
 
-    try:
-        from datetime import timedelta, timezone
-        from datetime import datetime as dt
-        expires_at = dt.now(timezone.utc) + timedelta(days=7)
-        await database.create_user_discount(
-            telegram_id=telegram_id,
-            discount_percent=15,
-            expires_at=expires_at,
-            created_by=0,  # system
-        )
-        language = await resolve_user_language(telegram_id)
-        await callback.message.answer(
-            i18n_get_text(language, "main.discount_applied_choose_tariff", "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"),
-            parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.warning(f"Failed to apply trial discount for {telegram_id}: {e}")
+    await _apply_minus_15_discount(callback, telegram_id, "trial")
 
     from app.handlers.common.screens import _open_buy_screen
     await _open_buy_screen(callback, callback.bot, state)
@@ -346,23 +221,7 @@ async def callback_paid_discount_15(callback: CallbackQuery, state: FSMContext):
 
     telegram_id = callback.from_user.id
 
-    try:
-        from datetime import timedelta, timezone
-        from datetime import datetime as dt
-        expires_at = dt.now(timezone.utc) + timedelta(days=7)
-        await database.create_user_discount(
-            telegram_id=telegram_id,
-            discount_percent=15,
-            expires_at=expires_at,
-            created_by=0,  # system
-        )
-        language = await resolve_user_language(telegram_id)
-        await callback.message.answer(
-            i18n_get_text(language, "main.discount_applied_choose_tariff", "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"),
-            parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.warning(f"Failed to apply paid discount for {telegram_id}: {e}")
+    await _apply_minus_15_discount(callback, telegram_id, "paid")
 
     from app.handlers.common.screens import _open_buy_screen
     await _open_buy_screen(callback, callback.bot, state)
@@ -377,7 +236,7 @@ async def callback_instruction(callback: CallbackQuery):
 
 
 
-@router.callback_query(F.data.in_({"copy_key_menu", "copy_key", "copy_key_plus", "copy_vpn_key"}))
+@router.callback_query(F.data.in_({"copy_key", "copy_vpn_key"}))
 async def callback_connect_instead_of_copy(callback: CallbackQuery):
     """Ключи больше не отправляются в боте; показываем кнопку «Подключиться» (Mini App)."""
     try:
@@ -867,48 +726,6 @@ if _incy_ios_env:
 _incy_android_env = os.getenv("INCY_ANDROID_APP_URL")
 if _incy_android_env:
     _DOWNLOAD_LINKS["android"]["incy"] = _incy_android_env
-
-
-@router.callback_query(F.data == "setup_device")
-async def callback_setup_device(callback: CallbackQuery):
-    """Выбор устройства для настройки."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    text = i18n_get_text(language, "setup.select_device")
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios", style="primary"),
-            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android", style="primary"),
-        ],
-        [
-            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos", style="primary"),
-            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows", style="primary"),
-        ],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
-            icon_custom_emoji_id=CE["back"],
-            style="primary",
-        )],
-    ])
-
-    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
-    if has_photo:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.bot.send_message(
-            chat_id=telegram_id, text=text, reply_markup=keyboard, parse_mode="HTML",
-        )
-    else:
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("setup_platform:"))
@@ -1630,7 +1447,7 @@ async def callback_combo_tariff(callback: CallbackQuery, state: FSMContext):
     buttons = []
     period_keys = {30: "combo.period_1", 90: "combo.period_3", 180: "combo.period_6", 365: "combo.period_12", 730: "combo.period_24"}
     for period_days, info in tariff.items():
-        # Прогоняем через полную цепочку скидок (промокод / VIP / спецоффер / персональная)
+        # Скидки: промокод / спецоффер / персональная — действует наибольшая
         try:
             price_info = await subscription_service.calculate_price(
                 telegram_id=callback.from_user.id,
@@ -1691,7 +1508,7 @@ async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
     base_price_kopecks = info["price"] * 100
     gb = info["gb"]
 
-    # Apply full discount chain (promo / VIP / special offer / personal)
+    # Discounts: promo / special offer / personal — the largest single one wins
     from app.handlers.common.utils import get_promo_session
     from app.services.subscriptions import service as subscription_service
     promo_session = await get_promo_session(state)
@@ -1705,21 +1522,28 @@ async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
             base_price_override_rubles=info["price"],
         )
         price_kopecks = price_info["final_price_kopecks"]
+        promo_applied = bool(price_info.get("promo_code"))
     except Exception:
         price_kopecks = base_price_kopecks
+        promo_applied = False
 
-    # Сохраняем данные в FSM для стандартного платёжного потока
+    # Сохраняем данные в FSM для стандартного платёжного потока.
+    # promo_applied: the price was computed WITH the session promo code (it won
+    # as the largest discount) — only then the purchase stores / consumes it.
     await state.update_data(
         tariff_type=base_tariff,
         period_days=period_days,
         final_price_kopecks=price_kopecks,
         combo_bypass_gb=gb,
+        promo_applied=promo_applied,
     )
     from app.handlers.common.states import PurchaseState
     await state.set_state(PurchaseState.choose_payment_method)
 
-    from handlers import show_payment_method_selection
-    await show_payment_method_selection(callback, base_tariff, period_days, price_kopecks)
+    from app.handlers.payments.payment_method_selection import show_payment_method_selection
+    # «Назад» → the Combo periods (08 M14: it went to the buy root, the Combo was lost)
+    await show_payment_method_selection(callback, base_tariff, period_days, price_kopecks,
+                                        back_callback=f"combo_tariff:{combo_type}")
 
 
 # ── Mini Shop ────────────────────────────────────────────────────
@@ -2003,68 +1827,6 @@ async def callback_apple_confirm(callback: CallbackQuery):
 
 
 # ── Apple ID Payment Handlers ────────────────────────────────────
-
-@router.callback_query(F.data.startswith("apple_pay_lava:"))
-async def callback_apple_pay_lava(callback: CallbackQuery):
-    """Apple ID — pay via Lava (card)."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    parts = callback.data.split(":")
-    region = parts[1]
-    nominal = int(parts[2])
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    price_rub = _apple_price_rub(region, nominal)
-
-    import lava_service
-    if not lava_service.is_enabled():
-        await callback.answer(i18n_get_text(language, "errors.card_payment_unavailable", "Оплата картой временно недоступна"), show_alert=True)
-        return
-
-    region_label = _APPLE_REGIONS.get(region, region)
-    nominal_label = _apple_nominal_label(region, nominal)
-
-    purchase_id = await database.create_pending_purchase(
-        telegram_id=telegram_id,
-        tariff=f"apple_id_{region}_{nominal}",
-        period_days=0,
-        price_kopecks=round(price_rub * 100),
-        purchase_type="apple_id",
-    )
-
-    invoice_data = await lava_service.create_invoice(
-        amount_rubles=price_rub,
-        purchase_id=purchase_id,
-        comment=f"Apple ID {region_label} {nominal_label}",
-    )
-
-    payment_url = invoice_data["payment_url"]
-
-    try:
-        await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_data["invoice_id"]))
-    except Exception:
-        pass
-
-    text = i18n_get_text(language, "payment.lava_waiting", amount=price_rub)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button"), url=payment_url)],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
-    ])
-
-    lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-
-    async def _del(bot, cid, msg):
-        try:
-            await asyncio.sleep(15 * 60)
-            await bot.delete_message(chat_id=cid, message_id=msg.message_id)
-        except Exception:
-            pass
-    asyncio.create_task(_del(callback.bot, telegram_id, lava_msg))
-
 
 @router.callback_query(F.data.startswith("apple_pay_wata:"))
 async def callback_apple_pay_wata(callback: CallbackQuery):

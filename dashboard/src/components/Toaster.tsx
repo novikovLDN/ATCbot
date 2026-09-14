@@ -18,7 +18,7 @@ export function Toaster() {
   const items = useToasts((s) => s.items);
   const dismiss = useToasts((s) => s.dismiss);
   return (
-    <div className="fixed right-4 top-4 z-50 flex w-[360px] max-w-[90vw] flex-col gap-2">
+    <div className="pointer-events-none fixed right-4 top-[max(1rem,env(safe-area-inset-top))] z-[60] flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2">
       {items.map((t) => {
         const Icon = ICONS[t.kind];
         return (
@@ -35,7 +35,7 @@ export function Toaster() {
             <button
               type="button"
               onClick={() => dismiss(t.id)}
-              className="rounded-md p-1 text-fg-muted hover:bg-bg-elevated hover:text-fg"
+              className="tap-target rounded-md p-1 text-fg-muted hover:bg-bg-elevated hover:text-fg"
               aria-label="Закрыть"
             >
               <X className="h-3.5 w-3.5" />

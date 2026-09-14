@@ -23,7 +23,7 @@
 ## Миграции — кастомный ранер (`migrations.py` в корне, НЕ alembic)
 
 - Таблица `schema_migrations(version TEXT PRIMARY KEY, applied_at)`; файлы `migrations/NNN_*.sql` по номеру.
-  Сейчас ~79, последняя `079_sub_pairs.sql`.
+  Сейчас 77 файлов, последняя `083_pending_purchase_credit_kopecks.sql`.
 - **Правило (комментарий в `migrations.py`):** все миграции backward-compatible → откатываемы; код НЕ должен
   полагаться на немедленное наличие новых полей (миграции применяются отдельно); rollback-допущения
   документируются в комментарии миграции.

@@ -4,9 +4,7 @@ import logging
 import os
 import random
 import time
-from datetime import datetime, timezone
 from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from app.utils.telegram_safe import safe_send_message
 import asyncpg
 import database
@@ -14,9 +12,6 @@ import config
 import admin_notifications
 from app.services.activation import service as activation_service
 from app.services.activation.exceptions import (
-    ActivationServiceError,
-    ActivationNotAllowedError,
-    ActivationMaxAttemptsReachedError,
     ActivationFailedError,
     VPNActivationError,
 )
@@ -27,9 +22,39 @@ from app.utils.logging_helpers import (
     log_worker_iteration_end,
     classify_error,
 )
-from app.core.structured_logger import log_event
 from app.core.cooperative_yield import cooperative_yield
 from app.core.pool_monitor import acquire_connection
+
+
+def build_activation_failed_alert(
+    *, subscription_id, telegram_id, subscription_type, amount_rubles, period_days,
+    attempts, max_attempts, error_msg,
+) -> str:
+    """Admin alert «activation failed for good» — Telegram HTML, every value escaped.
+
+    It used to be legacy Markdown: `combo_basic` or a panel error with `_*[`
+    made Telegram reject it and the alert was silently lost."""
+    from datetime import datetime, timezone as _tz
+    from html import escape
+
+    admin_lang = "ru"
+    _now_str = datetime.now(_tz.utc).strftime("%d.%m.%Y %H:%M UTC")
+    _tariff_line = f"\nТариф: {escape(str(subscription_type or 'N/A'))}"
+    _amount_line = f"\nСумма: {escape(str(amount_rubles))} RUB" if amount_rubles else ""
+    _period_line = f"\nСрок: {escape(str(period_days))} дн." if period_days else ""
+    _error = str(error_msg or "")
+    _error = escape(_error[:1000]) + ("…" if len(_error) > 1000 else "")
+    return (
+        f"{i18n.get_text(admin_lang, 'admin.activation_error_title')}\n\n"
+        f"Дата: {_now_str}\n"
+        f"{i18n.get_text(admin_lang, 'admin.activation_error_subscription_id', subscription_id=escape(str(subscription_id)))}\n"
+        f"{i18n.get_text(admin_lang, 'admin.activation_error_user', telegram_id=escape(str(telegram_id)))}"
+        f"{_tariff_line}{_amount_line}{_period_line}\n"
+        f"{i18n.get_text(admin_lang, 'admin.activation_error_attempts', attempts=attempts, max_attempts=max_attempts)}\n"
+        f"{i18n.get_text(admin_lang, 'admin.activation_error_error', error_msg=_error)}\n\n"
+        f"{i18n.get_text(admin_lang, 'admin.activation_error_status')}\n"
+        f"{i18n.get_text(admin_lang, 'admin.activation_error_action')}"
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -203,25 +228,22 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 f"user={telegram_id}, reason=already_notified]"
                             )
                         else:
-                            from app.handlers.common.keyboards import get_connect_keyboard
-                            language = await resolve_user_language(telegram_id)
-                            expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
-                            sub_type = (subscription_check.get("subscription_type") or "basic").strip().lower()
-                            if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
-                                sub_type = "basic"
-                            if config.is_biz_tariff(sub_type):
-                                tariff_label = "Business"
-                            elif sub_type == "plus":
-                                tariff_label = "Plus"
-                            else:
-                                tariff_label = "Basic"
-                            tariff_emoji = "🏢" if config.is_biz_tariff(sub_type) else ("⭐️" if sub_type == "plus" else "📦")
-                            text = (
-                                "🎉 <b>Подписка активирована!</b>\n\n"
-                                f"⚡ {tariff_label} · до {expires_str}\n\n"
-                                "Нажмите кнопку ниже чтобы подключить устройство."
+                            from app.i18n import get_text as _i18n_get_text
+                            from app.services.payments.success_message import (
+                                success_keyboard, tariff_display,
                             )
-                            keyboard = get_connect_keyboard()
+                            language = await resolve_user_language(telegram_id)
+                            expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "—"
+                            # Same tariff label and connect keyboard as the payment
+                            # success message, in the user's language (08 #3 / #21).
+                            text = _i18n_get_text(
+                                language, "purchase.activated_later",
+                                tariff_name=tariff_display(
+                                    language, subscription_check.get("subscription_type"), False,
+                                ),
+                                expires_date=expires_str,
+                            )
+                            keyboard = success_keyboard(language)
                             await safe_send_message(
                                 bot, telegram_id, text,
                                 reply_markup=keyboard, parse_mode="HTML"
@@ -281,26 +303,19 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 f"user={telegram_id}, attempts={new_attempts}, error={error_msg}]"
                             )
                             try:
-                                admin_lang = "ru"
-                                from datetime import datetime, timezone as _tz
-                                _now_str = datetime.now(_tz.utc).strftime("%d.%m.%Y %H:%M UTC")
-                                _tariff_line = f"\nТариф: {pending_sub.subscription_type or 'N/A'}"
-                                _amount_line = f"\nСумма: {pending_sub.amount_rubles} RUB" if pending_sub.amount_rubles else ""
-                                _period_line = f"\nСрок: {pending_sub.period_days} дн." if pending_sub.period_days else ""
-                                admin_message = (
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_title')}\n\n"
-                                    f"Дата: {_now_str}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_subscription_id', subscription_id=subscription_id)}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_user', telegram_id=telegram_id)}"
-                                    f"{_tariff_line}{_amount_line}{_period_line}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_attempts', attempts=new_attempts, max_attempts=MAX_ACTIVATION_ATTEMPTS)}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_error', error_msg=error_msg)}\n\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_status')}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_action')}"
+                                admin_message = build_activation_failed_alert(
+                                    subscription_id=subscription_id,
+                                    telegram_id=telegram_id,
+                                    subscription_type=pending_sub.subscription_type,
+                                    amount_rubles=pending_sub.amount_rubles,
+                                    period_days=pending_sub.period_days,
+                                    attempts=new_attempts,
+                                    max_attempts=MAX_ACTIVATION_ATTEMPTS,
+                                    error_msg=error_msg,
                                 )
                                 if await safe_send_message(
                                     bot, config.ADMIN_TELEGRAM_ID,
-                                    admin_message, parse_mode="Markdown"
+                                    admin_message, parse_mode="HTML"
                                 ):
                                     logger.info(
                                         f"Admin notification sent: Activation failed for subscription {subscription_id}"
@@ -376,6 +391,8 @@ async def activation_worker_task(bot: Bot):
         bot: Экземпляр Telegram бота
     """
     logger.info(f"Activation worker task started (interval={ACTIVATION_INTERVAL_SECONDS}s, max_attempts={MAX_ACTIVATION_ATTEMPTS})")
+    from app.core import runtime_health  # dashboard liveness (in-memory)
+    runtime_health.register("activation_worker", interval_s=ACTIVATION_INTERVAL_SECONDS + 120, initial_delay_s=60)
     
     # Prevent worker burst at startup
     jitter_s = random.uniform(5, 60)
@@ -481,6 +498,7 @@ async def activation_worker_task(bot: Bot):
                 pass
         finally:
             # H2 fix: ITERATION_END always fires in finally block
+            runtime_health.record("activation_worker", outcome, iteration_error_type)
             duration_ms = (time.time() - iteration_start_time) * 1000
             error_type = iteration_error_type if 'iteration_error_type' in locals() else (None if outcome == "success" else "infra_error")
             log_worker_iteration_end(

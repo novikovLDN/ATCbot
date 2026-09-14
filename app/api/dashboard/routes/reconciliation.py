@@ -18,10 +18,12 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 import database
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
+from app.api.dashboard.idempotency import IdempotentRoute
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_admin)], route_class=IdempotentRoute)
 
 
 @router.get("/candidates")
@@ -30,7 +32,7 @@ async def candidates(limit: int = Query(200, gt=0, le=1000)):
     try:
         rows = await database.find_over_issuance_candidates(limit)
     except Exception as e:
-        raise HTTPException(500, f"candidates_failed: {e}")
+        raise server_error("candidates_failed") from e
     return {"total": len(rows), "items": rows}
 
 
@@ -42,7 +44,7 @@ async def candidate_detail(telegram_id: int = Path(..., gt=0)):
     try:
         detail = await database.get_reconciliation_detail(telegram_id)
     except Exception as e:
-        raise HTTPException(500, f"detail_failed: {e}")
+        raise server_error("detail_failed") from e
     if not detail.get("found"):
         raise HTTPException(404, "no_subscription")
     return detail
@@ -67,7 +69,7 @@ async def apply_fix(
         )
     except Exception as e:
         logger.exception("reconciliation_fix crash user=%s", telegram_id)
-        raise HTTPException(500, f"fix_failed: {e}")
+        raise server_error("fix_failed") from e
     if not result.get("success"):
         # После рефакторинга single-source-of-truth ошибка возможна ровно
         # одна: Remnawave-панель не приняла PATCH expireAt (сеть, 5xx,
@@ -86,7 +88,7 @@ async def audit_log(limit: int = Query(100, gt=0, le=500)):
     try:
         rows = await database.list_reconciliation_log(limit)
     except Exception as e:
-        raise HTTPException(500, f"audit_failed: {e}")
+        raise server_error("audit_failed") from e
     return rows
 
 
@@ -97,5 +99,5 @@ async def over_issuance_log(limit: int = Query(100, gt=0, le=500)):
     try:
         rows = await database.list_over_issuance_log(limit)
     except Exception as e:
-        raise HTTPException(500, f"over_issuance_failed: {e}")
+        raise server_error("over_issuance_failed") from e
     return rows

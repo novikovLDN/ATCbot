@@ -3,7 +3,6 @@ Pure presentation screen helpers. Reusable for callbacks and message commands.
 No router decorators, no handler-level logic — only rendering and keyboard building.
 """
 import logging
-from datetime import timedelta
 from typing import Union
 
 import config
@@ -19,7 +18,19 @@ from app.services.subscriptions.service import (
     get_subscription_status,
     check_and_disable_expired_subscription as check_subscription_expiry_service,
 )
+from html import escape as html_escape
+
 from app.handlers.common.utils import safe_edit_text, sanitize_display_name
+
+
+def _profile_header(display_name: str, telegram_id: int) -> str:
+    """Шапка карточки профиля. Имя — пользовательские данные (first_name /
+    username), поэтому экранируем: иначе «<3 Аня» или «Tom & Jerry» ломают
+    parse_mode=HTML и профиль не открывается."""
+    return (
+        f"👤 <b>{html_escape(display_name or '')}</b>\n"
+        f"🆔 ID: <code>{telegram_id}</code>\n\n"
+    )
 from app.handlers.common.keyboards import (
     get_about_keyboard,
     get_instruction_keyboard,
@@ -361,6 +372,12 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
                 icon_custom_emoji_id=CE["gift"],
                 style="success",
             )],
+            # 08 #19: «Мои подарки» (bought gift links) had no entry point.
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "gift.btn_my_gifts"),
+                callback_data="my_gifts:0",
+                style="primary",
+            )],
             [
                 InlineKeyboardButton(
                     text=i18n_get_text(language, "referral.stats_button"),
@@ -477,40 +494,9 @@ async def show_profile(message_or_query, language: str):
         if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
             sub_type = "basic"
 
-        # Бизнес-профиль: специальный экран для biz_* подписок
-        if config.is_biz_tariff(sub_type) and has_active_subscription:
-            from app.handlers.common.keyboards import get_biz_profile_keyboard
-            specs = config.BIZ_TIER_SPECS.get(sub_type, {})
-            country_code = subscription.get("country") or "nl"
-            country_info = config.BIZ_COUNTRIES.get(country_code, config.BIZ_COUNTRIES["nl"])
-            tariff_names = {
-                "biz_starter": "Starter", "biz_team": "Team", "biz_business": "Business",
-                "biz_pro": "Pro", "biz_enterprise": "Enterprise", "biz_ultimate": "Ultimate",
-            }
-            tariff_label = tariff_names.get(sub_type, "Business")
-            date_str = format_date_ru(expires_at)
-            text = i18n_get_text(language, "biz.profile_title") + "\n\n"
-            text += i18n_get_text(language, "biz.profile_welcome", name=display_name) + "\n\n"
-            text += i18n_get_text(language, "biz.profile_info",
-                date=date_str,
-                tariff=tariff_label,
-                balance=balance_str,
-                country=f"{country_info['flag']} {country_info['name']}",
-                cpu=specs.get("cpu", "?"),
-                ram=specs.get("ram", "?"),
-                traffic=specs.get("traffic", "?"),
-            )
-            keyboard = get_biz_profile_keyboard(language)
-            try:
-                await send_func(text, reply_markup=keyboard, parse_mode="HTML")
-            except Exception:
-                await send_func(text, reply_markup=keyboard)
-            return
-
         # Карточка профиля: единый формат (профиль + трафик)
         # Header — имя + Telegram ID
-        text = f"👤 <b>{display_name}</b>\n"
-        text += f"🆔 ID: <code>{telegram_id}</code>\n\n"
+        text = _profile_header(display_name, telegram_id)
 
         is_trial = sub_type == "trial"
         is_combo = subscription.get("is_combo", False) if subscription else False
@@ -521,9 +507,7 @@ async def show_profile(message_or_query, language: str):
         if has_active_subscription and expires_at and not is_bypass_only:
             date_str = format_date_ru(expires_at)
             info_lines.append(i18n_get_text(language, "profile.info_active_until", "📆 Подписка: активна до {date}", date=date_str))
-            if config.is_biz_tariff(sub_type):
-                tariff_label = "Business"
-            elif sub_type == "plus":
+            if sub_type == "plus":
                 tariff_label = "Комбо Plus" if is_combo else "Plus"
             elif is_trial:
                 tariff_label = "Trial"
@@ -664,10 +648,10 @@ async def _open_buy_screen(
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
+    await state.update_data(purchase_id=None, tariff_type=None, period_days=None, combo_bypass_gb=0)
     await database.cancel_pending_purchases(telegram_id, "new_purchase_started")
     # Снести залипшие invoice-экраны от предыдущих покупок (Wata «Ждём
-    # платёж», Lava/Platega, нативный Telegram Payments invoice и т.п.).
+    # платёж», Platega, нативный Telegram Payments invoice и т.п.).
     # Иначе они болтаются в чате рядом с новым «Выберите тариф» и путают
     # юзера — он видит старый 89 ₽ invoice + новый экран тарифов.
     try:
@@ -835,9 +819,7 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
 
     # Тариф
     if has_active_subscription and not is_bypass_only:
-        if config.is_biz_tariff(sub_type):
-            tariff_label = "Business"
-        elif sub_type == "plus":
+        if sub_type == "plus":
             tariff_label = "Комбо Plus" if is_combo else "Plus"
         elif is_trial:
             tariff_label = "Trial"

@@ -1,42 +1,35 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  AlertTriangle,
-  Power,
-  RefreshCcw,
-  Clock,
-  Save,
-  Wallet,
-  Zap,
-  ShieldOff,
-  PlayCircle,
-  Fingerprint,
-  Plus,
-  Trash2,
-} from "lucide-react";
-import { isPasskeySupported, passkeyList, passkeyDelete, registerPasskey, type PasskeyRow } from "@/lib/passkey";
+import { Power, RefreshCcw, Save, PlayCircle, Plus, Trash2 } from "lucide-react";
+import { isInAppBrowser, isPasskeySupported, passkeyList, passkeyDelete, registerPasskey, type PasskeyRow } from "@/lib/passkey";
 import { ApiError, endpoints } from "@/lib/api";
 import { fmtDate, fmtNum, fmtRub } from "@/lib/format";
 import { toast } from "@/store/toast";
 import { Spinner } from "@/components/Spinner";
-import { EmptyState } from "@/components/EmptyState";
+import { Bento, PageHeader, Surface } from "@/components/ui/Surface";
+import { IconButton, ListRow, StatusDot } from "@/components/ui/controls";
+import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
 
 export function Service() {
   return (
-    <div className="space-y-6">
-      <header>
-        <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-          Операции
-        </div>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg md:text-3xl">
-          Сервис
-        </h1>
-      </header>
+    <>
+      <PageHeader title="Сервис" sub="Операции: passkey, режим инцидента, очередь провизии VPN и висящие платежи." />
+      <Bento>
+        <PasskeysSection />
+        <IncidentSection />
+        <PendingActivationsSection />
+        <PendingPaymentsSection />
+      </Bento>
+    </>
+  );
+}
 
-      <PasskeysSection />
-      <IncidentSection />
-      <PendingActivationsSection />
-      <PendingPaymentsSection />
+function RowsSkeleton() {
+  return (
+    <div className="flex flex-col gap-2" role="status" aria-label="Загрузка">
+      <Skeleton className="h-10 w-full" />
+      <Skeleton className="h-10 w-full" />
+      <Skeleton className="h-10 w-2/3" />
     </div>
   );
 }
@@ -75,36 +68,27 @@ function IncidentSection() {
   const isActive = incident.data?.is_active ?? false;
 
   return (
-    <section
-      className={
-        isActive
-          ? "card border-warning/40 bg-warning/10 p-5"
-          : "card p-5"
+    <Surface
+      className="sm:col-span-6 xl:col-span-7"
+      variant={isActive ? "raised" : "ink"}
+      label="Режим инцидента"
+      aside={
+        isActive ? (
+          <span className="badge-warning">
+            <StatusDot tone="warn" /> Включён
+          </span>
+        ) : (
+          <span className="badge-muted">Выключен</span>
+        )
       }
     >
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <div
-            className={
-              isActive
-                ? "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-warning/15 text-warning"
-                : "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border"
-            }
-          >
-            <AlertTriangle className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Режим инцидента
-            </div>
-            <h2 className="text-lg font-semibold text-fg">
-              Баннер всем пользователям
-            </h2>
-            <p className="mt-1 text-sm text-fg-muted">
-              Текст появится у каждого юзера на главном экране бота. Используй
-              для предупреждений о тех. работах, перебоях оплаты, и т.п.
-            </p>
-          </div>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-60">
+          <h2 className="text-[15px] font-semibold">Баннер всем пользователям</h2>
+          <p className="t-mute mt-1 text-[13px] leading-5">
+            Текст появится у каждого юзера на главном экране бота. Используй
+            для предупреждений о тех. работах, перебоях оплаты, и т.п.
+          </p>
         </div>
         <button
           type="button"
@@ -123,9 +107,7 @@ function IncidentSection() {
       </div>
 
       <label className="block">
-        <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-fg-subtle">
-          Текст (HTML)
-        </div>
+        <span className="t-mute mb-1.5 block text-[13px]">Текст (HTML)</span>
         <textarea
           className="input min-h-[120px] resize-y leading-relaxed"
           value={text}
@@ -139,7 +121,7 @@ function IncidentSection() {
       </label>
 
       {dirty && (
-        <div className="mt-3 flex items-center justify-end gap-2">
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
           <button
             type="button"
             onClick={() => {
@@ -162,7 +144,7 @@ function IncidentSection() {
           </button>
         </div>
       )}
-    </section>
+    </Surface>
   );
 }
 
@@ -196,70 +178,48 @@ function PendingActivationsSection() {
   const rows = list.data?.rows ?? [];
 
   return (
-    <section className="card p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div
-            className={
-              total > 0
-                ? "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-warning/15 text-warning"
-                : "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border"
-            }
-          >
-            <Zap className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Pending активации VPN
-            </div>
-            <h2 className="text-lg font-semibold text-fg">
-              Очередь провизии
-              {total > 0 && (
-                <span className="ml-2 badge-warning">{fmtNum(total)}</span>
-              )}
-            </h2>
-          </div>
+    <Surface
+      className="sm:col-span-6 xl:col-span-12"
+      label="Очередь провизии VPN"
+      aside={
+        <div className="flex items-center gap-2">
+          {total > 0 && <span className="badge-warning tabular">{fmtNum(total)}</span>}
+          <button type="button" onClick={() => list.refetch()} className="btn-secondary">
+            <RefreshCcw className="h-3.5 w-3.5" /> Обновить
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => list.refetch()}
-          className="btn-secondary"
-        >
-          <RefreshCcw className="h-3.5 w-3.5" /> Обновить
-        </button>
-      </div>
-
-      <p className="mb-4 text-sm text-fg-muted">
+      }
+    >
+      <p className="t-mute mb-4 max-w-[80ch] text-[13px] leading-5">
         Пользователь оплатил, подписка создана, но в момент webhook'а VPN-API
         не ответил — UUID/ключ ещё не выданы. Фоновый воркер дёргает retry
         раз в 5 мин (макс 5 попыток). Здесь можно дёрнуть руками сейчас.
       </p>
 
       {list.isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-fg-muted">
-          <Spinner /> Загружаю...
-        </div>
+        <RowsSkeleton />
+      ) : list.isError && !list.data ? (
+        <ErrorState className="bg-tile-2" error={list.error} onRetry={() => list.refetch()} />
       ) : rows.length === 0 ? (
         <EmptyState
-          icon={ShieldOff}
           title="Очередь пуста"
-          description="Все оплаченные подписки имеют VPN-ключи. Это норма."
+          hint="Все оплаченные подписки имеют VPN-ключи. Это норма."
         />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+        <div className="-mx-2 overflow-x-auto px-2">
+          <table className="dtable min-w-[760px]">
             <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-fg-subtle">
-                <th className="px-2 py-2 font-medium">Sub ID</th>
-                <th className="px-2 py-2 font-medium">Юзер</th>
-                <th className="px-2 py-2 font-medium">Тариф</th>
-                <th className="px-2 py-2 font-medium">Попыток</th>
-                <th className="px-2 py-2 font-medium">Последняя ошибка</th>
-                <th className="px-2 py-2 font-medium">С</th>
-                <th className="px-2 py-2"></th>
+              <tr>
+                <th>Sub ID</th>
+                <th>Юзер</th>
+                <th>Тариф</th>
+                <th>Попыток</th>
+                <th>Последняя ошибка</th>
+                <th>С</th>
+                <th aria-label="Действия"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/60">
+            <tbody>
               {rows.map((r) => {
                 const id = Number(r.id ?? 0);
                 const attempts = asNum(r.activation_attempts) ?? 0;
@@ -269,39 +229,28 @@ function PendingActivationsSection() {
                     ? fmtDate(r.activated_at)
                     : "—";
                 return (
-                  <tr
-                    key={id || Math.random()}
-                    className="hover:bg-accent/[0.04]"
-                  >
-                    <td className="px-2 py-2 font-mono text-xs text-fg-muted">
-                      {id}
-                    </td>
-                    <td className="px-2 py-2 text-fg">
-                      tg:{String(r.telegram_id ?? "—")}
-                    </td>
-                    <td className="px-2 py-2 text-fg">
-                      {String(r.subscription_type ?? "—")}
-                    </td>
-                    <td className="px-2 py-2">
+                  <tr key={id || Math.random()}>
+                    <td className="t-mute tabular font-mono text-[12px]">{id}</td>
+                    <td className="tabular">tg:{String(r.telegram_id ?? "—")}</td>
+                    <td>{String(r.subscription_type ?? "—")}</td>
+                    <td>
                       <span
                         className={
                           attempts >= 5
-                            ? "badge-danger"
+                            ? "badge-danger tabular"
                             : attempts >= 3
-                            ? "badge-warning"
-                            : "badge-muted"
+                            ? "badge-warning tabular"
+                            : "badge-muted tabular"
                         }
                       >
                         {attempts}/5
                       </span>
                     </td>
-                    <td className="max-w-[280px] truncate px-2 py-2 text-xs text-fg-muted">
+                    <td className="t-mute max-w-[280px] truncate text-[12px]" title={err}>
                       {err}
                     </td>
-                    <td className="px-2 py-2 text-xs text-fg-muted">
-                      {sinceStr}
-                    </td>
-                    <td className="px-2 py-2 text-right">
+                    <td className="t-mute tabular whitespace-nowrap text-[12px]">{sinceStr}</td>
+                    <td className="text-right">
                       <button
                         type="button"
                         onClick={() => retry.mutate(id)}
@@ -323,7 +272,7 @@ function PendingActivationsSection() {
           </table>
         </div>
       )}
-    </section>
+    </Surface>
   );
 }
 
@@ -335,98 +284,76 @@ function PendingPaymentsSection() {
   });
 
   return (
-    <section className="card p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border">
-            <Clock className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Висящие платежи
-            </div>
-            <h2 className="text-lg font-semibold text-fg">
-              Статус «pending»
-              {list.data && list.data.length > 0 && (
-                <span className="ml-2 badge-warning">
-                  {list.data.length}
-                </span>
-              )}
-            </h2>
-          </div>
+    <Surface
+      className="sm:col-span-6 xl:col-span-12"
+      variant="raised"
+      label="Висящие платежи · статус «pending»"
+      aside={
+        <div className="flex items-center gap-2">
+          {list.data && list.data.length > 0 && (
+            <span className="badge-warning tabular">{list.data.length}</span>
+          )}
+          <button type="button" onClick={() => list.refetch()} className="btn-secondary">
+            <RefreshCcw className="h-3.5 w-3.5" /> Обновить
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => list.refetch()}
-          className="btn-secondary"
-        >
-          <RefreshCcw className="h-3.5 w-3.5" /> Обновить
-        </button>
-      </div>
-
+      }
+    >
       {list.isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-fg-muted">
-          <Spinner /> Загружаю...
-        </div>
+        <RowsSkeleton />
+      ) : list.isError && !list.data ? (
+        <ErrorState className="bg-tile-3" error={list.error} onRetry={() => list.refetch()} />
       ) : !list.data || list.data.length === 0 ? (
         <EmptyState
-          icon={Wallet}
           title="Нет висящих платежей"
-          description="Все платежи обработаны. Это хороший признак."
+          hint="Все платежи обработаны. Это хороший признак."
         />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-fg-subtle">
-                <th className="px-2 py-2 font-medium">ID</th>
-                <th className="px-2 py-2 font-medium">Юзер</th>
-                <th className="px-2 py-2 font-medium">Тариф</th>
-                <th className="px-2 py-2 font-medium">Сумма</th>
-                <th className="px-2 py-2 font-medium">Источник</th>
-                <th className="px-2 py-2 font-medium">Создан</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/60">
-              {list.data.map((p) => (
-                <tr
-                  key={String(p.id ?? Math.random())}
-                  className="hover:bg-accent/[0.04]"
-                >
-                  <td className="px-2 py-2 font-mono text-xs text-fg-muted">
-                    {String(p.id ?? "—")}
-                  </td>
-                  <td className="px-2 py-2 text-fg">
-                    tg:{String(p.telegram_id ?? "—")}
-                  </td>
-                  <td className="px-2 py-2 text-fg">{String(p.tariff ?? "—")}</td>
-                  <td className="px-2 py-2 text-fg">
-                    {typeof p.amount === "number"
-                      ? fmtRub(p.amount / 100)
-                      : String(p.amount ?? "—")}
-                  </td>
-                  <td className="px-2 py-2 text-fg-muted">
-                    {String(p.source ?? "—")}
-                  </td>
-                  <td className="px-2 py-2 text-fg-muted">
-                    {typeof p.created_at === "string"
-                      ? fmtDate(p.created_at)
-                      : "—"}
-                  </td>
+        <>
+          <div className="-mx-2 overflow-x-auto px-2">
+            <table className="dtable min-w-[640px]">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Юзер</th>
+                  <th>Тариф</th>
+                  <th className="num">Сумма</th>
+                  <th>Источник</th>
+                  <th>Создан</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="mt-3 text-xs text-fg-subtle">
+              </thead>
+              <tbody>
+                {list.data.map((p) => (
+                  <tr key={String(p.id ?? Math.random())}>
+                    <td className="t-mute tabular font-mono text-[12px]">{String(p.id ?? "—")}</td>
+                    <td className="tabular">tg:{String(p.telegram_id ?? "—")}</td>
+                    <td>{String(p.tariff ?? "—")}</td>
+                    <td className="num">
+                      {typeof p.amount === "number"
+                        ? fmtRub(p.amount / 100)
+                        : String(p.amount ?? "—")}
+                    </td>
+                    <td className="t-mute">{String(p.source ?? "—")}</td>
+                    <td className="t-mute tabular whitespace-nowrap">
+                      {typeof p.created_at === "string"
+                        ? fmtDate(p.created_at)
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="t-mute mt-3 max-w-[80ch] text-[12px] leading-5">
             Платежи &ldquo;виснут&rdquo; обычно из-за пропавших webhook'ов от
             провайдера. Большинство решаются ретраем со стороны провайдера в
             течение часа. Если &gt;24 ч — стоит проверить руками. Авто-полл
             раз в 15 секунд (
             {fmtNum(list.data.length)} записей).
           </p>
-        </div>
+        </>
       )}
-    </section>
+    </Surface>
   );
 }
 
@@ -476,43 +403,21 @@ function PasskeysSection() {
 
   if (!supported) {
     return (
-      <section className="card p-5">
-        <div className="flex items-start gap-3">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border">
-            <Fingerprint className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Passkey
-            </div>
-            <h2 className="text-lg font-semibold text-fg">Браузер не поддерживает</h2>
-            <p className="mt-1 text-sm text-fg-muted">
-              Открой дашборд в Safari (iOS / macOS) или Chrome — там доступны
-              Face ID / Touch ID / системные ключи.
-            </p>
-          </div>
-        </div>
-      </section>
+      <Surface className="sm:col-span-6 xl:col-span-5" variant="raised" label="Passkey">
+        <h2 className="text-[15px] font-semibold">Браузер не поддерживает</h2>
+        <p className="t-mute mt-1 text-[13px] leading-5">
+          {isInAppBrowser()
+            ? "Это встроенный браузер приложения (Telegram и т.п.) — iOS не даёт ему ключи входа. Открой дашборд в Safari («⋯» → «Открыть в Safari») и добавь passkey там."
+            : "Открой дашборд в Safari (iOS / macOS) или Chrome — там доступны Face ID / Touch ID / системные ключи."}
+        </p>
+      </Surface>
     );
   }
 
   return (
-    <section className="card p-5">
-      <div className="mb-3 flex items-center gap-3">
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
-          <Fingerprint className="h-4 w-4" />
-        </div>
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Passkey
-          </div>
-          <h2 className="text-lg font-semibold text-fg">
-            Face ID / Touch ID
-          </h2>
-        </div>
-      </div>
-
-      <p className="mb-3 text-sm text-fg-muted">
+    <Surface className="sm:col-span-6 xl:col-span-5" variant="raised" label="Passkey">
+      <h2 className="text-[15px] font-semibold">Face ID / Touch ID</h2>
+      <p className="t-mute mb-4 mt-1 text-[13px] leading-5">
         Добавь passkey — и в следующий раз войдёшь одним касанием без
         пароля. Привяжется к этому устройству / iCloud Keychain.
       </p>
@@ -522,6 +427,7 @@ function PasskeysSection() {
           className="input"
           maxLength={64}
           placeholder='Метка — напр. "iPhone 15", "MacBook Air"'
+          aria-label="Метка passkey"
           value={label}
           onChange={(e) => setLabel(e.target.value)}
         />
@@ -537,48 +443,46 @@ function PasskeysSection() {
       </div>
 
       {list.isLoading ? (
-        <div className="mt-4 flex items-center gap-2 text-sm text-fg-muted">
-          <Spinner /> Загружаю...
+        <div className="mt-4">
+          <RowsSkeleton />
         </div>
       ) : list.data && list.data.length > 0 ? (
-        <ul className="mt-4 divide-y divide-border/60">
+        <ul className="mt-4 flex flex-col gap-2">
           {list.data.map((p: PasskeyRow) => (
-            <li
-              key={p.id}
-              className="flex items-center justify-between gap-2 py-3 text-sm"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-medium text-fg">
-                  {p.label || "Passkey"}
-                </div>
-                <div className="mt-0.5 text-xs text-fg-muted">
-                  {p.transports && p.transports.length > 0 ? (
-                    <span>{p.transports.join(" · ")} · </span>
-                  ) : null}
-                  Добавлен {p.created_at ? new Date(p.created_at).toLocaleDateString("ru-RU") : "—"}
-                  {p.last_used_at
-                    ? ` · последний вход ${new Date(p.last_used_at).toLocaleDateString("ru-RU")}`
-                    : " · ещё не использовался"}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  if (confirm(`Удалить «${p.label || "passkey"}»?`)) del.mutate(p.id);
-                }}
-                disabled={del.isPending}
-                className="btn-ghost text-danger hover:text-danger"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+            <li key={p.id}>
+              <ListRow
+                title={p.label || "Passkey"}
+                meta={
+                  <>
+                    {p.transports && p.transports.length > 0 ? (
+                      <span>{p.transports.join(" · ")} · </span>
+                    ) : null}
+                    Добавлен {p.created_at ? new Date(p.created_at).toLocaleDateString("ru-RU") : "—"}
+                    {p.last_used_at
+                      ? ` · последний вход ${new Date(p.last_used_at).toLocaleDateString("ru-RU")}`
+                      : " · ещё не использовался"}
+                  </>
+                }
+                trailing={
+                  <IconButton
+                    label={`Удалить «${p.label || "passkey"}»`}
+                    small
+                    className="text-danger"
+                    onClick={() => {
+                      if (confirm(`Удалить «${p.label || "passkey"}»?`)) del.mutate(p.id);
+                    }}
+                    disabled={del.isPending}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </IconButton>
+                }
+              />
             </li>
           ))}
         </ul>
       ) : (
-        <div className="mt-4 text-sm text-fg-muted">
-          Ещё ни одного passkey не привязано.
-        </div>
+        <p className="t-mute mt-4 text-[13px]">Ещё ни одного passkey не привязано.</p>
       )}
-    </section>
+    </Surface>
   );
 }

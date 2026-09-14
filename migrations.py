@@ -10,11 +10,10 @@ STEP 1.4 - SAFE DEPLOY & ROLLBACK GUARANTEES:
 - Code can run against older schema → feature flags or conditional logic
 - Rollback assumptions documented in migration comments
 """
-import os
 import re
 import logging
 from pathlib import Path
-from typing import List, Set, Optional
+from typing import List, Set
 import asyncpg
 
 logger = logging.getLogger(__name__)

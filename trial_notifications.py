@@ -21,7 +21,6 @@ from app.utils.logging_helpers import (
     log_worker_iteration_end,
     classify_error,
 )
-from app.core.structured_logger import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +223,105 @@ async def send_trial_notification(
         return (False, "failed_temporary")
 
 
+# ── N-05: «Пробный доступ завершён, −30%» (docs/notifications/bugs-and-risks.md) ──
+# Sent exactly once per user by whichever worker expires the trial first
+# (fast_expiry_cleanup usually wins the race: 1 min vs 5 min). The 30% is a real
+# personal discount (user_discounts — same mechanism as the 15% buttons), applied
+# by calculate_final_price at checkout for TRIAL_EXPIRED_DISCOUNT_DAYS.
+TRIAL_EXPIRED_DISCOUNT_PERCENT = 30
+TRIAL_EXPIRED_DISCOUNT_DAYS = 7
+
+
+async def claim_trial_expired_notice(telegram_id: int, conn) -> bool:
+    """Atomically claim the one-per-user "trial ended" notice.
+
+    True → users.trial_completed_sent went FALSE→TRUE just now and the caller
+    must send it (send_trial_expired_notice). False → not a trial user or
+    already claimed by the other worker.
+    """
+    should_send, reason = await trial_service.should_send_completion_notification(
+        telegram_id=telegram_id, conn=conn,
+    )
+    if not should_send:
+        logger.debug(f"trial_completion_notification_skipped: user={telegram_id}, reason={reason}")
+        return False
+    claimed = await trial_service.mark_trial_completed(telegram_id=telegram_id, conn=conn)
+    if not claimed:
+        logger.info(f"trial_expired_skipped: user={telegram_id}, reason=already_sent")
+    return claimed
+
+
+async def _grant_trial_expired_discount(telegram_id: int) -> None:
+    """Apply the promised 30% for TRIAL_EXPIRED_DISCOUNT_DAYS; keep a bigger one."""
+    try:
+        existing = await database.get_user_discount(telegram_id)
+        if existing and int(existing.get("discount_percent") or 0) >= TRIAL_EXPIRED_DISCOUNT_PERCENT:
+            return
+        await database.create_user_discount(
+            telegram_id=telegram_id,
+            discount_percent=TRIAL_EXPIRED_DISCOUNT_PERCENT,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=TRIAL_EXPIRED_DISCOUNT_DAYS),
+            created_by=0,  # system
+        )
+    except Exception as e:
+        logger.warning("trial_expired: discount not applied user=%s err=%s", telegram_id, type(e).__name__)
+
+
+async def send_trial_expired_notice(bot: Bot, telegram_id: int) -> bool:
+    """Apply the discount, then send "trial ended". Call only after a True claim."""
+    await _grant_trial_expired_discount(telegram_id)
+    language = await resolve_user_language(telegram_id)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n.get_text(language, "trial.expired_discount_btn"),
+            callback_data="menu_buy_vpn",
+        )]
+    ])
+    sent = await safe_send_message(
+        bot, telegram_id, i18n.get_text(language, "trial.expired"),
+        parse_mode="HTML", reply_markup=keyboard,
+    )
+    if not sent:
+        logger.warning(f"TRIAL_EXPIRED_SKIP_CHAT_NOT_FOUND user={telegram_id}")
+        return False
+    await asyncio.sleep(0.05)
+    logger.info(f"trial_expired: notification sent: user={telegram_id}")
+    return True
+
+
+# Owner, 2026-09-14: a trial user who BOUGHT bypass GB (the 3-day gift of a GB
+# purchase from «Только обход блокировок», or GB bought during the trial) keeps
+# the GB after the premium ends — «VPN перестанет работать» would be false.
+# Such users get the GB-aware variant of the pre-expiry reminders.
+_GB_REMINDER_KEYS = {
+    "trial.reminder_24h": "trial.reminder_24h_gb",
+    "trial.reminder_3h": "trial.reminder_3h_gb",
+    "trial.notification_71h": "trial.notification_71h_gb",
+}
+_PURCHASED_GB_SQL = """
+    SELECT EXISTS (
+        SELECT 1 FROM payments
+        WHERE telegram_id = $1 AND status = 'approved'
+          AND tariff ~ '^(bypass|traffic)_[0-9]+gb$'
+    )
+"""
+
+
+async def _gb_reminder_text(pool, telegram_id: int, key: str, language: str, **fmt):
+    """GB-aware reminder text for a trial user with purchased GB, else None.
+    `fmt` fills the text's placeholders (trial.reminder_3h_gb: {deadline})."""
+    gb_key = _GB_REMINDER_KEYS.get(key)
+    if gb_key is None:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            has_gb = await conn.fetchval(_PURCHASED_GB_SQL, telegram_id)
+    except Exception as e:
+        logger.warning("trial_reminder_gb_check_failed: user=%s %s: %s", telegram_id, type(e).__name__, e)
+        return None
+    return i18n.get_text(language, gb_key, **fmt) if has_gb else None
+
+
 async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: datetime):
     """Process trial notifications for a single user. Acquires and releases DB connection internally."""
     telegram_id = row["telegram_id"]
@@ -294,9 +392,10 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
                 logger.info(f"trial_reminder_24h_skipped_disabled: user={telegram_id}")
                 return
             # Кастомный текст админа (fallback на i18n при отсутствии).
-            custom = await get_notification_text("trial.reminder_24h")
             language = await resolve_user_language(telegram_id)
-            text = custom or i18n.get_text(language, "trial.reminder_24h")
+            custom = await get_notification_text("trial.reminder_24h", language=language)
+            text = (await _gb_reminder_text(pool, telegram_id, "trial.reminder_24h", language)
+                    or custom or i18n.get_text(language, "trial.reminder_24h"))
             keyboard = get_trial_buy_keyboard(language)
             success, status = await send_trial_notification(
                 bot, pool, telegram_id, "trial.reminder_24h",
@@ -331,9 +430,17 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
                 )
                 logger.info(f"trial_reminder_3h_skipped_disabled: user={telegram_id}")
                 return
-            custom = await get_notification_text("trial.reminder_3h")
             language = await resolve_user_language(telegram_id)
-            text = custom or i18n.get_text(language, "trial.reminder_3h")
+            # Owner 2026-09-14: the trial's ONE 72 h −15 % window opens here; the
+            # text names its end (MSK) instead of «до конца триала» (the button
+            # used to give 7 days). Users with bought GB keep the GB wording.
+            from database.subscriptions import claim_special_offer
+            from app.services.notifications.special_offer import format_deadline
+            offer = await claim_special_offer(telegram_id, trial_expires_at)
+            deadline = format_deadline(language, offer["expires_at"] if offer else trial_expires_at)
+            custom = await get_notification_text("trial.reminder_3h", language=language, params={"deadline": deadline})
+            text = (await _gb_reminder_text(pool, telegram_id, "trial.reminder_3h", language, deadline=deadline)
+                    or custom or i18n.get_text(language, "trial.reminder_3h", deadline=deadline))
             keyboard = get_trial_discount_keyboard(language)
             photo_id = _REMINDER_3H_PHOTO.get("prod" if config.IS_PROD else "stage", "")
             sent = await _safe_send_photo_or_text(
@@ -456,7 +563,9 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
             await log_notification_send(_key, telegram_id, status="skipped_disabled")
             logger.info(f"trial_final_reminder_skipped_disabled: user={telegram_id}, key={_key}")
             return
-        _custom = await get_notification_text(_key)
+        _lang = await resolve_user_language(telegram_id)
+        _custom = (await _gb_reminder_text(pool, telegram_id, _key, _lang)
+                   or await get_notification_text(_key, language=_lang))
         success, status = await send_trial_notification(
             bot, pool, telegram_id, _key, payload_final["has_button"],
             custom_text=_custom,
@@ -502,7 +611,9 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
             await _log_send_impl(_key, telegram_id, status="skipped_disabled")
             logger.info(f"trial_schedule_skipped_disabled: user={telegram_id}, key={_key}")
             continue
-        _custom = await _get_text_impl(_key)
+        _custom = await _get_text_impl(
+            _key, language=await resolve_user_language(telegram_id),
+        )
         success, status = await send_trial_notification(
             bot, pool, telegram_id, _key, payload["has_button"],
             custom_text=_custom,
@@ -688,16 +799,6 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
                 )
                 return
 
-            if uuid_val:
-                import vpn_utils
-                try:
-                    await vpn_utils.remove_vless_user(uuid_val)
-                    logger.info(f"trial_expired: VPN access revoked: user={telegram_id}, uuid={uuid_val[:8]}...")
-                except Exception as e:
-                    logger.warning(f"Failed to remove VPN UUID for expired trial: user={telegram_id}, error={e}")
-                    # Don't mark subscription as expired if VPN removal failed — retry next cycle
-                    return
-
             # 3.x: убрать Remnawave premium entity после истечения триала
             # (bypass, если он был у trial-юзера, обрабатывается ниже — либо
             # оставляем как "bypass-only" при has_remnawave). Premium
@@ -762,47 +863,15 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
                     WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
                 """, telegram_id)
 
-            should_send, send_reason = await trial_service.should_send_completion_notification(
-                telegram_id=telegram_id,
-                conn=conn
-            )
-            if should_send:
-                trial_completed_sent = await trial_service.mark_trial_completed(
-                    telegram_id=telegram_id,
-                    conn=conn
-                )
-                if trial_completed_sent:
-                    language = await resolve_user_language(telegram_id)
-                    expired_text = i18n.get_text(language, "trial.expired")
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text=i18n.get_text(language, "trial.expired_discount_btn"),
-                            callback_data="menu_buy_vpn"
-                        )]
-                    ])
-                    sent = await safe_send_message(
-                        bot, telegram_id, expired_text,
-                        parse_mode="HTML", reply_markup=keyboard
+            # N-05: same exactly-once claim + send as fast_expiry_cleanup.
+            if await claim_trial_expired_notice(telegram_id, conn):
+                if await send_trial_expired_notice(bot, telegram_id):
+                    logger.info(
+                        f"trial_completed: user={telegram_id}, "
+                        f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
+                        f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
+                        f"completed_at={now.isoformat()}"
                     )
-                    if sent:
-                        await asyncio.sleep(0.05)
-                        logger.info(
-                            f"trial_expired: notification sent: user={telegram_id}, "
-                            f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
-                            f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}"
-                        )
-                        logger.info(
-                            f"trial_completed: user={telegram_id}, "
-                            f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
-                            f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-                            f"completed_at={now.isoformat()}"
-                        )
-                    else:
-                        logger.warning(f"TRIAL_EXPIRED_SKIP_CHAT_NOT_FOUND user={telegram_id}")
-                else:
-                    logger.info(f"trial_expired_skipped: user={telegram_id}, reason=already_sent")
-            else:
-                logger.debug(f"trial_completion_notification_skipped: user={telegram_id}, reason={send_reason}")
         except trial_service.TrialServiceError as e:
             logger.warning(f"trial_expiry_skipped: user={telegram_id}, service_error={type(e).__name__}: {str(e)}")
         except Exception as e:
@@ -898,6 +967,8 @@ async def run_trial_scheduler(bot: Bot):
             return
         _TRIAL_SCHEDULER_STARTED = True
     logger.info("Trial notifications scheduler started")
+    from app.core import runtime_health  # dashboard liveness (in-memory)
+    runtime_health.register("trial_notifications", interval_s=300 + 120, initial_delay_s=60)
     
     # Prevent worker burst at startup
     jitter_s = random.uniform(5, 60)
@@ -986,6 +1057,7 @@ async def run_trial_scheduler(bot: Bot):
                 pass
         finally:
             # H2 fix: ITERATION_END always fires in finally block
+            runtime_health.record("trial_notifications", iteration_outcome, iteration_error_type)
             duration_ms = (time.time() - iteration_start_time) * 1000
             log_worker_iteration_end(
                 worker_name="trial_notifications",

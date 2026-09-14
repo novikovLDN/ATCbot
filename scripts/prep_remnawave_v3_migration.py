@@ -154,9 +154,9 @@ async def _process(
 async def _main(dry_run: bool, limit: Optional[int]) -> int:
     logger.info("prep starting (dry_run=%s, limit=%s)", dry_run, limit)
 
-    from database.core import initialize_database
-    if not await initialize_database():
-        logger.error("database initialize_database() → False")
+    from database.core import init_db
+    if not await init_db():
+        logger.error("database init_db() → False")
         return 2
 
     if not await _has_migration_078():

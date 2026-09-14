@@ -41,7 +41,6 @@ def _make_mock_config(**overrides):
     cfg.PLATEGA_API_URL = overrides.get("PLATEGA_API_URL", "https://api.platega.io")
     cfg.SBP_MARKUP_PERCENT = 11
     cfg.VALID_SUBSCRIPTION_TYPES = ["basic", "plus"]
-    cfg.is_biz_tariff = lambda t: False
     return cfg
 
 
@@ -50,6 +49,9 @@ def _make_mock_database(db_ready: bool = True):
     db = MagicMock()
     db.DB_READY = db_ready
     db.get_pending_purchase_by_id = AsyncMock(return_value=None)
+    # confirmation.lookup_pending_purchase binds this mock when the test file
+    # runs in isolation (confirmation imported while "database" is mocked).
+    db.get_pending_purchase_any_status = AsyncMock(return_value=None)
     db.finalize_purchase = AsyncMock(return_value=None)
     return db
 
@@ -61,7 +63,7 @@ def _load_cryptobot_service(config_mock=None, db_mock=None):
 
     # Pre-inject mocks so import chain doesn't pull real modules
     saved = {}
-    for mod_name, mock_obj in [("config", cfg), ("database", db), ("vpn_utils", MagicMock())]:
+    for mod_name, mock_obj in [("config", cfg), ("database", db)]:
         saved[mod_name] = sys.modules.get(mod_name)
         sys.modules[mod_name] = mock_obj
 
@@ -86,7 +88,7 @@ def _load_platega_service(config_mock=None, db_mock=None):
     db = db_mock or _make_mock_database()
 
     saved = {}
-    for mod_name, mock_obj in [("config", cfg), ("database", db), ("vpn_utils", MagicMock())]:
+    for mod_name, mock_obj in [("config", cfg), ("database", db)]:
         saved[mod_name] = sys.modules.get(mod_name)
         sys.modules[mod_name] = mock_obj
 
@@ -207,14 +209,21 @@ class TestPlategaWebhookAuth:
 
     @pytest.mark.asyncio
     async def test_db_not_ready_returns_degraded(self):
+        """DB not ready → TransientPaymentError (HTTP 500) so Platega retries.
+
+        Deliberate since cc0c946d: a 200 {"status": "degraded"} made the
+        provider stop retrying and the payment was lost.
+        """
         db_mock = _make_mock_database(db_ready=False)
         svc = _load_platega_service(db_mock=db_mock)
         svc.database = db_mock
 
         headers = {"x-merchantid": FAKE_PLATEGA_MERCHANT_ID, "x-secret": FAKE_PLATEGA_SECRET}
         body = {"id": "txn-001", "status": "confirmed"}
-        result = await svc.process_webhook_data(headers, body, MagicMock())
-        assert result["status"] == "degraded"
+        with pytest.raises(svc.TransientPaymentError, match="DB not ready"):
+            await svc.process_webhook_data(headers, body, MagicMock())
+        db_mock.get_pending_purchase_by_id.assert_not_awaited()
+        db_mock.finalize_purchase.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_case_insensitive_headers(self):

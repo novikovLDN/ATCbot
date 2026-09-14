@@ -1,0 +1,214 @@
+"""−15 % around the end of a subscription (owner 2026-09-14, SCOPE.md «Срок скидки −15 %»;
+docs/audit/08_payments_ux.md P1 #5, P2 #11):
+
+  * ONE 72 h window per period, opened by whatever offers it first — the 3 h
+    reminder or the expiry; a button never extends it, an old button after the
+    window says it expired; a bigger personal discount stays;
+  * the texts name the exact end in Moscow time (not «3 часа» / «7 дней»);
+  * a paid subscription that ended tells the user — after the commit, once —
+    also without a bypass entity (it used to end in silence).
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+import database
+import database.subscriptions as db_subs
+from app.i18n import get_text
+from app.services.notifications import special_offer as so
+
+# reuse the one-subscription world of the N7 tests
+from tests.services.test_special_offer_on_expiry import (  # noqa: F401 — `world` is a fixture
+    ENDED, TG, _one_fast_expiry_pass, _patch_fast_expiry, world,
+)
+
+END = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+OFFER_END = datetime(2026, 9, 17, 11, 30, tzinfo=timezone.utc)
+CYRILLIC = set("абвгдеёжзийклмнопрстуфхцчшщъыьэюя")
+
+
+def test_deadline_is_moscow_time():
+    assert so.format_deadline("ru", OFFER_END) == "17.09.2026 14:30 МСК"
+    assert so.format_deadline("en", OFFER_END) == "17.09.2026 14:30 Moscow time"
+
+
+def test_window_is_72_hours_and_one_per_period():
+    assert db_subs.SPECIAL_OFFER_DURATION == timedelta(hours=72)
+    naive_end = END.replace(tzinfo=None)
+    assert db_subs._offer_cutoff(END) == naive_end - timedelta(days=7)
+    assert db_subs._offer_cutoff(naive_end) == naive_end - timedelta(days=7)
+
+
+class _Pool:
+    def __init__(self, tag):
+        self.tag, self.args = tag, None
+
+    def acquire(self):
+        pool = self
+
+        class _A:
+            async def __aenter__(self_inner):
+                class _C:
+                    async def execute(self_c, sql, *args):
+                        pool.args = args
+                        return pool.tag
+                return _C()
+
+            async def __aexit__(self_inner, *exc):
+                return False
+        return _A()
+
+
+@pytest.mark.parametrize("tag", ["UPDATE 1", "UPDATE 0"])
+async def test_claim_opens_once_and_returns_the_active_window(monkeypatch, tag):
+    pool = _Pool(tag)
+    monkeypatch.setattr(db_subs._core, "DB_READY", True)
+    monkeypatch.setattr(db_subs, "get_pool", AsyncMock(return_value=pool))
+    active = {"expires_at": OFFER_END, "discount_percent": 15}
+    monkeypatch.setattr(db_subs, "get_special_offer_info", AsyncMock(return_value=active))
+
+    assert await db_subs.claim_special_offer(TG, END) is active
+    assert pool.args[2] == END.replace(tzinfo=None) - timedelta(days=7)   # never re-opens this period
+
+
+async def test_claim_without_db_or_period_end_is_none(monkeypatch):
+    monkeypatch.setattr(db_subs._core, "DB_READY", True)
+    assert await db_subs.claim_special_offer(TG, None) is None
+    monkeypatch.setattr(db_subs._core, "DB_READY", False)
+    assert await db_subs.claim_special_offer(TG, END) is None
+
+
+# ── the −15 % buttons ──────────────────────────────────────────────────
+
+
+async def _press(monkeypatch, *, offer, claim_returns=None, current=None, lang="ru", handler="callback_paid_discount_15"):
+    from app.handlers.callbacks import navigation
+    import app.handlers.common.screens as screens
+
+    create = AsyncMock()
+    claim = AsyncMock(return_value=claim_returns)
+    monkeypatch.setattr(database, "create_user_discount", create)
+    monkeypatch.setattr(database, "get_special_offer_info", AsyncMock(return_value=offer))
+    monkeypatch.setattr(database, "get_subscription_any", AsyncMock(return_value={"expires_at": END}))
+    monkeypatch.setattr(db_subs, "claim_special_offer", claim)
+    monkeypatch.setattr(database, "get_user_discount", AsyncMock(
+        return_value={"discount_percent": current} if current else None))
+    monkeypatch.setattr(navigation, "resolve_user_language", AsyncMock(return_value=lang))
+    monkeypatch.setattr(screens, "_open_buy_screen", AsyncMock())
+    callback = MagicMock()
+    callback.from_user.id = TG
+    callback.answer = AsyncMock()
+    callback.message.answer = AsyncMock()
+    await getattr(navigation, handler)(callback, MagicMock())
+    return callback.message.answer.await_args.args[0], create, claim
+
+
+@pytest.mark.parametrize("handler", ["callback_paid_discount_15", "callback_trial_discount_15"])
+async def test_button_uses_the_open_window_and_names_its_end(monkeypatch, handler):
+    text, create, claim = await _press(monkeypatch, offer={"expires_at": OFFER_END}, handler=handler)
+    assert text == get_text("ru", "main.discount_applied_choose_tariff",
+                            deadline=so.format_deadline("ru", OFFER_END))
+    assert "7 дней" not in text and "17.09.2026 14:30" in text
+    create.assert_not_awaited()     # no 7-day personal discount any more
+    claim.assert_not_awaited()      # pressing again never extends the window
+
+
+async def test_button_opens_the_window_if_nothing_offered_it_yet(monkeypatch):
+    text, _, claim = await _press(monkeypatch, offer=None, claim_returns={"expires_at": OFFER_END})
+    assert claim.await_args.args == (TG, END)
+    assert "17.09.2026 14:30" in text
+
+
+async def test_old_button_after_the_window_says_it_expired(monkeypatch):
+    text, create, _ = await _press(monkeypatch, offer=None, claim_returns=None)
+    assert text == get_text("ru", "errors.special_offer_expired")
+    create.assert_not_awaited()
+
+
+async def test_a_bigger_discount_stays(monkeypatch):
+    text, _, _ = await _press(monkeypatch, offer={"expires_at": OFFER_END}, current=30, lang="en")
+    assert text == get_text("en", "main.discount_bigger_kept", percent=30)
+
+
+# ── the «subscription ended» notice ────────────────────────────────────
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_paid_expired_notice_with_the_open_window(monkeypatch, lang):
+    monkeypatch.setattr(database, "get_special_offer_info", AsyncMock(return_value={"expires_at": OFFER_END}))
+    text, kb = await so.expired_notice(lang, TG, has_bypass=False)
+    assert text.startswith(get_text(lang, "subscription.expired_paid"))
+    assert so.format_deadline(lang, OFFER_END) in text
+    assert [b.callback_data for row in kb.inline_keyboard for b in row] == ["special_offer_buy", "menu_buy_vpn"]
+    if lang == "en":
+        assert not (set(text.lower()) & CYRILLIC)
+
+
+async def test_notice_without_a_window_has_no_offer(monkeypatch):
+    monkeypatch.setattr(database, "get_special_offer_info", AsyncMock(return_value=None))
+    text, kb = await so.expired_notice("ru", TG, has_bypass=False)
+    assert text == get_text("ru", "subscription.expired_paid")
+    assert [b.callback_data for row in kb.inline_keyboard for b in row] == ["menu_buy_vpn"]
+
+
+async def test_bypass_notice_keeps_its_buttons_and_gets_the_offer(monkeypatch):
+    monkeypatch.setattr(database, "get_special_offer_info", AsyncMock(return_value={"expires_at": OFFER_END}))
+    text, kb = await so.expired_notice("ru", TG, has_bypass=True)
+    assert text.startswith(get_text("ru", "traffic.subscription_expired_bypass_active"))
+    assert [b.callback_data for row in kb.inline_keyboard for b in row] == [
+        "special_offer_buy", "buy_traffic", "menu_buy_vpn"]
+
+
+# ── expiry paths: after the commit, once ───────────────────────────────
+
+
+@pytest.mark.parametrize("bypass", [False, True], ids=["fully_expired", "to_bypass_only"])
+async def test_fast_expiry_tells_a_paid_user_once(world, monkeypatch, bypass):
+    store = world(source="payment", bypass=bypass)
+    fec = _patch_fast_expiry(monkeypatch, store)
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(so, "notify_expired", notify)
+
+    await _one_fast_expiry_pass(fec)
+    notify.assert_awaited_once()
+    assert notify.await_args.kwargs["has_bypass"] is bypass
+    assert store.offer_writes == 1                 # the window exists when the notice is built
+
+    store.row.update(status="active", uuid="u-1", source="payment")  # rerun of the same period
+    await _one_fast_expiry_pass(fec)
+    assert store.offer_writes == 1
+
+
+@pytest.mark.parametrize("source", ["admin", "gift"])
+async def test_fast_expiry_unpaid_without_bypass_gets_no_paid_notice(world, monkeypatch, source):
+    store = world(source=source, bypass=False)
+    fec = _patch_fast_expiry(monkeypatch, store)
+    notify = AsyncMock()
+    monkeypatch.setattr(so, "notify_expired", notify)
+    await _one_fast_expiry_pass(fec)
+    notify.assert_not_awaited()
+
+
+@pytest.mark.parametrize("bypass, source, expected", [
+    (True, "payment", True), (False, "payment", False), (False, "admin", None),
+])
+async def test_check_and_disable_notifies_after_its_commit(world, monkeypatch, bypass, source, expected):
+    world(source=source, bypass=bypass)
+    schedule = MagicMock(return_value=True)
+    monkeypatch.setattr(so, "schedule_expired_notice", schedule)
+    assert await database.check_and_disable_expired_subscription(TG) is True
+    if expected is None:
+        schedule.assert_not_called()
+    else:
+        schedule.assert_called_once_with(TG, has_bypass=expected)
+
+
+def test_grant_skips_a_window_the_reminder_already_opened():
+    """The 3 h reminder opened the window at end − 3 h → the expiry must not re-open it."""
+    naive_end = ENDED
+    reminder_offer = naive_end - timedelta(hours=3)
+    assert not reminder_offer < db_subs._offer_cutoff(naive_end)        # «already offered»
+    assert (naive_end - timedelta(days=40)) < db_subs._offer_cutoff(naive_end)  # previous period

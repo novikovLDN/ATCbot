@@ -7,6 +7,7 @@ All messages use admin's language from DB.
 from app.i18n import get_text
 from app.services.language_service import resolve_user_language, DEFAULT_LANGUAGE
 import asyncio
+import html
 import logging
 from datetime import datetime
 from typing import Optional
@@ -56,7 +57,7 @@ async def notify_admin_degraded_mode(bot: Bot):
         bot=bot,
         message=message,
         notification_type="degraded_mode",
-        parse_mode=None
+        parse_mode="HTML"
     )
     
     if success:
@@ -92,7 +93,7 @@ async def notify_admin_recovered(bot: Bot):
         bot=bot,
         message=message,
         notification_type="recovered",
-        parse_mode=None
+        parse_mode="HTML"
     )
     
     if success:
@@ -168,8 +169,8 @@ async def notify_admin_pending_activations(bot: Bot, pending_count: int, oldest_
                     subscription_id=sub["subscription_id"],
                     telegram_id=sub["telegram_id"],
                     attempts=sub["attempts"],
-                    pending_since=pending_since_str,
-                    error=error_preview
+                    pending_since=html.escape(pending_since_str),
+                    error=html.escape(str(error_preview)),  # panel text: may carry < & >
                 )
                 message_lines.append(row)
         
@@ -180,7 +181,7 @@ async def notify_admin_pending_activations(bot: Bot, pending_count: int, oldest_
             bot=bot,
             message=message,
             notification_type="pending_activations",
-            parse_mode=None
+            parse_mode="HTML"
         )
         
         if success:
@@ -218,8 +219,7 @@ async def send_admin_notification(
         bot: Telegram bot instance
         message: Notification message text
         notification_type: Type of notification (for logging/observability)
-                          Examples: "degraded_mode", "recovered", "pending_activations", 
-                                   "corporate_access_request", "custom"
+                          Examples: "degraded_mode", "recovered", "pending_activations", "custom"
         parse_mode: Parse mode for message (None, "HTML", "Markdown")
         **kwargs: Additional arguments passed to bot.send_message
     
@@ -252,73 +252,3 @@ async def send_admin_notification(
         )
         logger.exception(f"Admin notification delivery failed (non-fatal): {e}")
         return False
-
-
-async def send_user_notification(
-    bot: Bot,
-    user_id: int,
-    message: str,
-    notification_type: str = "custom",
-    parse_mode: Optional[str] = "HTML",
-    reply_markup: Optional[InlineKeyboardMarkup] = None,
-    **kwargs
-) -> bool:
-    """
-    Unified entry point for sending user notifications.
-    
-    This is a first-class notification service that:
-    - Logs all delivery attempts explicitly
-    - Handles errors gracefully (logs but doesn't crash)
-    - Returns success/failure status
-    - Makes delivery attempts observable
-    
-    Args:
-        bot: Telegram bot instance
-        user_id: Telegram user ID
-        message: Notification message text
-        notification_type: Type of notification (for logging/observability)
-                          Examples: "admin_grant", "admin_revoke", "payment_approved",
-                                   "subscription_renewed", "corporate_access_confirmation", "custom"
-        parse_mode: Parse mode for message (None, "HTML", "Markdown")
-        reply_markup: Optional inline keyboard
-        **kwargs: Additional arguments passed to bot.send_message
-    
-    Returns:
-        bool: True if notification sent successfully, False otherwise
-    
-    Never raises exceptions - all errors are logged and handled gracefully.
-    """
-    try:
-        logger.info(f"USER_NOTIFICATION_ATTEMPT [type={notification_type}, user_id={user_id}]")
-        
-        await bot.send_message(
-            user_id,
-            message,
-            parse_mode=parse_mode,
-            reply_markup=reply_markup,
-            **kwargs
-        )
-        
-        logger.info(f"USER_NOTIFICATION_SENT [type={notification_type}, user_id={user_id}]")
-        return True
-        
-    except Exception as e:
-        # Handle specific Telegram errors gracefully
-        error_type = type(e).__name__
-        error_msg = str(e)
-        
-        # User blocked bot or deleted account
-        if "blocked" in error_msg.lower() or "chat not found" in error_msg.lower():
-            logger.warning(
-                f"USER_NOTIFICATION_SKIPPED [type={notification_type}, user_id={user_id}, "
-                f"reason=user_unreachable, error={error_type}]"
-            )
-        else:
-            logger.error(
-                f"USER_NOTIFICATION_FAILED [type={notification_type}, user_id={user_id}, "
-                f"error={error_type}: {error_msg[:100]}]"
-            )
-            logger.exception(f"User notification delivery failed (non-fatal): {e}")
-        
-        return False
-

@@ -2,508 +2,658 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Dashboard v3 design tokens ─────────────────────────────────────────
+   A monochrome bento: charcoal and graphite tiles on a warm light-gray
+   device, which itself floats on a lit wall. Tiles are told apart by
+   shade, never by borders. One warm note — cream — marks what is active
+   or most important, and nothing else carries colour except small,
+   desaturated status dots.
+
+   Colours are "R G B" triplets so Tailwind opacity modifiers work and the
+   theme / brand can be swapped by redefining variables:
+     --c-brand   set at runtime from GET /api/branding (BRAND_PRIMARY_COLOR)
+     data-theme  "dark" (charcoal tiles, the primary look) | "light"      */
 @layer base {
-  html,
-  body,
-  #root {
-    @apply h-full;
+  :root,
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --c-brand: 242 232 201;
+
+    --c-wall: 216 215 211;
+    --c-wall-2: 186 185 181;
+    --c-shell: 207 206 202;
+    --c-shell-ink: 28 28 28;
+    --c-shell-mute: 92 91 88;
+
+    --c-tile-1: 30 30 30;
+    --c-tile-2: 38 38 38;
+    --c-tile-3: 47 47 47;
+    --c-tile-4: 60 60 60;
+    --c-steel: 74 74 74;
+    --c-on-steel: 236 236 236;
+    --c-fog: 140 140 140;
+    --c-on-fog: 22 22 22;
+    --c-mist: 166 166 166;
+    --c-on-mist: 22 22 22;
+
+    --c-ink: 234 234 232;
+    --c-body: 190 190 188;
+    --c-mute: 150 150 147;
+    --c-ash: 112 112 110;
+
+    --c-line: 56 56 56;
+    --c-line-soft: 46 46 46;
+    --c-line-strong: 76 76 76;
+
+    --c-accent: var(--c-brand);
+    --c-accent-hi: 250 244 226;
+    --c-accent-lo: 222 209 172;
+    --c-on-accent: 28 28 28;
+
+    --c-ok: 143 179 154;
+    --c-warn: 205 184 128;
+    --c-err: 204 141 132;
+    --c-info: 146 170 192;
+    --c-special: 172 158 192;
+
+    --shadow-shell: 0 40px 80px -30px rgb(0 0 0 / 0.35), 0 12px 24px -12px rgb(0 0 0 / 0.18);
+  }
+
+  /* Light variant: shades inverted — dark wall and device, light tiles.
+     The accent role flips to a charcoal pill carrying the brand colour as
+     its text, because cream on near-white would disappear. */
+  [data-theme="light"] {
+    color-scheme: light;
+    --c-wall: 44 44 43;
+    --c-wall-2: 24 24 23;
+    --c-shell: 36 36 35;
+    --c-shell-ink: 236 236 234;
+    --c-shell-mute: 170 170 166;
+
+    --c-tile-1: 246 245 242;
+    --c-tile-2: 238 237 233;
+    --c-tile-3: 228 227 223;
+    --c-tile-4: 214 213 209;
+    --c-steel: 196 196 194;
+    --c-on-steel: 24 24 24;
+    --c-fog: 120 120 118;
+    --c-on-fog: 246 246 244;
+    --c-mist: 90 90 88;
+    --c-on-mist: 246 246 244;
+
+    --c-ink: 26 26 26;
+    --c-body: 64 64 62;
+    --c-mute: 102 102 99;
+    --c-ash: 140 140 137;
+
+    --c-line: 222 221 217;
+    --c-line-soft: 232 231 227;
+    --c-line-strong: 200 199 195;
+
+    --c-accent: 30 30 30;
+    --c-accent-hi: 50 50 50;
+    --c-accent-lo: 16 16 16;
+    --c-on-accent: var(--c-brand);
+
+    --c-ok: 70 120 88;
+    --c-warn: 150 118 50;
+    --c-err: 160 80 70;
+    --c-info: 70 100 130;
+    --c-special: 110 90 140;
+
+    --shadow-shell: 0 40px 80px -30px rgb(0 0 0 / 0.6), 0 12px 24px -12px rgb(0 0 0 / 0.4);
+  }
+
+  :root {
+    /* Geometry. Tiles 24px, rows 16px, the device 30px; the notch bite is
+       sized to hold a 40px circular control with an 8px moat. */
+    --r-shell: 30px;
+    --r-tile: 24px;
+    --r-row: 16px;
+    --gap: 12px;
+    --notch: 56px;
+
+    /* Motion: 150–220ms, ease, nothing bouncy. */
+    --dur-instant: 120ms;
+    --dur-fast: 160ms;
+    --dur-base: 200ms;
+    --dur-slow: 220ms;
+    --ease-standard: cubic-bezier(0.2, 0, 0.2, 1);
+    --ease-entrance: cubic-bezier(0, 0, 0.2, 1);
+    --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+    --ease: var(--ease-standard);
+
+    --row-h: 40px;
+    --row-pad-y: 8px;
+    --cell-text: 13px;
+
+    /* Legacy variable names used by v2 components — resolve to v3. */
+    --canvas: rgb(var(--c-tile-1));
+    --surface-1: rgb(var(--c-tile-2));
+    --surface-2: rgb(var(--c-tile-3));
+    --surface-3: rgb(var(--c-tile-4));
+    --surface-4: rgb(var(--c-steel));
+    --hairline: rgb(var(--c-line));
+    --hairline-hi: rgb(var(--c-line-strong));
+    --hairline-soft: rgb(var(--c-line-soft));
+    --border-subtle: var(--hairline-soft);
+    --border-default: var(--hairline);
+    --border-strong: var(--hairline-hi);
+    --ink: rgb(var(--c-ink));
+    --body: rgb(var(--c-body));
+    --mute: rgb(var(--c-mute));
+    --ash: rgb(var(--c-ash));
+    --text-primary: var(--ink);
+    --text-secondary: var(--body);
+    --text-muted: var(--mute);
+    --text-disabled: var(--ash);
+    --accent: rgb(var(--c-accent));
+    --accent-hover: rgb(var(--c-accent-hi));
+    --accent-dim: rgb(var(--c-accent) / 0.14);
+    --accent-ring: rgb(var(--c-accent) / 0.45);
+    --on-accent: rgb(var(--c-on-accent));
+    --ok: rgb(var(--c-ok));
+    --warn: rgb(var(--c-warn));
+    --err: rgb(var(--c-err));
+    --info: rgb(var(--c-info));
+    --special: rgb(var(--c-special));
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-6: 24px;
+    --space-8: 32px;
+  }
+
+  [data-density="compact"] { --row-h: 32px; --row-pad-y: 4px; --cell-text: 12px; }
+  [data-density="spacious"] { --row-h: 52px; --row-pad-y: 14px; --cell-text: 14px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+  [data-motion="reduced"] *, [data-motion="reduced"] *::before, [data-motion="reduced"] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  html, body, #root { min-height: 100%; }
+  html, body { overscroll-behavior: none; }
+
+  html {
+    /* The lit wall: light falls from the upper left. On <html> so it
+       covers the whole canvas, not just the body box. */
+    background-color: rgb(var(--c-wall-2));
+    background-image: radial-gradient(120% 90% at 0% 0%, rgb(var(--c-wall)) 0%, rgb(var(--c-wall-2)) 100%);
+    background-attachment: fixed;
   }
 
   body {
-    font-feature-settings: "ss01", "ss02", "cv11";
-    /* WHITE THEME 2026/2027 — warm off-white канвас с тонкими colored halo
-       по углам (info/special/success по 3%). Плюс субтильная dot-grid
-       12px и SVG-turbulence noise-плёнка — даёт «paper texture» вместо
-       плоского белого, снижает нагрузку на глаз при долгом просмотре. */
-    background:
-      radial-gradient(ellipse 60% 40% at 100% 0%, rgba(37, 99, 235, 0.045), transparent 65%),
-      radial-gradient(ellipse 55% 45% at 0% 100%, rgba(124, 58, 237, 0.035), transparent 60%),
-      radial-gradient(ellipse 40% 35% at 100% 100%, rgba(16, 185, 129, 0.030), transparent 60%),
-      radial-gradient(rgba(15, 23, 32, 0.055) 1px, transparent 1px),
-      #FBFBF9;
-    background-size: auto, auto, auto, 12px 12px, auto;
-    min-height: 100vh;
-    letter-spacing: -0.01em;
-    color: #0F1720;
-    position: relative;
-    /* Safe-area-friendly для iOS PWA (notch, home-indicator) */
-    padding-top: env(safe-area-inset-top);
-    padding-bottom: env(safe-area-inset-bottom);
-    -webkit-tap-highlight-color: transparent; /* убрать серый flash на tap */
+    font-family: Onest, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-optical-sizing: auto;
+    color: rgb(var(--c-ink));
+    -webkit-font-smoothing: antialiased;
   }
-  /* Ультратонкая plâter-текстура. Opacity 0.035, multiply — не серит
-     карточки (у них своё pure white), только оживляет фон.
-     iOS Safari корректно рендерит SVG data-uri. */
+
+  /* Paper grain on the wall only, never on tiles (it would stack at seams). */
   body::before {
     content: "";
     position: fixed;
     inset: 0;
     pointer-events: none;
     z-index: 0;
-    opacity: 0.035;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.85'/></svg>");
-    mix-blend-mode: multiply;
+    opacity: 0.05;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
   }
-  #root {
-    position: relative;
-    z-index: 1;
-  }
+  #root { position: relative; z-index: 1; }
 
-  ::selection {
-    background-color: rgba(37, 99, 235, 0.18);   /* info-blue tint */
-    color: #0F1720;
-  }
+  .nums, .tabular { font-variant-numeric: tabular-nums; }
+  * { -webkit-tap-highlight-color: transparent; }
+  h1, h2, h3 { letter-spacing: -0.02em; }
+  ::selection { background-color: rgb(var(--c-accent) / 0.35); color: rgb(var(--c-ink)); }
 
-  /* Scrollbar — тонкий slate на light canvas. */
-  ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-  }
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
+  :focus-visible { outline: 2px solid rgb(var(--c-accent)); outline-offset: 2px; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb {
-    background: rgba(15, 23, 32, 0.15);
+    background: rgb(var(--c-tile-4));
     border-radius: 8px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgba(15, 23, 32, 0.25);
-    background-clip: padding-box;
-    border: 2px solid transparent;
-  }
 
-  /* Big headlines feel right in the reference — tighter tracking,
-     heavier optical weight. */
-  h1, h2, h3 {
-    letter-spacing: -0.02em;
-  }
+  .track-hero { letter-spacing: -0.035em; }
+  .track-metric { letter-spacing: -0.02em; }
+  .track-body { letter-spacing: 0; }
+  .track-label { letter-spacing: 0.02em; }
 }
 
 @layer components {
-  .card {
-    @apply rounded-2xl border border-border bg-bg-card shadow-card;
+  /* ── Device shell ─────────────────────────────────────────────────── */
+  .device {
+    position: relative;
+    background: rgb(var(--c-shell));
+    border-radius: var(--r-shell);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.35),
+      inset 0 0 0 1px rgb(255 255 255 / 0.12),
+      var(--shadow-shell);
   }
-  .card-hover {
-    @apply transition-all duration-200
-           hover:border-accent/40 hover:shadow-glow-sm;
+  [data-theme="light"] .device {
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08), inset 0 0 0 1px rgb(255 255 255 / 0.05), var(--shadow-shell);
   }
-  .row-hover {
-    @apply transition-colors hover:bg-bg-subtle;
+  .on-shell { color: rgb(var(--c-shell-ink)); }
+  .on-shell-mute { color: rgb(var(--c-shell-mute)); }
+
+  /* ── Tiles ─────────────────────────────────────────────────────────── */
+  .tile {
+    position: relative;
+    border-radius: var(--r-tile);
+    background: rgb(var(--c-tile-1));
+    color: rgb(var(--c-ink));
   }
-  .focus-ring {
-    @apply focus:outline-none focus:ring-2 focus:ring-accent/50 focus:ring-offset-0;
+  .tile-raised { background: rgb(var(--c-tile-2)); }
+  .tile-steel { background: rgb(var(--c-steel)); color: rgb(var(--c-on-steel)); }
+  .tile-fog { background: rgb(var(--c-fog)); color: rgb(var(--c-on-fog)); }
+  .tile-mist { background: rgb(var(--c-mist)); color: rgb(var(--c-on-mist)); }
+  .tile-accent { background: rgb(var(--c-accent)); color: rgb(var(--c-on-accent)); }
+  /* Secondary text on light-coloured tiles follows the tile's own ink. */
+  .tile-fog .t-mute, .tile-mist .t-mute, .tile-accent .t-mute, .tile-steel .t-mute { color: currentColor; opacity: 0.68; }
+  .t-mute { color: rgb(var(--c-mute)); }
+  .t-body { color: rgb(var(--c-body)); }
+
+  /* Notch: a bite out of one tile corner, painted in the shell colour, with
+     a concave inner curve and two convex fillets so the tile edge flows
+     around whatever sits in the bite (a ↗ badge or a neighbouring tile).
+     Geometry is authored for the top-right corner; the other corners are
+     the same element mirrored. */
+  .notch {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
   }
-  .link-accent {
-    @apply text-accent transition-colors hover:text-accent-hover;
+  .notch[data-corner="tl"] { transform: scaleX(-1); }
+  .notch[data-corner="br"] { transform: scaleY(-1); }
+  .notch[data-corner="bl"] { transform: scale(-1, -1); }
+  .notch > i {
+    position: absolute;
+    display: block;
+    background: rgb(var(--c-shell));
   }
+  .notch > i:nth-child(1) {
+    top: -1px;
+    right: -1px;
+    width: calc(var(--notch) + 1px);
+    height: calc(var(--notch) + 1px);
+    border-bottom-left-radius: var(--r-tile);
+  }
+  .notch > i:nth-child(2),
+  .notch > i:nth-child(3) {
+    width: var(--r-tile);
+    height: var(--r-tile);
+    background: radial-gradient(circle at 0 100%, transparent calc(var(--r-tile) - 0.5px), rgb(var(--c-shell)) var(--r-tile));
+  }
+  /* Each fillet overlaps the bite by 1px so no sub-pixel seam shows. */
+  .notch > i:nth-child(2) { top: -1px; right: calc(var(--notch) - 1px); width: calc(var(--r-tile) + 1px); }
+  .notch > i:nth-child(3) { top: calc(var(--notch) - 1px); right: -1px; height: calc(var(--r-tile) + 1px); }
+
+  .corner-slot {
+    position: absolute;
+    display: grid;
+    place-items: center;
+    width: var(--notch);
+    height: var(--notch);
+    z-index: 2;
+  }
+  .corner-slot[data-corner="tr"] { top: 0; right: 0; }
+  .corner-slot[data-corner="tl"] { top: 0; left: 0; }
+  .corner-slot[data-corner="br"] { bottom: 0; right: 0; }
+  .corner-slot[data-corner="bl"] { bottom: 0; left: 0; }
+
+  /* ── Capsules ─────────────────────────────────────────────────────── */
+  .capsule-nav {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px;
+    border-radius: 999px;
+    background: rgb(var(--c-tile-1));
+  }
+  .capsule-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    color: rgb(var(--c-mute));
+    transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .capsule-tab:hover { color: rgb(var(--c-ink)); background: rgb(var(--c-tile-3)); }
+  .capsule-tab[aria-current="page"], .capsule-tab[aria-pressed="true"] {
+    background: rgb(var(--c-accent));
+    color: rgb(var(--c-on-accent));
+  }
+  .capsule-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: rgb(var(--c-ink) / 0.07);
+    font-size: 12px;
+    font-weight: 500;
+    color: rgb(var(--c-body));
+  }
+  .tile-fog .capsule-label, .tile-mist .capsule-label, .tile-accent .capsule-label, .tile-steel .capsule-label {
+    background: rgb(0 0 0 / 0.08);
+    color: currentColor;
+  }
+
+  .icon-btn {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    flex: none;
+    border-radius: 999px;
+    background: rgb(var(--c-tile-1));
+    color: rgb(var(--c-ink));
+    transition: background-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+  }
+  .icon-btn:hover { background: rgb(var(--c-tile-3)); }
+  .icon-btn:active { transform: scale(0.96); }
+  .icon-btn-sm { width: 32px; height: 32px; }
+  .icon-btn-accent { background: rgb(var(--c-accent)); color: rgb(var(--c-on-accent)); }
+  .icon-btn-accent:hover { background: rgb(var(--c-accent-hi)); }
+  .icon-btn-dot, .icon-btn-dot-accent {
+    position: absolute; right: 6px; top: 6px; width: 8px; height: 8px; border-radius: 999px;
+    pointer-events: none; box-shadow: 0 0 0 2px rgb(var(--c-tile-1));
+  }
+  .icon-btn-dot { background: rgb(var(--c-err)); }
+  .icon-btn-dot-accent { background: rgb(var(--c-accent)); }
+
+  .list-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 52px;
+    padding: 8px 8px 8px 16px;
+    border-radius: var(--r-row);
+    background: rgb(var(--c-tile-3));
+    color: rgb(var(--c-ink));
+    transition: background-color var(--dur-fast) var(--ease);
+  }
+  a.list-row:hover, button.list-row:hover { background: rgb(var(--c-tile-4)); }
+
+
+  .pill-track {
+    position: relative;
+    height: 12px;
+    border-radius: 999px;
+    background: rgb(var(--c-ink) / 0.09);
+  }
+  .pill-fill {
+    position: absolute; inset: 0 auto 0 0; border-radius: 999px;
+    background: rgb(var(--c-ink) / 0.5);
+    transition: width var(--dur-slow) var(--ease);
+  }
+  .pill-knob {
+    position: absolute; top: 50%; width: 20px; height: 20px; margin-left: -10px; margin-top: -10px;
+    border-radius: 999px; background: rgb(var(--c-accent));
+    box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+    transition: left var(--dur-slow) var(--ease);
+  }
+
+  /* ── Legacy component classes, restyled on v3 tokens ──────────────── */
+  .hairline { border: 1px solid rgb(var(--c-line)); }
+  .hairline-t { border-top: 1px solid rgb(var(--c-line)); }
+  .hairline-b { border-bottom: 1px solid rgb(var(--c-line)); }
+  .card { @apply rounded-[16px] bg-tile-2; }
+  .card-hover { transition: background-color var(--dur-fast) var(--ease); }
+  .card-hover:hover { background: rgb(var(--c-tile-3)); }
+  .row-hover { transition: background-color var(--dur-instant) var(--ease); }
+  .row-hover:hover { background: rgb(var(--c-tile-3)); }
+  .focus-ring { @apply outline-none focus-visible:ring-2 focus-visible:ring-accent/45; }
+  .link-accent { @apply text-accent underline-offset-2 hover:underline; }
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2
-           text-sm font-medium tracking-tight transition-all duration-150
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium
+           outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/45
            disabled:cursor-not-allowed disabled:opacity-50;
+    transition-duration: var(--dur-instant);
   }
-  /* Primary CTA на dark canvas — лаймовый акцент с тёмным текстом
-     (как «Dashboard» pill в нижнем navbar из brand-deck). Контраст и
-     активная роль очевидны мгновенно; тень — мягкое лаймовое glow. */
-  .btn-primary {
-    @apply btn bg-accent text-bg font-semibold
-           shadow-glow
-           hover:bg-accent-hover
-           active:translate-y-px;
-  }
-  .btn-secondary {
-    @apply btn border border-border bg-bg-card text-fg
-           hover:border-fg-subtle/40 hover:bg-bg-subtle;
-  }
-  .btn-danger {
-    @apply btn border border-danger/30 bg-danger/10 text-danger
-           hover:bg-danger/20 hover:border-danger/50;
-  }
-  .btn-ghost {
-    @apply btn text-fg-muted hover:bg-bg-subtle hover:text-fg;
-  }
-  .btn-info {
-    @apply btn border border-secondary/30 bg-secondary/10 text-secondary
-           hover:bg-secondary/20 hover:border-secondary/50;
-  }
+  .btn-primary { @apply btn bg-accent font-semibold text-onaccent hover:bg-accent-hover; }
+  .btn-secondary { @apply btn bg-tile-3 text-ink hover:bg-tile-4; }
+  .btn-danger { @apply btn bg-danger/15 text-danger hover:bg-danger/25; }
+  .btn-ghost { @apply btn text-mute hover:bg-tile-3 hover:text-ink; }
+  .btn-info { @apply btn bg-info/15 text-info hover:bg-info/25; }
 
   .input {
-    @apply w-full rounded-xl border border-border bg-bg-card px-4 py-2.5
-           text-sm text-fg placeholder:text-fg-subtle outline-none
-           transition-colors focus:border-accent focus:ring-2 focus:ring-accent/20;
+    @apply w-full rounded-[14px] border border-transparent bg-tile-3 px-4 py-2.5 text-sm text-ink outline-none
+           transition-colors placeholder:text-ash focus:border-accent/60 focus:ring-2 focus:ring-accent/25;
+    transition-duration: var(--dur-instant);
   }
+  .light-input { @apply input; }
 
-  /* Auth-input — Login на dark canvas. Тоньше .input, тёмная
-     pill-форма (bg-elevated), фокусный ring лаймовый. */
-  .light-input {
-    @apply w-full rounded-xl border border-border bg-bg-elevated px-4 py-2.5
-           text-sm text-fg outline-none transition-all duration-200
-           placeholder:text-fg-subtle
-           focus:border-accent/60 focus:ring-2 focus:ring-accent/25;
-  }
+  .badge { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium; }
+  .badge-success { @apply badge bg-success/15 text-success; }
+  .badge-danger { @apply badge bg-danger/15 text-danger; }
+  .badge-warning { @apply badge bg-warning/15 text-warning; }
+  .badge-muted { @apply badge bg-tile-3 text-mute; }
+  .badge-accent { @apply badge bg-accent text-onaccent; }
+  .badge-info, .badge-live { @apply badge bg-info/15 text-info; }
+  .badge-special { @apply badge bg-special/15 text-special; }
+  .tag-purple { @apply badge-special; }
+  .tag-blue { @apply badge-info; }
+  .tag-green { @apply badge-success; }
+  .tag-amber { @apply badge-warning; }
+  .tag-rose { @apply badge-danger; }
 
-  .badge {
-    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1
-           text-xs font-medium;
-  }
-  .badge-success {
-    @apply badge bg-success/12 text-success ring-1 ring-success/20;
-  }
-  .badge-danger {
-    @apply badge bg-danger/12 text-danger ring-1 ring-danger/20;
-  }
-  .badge-warning {
-    @apply badge bg-warning/12 text-warning ring-1 ring-warning/20;
-  }
-  .badge-muted {
-    @apply badge bg-bg-subtle text-fg-muted ring-1 ring-border;
-  }
-  .badge-accent {
-    @apply badge bg-accent/15 text-accent ring-1 ring-accent/25;
-  }
-  .badge-info {
-    @apply badge bg-secondary/12 text-secondary ring-1 ring-secondary/25;
-  }
-  /* Holo-style category tags — used for tariff / status / segment chips. */
-  .tag-purple {
-    @apply badge bg-tagpurple/15 text-tagpurple ring-1 ring-tagpurple/25;
-  }
-  .tag-blue {
-    @apply badge bg-tagblue/15 text-tagblue ring-1 ring-tagblue/25;
-  }
-  .tag-green {
-    @apply badge bg-taggreen/15 text-taggreen ring-1 ring-taggreen/25;
-  }
-  .tag-amber {
-    @apply badge bg-tagamber/15 text-tagamber ring-1 ring-tagamber/25;
-  }
-  .tag-rose {
-    @apply badge bg-tagrose/15 text-tagrose ring-1 ring-tagrose/25;
-  }
+  .stat-num { @apply text-2xl font-semibold tracking-[-0.03em] text-ink md:text-3xl; }
+  .stat-pill { @apply inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[11px] font-semibold text-onaccent; }
+  .pill-tabs { @apply inline-flex items-center gap-0.5 rounded-full bg-tile-2 p-1 text-xs font-medium; }
+  .pill-tab { @apply rounded-full px-3 py-1.5 text-mute transition-colors hover:text-ink; }
+  .pill-tab-active { @apply rounded-full bg-accent px-3 py-1.5 font-semibold text-onaccent; }
+  .card-accent { @apply rounded-[16px] bg-accent text-onaccent; }
 
-  /* Big stat number — matches the +2.3h / 15.1 h / 8h 35m feel.
-     Lighter optical weight than ui-text via tightened tracking. */
-  .stat-num {
-    /* Was text-3xl/4xl — too big for long Russian ruble values on
-       cards, the number truncated to "65 4..." on Payments / 24h
-       tiles. text-2xl/3xl reads as a hero KPI without overflow. */
-    @apply text-2xl font-semibold tracking-[-0.03em] text-fg md:text-3xl;
-  }
-  .stat-pill {
-    @apply inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5
-           text-[11px] font-semibold text-bg shadow-glow-sm;
-  }
-
-  /* Pill-tabs — segmented control как в brand-deck (бирка
-     "Light / Dark" сверху или "Dashboard ▪ Payments…" в нав-баре):
-     полностью круглые края, тёмный bg-elevated подложка, active
-     элемент — лаймовая пилюля с тёмным текстом и тонким glow.
-     Не sliding indicator (для этого используется SegPill в .tsx),
-     а статичные стили для прямых случаев — chip-row фильтров и т.п. */
-  .pill-tabs {
-    @apply inline-flex items-center gap-0.5 rounded-full border border-border
-           bg-bg-elevated p-0.5 text-xs font-medium;
-  }
-  .pill-tab {
-    @apply rounded-full px-3 py-1.5 text-fg-muted transition-colors
-           hover:text-fg;
-  }
-  .pill-tab-active {
-    @apply rounded-full bg-accent px-3 py-1.5 font-semibold text-bg
-           shadow-glow-sm;
-  }
-
-  /* Icon-btn — круглая кнопка-иконка из brand-deck (bell с красной
-     точкой, settings cog, search). Тёмная заливка, тонкий border,
-     hover — лёгкое осветление + лаймовый ring. Размер задаётся
-     извне через w-/h- классы (по умолчанию h-10 w-10). */
-  .icon-btn {
-    @apply relative inline-flex h-10 w-10 items-center justify-center
-           rounded-full border border-border bg-bg-card text-fg-muted
-           transition-all duration-200
-           hover:border-accent/40 hover:bg-bg-elevated hover:text-fg
-           focus:outline-none focus:ring-2 focus:ring-accent/35;
-  }
-  .icon-btn-sm {
-    @apply h-8 w-8;
-  }
-  /* Notification-dot — маленький лаймовый/красный dot в правом-
-     верхнем углу .icon-btn. Использовать как абсолютный child. */
-  .icon-btn-dot {
-    @apply pointer-events-none absolute right-1.5 top-1.5 h-2 w-2
-           rounded-full bg-danger ring-2 ring-bg;
-  }
-  .icon-btn-dot-accent {
-    @apply pointer-events-none absolute right-1.5 top-1.5 h-2 w-2
-           rounded-full bg-accent ring-2 ring-bg shadow-glow-sm;
-  }
-
-  /* Card-accent — лаймовая выделенная карточка (как Nvidia в
-     Investments из brand-deck). Лайм фон, тёмный текст, soft glow.
-     Используется для «выбран» / «top performer» / «recommended»
-     состояний — не для CTA. */
-  .card-accent {
-    @apply rounded-2xl bg-accent text-bg shadow-glow;
-  }
-
-  /* Shimmer-скелетон — лёгкий лаймовый блик на тёмном bg-elevated.
-     Используется в скелетонах карточек и графиков вместо обычного
-     pulse — даёт ощущение «живого» loading. */
   .skeleton {
-    @apply rounded-md bg-bg-elevated;
-    background-image: linear-gradient(
-      90deg,
-      transparent 0%,
-      rgba(215, 255, 103, 0.10) 50%,
-      transparent 100%
-    );
+    @apply rounded-[10px] bg-tile-3;
+    background-image: linear-gradient(90deg, transparent 0%, rgb(var(--c-ink) / 0.05) 50%, transparent 100%);
     background-size: 200% 100%;
     @apply animate-shimmer;
   }
+  .hover-lift { transition: background-color var(--dur-fast) var(--ease); }
+  .hover-lift:hover { background: rgb(var(--c-tile-3)); }
+  .glass-panel { @apply rounded-[16px] bg-tile-2; }
 
-  /* Hover-lift — subtle подъём + тёмный drop для интерактивных
-     карточек на dark canvas. */
-  .hover-lift {
-    @apply transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]
-           hover:-translate-y-0.5
-           hover:shadow-[0_10px_28px_-14px_rgba(0,0,0,0.7)]
-           hover:border-accent/35;
+  .alert-ring { @apply relative overflow-hidden rounded-[16px] p-px; }
+  .alert-ring::before {
+    content: ""; position: absolute; inset: -60%;
+    background: conic-gradient(from var(--angle), transparent 0deg, rgb(var(--c-warn)) 40deg, transparent 90deg);
+    animation: spin-angle 4s linear infinite; z-index: 0;
   }
+  .alert-ring > * { position: relative; z-index: 1; border-radius: 15px; }
 
-  /* Glass panel — матовая полупрозрачная поверхность с backdrop-blur.
-     Использовать для «плавающих» слоёв (модалки, popover, sticky top-bar).
-     Слегка вложенный inset-block сверху даёт «стеклянный» рельеф. */
-  .glass-panel {
-    @apply rounded-2xl border border-white/[0.06] bg-bg-card/70
-           backdrop-blur-xl shadow-matte;
-  }
+  .pulse-live { @apply inline-block h-2 w-2 rounded-full bg-info; animation: pulse-live 2.2s ease-in-out infinite; }
+  .pulse-live-danger { @apply inline-block h-2 w-2 rounded-full bg-danger; animation: pulse-live 1.8s ease-in-out infinite; }
+  .route-in { animation: route-in var(--dur-slow) var(--ease-entrance); }
+  .num-tick { animation: num-tick var(--dur-base) var(--ease-standard); }
+  .stagger-children > * { animation: none; }
 
-  /* Tech-card — карточка с медленно вращающимся conic-gradient
-     под тонким border'ом. Даёт живой tech-look для VIP/hero-виджетов.
-     Внутри — стандартный .card content; wrapper даёт animated ring.
-     Требует p-[1px] и вложенного div для контента. */
-  .tech-border-wrap {
-    @apply relative rounded-2xl p-[1px] overflow-hidden;
-  }
-  .tech-border-wrap::before {
-    content: "";
-    position: absolute;
-    inset: -60%;
-    background:
-      conic-gradient(from 0deg, transparent 0deg, rgba(245,245,245,0.55) 60deg, transparent 120deg, transparent 180deg, rgba(125,211,252,0.35) 240deg, transparent 300deg);
-    animation: spin-slow 14s linear infinite;
-    z-index: 0;
-    filter: blur(0.5px);
-  }
-  .tech-border-wrap > * {
-    position: relative;
-    z-index: 1;
-  }
-
-  /* Pulse-live — 8×8 dot для real-time индикатора (info-cyan цвет).
-     Используется рядом с заголовками виджетов, у которых есть SSE. */
-  .pulse-live {
-    @apply inline-block h-2 w-2 rounded-full bg-info animate-pulse-live;
-  }
-  .pulse-live-danger {
-    @apply inline-block h-2 w-2 rounded-full bg-danger;
-    animation: pulse-live 1.8s ease-in-out infinite;
-    box-shadow: 0 0 0 0 rgba(255,107,107,0.55);
-  }
-
-  /* Stat-shine — hover-эффект «блика по card'у». Работает через
-     absolute-child, у которого animation-play-state paused по умолчанию,
-     а на hover — running. Плюс parent должен быть overflow-hidden. */
-  .stat-shine {
-    @apply relative overflow-hidden;
-  }
-  .stat-shine::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 40%;
-    background: linear-gradient(
-      100deg,
-      transparent 0%,
-      rgba(255,255,255,0.06) 45%,
-      rgba(255,255,255,0.10) 50%,
-      rgba(255,255,255,0.06) 55%,
-      transparent 100%
-    );
-    transform: translateX(-120%);
-    opacity: 0;
-    transition: opacity 0.2s;
-    pointer-events: none;
-  }
-  .stat-shine:hover::after {
-    opacity: 1;
-    animation: sweep 1.2s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  /* Info / Special tinted badges — дополняем набор badge'ей
-     сдержанными cyan / violet цветами. */
-  .badge-live {
-    @apply badge bg-info/12 text-info ring-1 ring-info/25;
-  }
-  .badge-special {
-    @apply badge bg-special/12 text-special ring-1 ring-special/25;
-  }
-
-  /* Route-transition — обёртка страницы с fade+slide-in.
-     Компонент RouteTransition применяет этот класс на mount. */
-  .route-in {
-    animation: route-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
-  }
-
-  /* Subtle noise-overlay для body — очень слабая zern-текстура,
-     чтобы «плоский dark» ощущался матовым, не пластиковым.
-     Применяем как ::before на body в base-слое. */
-
-  /* Num-tick — анимация обновления числового счётчика. Задаётся
-     компонентом CountUp через inline animation. */
-  .num-tick {
-    animation: num-tick 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-
-  /* ═══════════════════════════════════════════════════════════════
-     DESIGN 2026 — bento grid, frosted cards, motion primitives
-     ═══════════════════════════════════════════════════════════════ */
-
-  /* Bento-card — базовая карточка Bento-грида. Pure white surface,
-     hair-line border, hover-lift + subtle scale, focus-ring для
-     клавиатурной навигации. */
-  .bento-card {
-    @apply relative overflow-hidden rounded-2xl border border-border
-           bg-bg-card shadow-card transition-all duration-300 ease-out;
-  }
-  .bento-card-hover {
-    @apply hover:-translate-y-0.5 hover:border-fg/15
-           hover:shadow-[0_0_0_1px_rgba(15,23,32,0.08),0_8px_24px_-12px_rgba(15,23,32,0.16)];
-  }
-
-  /* Bento-tile-hero — большая карточка для главной KPI (2 col на md).
-     С subtle ambient-gradient и слегка увеличенным padding.  */
-  .bento-hero {
-    @apply bento-card p-5 md:p-7;
-    background:
-      radial-gradient(ellipse 80% 60% at 100% 0%, rgba(37, 99, 235, 0.055), transparent 60%),
-      radial-gradient(ellipse 60% 45% at 0% 100%, rgba(124, 58, 237, 0.040), transparent 60%),
-      #FFFFFF;
-    background-size: 200% 200%;
-    animation: ambient 20s ease-in-out infinite;
-  }
-
-  /* Tap-scale — тактильный отклик на клик (mobile-first). */
-  .tap-scale {
-    @apply transition-transform duration-100 active:scale-[0.98];
-  }
-
-  /* Coloured chip — маленький пилюль для «today +12%» / «-5%». */
-  .chip-success {
-    @apply inline-flex items-center gap-0.5 rounded-full bg-success/12
-           px-2 py-0.5 text-[11px] font-semibold text-success ring-1 ring-success/25;
-  }
-  .chip-danger {
-    @apply inline-flex items-center gap-0.5 rounded-full bg-danger/12
-           px-2 py-0.5 text-[11px] font-semibold text-danger ring-1 ring-danger/25;
-  }
-  .chip-info {
-    @apply inline-flex items-center gap-0.5 rounded-full bg-info/12
-           px-2 py-0.5 text-[11px] font-semibold text-info ring-1 ring-info/25;
-  }
-
-  /* Collapsible — раскрывающаяся секция. Header + опциональный chevron.
-     Открытие анимируется через grid-template-rows 0fr → 1fr (без JS-
-     измерения высоты, чисто CSS). Работает на всех современных
-     браузерах (Chrome 117+, Safari 17+, Firefox 120+ — iOS PWA OK). */
-  .collapsible {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-  .collapsible[data-open="true"] {
-    grid-template-rows: 1fr;
-  }
-  .collapsible > .collapsible-inner {
-    overflow: hidden;
-    min-height: 0;
-  }
-  .collapsible[data-open="true"] > .collapsible-inner {
-    animation: collapse-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  /* Tooltip-hint — inline (?) иконка с hover-подсказкой.
-     На мобильных tap раскрывает; на десктопе — hover. */
+  .tap-scale { @apply transition-transform duration-100 active:scale-[0.98]; }
+  .collapsible { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-slow) var(--ease); }
+  .collapsible[data-open="true"] { grid-template-rows: 1fr; }
+  .collapsible > .collapsible-inner { overflow: hidden; min-height: 0; }
   .hint-dot {
-    @apply relative inline-flex h-4 w-4 shrink-0 items-center justify-center
-           rounded-full bg-bg-elevated text-[10px] font-bold text-fg-subtle
-           ring-1 ring-border cursor-help transition-colors
-           hover:bg-info/15 hover:text-info hover:ring-info/30;
+    @apply relative inline-flex h-4 w-4 shrink-0 cursor-help items-center justify-center rounded-full
+           bg-tile-3 text-[10px] font-bold text-mute transition-colors hover:text-ink;
+  }
+  .no-tap-highlight { -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
+
+  /* ── Metric definitions ("?" popover, components/ui/Hint.tsx) ─────── */
+  .hint-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    flex: none;
+    border-radius: 999px;
+    background: rgb(var(--c-ink) / 0.09);
+    color: rgb(var(--c-mute));
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .hint-btn:hover, .hint-btn[aria-expanded="true"] { background: rgb(var(--c-ink) / 0.16); color: rgb(var(--c-ink)); }
+  .tile-fog .hint-btn, .tile-mist .hint-btn, .tile-accent .hint-btn, .tile-steel .hint-btn {
+    background: rgb(0 0 0 / 0.1);
+    color: currentColor;
+  }
+  .hint-on-shell { background: rgb(var(--c-shell-ink) / 0.1); color: rgb(var(--c-shell-mute)); }
+  .hint-pop {
+    position: fixed;
+    z-index: 60;
+    padding: 12px 14px;
+    border-radius: 16px;
+    background: rgb(var(--c-tile-1));
+    color: rgb(var(--c-ink));
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.45;
+    text-align: left;
+    white-space: normal;
+    box-shadow: 0 16px 40px -12px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(var(--c-line));
+    animation: route-in var(--dur-fast) var(--ease-entrance);
   }
 
-  /* Tap-highlight-off — для интерактивов, где мы сами анимируем tap. */
-  .no-tap-highlight {
-    -webkit-tap-highlight-color: transparent;
-    -webkit-touch-callout: none;
+  /* Invisible 44×44 hit area around a visually small control. */
+  .tap-target { position: relative; }
+  .tap-target::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
   }
 
-  /* Sticky-top-bar — mobile-first sticky header страницы.
-     Frosted-glass, безопасное перекрытие безнотчей iOS. */
-  .sticky-top-bar {
-    @apply sticky top-0 z-30 -mx-4 md:-mx-8 border-b border-border/70
-           bg-bg/80 px-4 py-3 backdrop-blur-xl md:px-8;
+  /* ── Data tables on v3 tiles ──────────────────────────────────────── */
+  .dtable { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--cell-text); }
+  .dtable th {
+    padding: 0 12px 8px;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 500;
+    color: rgb(var(--c-mute));
+    white-space: nowrap;
   }
+  .dtable td {
+    padding: var(--row-pad-y) 12px;
+    height: var(--row-h);
+    border-top: 1px solid rgb(var(--c-line-soft));
+    vertical-align: middle;
+  }
+  .dtable tbody tr { transition: background-color var(--dur-instant) var(--ease); }
+  .dtable tbody tr:hover td { background: rgb(var(--c-tile-3) / 0.6); }
+  .dtable td:first-child, .dtable th:first-child { padding-left: 4px; }
+  .dtable td:last-child, .dtable th:last-child { padding-right: 4px; }
+  .dtable .num { text-align: right; font-variant-numeric: tabular-nums; }
+}
 
-  /* Bento-in animation — mount карточки Bento. */
-  .bento-in {
-    animation: bento-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) backwards;
-  }
-  /* Stagger для bento-grid, до 12 карточек. */
-  .bento-grid > *:nth-child(1)  { animation-delay: 0ms; }
-  .bento-grid > *:nth-child(2)  { animation-delay: 50ms; }
-  .bento-grid > *:nth-child(3)  { animation-delay: 100ms; }
-  .bento-grid > *:nth-child(4)  { animation-delay: 150ms; }
-  .bento-grid > *:nth-child(5)  { animation-delay: 200ms; }
-  .bento-grid > *:nth-child(6)  { animation-delay: 250ms; }
-  .bento-grid > *:nth-child(7)  { animation-delay: 300ms; }
-  .bento-grid > *:nth-child(8)  { animation-delay: 350ms; }
-  .bento-grid > *:nth-child(9)  { animation-delay: 400ms; }
-  .bento-grid > *:nth-child(10) { animation-delay: 450ms; }
-  .bento-grid > *:nth-child(11) { animation-delay: 500ms; }
-  .bento-grid > *:nth-child(12) { animation-delay: 550ms; }
+@layer utilities {
+  .col-num { text-align: right; font-variant-numeric: tabular-nums; }
+  .scrollbar-none { scrollbar-width: none; }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+}
 
-  /* Attention pulse — вспышка на карточке когда через WS пришло
-     событие (например, revenue вырос). Инициируется JS: .classList.add
-     на 900мс, потом remove. */
-  .attention-pulse {
-    animation: attention 0.9s cubic-bezier(0.4, 0, 0.2, 1) 1;
+/* ── iOS / touch ────────────────────────────────────────────────────────
+   Outside @layer so they beat utility classes (text-sm, text-xs …).
+   Safari zooms the page when a focused field is under 16px; on touch
+   screens every field is therefore 16px. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: 16px !important;
   }
+}
+/* Finger-sized targets (Apple HIG: 44pt). Visually small controls keep
+   their size and get an invisible 44px hit area instead, so dense rows
+   (tables, list-row trailing buttons) do not reflow on a phone. */
+@media (pointer: coarse) {
+  .capsule-tab { height: 44px; }
+  .icon-btn:not(.icon-btn-sm) { width: 44px; height: 44px; }
+  .icon-btn-sm { position: relative; }
+  .icon-btn-sm::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+  .btn { min-height: 44px; }
+}
+/* Inner scroll areas (tables, lists) keep momentum and don't drag the page. */
+.overflow-x-auto, .overflow-y-auto, .overflow-auto {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+/* Modal overlays (fixed inset-0 grid place-items-center …): the dialog can
+   be taller than a phone screen or the space above the keyboard, so the
+   overlay itself scrolls and the dialog starts at the top instead of being
+   clipped at both ends. Safe-area padding keeps it off the notch. */
+.fixed.inset-0.grid {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  align-items: start;
+  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+@media (min-height: 700px) and (min-width: 640px) {
+  .fixed.inset-0.grid { align-items: center; }
+}
+.fixed.inset-0.grid > * { max-height: none; }
 
-  /* Staggered fade-up для children — секций главной. backwards
-     animation-fill-mode (через keyframes config) гарантирует, что
-     при mount элементы стартуют с opacity:0, не моргают. */
-  .stagger-children > * {
-    animation: fade-up 0.55s cubic-bezier(0.16, 1, 0.3, 1) backwards;
-  }
-  .stagger-children > *:nth-child(1)  { animation-delay: 0ms; }
-  .stagger-children > *:nth-child(2)  { animation-delay: 60ms; }
-  .stagger-children > *:nth-child(3)  { animation-delay: 120ms; }
-  .stagger-children > *:nth-child(4)  { animation-delay: 180ms; }
-  .stagger-children > *:nth-child(5)  { animation-delay: 240ms; }
-  .stagger-children > *:nth-child(6)  { animation-delay: 300ms; }
-  .stagger-children > *:nth-child(7)  { animation-delay: 360ms; }
-  .stagger-children > *:nth-child(8)  { animation-delay: 420ms; }
-  .stagger-children > *:nth-child(9)  { animation-delay: 480ms; }
-  .stagger-children > *:nth-child(10) { animation-delay: 540ms; }
-  .stagger-children > *:nth-child(11) { animation-delay: 600ms; }
-  .stagger-children > *:nth-child(12) { animation-delay: 660ms; }
+/* Status dots live outside @layer on purpose: their class names are
+   composed at runtime (`dot-${tone}`), which Tailwind's content scan
+   cannot see, so a layered rule would be purged. */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; flex: none; }
+.dot-ok { background: rgb(var(--c-ok)); }
+.dot-warn { background: rgb(var(--c-warn)); }
+.dot-err { background: rgb(var(--c-err)); }
+.dot-info { background: rgb(var(--c-info)); }
+.dot-idle { background: rgb(var(--c-ash)); }
+.dot-accent { background: rgb(var(--c-accent)); }
 
-  @keyframes fade-up {
-    from { opacity: 0; transform: translateY(12px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
+@property --angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@keyframes spin-angle { to { --angle: 360deg; } }
+@keyframes route-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes num-tick { 0% { opacity: 1; } 40% { opacity: 0.55; } 100% { opacity: 1; } }
+@keyframes pulse-live { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+
+::view-transition-group(*) { animation-duration: 180ms; animation-timing-function: cubic-bezier(0.2, 0, 0.2, 1); }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 160ms; }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
 }

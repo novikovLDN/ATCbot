@@ -22,7 +22,6 @@ from __future__ import annotations
 import logging
 import uuid as uuid_lib
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 import config
@@ -264,9 +263,10 @@ async def create_bypass_user_entity(
             panel_id=_extract_id(response),
         )
 
-    # 409 from POST — race between preflight and POST.
+    # Username conflict from POST — race between preflight and POST (3.4.3:
+    # HTTP 400 errorCode A019, see remnawave_api.is_username_conflict).
     first_status = int((raw or {}).get("status") or 0)
-    if first_status == 409:
+    if remnawave_api.is_username_conflict(raw):
         try:
             existing2 = await remnawave_api.find_user_by_username(username)
         except Exception:
@@ -375,30 +375,9 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
 
 # ── Delete ─────────────────────────────────────────────────────────────
 
-async def delete_bypass_user(telegram_id: int) -> bool:
-    """Delete the bypass entity, if any.  Idempotent."""
-    if not config.REMNAWAVE_ENABLED:
-        return False
-    import database  # lazy
-    rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-    if not rmn_uuid:
-        return False
-    try:
-        await remnawave_api.delete_user(rmn_uuid)
-    except Exception as e:
-        logger.error("REMNAWAVE_BYPASS_DELETE_FAIL: tg=%s %s", telegram_id, e)
-        return False
-    try:
-        await database.clear_remnawave_uuid(telegram_id)
-    except Exception as e:
-        logger.warning("REMNAWAVE_BYPASS_DELETE_DB_CLEAR_FAIL: tg=%s %s", telegram_id, e)
-    return True
-
-
 __all__ = [
     "BypassCreateResult",
     "build_bypass_username",
     "create_bypass_user_entity",
     "add_bypass_traffic",
-    "delete_bypass_user",
 ]

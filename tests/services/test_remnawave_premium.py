@@ -625,8 +625,11 @@ async def test_post409_adoption_patches_expire_at_and_squad():
 
 
 @pytest.mark.asyncio
-async def test_adoption_patch_failure_does_not_break_recovery():
-    """If the PATCH itself raises, adoption still succeeds (next renewal retries)."""
+async def test_adoption_patch_failure_is_reported_as_failure():
+    """If the expireAt PATCH of an adopted entity fails, the adoption is a
+    FAILURE (E2E-ADOPT-SILENT, docs/audit/07_e2e.md): reporting ok left the
+    panel on the old date with no alert and no re-sync. The entity is still
+    identified (recovered, panel_uuid) for the caller's retry."""
     cfg = _cfg_stub(REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID=EXT_SQUAD_UUID)
     existing = {
         "uuid": PANEL_UUID,
@@ -648,8 +651,11 @@ async def test_adoption_patch_failure_does_not_break_recovery():
             requested_uuid=SAMPLE_UUID,
             expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
         )
-    assert result.ok is True
+    assert result.ok is False
+    assert result.error == "adopt_expire_patch_failed"
     assert result.recovered is True
+    assert result.panel_uuid == PANEL_UUID
+    create_mock.assert_not_awaited()
 
 
 # ── renew_premium_user: externalSquadUuid safety net ──────────────────
@@ -779,3 +785,60 @@ async def test_renew_premium_user_retries_on_exception_too():
         )
     assert ok is True
     assert update_mock.await_count == 2
+
+
+# ── Remnawave 3.4.3: a taken username is HTTP 400 errorCode A019 ──────
+# libs/contract/constants/errors/errors.ts USER_USERNAME_ALREADY_EXISTS
+# (httpCode 400) + src/common/exception/http-exception.filter.ts body shape.
+
+A019 = {
+    "ok": False, "status": 400,
+    "body": {"timestamp": "2026-09-14T00:00:00.000Z", "path": "/api/users",
+             "message": "User username already exists", "errorCode": "A019"},
+    "response": None,
+}
+
+
+@pytest.mark.asyncio
+async def test_post_400_a019_adopts_like_a_race():
+    """Preflight missed the entity → POST → 400 A019 → re-lookup → adopt
+    (the 409 branch never fired on 3.4.3)."""
+    existing = {
+        "id": 382, "vlessUuid": SAMPLE_UUID, "shortUuid": "racesh",
+        "username": "tg_42_premium", "telegramId": 42,
+        "subscriptionUrl": "https://r/sub/race",
+    }
+    find_mock = AsyncMock(side_effect=[None, existing])
+    create_mock = AsyncMock(return_value=A019)
+    update_mock = AsyncMock(return_value={"id": 382})
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create, patch.object(
+        remnawave_premium.remnawave_api, "update_user", update_mock,
+    ):
+        result = await remnawave_premium.create_premium_user_entity(
+            42, requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.ok is True
+    assert result.recovered is True
+    assert result.panel_id == 382
+    assert result.panel_uuid == SAMPLE_UUID
+    # one POST only: A019 is not a "forced uuid rejected" 400
+    create_mock.assert_called_once()
+    update_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_post_400_a019_unrelated_owner_no_uuidless_retry():
+    unrelated = {"id": 9, "username": "tg_42_premium", "telegramId": 7}
+    find_mock = AsyncMock(side_effect=[None, unrelated])
+    create_mock = AsyncMock(return_value=A019)
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
+        result = await remnawave_premium.create_premium_user_entity(
+            42, requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.ok is False
+    assert result.recovered is False
+    assert create_mock.call_count == 1

@@ -1,4 +1,12 @@
-import { auth } from "./auth";
+import type {
+  PurchaseRow,
+  SubscriptionHistoryRow,
+  UserDetail as UserDetailType,
+  UserExtendedStats,
+  UserListFilters,
+  UserListResponse,
+  UserSearchMatch,
+} from "@/types/user";
 
 const BASE = "/dashboard/api";
 
@@ -12,25 +20,56 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = auth.get();
+export interface RequestOptions {
+  /**
+   * Idempotency-Key for a mutating call (app/api/dashboard/idempotency.py):
+   * the server runs the action once per key and replays the stored answer
+   * for repeats. Generate one per form submission and reuse it on retry.
+   */
+  idempotencyKey?: string;
+}
+
+/** A fresh key for one form submission. */
+export function newIdempotencyKey(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}, opts: RequestOptions = {}): Promise<T> {
+  // Auth is the HttpOnly session cookie only. The magic-link token is a
+  // bootstrap secret for /auth/setup (sent in the body there), never a
+  // header: the server stops accepting it the moment a password exists.
   const headers = new Headers(init.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (opts.idempotencyKey) headers.set("Idempotency-Key", opts.idempotencyKey);
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
-  const res = await fetch(BASE + path, {
-    ...init,
-    headers,
-    // Send the HttpOnly session cookie set by /api/auth/login.
-    // Same-origin requests honour this by default in modern browsers,
-    // but being explicit guards against quirks (Safari standalone PWA
-    // sometimes drops cookies on cross-context navigations).
-    credentials: "include",
-  });
+  const doFetch = () =>
+    fetch(BASE + path, {
+      ...init,
+      headers,
+      // Send the HttpOnly session cookie set by /api/auth/login.
+      // Same-origin requests honour this by default in modern browsers,
+      // but being explicit guards against quirks (Safari standalone PWA
+      // sometimes drops cookies on cross-context navigations).
+      credentials: "include",
+    });
+  let res: Response;
+  try {
+    res = await doFetch();
+  } catch (e) {
+    // A network failure on a keyed mutation is retried once with the SAME
+    // key: if the first attempt did reach the server, the server replays
+    // its answer instead of running the action a second time.
+    if (!opts.idempotencyKey) throw e;
+    await new Promise((r) => setTimeout(r, 800));
+    res = await doFetch();
+  }
   if (res.status === 401) {
-    auth.clear();
     // Force a hard reload so route guards re-evaluate and show login.
     if (window.location.pathname !== "/dashboard/" && window.location.pathname !== "/dashboard") {
       window.location.assign("/dashboard/");
@@ -59,11 +98,15 @@ export const api = {
   get<T>(path: string) {
     return request<T>(path, { method: "GET" });
   },
-  post<T>(path: string, body?: unknown) {
-    return request<T>(path, {
-      method: "POST",
-      body: body ? JSON.stringify(body) : undefined,
-    });
+  post<T>(path: string, body?: unknown, opts?: RequestOptions) {
+    return request<T>(
+      path,
+      {
+        method: "POST",
+        body: body ? JSON.stringify(body) : undefined,
+      },
+      opts,
+    );
   },
   put<T>(path: string, body?: unknown) {
     return request<T>(path, {
@@ -77,8 +120,8 @@ export const api = {
       body: body ? JSON.stringify(body) : undefined,
     });
   },
-  del<T>(path: string) {
-    return request<T>(path, { method: "DELETE" });
+  del<T>(path: string, opts?: RequestOptions) {
+    return request<T>(path, { method: "DELETE" }, opts);
   },
 };
 
@@ -94,49 +137,21 @@ export interface PanelEntitySnapshot {
   telegram_id_field: number | null;
 }
 
-export interface StatsOverview {
-  total_users?: number;
-  active_subscriptions?: number;
-  pending_payments?: number;
-  business_metrics?: Record<string, number | string>;
-  [k: string]: unknown;
-}
-
-export interface RevenueStats {
-  total_revenue_rubles: number;
-  paying_users: number;
-  arpu_rubles: number;
-  avg_ltv_rubles: number;
-}
-
-export interface PremiumState {
-  has_entity: boolean;
-  is_active: boolean;
-  expires_at: string | null;
-  subscription_type?: string | null;
-}
-
-export interface BypassState {
-  has_entity: boolean;
-  used_bytes: number;
-  limit_bytes: number;
-  remaining_bytes: number;
-  status: string | null;
-}
-
-export interface UserDetail {
-  user: Record<string, unknown>;
-  balance_rubles: number;
-  subscription: Record<string, unknown> | null;
-  premium: PremiumState;
-  bypass: BypassState;
-  trial: Record<string, unknown> | null;
-  discount: Record<string, unknown> | null;
-  traffic_discount: Record<string, unknown> | null;
-  is_vip: boolean;
-  cashback_fixed_percent: number | null;
-  cashback_effective_percent: number;
-}
+// The user-domain shapes live in @/types/user. They used to be declared
+// here as Record<string, unknown>, which is why most of what the backend
+// sends was never rendered: reading a field meant writing a cast, so the
+// screen only ever read the four everybody already knew about.
+export type {
+  UserDetail,
+  PremiumState,
+  BypassState,
+  UserExtendedStats,
+  UserListFilters,
+  UserListResponse,
+  UserSearchMatch,
+  PurchaseRow,
+  SubscriptionHistoryRow,
+} from "@/types/user";
 
 export const endpoints = {
   authStatus: () =>
@@ -150,22 +165,6 @@ export const endpoints = {
   authLogin: (body: { username: string; password: string }) =>
     api.post<{ ok: boolean }>("/auth/login", body),
   authLogout: () => api.post<{ ok: boolean }>("/auth/logout"),
-  authMe: () => api.get<{ telegram_id: number }>("/auth/me"),
-  authVerify: (token: string) =>
-    api.get<{ telegram_id: number; role: string; expires_at: number }>(
-      `/auth/verify?token=${encodeURIComponent(token)}`,
-    ),
-  statsOverview: () => api.get<StatsOverview>("/stats/overview"),
-  statsBusiness: () => api.get<Record<string, number>>("/stats/business"),
-  statsRevenue: () => api.get<RevenueStats>("/stats/revenue"),
-  statsPeriod: (hours: number) =>
-    api.get<Record<string, number>>(`/stats/period?hours=${hours}`),
-  statsPeriodSince: (sinceIso: string) =>
-    api.get<Record<string, number>>(
-      `/stats/period?since=${encodeURIComponent(sinceIso)}`,
-    ),
-  statsBreakdown: () => api.get<Record<string, unknown>>("/stats/purchase-breakdown"),
-  statsPromo: () => api.get<unknown[]>("/stats/promo"),
 
   // Bypass-overwrite audit — список пострадавших + восстановление.
   bypassAuditList: () =>
@@ -327,18 +326,6 @@ export const endpoints = {
       }>;
     }>(`/traffic-audit/fix-all${qs}`);
   },
-  statsDaily: (days = 30) =>
-    api.get<{
-      days: number;
-      series: Array<{
-        date: string;
-        revenue_rubles: number;
-        payments_count: number;
-        new_users: number;
-        new_subscriptions: number;
-        new_paid_subscriptions: number;
-      }>;
-    }>(`/stats/daily?days=${days}`),
   statsHourly: (days = 7) =>
     api.get<{
       days: number;
@@ -353,79 +340,104 @@ export const endpoints = {
       }>;
     }>(`/stats/hourly?days=${days}`),
 
-  userSearch: (q: string) =>
+  /**
+   * The listing the Users screen never had. Until this existed the screen
+   * could only answer "show me this one person", never "who signed up
+   * today" or "whose subscription lapses this week".
+   *
+   * Undefined filters are dropped rather than sent empty, so the query
+   * string stays a stable cache key across renders.
+   */
+  usersList: (f: UserListFilters = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(f)) {
+      if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+    }
+    const s = qs.toString();
+    return api.get<UserListResponse>(`/users/list${s ? `?${s}` : ""}`);
+  },
+  userSearch: (q: string, limit = 25) =>
     api.get<{
       query: string;
+      /** Matches in the database, not the length of the returned slice —
+          the old value made 300 hits look like 25 with no hint of more. */
       total: number;
-      matches: Array<{
-        telegram_id: number;
-        username: string | null;
-        language: string | null;
-        created_at: string | null;
-        has_active_sub: boolean;
-      }>;
-    }>(`/users/search?q=${encodeURIComponent(q)}`),
-  userDetail: (tg: number) => api.get<UserDetail>(`/users/${tg}`),
+      matches: UserSearchMatch[];
+    }>(`/users/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  userDetail: (tg: number) => api.get<UserDetailType>(`/users/${tg}`),
   userHistory: (tg: number, limit = 20) =>
-    api.get<unknown[]>(`/users/${tg}/history?limit=${limit}`),
-  userExtended: (tg: number) => api.get<Record<string, unknown>>(`/users/${tg}/extended-stats`),
+    api.get<SubscriptionHistoryRow[]>(`/users/${tg}/history?limit=${limit}`),
+  userExtended: (tg: number) =>
+    api.get<UserExtendedStats>(`/users/${tg}/extended-stats`),
 
-  userGrant: (tg: number, body: { days: number; tariff: string }) =>
+  userGrant: (tg: number, body: { days: number; tariff: string }, opts?: RequestOptions) =>
     api.post<{ ok: boolean; expires_at: string; vpn_key: string }>(
       `/users/${tg}/grant`,
       body,
+      opts,
     ),
-  userGrantMinutes: (tg: number, body: { minutes: number }) =>
+  userGrantMinutes: (tg: number, body: { minutes: number }, opts?: RequestOptions) =>
     api.post<{ ok: boolean; expires_at: string; vpn_key: string }>(
       `/users/${tg}/grant-minutes`,
       body,
+      opts,
     ),
-  userRevoke: (tg: number) => api.post<{ ok: boolean }>(`/users/${tg}/revoke`),
-  userReissueAggregator: (tg: number) =>
-    api.post<{ ok: boolean; url: string }>(`/users/${tg}/reissue-aggregator`),
-  userSwitchTariff: (tg: number, body: { tariff: string }) =>
-    api.post<{ ok: boolean; subscription: unknown }>(`/users/${tg}/switch-tariff`, body),
+  userRevoke: (tg: number, opts?: RequestOptions) => api.post<{ ok: boolean }>(`/users/${tg}/revoke`, undefined, opts),
+  userReissueAggregator: (tg: number, opts?: RequestOptions) =>
+    api.post<{ ok: boolean; url: string }>(`/users/${tg}/reissue-aggregator`, undefined, opts),
+  userSwitchTariff: (tg: number, body: { tariff: string }, opts?: RequestOptions) =>
+    api.post<{ ok: boolean; subscription: unknown }>(`/users/${tg}/switch-tariff`, body, opts),
   userDiscountCreate: (
     tg: number,
     body: { percent: number; expires_in_hours: number | null },
-  ) => api.post<{ ok: boolean }>(`/users/${tg}/discount`, body),
-  userDiscountDelete: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}/discount`),
+    opts?: RequestOptions,
+  ) => api.post<{ ok: boolean }>(`/users/${tg}/discount`, body, opts),
+  userDiscountDelete: (tg: number, opts?: RequestOptions) => api.del<{ ok: boolean }>(`/users/${tg}/discount`, opts),
   userTrafficDiscountCreate: (
     tg: number,
     body: { percent: number; expires_in_hours: number | null },
+    opts?: RequestOptions,
   ) =>
     api.post<{ ok: boolean; percent: number; expires_at: string | null }>(
       `/users/${tg}/traffic-discount`,
       body,
+      opts,
     ),
-  userTrafficDiscountDelete: (tg: number) =>
-    api.del<{ ok: boolean }>(`/users/${tg}/traffic-discount`),
-  userCashbackFixSet: (tg: number, body: { percent: number }) =>
+  userTrafficDiscountDelete: (tg: number, opts?: RequestOptions) =>
+    api.del<{ ok: boolean }>(`/users/${tg}/traffic-discount`, opts),
+  userCashbackFixSet: (tg: number, body: { percent: number }, opts?: RequestOptions) =>
     api.post<{
       ok: boolean;
       percent: number;
       effective_percent: number;
       notify_sent: boolean;
-    }>(`/users/${tg}/cashback-fix`, body),
-  userCashbackFixClear: (tg: number) =>
+    }>(`/users/${tg}/cashback-fix`, body, opts),
+  userCashbackFixClear: (tg: number, opts?: RequestOptions) =>
     api.del<{ ok: boolean; effective_percent: number }>(
       `/users/${tg}/cashback-fix`,
+      opts,
     ),
-  userVipGrant: (tg: number) => api.post<{ ok: boolean }>(`/users/${tg}/vip`),
-  userVipRevoke: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}/vip`),
   userBalanceChange: (
     tg: number,
     body: { delta_rubles: number; reason?: string },
+    opts?: RequestOptions,
   ) =>
     api.post<{ ok: boolean; new_balance_rubles: number }>(
       `/users/${tg}/balance`,
       body,
+      opts,
     ),
   userPayments: (tg: number, limit = 20) =>
-    api.get<Array<Record<string, unknown>>>(`/users/${tg}/payments?limit=${limit}`),
+    api.get<PurchaseRow[]>(`/users/${tg}/payments?limit=${limit}`),
 
-  auditRecent: (limit = 50) =>
-    api.get<Array<Record<string, unknown>>>(`/audit/recent?limit=${limit}`),
+  /** `telegram_id` scopes the log to one user — that is what turns a
+      global tail into "which admin did what to this person". */
+  auditRecent: (limit = 50, telegramId?: number) =>
+    api.get<Array<Record<string, unknown>>>(
+      `/audit/recent?limit=${limit}${
+        telegramId ? `&telegram_id=${telegramId}` : ""
+      }`,
+    ),
 
   broadcastsRecent: (limit = 20) =>
     api.get<Array<Record<string, unknown>>>(`/broadcasts/recent?limit=${limit}`),
@@ -492,8 +504,6 @@ export const endpoints = {
     api.get<Array<Record<string, unknown>>>(
       `/broadcasts/scheduled?active_only=${activeOnly}&limit=${limit}`,
     ),
-  broadcastScheduleGet: (id: number) =>
-    api.get<Record<string, unknown>>(`/broadcasts/scheduled/${id}`),
   broadcastScheduleCancel: (id: number) =>
     api.del<{ ok: boolean }>(`/broadcasts/scheduled/${id}`),
   broadcastCreate: (body: {
@@ -509,10 +519,11 @@ export const endpoints = {
     gift_reveal_percent?: number | null;
     tag?: string | null;
     tag_color?: string | null;
-  }) =>
+  }, opts?: RequestOptions) =>
     api.post<{ ok: boolean; broadcast_id: number; audience: number }>(
       "/broadcasts",
       body,
+      opts,
     ),
   broadcastTestSelf: (body: {
     title: string;
@@ -581,7 +592,7 @@ export const endpoints = {
     gb_amount: number;
     validity_days: number;
     max_uses: number;
-  }) => api.post<Record<string, unknown>>("/bgift", body),
+  }, opts?: RequestOptions) => api.post<Record<string, unknown>>("/bgift", body, opts),
   bgiftDelete: (id: number) => api.del<{ ok: boolean }>(`/bgift/${id}`),
 
   // ── Beta-testing applications ──────────────────────────────────────
@@ -594,15 +605,13 @@ export const endpoints = {
       `/beta-applications/list?program=${encodeURIComponent(program)}&page=${page}&page_size=${page_size}`,
     ),
 
-  userDelete: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}`),
+  userDelete: (tg: number, opts?: RequestOptions) => api.del<{ ok: boolean }>(`/users/${tg}`, opts),
 
   // ── Marketing links: stats + promo ─────────────────────────────────
   statsLinksList: () =>
     api.get<Array<Record<string, unknown>>>("/links/stats"),
   statsLinkCreate: (body: { name: string }) =>
     api.post<Record<string, unknown>>("/links/stats", body),
-  statsLinkDetail: (id: number) =>
-    api.get<Record<string, unknown>>(`/links/stats/${id}`),
   statsLinkDeactivate: (id: number) =>
     api.post<{ ok: boolean }>(`/links/stats/${id}/deactivate`),
   statsLinkReactivate: (id: number) =>
@@ -622,8 +631,6 @@ export const endpoints = {
     expires_in_hours?: number | null;
   }) =>
     api.post<Record<string, unknown>>("/links/promo", body),
-  promoLinkDetail: (id: number) =>
-    api.get<Record<string, unknown>>(`/links/promo/${id}`),
   promoLinkDeactivate: (id: number) =>
     api.post<{ ok: boolean }>(`/links/promo/${id}/deactivate`),
   promoLinkReactivate: (id: number) =>
@@ -643,8 +650,8 @@ export const endpoints = {
     discount_percent: number;
     duration_seconds: number;
     max_uses: number;
-  }) =>
-    api.post<{ ok: boolean; promo_id: number; code: string }>("/promo", body),
+  }, opts?: RequestOptions) =>
+    api.post<{ ok: boolean; promo_id: number; code: string }>("/promo", body, opts),
   promoDeactivate: (id: number) =>
     api.del<{ ok: boolean }>(`/promo/${id}`),
   promoReactivate: (id: number) =>
@@ -652,24 +659,6 @@ export const endpoints = {
 
   paymentsPending: () =>
     api.get<Array<Record<string, unknown>>>("/payments/pending"),
-  paymentsRevenue: (hours: number) =>
-    api.get<{
-      revenue_rubles: number;
-      payments_count: number;
-      avg_check_rubles: number;
-      by_type: Record<string, { count: number; revenue_rubles: number }>;
-    }>(`/payments/revenue?hours=${hours}`),
-  paymentsRevenueSince: (sinceIso: string) =>
-    api.get<{
-      revenue_rubles: number;
-      payments_count: number;
-      avg_check_rubles: number;
-      by_type: Record<string, { count: number; revenue_rubles: number }>;
-    }>(`/payments/revenue?since=${encodeURIComponent(sinceIso)}`),
-  paymentsByProvider: (hours: number) =>
-    api.get<Array<{ provider: string; count: number; revenue_rubles: number }>>(
-      `/payments/by-provider?hours=${hours}`,
-    ),
   paymentsBreakdown: (hours: number) =>
     api.get<{
       hours: number;
@@ -706,37 +695,6 @@ export const endpoints = {
       "/payments/recent" + (qs ? `?${qs}` : ""),
     );
   },
-  paymentsTraffic: (hours: number) =>
-    api.get<{
-      count: number;
-      revenue_rubles: number;
-      total_gb: number;
-      by_method: Array<{
-        method: string;
-        count: number;
-        revenue_rubles: number;
-        total_gb: number;
-      }>;
-    }>(`/payments/traffic?hours=${hours}`),
-  paymentsErrorsSummary: (hours: number) =>
-    api.get<{
-      total: number;
-      by_stage: Array<{ stage: string; count: number }>;
-      by_provider: Array<{ provider: string; count: number }>;
-    }>(`/payments/errors/summary?hours=${hours}`),
-  paymentsErrors: (params: { limit?: number; hours?: number; provider?: string; stage?: string } = {}) => {
-    const u = new URLSearchParams();
-    if (params.limit !== undefined) u.set("limit", String(params.limit));
-    if (params.hours !== undefined) u.set("hours", String(params.hours));
-    if (params.provider) u.set("provider", params.provider);
-    if (params.stage) u.set("stage", params.stage);
-    const qs = u.toString();
-    return api.get<Array<Record<string, unknown>>>(
-      "/payments/errors" + (qs ? `?${qs}` : ""),
-    );
-  },
-  paymentDetail: (id: number) =>
-    api.get<Record<string, unknown>>(`/payments/${id}`),
 
   activationsPending: (limit = 100) =>
     api.get<{ total: number; rows: Array<Record<string, unknown>> }>(
@@ -865,24 +823,6 @@ export const endpoints = {
         reason ? `?reason=${encodeURIComponent(reason)}` : ""
       }`,
     ),
-  reconciliationAuditLog: () =>
-    api.get<
-      Array<{
-        id: number;
-        telegram_id: number;
-        old_expires_at: string;
-        new_expires_at: string;
-        old_days_from_now: number;
-        new_days_from_now: number;
-        days_removed: number;
-        reason: string;
-        proof_payment_ids: number[];
-        total_paid_days: number;
-        admin_grant_days_kept: number;
-        admin_telegram_id: number | null;
-        created_at: string;
-      }>
-    >("/reconciliation/audit-log"),
   reconciliationOverIssuanceLog: () =>
     api.get<
       Array<{
@@ -937,21 +877,6 @@ export const endpoints = {
     api.del<{ ok: boolean; key: string; deleted: boolean }>(
       `/automated-notifications/${encodeURIComponent(key)}`,
     ),
-  automatedNotificationGet: (key: string) =>
-    api.get<{
-      key: string;
-      title: string;
-      description: string | null;
-      category: string;
-      is_enabled: boolean;
-      has_custom_text: boolean;
-      default_text_ru: string;
-      custom_text_ru: string | null;
-      trigger_config: Record<string, unknown>;
-      template_vars: string[];
-      updated_at: string | null;
-      last_edited_by: number | null;
-    }>(`/automated-notifications/${encodeURIComponent(key)}`),
   automatedNotificationPatch: (
     key: string,
     body: {
@@ -1071,15 +996,10 @@ export interface RemnawaveBackfillStatus {
   elapsed_sec: number;
 }
 
-// Auth-aware CSV download via fetch + blob. Returns nothing; triggers
-// a browser download. We can't use a plain <a href="..."> because the
-// Authorization header is required and browsers won't attach it to
-// raw link clicks.
+// CSV download via fetch + blob (session cookie). Triggers a browser
+// download; errors surface as ApiError like every other call.
 export async function downloadCsv(path: string, filename: string) {
-  const token = auth.get();
-  const res = await fetch(`/dashboard/api${path}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
+  const res = await fetch(`/dashboard/api${path}`, { credentials: "include" });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     try {
@@ -1105,14 +1025,9 @@ export async function downloadCsv(path: string, filename: string) {
 async function _uploadMultipart(
   path: string, file: File,
 ): Promise<{ file_id: string }> {
-  const token = auth.get();
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch(path, {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: fd,
-  });
+  const res = await fetch(path, { method: "POST", credentials: "include", body: fd });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     try {

@@ -3,11 +3,13 @@ import asyncio
 import logging
 import random
 
+from app.branding import get_brand
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 import config
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
 from app.services import admin_settings, sbp_router
 
 logger = logging.getLogger(__name__)
@@ -144,7 +146,7 @@ async def settings_push_vapid_key():
     try:
         return {"publicKey": await push_notifications.get_public_key()}
     except Exception as e:
-        raise HTTPException(500, f"vapid_key_failed: {e}")
+        raise server_error("vapid_key_failed") from e
 
 
 class PushSubscribeRequest(BaseModel):
@@ -194,9 +196,9 @@ async def settings_push_test():
     try:
         result = await push_notifications.send_to_all(
             title="🧪 Тестовое уведомление",
-            body="Atlas Admin — пуш-уведомления работают.",
-            tag="atlas-test",
+            body=f"{get_brand().admin_title} — пуш-уведомления работают.",
+            tag=f"{get_brand().slug}-test",
         )
         return result
     except Exception as e:
-        raise HTTPException(500, f"push_test_failed: {e}")
+        raise server_error("push_test_failed") from e

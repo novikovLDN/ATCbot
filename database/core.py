@@ -2,22 +2,15 @@ import asyncpg
 import asyncio
 import os
 import sys
-import hashlib
-import base64
 import uuid as uuid_lib
-import random
-import json
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any, TYPE_CHECKING
 import logging
 import config
-import vpn_utils
 from app.utils.retry import retry_async
-from app.core.system_state import ComponentStatus
-# outline_api removed - use vpn_utils instead
 
 if TYPE_CHECKING:
-    from aiogram import Bot
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -87,10 +80,15 @@ def _ensure_utc(dt: datetime) -> datetime:
 
 
 def _normalize_subscription_row(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Convert naive DB datetime columns to aware UTC. Use when returning subscription dicts."""
+    """Convert naive DB datetime columns to aware UTC. Use when returning subscription dicts.
+
+    Also normalizes subscription_type: legacy biz_* → "plus" (tariffs.normalize_tier)."""
     if row is None:
         return None
     d = dict(row)
+    if "subscription_type" in d:
+        from app.services.tariffs import normalize_tier
+        d["subscription_type"] = normalize_tier(d["subscription_type"])
     for k in ("expires_at", "trial_expires_at", "created_at", "activated_at", "last_reminder_at",
               "last_auto_renewal_at", "last_notification_sent_at", "first_traffic_at"):
         if k in d and d[k] is not None and isinstance(d[k], datetime):
@@ -118,41 +116,6 @@ def safe_int(value: Any) -> int:
         return int(value)
     except (ValueError, TypeError):
         return 0
-
-
-def safe_float(value: Any) -> float:
-    """
-    Безопасное преобразование значения в float с обработкой None
-    
-    Args:
-        value: Значение для преобразования (может быть None, int, float, str, Decimal)
-    
-    Returns:
-        float: Преобразованное значение или 0.0 если None
-    """
-    if value is None:
-        return 0.0
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return 0.0
-
-
-def safe_get(dictionary: Dict[str, Any], key: str, default: Any = None) -> Any:
-    """
-    Безопасное получение значения из словаря с обработкой отсутствующих ключей
-    
-    Args:
-        dictionary: Словарь
-        key: Ключ
-        default: Значение по умолчанию
-    
-    Returns:
-        Значение из словаря или default
-    """
-    if dictionary is None:
-        return default
-    return dictionary.get(key, default)
 
 
 async def mark_payment_notification_sent(
@@ -285,8 +248,16 @@ async def get_pool() -> asyncpg.Pool:
         raise RuntimeError(f"{config.APP_ENV.upper()}_DATABASE_URL is not configured")
     if _pool is None:
         pool_config = _get_pool_config()
+
+        # asyncpg.create_pool() returns a Pool that must be AWAITED to connect;
+        # it is not a coroutine, so retry_async returned it un-awaited and the
+        # lazily created pool raised "pool is not initialized" on first use
+        # (docs/audit/07_e2e.md, E2E-POOL).
+        async def _create_pool():
+            return await asyncpg.create_pool(DATABASE_URL, **pool_config)
+
         _pool = await retry_async(
-            lambda: asyncpg.create_pool(DATABASE_URL, **pool_config),
+            _create_pool,
             retries=1,
             base_delay=0.5,
             max_delay=5.0,
@@ -361,18 +332,6 @@ async def check_critical_tables() -> bool:
     except Exception as e:
         logger.warning(f"Error checking critical tables: {e}")
         return False
-
-
-async def _get_pool_safe() -> Optional[asyncpg.Pool]:
-    """
-    Безопасное получение pool с проверкой DB_READY
-    
-    Returns:
-        Pool если БД готова, None если БД не готова
-    """
-    if not DB_READY:
-        return None
-    return await get_pool()
 
 
 async def init_db() -> bool:

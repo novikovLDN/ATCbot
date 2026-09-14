@@ -13,6 +13,8 @@ from aiogram import BaseMiddleware
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 from app.core.structured_logger import log_event
+from app.i18n import get_text
+from app.services.language_service import DEFAULT_LANGUAGE, resolve_user_language
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +90,18 @@ class TelegramErrorBoundaryMiddleware(BaseMiddleware):
 
             if answer_target:
                 try:
-                    await answer_target.answer("⚠️ Произошла ошибка. Попробуйте позже.", show_alert=False)
+                    language = DEFAULT_LANGUAGE
+                    if user_id:
+                        try:
+                            # Bounded: the DB may be the reason the handler failed.
+                            language = await asyncio.wait_for(resolve_user_language(user_id), timeout=2.0)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            language = DEFAULT_LANGUAGE
+                    await answer_target.answer(get_text(language, "errors.try_later"), show_alert=False)
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     pass
 

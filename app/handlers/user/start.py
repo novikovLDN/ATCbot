@@ -12,9 +12,9 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
 from app.i18n import get_text as i18n_get_text
+from app.services import grant_outbox
 from app.services.language_service import resolve_user_language
 from app.utils.referral_middleware import process_referral_on_first_interaction
-from app.handlers.common.guards import ensure_db_ready_message
 from app.handlers.common.keyboards import get_main_menu_keyboard
 from app.handlers.common.utils import safe_resolve_username
 from app.handlers.common.emoji import CE
@@ -108,60 +108,6 @@ async def cmd_start(message: Message, state: FSMContext):
                     referral_code, telegram_id
                 )
     
-    # SITE LINK: Обработка привязки с сайта /start <telegramLinkToken>
-    # Сайт генерирует ссылку t.me/atlassecure_bot?start=<token>
-    # Бот вызывает POST /api/bot/link чтобы привязать telegram_id к аккаунту сайта
-    if message.text:
-        start_parts = message.text.strip().split(maxsplit=1)
-        if len(start_parts) > 1:
-            payload = start_parts[1]
-            # Токен привязки — не ref_, не gift_ и не bgift_ (буквенно-цифровой, 10-64 символа)
-            if (not payload.startswith("ref_")
-                    and not payload.startswith("gift_")
-                    and not payload.startswith("bgift_")
-                    and len(payload) >= 10
-                    and len(payload) <= 64
-                    and payload.replace("_", "").replace("-", "").isalnum()):
-                try:
-                    from app.services.site_sync import (
-                        link_telegram_account, sync_balance, sync_referrals,
-                        is_enabled as _site_enabled,
-                    )
-                    if _site_enabled():
-                        link_result = await link_telegram_account(payload, telegram_id)
-                        if link_result:
-                            logger.info("SITE_LINK_SUCCESS user=%s token=%s", telegram_id, payload[:16])
-                            # Mark user as site-linked in local DB
-                            pool = await database.get_pool()
-                            async with pool.acquire() as conn:
-                                await conn.execute(
-                                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS site_linked BOOLEAN DEFAULT FALSE"
-                                )
-                                await conn.execute(
-                                    "UPDATE users SET site_linked = TRUE WHERE telegram_id = $1",
-                                    telegram_id,
-                                )
-                            # Sync data immediately after linking
-                            sub = await database.get_subscription(telegram_id)
-                            if sub and sub.get("expires_at"):
-                                from app.services.site_sync import sync_subscription
-                                exp_iso = sub["expires_at"].isoformat()
-                                plan = (sub.get("subscription_type") or "basic").strip().lower()
-                                await sync_subscription(telegram_id, exp_iso, plan)
-                            await sync_balance(telegram_id)
-                            await sync_referrals(telegram_id)
-                            logger.info("SITE_LINK_FULL_SYNC user=%s", telegram_id)
-
-                            _lang = await resolve_user_language(telegram_id)
-                            await message.answer(
-                                i18n_get_text(_lang, "start.site_linked_success", "✅ Сайт QoDev успешно привязан.\nТеперь синхронизация работает! ⚡️"),
-                                parse_mode="HTML",
-                            )
-                        else:
-                            logger.warning("SITE_LINK_FAILED user=%s token=%s", telegram_id, payload[:16])
-                except Exception as e:
-                    logger.warning("SITE_LINK_ERROR user=%s error=%s", telegram_id, e)
-
     # BYPASS GIFT LINK: /start bgift_<CODE> — admin-created GB gift link.
     # Grants the configured bypass GB through Remnawave; one redemption per user.
     if message.text:
@@ -197,13 +143,28 @@ async def cmd_start(message: Message, state: FSMContext):
                             existing_active = await database.get_subscription(telegram_id)
                             if not existing_active:
                                 await database.ensure_bypass_only_subscription(telegram_id)
-                            granted = await add_bypass_traffic(
-                                telegram_id=telegram_id,
-                                extra_bytes=extra_bytes,
-                                subscription_type="basic",
-                                subscription_end=None,
-                                period_days=30,
-                            )
+                            if grant_outbox.is_on():
+                                # T16: exactly +gb GB via the outbox, keyed by the
+                                # UNIQUE(link_id, telegram_id) redemption. Committed =
+                                # granted (panel retries are the worker's job).
+                                code = (result.get("link") or {}).get("code") or bgift_code
+                                await grant_outbox.grant(
+                                    telegram_id=telegram_id,
+                                    key=f"bgift:{code}:{telegram_id}",
+                                    gb=int(gb),
+                                    grant_source="bypass_gift",
+                                    context={"kind": "bypass_gift", "link_id": link_id},
+                                    bot=getattr(message, "bot", None),
+                                )
+                                granted = True
+                            else:
+                                granted = await add_bypass_traffic(
+                                    telegram_id=telegram_id,
+                                    extra_bytes=extra_bytes,
+                                    subscription_type="basic",
+                                    subscription_end=None,
+                                    period_days=30,
+                                )
                         except Exception as rmn_err:
                             logger.exception(
                                 "BGIFT_REMNAWAVE_FAIL user=%s code=%s err=%s",
@@ -328,15 +289,18 @@ async def cmd_start(message: Message, state: FSMContext):
                             await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                         logger.info(f"GIFT_ACTIVATED_VIA_LINK user={telegram_id} code={gift_code} new_user={is_new_user}")
 
-                        # Fire-and-forget: create Remnawave bypass for gift recipient
-                        try:
-                            from app.services.remnawave_service import renew_remnawave_user_bg
-                            if tariff in ("basic", "plus"):
-                                sub = await database.get_subscription(telegram_id)
-                                if sub and sub.get("expires_at"):
-                                    renew_remnawave_user_bg(telegram_id, tariff, sub["expires_at"])
-                        except Exception as rmn_err:
-                            logger.warning("REMNAWAVE_GIFT_FAIL: tg=%s %s", telegram_id, rmn_err)
+                        # Fire-and-forget: create Remnawave bypass for gift recipient.
+                        # Legacy path only: with the "gift" outbox flag (T14) the
+                        # provisioning job already grants premium + the tariff GB.
+                        if not activation_result.get("outbox"):
+                            try:
+                                from app.services.remnawave_service import renew_remnawave_user_bg
+                                if tariff in ("basic", "plus"):
+                                    sub = await database.get_subscription(telegram_id)
+                                    if sub and sub.get("expires_at"):
+                                        renew_remnawave_user_bg(telegram_id, tariff, sub["expires_at"])
+                            except Exception as rmn_err:
+                                logger.warning("REMNAWAVE_GIFT_FAIL: tg=%s %s", telegram_id, rmn_err)
 
                         return
                     else:
@@ -936,6 +900,7 @@ async def _handle_promo_link_start(
     try:
         applied_ok, applied_text = await _apply_promo_reward(
             telegram_id, reward_type, reward_value, reward_meta,
+            link_id=link["id"], bot=getattr(message, "bot", None),
         )
     except Exception as e:
         logger.exception(
@@ -1011,16 +976,39 @@ async def _handle_promo_link_start(
     return True
 
 
+async def _promo_grant_key(link_id: int, telegram_id: int) -> str:
+    """T16 idempotency key of one promo-link redemption:
+    promo:{link_id}:{tg}:{promo_link_redemptions.id}. The redemption row is
+    committed by try_redeem_promo_link before the reward is applied, so its id
+    is stable for this event and distinct per redemption (max_uses_per_user>1)."""
+    pool = await database.get_pool()
+    if pool is None:
+        raise RuntimeError("promo grant key: DB pool unavailable")
+    async with pool.acquire() as conn:
+        redemption_id = await conn.fetchval(
+            "SELECT MAX(id) FROM promo_link_redemptions WHERE link_id = $1 AND telegram_id = $2",
+            link_id, telegram_id,
+        )
+    if redemption_id is None:
+        raise RuntimeError(f"promo grant key: no redemption row link={link_id} tg={telegram_id}")
+    return f"promo:{link_id}:{telegram_id}:{redemption_id}"
+
+
 async def _apply_promo_reward(
     telegram_id: int,
     reward_type: str,
     reward_value: int,
     reward_meta: dict,
+    *,
+    link_id: int | None = None,
+    bot=None,
 ) -> tuple[bool, str]:
     """Применить награду. Возвращает (ok, user_facing_text).
 
     Реализовано через существующие database helper'ы: grant_access,
     create_user_discount, create_user_traffic_discount, add_bypass_traffic.
+    T16: при provisioning_flags.is_on("grants") дни и ГБ идут через outbox
+    (app.services.grant_outbox), ключ — _promo_grant_key.
     """
     from datetime import datetime, timedelta, timezone
 
@@ -1035,14 +1023,28 @@ async def _apply_promo_reward(
             # source="admin" — валидное значение, весь branch-код в
             # grant_access его знает (avoiding нестандартный "promo_link",
             # который мог бы пойти по неожиданной ветке в renewal-логике).
-            res = await database.grant_access(
-                telegram_id=telegram_id,
-                duration=timedelta(days=days),
-                source="admin",
-                admin_telegram_id=None,
-                admin_grant_days=days,
-                tariff=tariff,
-            )
+            if grant_outbox.is_on():
+                # T16: premium only (0 GB), panel work via the outbox.
+                outcome = await grant_outbox.grant(
+                    telegram_id=telegram_id,
+                    key=await _promo_grant_key(link_id, telegram_id),
+                    days=days,
+                    tier=tariff,
+                    grant_source="admin",
+                    grant_kwargs={"admin_telegram_id": None, "admin_grant_days": days, "tariff": tariff},
+                    context={"kind": "promo_days", "link_id": link_id},
+                    bot=bot,
+                )
+                res = {"subscription_end": outcome.subscription_end}
+            else:
+                res = await database.grant_access(
+                    telegram_id=telegram_id,
+                    duration=timedelta(days=days),
+                    source="admin",
+                    admin_telegram_id=None,
+                    admin_grant_days=days,
+                    tariff=tariff,
+                )
         except Exception as e:
             logger.exception("PROMO_APPLY_SUBSCRIPTION_FAIL: %s", e)
             return False, ""
@@ -1110,14 +1112,26 @@ async def _apply_promo_reward(
                     await database.ensure_bypass_only_subscription(telegram_id)
                 except Exception as e:
                     logger.warning("PROMO_ENSURE_BYPASS_ONLY_FAIL: %s", e)
-            from app.services.remnawave_service import add_bypass_traffic
-            granted = await add_bypass_traffic(
-                telegram_id=telegram_id,
-                extra_bytes=extra_bytes,
-                subscription_type="basic",
-                subscription_end=None,
-                period_days=30,
-            )
+            if grant_outbox.is_on():
+                # T16: exactly +gb GB via the outbox; committed = granted.
+                await grant_outbox.grant(
+                    telegram_id=telegram_id,
+                    key=await _promo_grant_key(link_id, telegram_id),
+                    gb=gb,
+                    grant_source="promo_link",
+                    context={"kind": "promo_gb", "link_id": link_id},
+                    bot=bot,
+                )
+                granted = True
+            else:
+                from app.services.remnawave_service import add_bypass_traffic
+                granted = await add_bypass_traffic(
+                    telegram_id=telegram_id,
+                    extra_bytes=extra_bytes,
+                    subscription_type="basic",
+                    subscription_end=None,
+                    period_days=30,
+                )
         except Exception as e:
             logger.exception("PROMO_APPLY_BYPASS_GB_FAIL: %s", e)
             return False, ""

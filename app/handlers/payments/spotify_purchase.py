@@ -656,58 +656,6 @@ async def cb_pay_card(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Ошибка создания платежа", show_alert=True)
 
 
-@spotify_purchase_router.callback_query(F.data.startswith("spotify_pay:lava:"))
-async def cb_pay_lava(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-    flow = await _get_flow_data(callback, state)
-    if not flow:
-        return
-    plan, months, price, email, password = flow
-    telegram_id = callback.from_user.id
-    price_kopecks = price * 100
-
-    import lava_service
-    if not lava_service.is_enabled():
-        await callback.answer("Оплата картой временно недоступна", show_alert=True)
-        return
-
-    purchase_id = await _create_pending(
-        telegram_id, plan, months, price_kopecks, email, password,
-    )
-    label = f"Spotify {_plan_meta(plan)['label']} {_duration_label(months)}"
-    try:
-        invoice_data = await lava_service.create_invoice(
-            amount_rubles=float(price),
-            purchase_id=purchase_id,
-            comment=label,
-        )
-        try:
-            await database.update_pending_purchase_invoice_id(
-                purchase_id, str(invoice_data["invoice_id"]),
-            )
-        except Exception:
-            pass
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить", url=invoice_data["payment_url"])],
-            [InlineKeyboardButton(
-                text="🔙 Назад",
-                callback_data="mini_shop",
-                icon_custom_emoji_id=CE["back"],
-                style="primary",
-            )],
-        ])
-        await callback.message.answer(
-            f"💳 Счёт создан: <b>{price}₽</b>\n\nОплатите по кнопке ниже.",
-            reply_markup=kb, parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.exception("SPOTIFY_LAVA_ERROR user=%s: %s", telegram_id, e)
-        await callback.answer("Ошибка создания счёта", show_alert=True)
-
-
 @spotify_purchase_router.callback_query(F.data.startswith("spotify_pay:wata:"))
 async def cb_pay_wata(callback: CallbackQuery, state: FSMContext):
     """Spotify — Wata (admin-only beta)."""
@@ -823,9 +771,12 @@ async def cb_pay_sbp(callback: CallbackQuery, state: FSMContext):
 async def send_spotify_success(
     bot: Bot, telegram_id: int, purchase_id: str,
     purchase: Optional[dict] = None,
+    *,
+    provider: Optional[str] = None,
 ):
     """Вызывается из confirmation.py после webhook об успешной оплате.
-    Юзеру — «ожидайте активацию», админу — весь заказ + кнопка «Выполнено»."""
+    Юзеру — «ожидайте активацию», админу — весь заказ + кнопка «Выполнено».
+    Если заказ админу не ушёл — отдельный forced-алерт без пароля/email."""
     if not purchase:
         purchase = await database.get_pending_purchase_by_id(purchase_id)
     if not purchase:
@@ -870,7 +821,7 @@ async def send_spotify_success(
             telegram_id, user_text, reply_markup=user_kb, parse_mode="HTML",
         )
     except Exception as e:
-        logger.error("SPOTIFY_USER_NOTIFY_FAILED user=%s: %s", telegram_id, e)
+        logger.error("SPOTIFY_USER_NOTIFY_FAILED user=%s: %s", telegram_id, type(e).__name__)
 
     # Admin: full order dump + «Выполнено» button
     try:
@@ -888,6 +839,7 @@ async def send_spotify_success(
         f"🎧 Тариф: {meta['label']}\n"
         f"⏳ Срок: {_duration_label(months)}\n"
         f"💰 Оплата: {price_rub}₽\n"
+        f"🧾 Заказ: <code>{_e(str(purchase_id))}</code> · {_e(str(provider or '—'))}\n"
         f"🕐 Дата: {now_str}\n\n"
         f"📧 <b>Email:</b> <code>{_e(email)}</code>\n"
         f"🔒 <b>Пароль:</b> <code>{_e(password)}</code>\n\n"
@@ -902,4 +854,23 @@ async def send_spotify_success(
             reply_markup=admin_kb, parse_mode="HTML",
         )
     except Exception as e:
-        logger.exception("SPOTIFY_ADMIN_NOTIFY_FAILED user=%s: %s", telegram_id, e)
+        # «Заказ не теряется»: оплачен, а админ не узнал → отдельный forced-алерт
+        # (без пароля/email) + payment_errors; алерт тоже упал → CRITICAL.
+        from app.services.payments.confirmation import alert_shop_order_not_notified
+        logger.error(
+            "SPOTIFY_ADMIN_NOTIFY_FAILED user=%s purchase_id=%s: %s",
+            telegram_id, purchase_id, type(e).__name__,
+        )
+        await alert_shop_order_not_notified(
+            bot,
+            stage="shop_admin_notify_failed",
+            purchase_id=purchase_id,
+            telegram_id=telegram_id,
+            provider=provider,
+            product=f"Spotify Premium · {meta['label']} · {_duration_label(months)}",
+            amount_rubles=price_rub,
+            username=buyer_username,
+            reason="сообщение с заказом админу не отправилось",
+            error=e,
+            pending=purchase,
+        )

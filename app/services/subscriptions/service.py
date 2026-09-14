@@ -39,7 +39,6 @@ async def calculate_price(
     tariff: str,
     period_days: int,
     promo_code: Optional[str] = None,
-    country: Optional[str] = None,
     base_price_override_rubles: Optional[int] = None
 ) -> Dict[str, Any]:
     """
@@ -60,7 +59,7 @@ async def calculate_price(
             "discount_amount_kopecks": int,
             "final_price_kopecks": int,
             "discount_percent": int,
-            "discount_type": str,  # "promo", "vip", "personal", None
+            "discount_type": str,  # "promo", "special_offer", "personal", None (largest wins)
             "promo_code": Optional[str],
             "is_valid": bool
         }
@@ -85,25 +84,23 @@ async def calculate_price(
                 raise InvalidTariffError(f"Invalid period_days: {period_days} for tariff {tariff}")
 
             # Admin-managed pricing (migration 069): применяем override
-            # + global discount ПЕРЕД юзер-скидками (promo/vip/personal).
-            # Combo/business с country идут по другому пути (get_biz_price)
-            # — их не трогаем.
-            if country is None:
-                try:
-                    from app.services import pricing as _pricing
-                    _ep = await _pricing.get_effective_price(tariff, period_days)
-                    if _ep is not None:
-                        # Оригинал из config — для strikethrough в UI.
-                        original_config_price_kopecks = int(config.TARIFFS[tariff][period_days]["price"] * 100)
-                        # Если override или global-discount изменили цену,
-                        # передаём в БД как base_price_override → юзер-скидки
-                        # применятся поверх нашей.
-                        if _ep.effective != int(config.TARIFFS[tariff][period_days]["price"]):
-                            base_price_override_rubles = _ep.effective
-                            pricing_reason = _ep.discount_reason
-                            pricing_percent = _ep.discount_percent
-                except Exception as _e:
-                    logger.warning("pricing helper failed (fallback config): %s", _e)
+            # + global discount ПЕРЕД юзер-скидками (promo/спецоффер/personal —
+            # действует наибольшая).
+            try:
+                from app.services import pricing as _pricing
+                _ep = await _pricing.get_effective_price(tariff, period_days)
+                if _ep is not None:
+                    # Оригинал из config — для strikethrough в UI.
+                    original_config_price_kopecks = int(config.TARIFFS[tariff][period_days]["price"] * 100)
+                    # Если override или global-discount изменили цену,
+                    # передаём в БД как base_price_override → юзер-скидки
+                    # применятся поверх нашей.
+                    if _ep.effective != int(config.TARIFFS[tariff][period_days]["price"]):
+                        base_price_override_rubles = _ep.effective
+                        pricing_reason = _ep.discount_reason
+                        pricing_percent = _ep.discount_percent
+            except Exception as _e:
+                logger.warning("pricing helper failed (fallback config): %s", _e)
 
         # Delegate to database layer
         result = await database.calculate_final_price(
@@ -111,7 +108,6 @@ async def calculate_price(
             tariff=tariff,
             period_days=period_days,
             promo_code=promo_code,
-            country=country,
             base_price_override_rubles=base_price_override_rubles
         )
 
@@ -136,6 +132,40 @@ async def calculate_price(
 # ====================================================================================
 # Purchase Creation
 # ====================================================================================
+
+async def ensure_combo_price_not_below(
+    telegram_id: int,
+    tariff: str,
+    period_days: int,
+    price_kopecks: int,
+    promo_code: Optional[str] = None,
+) -> None:
+    """P0 guard (9c497027) for paths that do not go through
+    create_subscription_purchase — the balance purchase: never sell Combo
+    (combo GB) below the Combo price, recomputed with the same discount chain.
+    A forged / stale FSM (combo flag + Basic/Plus price) used to be paid from
+    the balance as Combo (docs/audit/07_e2e.md, E2E-COMBO-BALANCE).
+    Raises InvalidTariffError; returns None when the price is fine."""
+    combo = (config.COMBO_TARIFFS.get(f"combo_{tariff}") or {}).get(period_days)
+    if not combo:
+        raise InvalidTariffError(f"No combo tariff for {tariff}/{period_days}")
+    combo_price_info = await calculate_price(
+        telegram_id=telegram_id,
+        tariff=tariff,
+        period_days=period_days,
+        promo_code=promo_code,
+        base_price_override_rubles=combo["price"],
+    )
+    if price_kopecks < combo_price_info["final_price_kopecks"]:
+        logger.error(
+            "COMBO_PRICE_BELOW_COMBO user=%s tariff=%s period=%s price=%s expected=%s (balance)",
+            telegram_id, tariff, period_days, price_kopecks, combo_price_info["final_price_kopecks"],
+        )
+        raise InvalidTariffError(
+            f"Combo price {price_kopecks} below combo price "
+            f"{combo_price_info['final_price_kopecks']} for {tariff}/{period_days}"
+        )
+
 
 async def create_subscription_purchase(
     telegram_id: int,
@@ -169,10 +199,36 @@ async def create_subscription_purchase(
             raise InvalidTariffError(f"Invalid period_days: {period_days} (subscription requires period_days > 0)")
         if tariff not in config.TARIFFS:
             raise InvalidTariffError(f"Invalid tariff: {tariff}")
-        if period_days not in config.TARIFFS[tariff]:
-            raise InvalidTariffError(f"Invalid period_days: {period_days} for tariff {tariff}")
+        # Combo is its own catalog (config.COMBO_TARIFFS, incl. 24 months / 730 d,
+        # shown on the combo screen) — HOW_IT_WORKS P1-3.
+        periods = (config.COMBO_TARIFFS.get(f"combo_{tariff}") or {}) if is_combo else config.TARIFFS[tariff]
+        if period_days not in periods:
+            raise InvalidTariffError(
+                f"Invalid period_days: {period_days} for tariff {tariff}{' (combo)' if is_combo else ''}"
+            )
         if price_kopecks <= 0:
             raise PurchaseCreationError(f"Invalid price: {price_kopecks} kopecks")
+        if is_combo:
+            # P0 guard: never sell Combo (combo GB) below the Combo price. The UI
+            # price comes from FSM; a stale Combo flag once paired it with a
+            # Basic/Plus price. Recompute with the same discount chain.
+            combo_price_info = await calculate_price(
+                telegram_id=telegram_id,
+                tariff=tariff,
+                period_days=period_days,
+                promo_code=promo_code,
+                base_price_override_rubles=periods[period_days]["price"],
+            )
+            if price_kopecks < combo_price_info["final_price_kopecks"]:
+                logger.error(
+                    "COMBO_PRICE_BELOW_COMBO user=%s tariff=%s period=%s price=%s expected=%s",
+                    telegram_id, tariff, period_days, price_kopecks,
+                    combo_price_info["final_price_kopecks"],
+                )
+                raise InvalidTariffError(
+                    f"Combo price {price_kopecks} below combo price "
+                    f"{combo_price_info['final_price_kopecks']} for {tariff}/{period_days}"
+                )
 
         # SECURITY: Block new subscription purchases when VPN is disabled
         # Balance top-ups and gifts are still allowed
@@ -210,7 +266,8 @@ async def create_subscription_purchase(
 async def create_balance_topup_purchase(
     telegram_id: int,
     amount_kopecks: int,
-    currency: str = "RUB"
+    currency: str = "RUB",
+    credit_kopecks: Optional[int] = None,
 ) -> str:
     """
     Create a pending balance top-up purchase. No tariff, no period_days.
@@ -231,9 +288,12 @@ async def create_balance_topup_purchase(
         if amount_kopecks <= 0:
             raise PurchaseCreationError(f"Invalid amount: {amount_kopecks} kopecks")
 
+        # credit_kopecks: amount to credit when it differs from the charged
+        # amount (SBP markup — owner 2026-09-14: only the asked amount is credited).
         purchase_id = await database.create_pending_balance_topup_purchase(
             telegram_id=telegram_id,
-            amount_kopecks=amount_kopecks
+            amount_kopecks=amount_kopecks,
+            credit_kopecks=credit_kopecks,
         )
 
         logger.info(
@@ -503,7 +563,8 @@ async def calculate_renewal_price(
     Calculate price for subscription renewal.
     
     Renewals use the same pricing logic as new purchases, but typically
-    default to 30 days. VIP and personal discounts apply.
+    default to 30 days. The special offer and personal discounts apply
+    (the largest single discount wins).
     
     Args:
         telegram_id: Telegram ID of the user
@@ -517,7 +578,7 @@ async def calculate_renewal_price(
         InvalidTariffError: If tariff or period is invalid
         PriceCalculationError: If price calculation fails
     """
-    # Renewals don't use promo codes - only VIP and personal discounts
+    # Renewals don't use promo codes - only the special offer / personal discount
     return await calculate_price(
         telegram_id=telegram_id,
         tariff=tariff,

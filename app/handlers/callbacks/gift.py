@@ -5,7 +5,6 @@ import asyncio
 import logging
 import math
 import time
-from urllib.parse import quote
 
 import config
 import database
@@ -16,31 +15,29 @@ from aiogram.types import (
     InlineKeyboardButton,
     LabeledPrice,
     Message,
-    SwitchInlineQueryChosenChat,
 )
-from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
-from app.services.subscriptions import service as subscription_service
 from app.core.rate_limit import check_rate_limit
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.states import GiftState
 from app.handlers.common.emoji import CE
+from app.utils.text_format import build_share_url
 
 gift_router = Router()
 logger = logging.getLogger(__name__)
 
 INVOICE_TIMEOUT = config.INVOICE_TIMEOUT_SECONDS
-LAVA_INVOICE_TIMEOUT = 15 * 60  # 15 minutes
+INVOICE_MSG_TIMEOUT = 15 * 60  # 15 minutes
 
 
-async def _auto_delete_lava_msg(bot, chat_id: int, msg):
-    """Delete Lava invoice message after timeout."""
+async def _auto_delete_invoice_msg(bot, chat_id: int, msg):
+    """Delete invoice message after timeout."""
     try:
-        await asyncio.sleep(LAVA_INVOICE_TIMEOUT)
+        await asyncio.sleep(INVOICE_MSG_TIMEOUT)
         await bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
     except Exception:
         pass
@@ -55,21 +52,29 @@ async def _schedule_invoice_deletion(bot: Bot, chat_id: int, invoice_message: Me
         pass
 
 
-def _tariff_display_name(tariff: str) -> str:
-    """Человекочитаемое название тарифа."""
-    names = {"basic": "Basic", "plus": "Plus", "combo_basic": "Комбо Basic", "combo_plus": "Комбо Plus"}
-    return names.get(tariff, tariff.capitalize())
+def _tariff_display_name(tariff: str, language: str = "ru") -> str:
+    """Человекочитаемое название тарифа — in the user's language (08 #21:
+    «Комбо …» was RU for everyone)."""
+    if tariff in ("basic", "plus", "combo_basic", "combo_plus"):
+        return i18n_get_text(language, f"tariff.name_{tariff}")
+    return tariff.capitalize()
 
 
-def _period_display(period_days: int) -> str:
-    """Человекочитаемый период."""
-    months = period_days // 30
-    if months == 1:
-        return "1 месяц"
-    elif months in (2, 3, 4):
-        return f"{months} месяца"
-    else:
-        return f"{months} месяцев"
+def _period_display(period_days: int, language: str = "ru") -> str:
+    """Человекочитаемый период (calendar months) — in the user's language (08 #21:
+    EN saw «1 месяц»)."""
+    from app.services.payments.success_message import period_display
+    return period_display(language, period_days)
+
+
+def _register_invoice_screen(purchase_id: str, telegram_id: int, msg) -> None:
+    """Gift «Ждём платёж» screens are removed after the payment like every other
+    invoice screen (08 #15): the confirmation deletes what is registered here."""
+    try:
+        from app.handlers.callbacks.payments_callbacks import _invoice_messages
+        _invoice_messages[purchase_id] = (telegram_id, msg.message_id)
+    except Exception:  # noqa: BLE001 — cosmetic, never blocks the payment
+        pass
 
 
 # ====================================================================================
@@ -142,7 +147,7 @@ async def callback_gift_tariff(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.update_data(gift_tariff=tariff)
 
-    tariff_name = _tariff_display_name(tariff)
+    tariff_name = _tariff_display_name(tariff, language)
     tariff_prices = config.TARIFFS.get(tariff, {})
 
     text = i18n_get_text(language, "gift.choose_period", tariff_name=tariff_name)
@@ -152,7 +157,7 @@ async def callback_gift_tariff(callback: CallbackQuery, state: FSMContext):
     buttons = []
     for period_days in sorted(tariff_prices.keys()):
         price = tariff_prices[period_days]["price"]
-        period_text = _period_display(period_days)
+        period_text = _period_display(period_days, language)
         badge = _period_badge(period_days)
         btn_text = f"{period_text} — {price} ₽"
         if badge:
@@ -211,8 +216,8 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
         gift_price_kopecks=price_kopecks,
     )
 
-    tariff_name = _tariff_display_name(tariff)
-    period_text = _period_display(period_days)
+    tariff_name = _tariff_display_name(tariff, language)
+    period_text = _period_display(period_days, language)
 
     text = i18n_get_text(
         language, "gift.choose_payment",
@@ -252,21 +257,22 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
             style="primary",
         )])
 
-    # Lava-кнопка подменена на Wata: та же надпись, но callback уходит
-    # в подарочный Wata-хендлер. Код lava_service не удаляем — оставляем
-    # гейт видимости.
-    import lava_service
-    if lava_service.is_enabled():
+    # WATA (карта/СБП/T-Pay) — one button per cash desk (08 #20): with WATA on,
+    # «Оплатить картой» (gift_pay:card) opened WATA too, so it gives way.
+    import wata_service
+    if wata_service.is_enabled():
+        buttons = [row for row in buttons if row[0].callback_data != "gift_pay:card"]
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.lava", "📱 СБП 3%"),
+            text=i18n_get_text(language, "payment.lava"),
             callback_data="gift_pay:wata",
-            style="primary",
+            style="success",
         )])
-    # СБП — обратно через Platega (revert Wata-миграции).
+    # СБП — Platega, with its real markup (08 #12; «📱 СБП» was hardcoded).
     import platega_service
     if platega_service.is_enabled():
+        from app.handlers.common.payment_labels import sbp_label
         buttons.append([InlineKeyboardButton(
-            text="📱 СБП",
+            text=sbp_label(language),
             callback_data="gift_pay:sbp",
             style="primary",
         )])
@@ -330,38 +336,91 @@ async def callback_gift_pay_balance(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(GiftState.processing_payment)
 
+    debited = False
+    gift_code = None
     try:
         # Списываем баланс
         success = await database.decrease_balance(
             telegram_id=telegram_id,
             amount=price_rubles,
             source="gift_subscription",
-            description=f"Подарочная подписка {_tariff_display_name(tariff)} на {_period_display(period_days)}",
+            description=f"Подарочная подписка {_tariff_display_name(tariff, language)} на {_period_display(period_days, language)}",
         )
         if not success:
             await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
             await state.clear()
             return
+        debited = True
 
         # Создаём запись о подарке
+        gift_purchase_id = f"gift_balance_{telegram_id}_{int(time.time())}"
         gift = await database.create_gift_subscription(
             buyer_telegram_id=telegram_id,
             tariff=tariff,
             period_days=period_days,
             price_kopecks=price_kopecks,
-            purchase_id=f"gift_balance_{telegram_id}_{int(time.time())}",
+            purchase_id=gift_purchase_id,
         )
 
         gift_code = gift["gift_code"]
         logger.info(f"GIFT_PAID_BALANCE buyer={telegram_id} code={gift_code} tariff={tariff} period={period_days}d")
+        # Owner rule 2026-09-14 (N17): a purchase paid from balance earns referral
+        # cashback too (once per purchase_id); never raises.
+        await database.award_referral_cashback(
+            buyer_id=telegram_id, purchase_id=gift_purchase_id, amount_rubles=price_rubles,
+        )
 
         await _send_gift_success(callback.bot, telegram_id, language, gift_code, tariff, period_days)
         await state.clear()
 
     except Exception as e:
         logger.exception(f"Error processing gift balance payment: user={telegram_id}, error={e}")
+        if debited and gift_code is None:
+            # Деньги списаны, а код не создан → вернуть на баланс + алерт (HOW_IT_WORKS P2).
+            await _refund_gift_balance(callback.bot, telegram_id, price_rubles, tariff, period_days, e)
         await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         await state.clear()
+
+
+async def _refund_gift_balance(bot, telegram_id: int, amount: float, tariff: str, period_days: int, error) -> None:
+    """Gift paid from balance, gift code NOT created: give the money back,
+    write payment_errors and send a forced admin alert. Never raises."""
+    refunded = False
+    try:
+        refunded = bool(await database.increase_balance(
+            telegram_id=telegram_id,
+            amount=amount,
+            source="refund",
+            description=f"Возврат: подарочная подписка {tariff} на {period_days} дн. не создана",
+        ))
+    except Exception as refund_err:  # noqa: BLE001
+        logger.error("GIFT_BALANCE_REFUND_FAILED user=%s amount=%s: %s", telegram_id, amount, refund_err)
+    logger.critical(
+        "GIFT_BALANCE_CODE_NOT_CREATED user=%s amount=%s refunded=%s", telegram_id, amount, refunded,
+    )
+    try:
+        await database.log_payment_error(
+            stage="gift_balance_code_not_created",
+            telegram_id=telegram_id,
+            payment_provider="balance",
+            amount_rubles=amount,
+            error_message=f"{type(error).__name__}: {error} (refunded={refunded})"[:500],
+        )
+    except Exception as log_err:  # noqa: BLE001
+        logger.warning("GIFT_BALANCE_PAYMENT_ERROR_LOG_FAILED user=%s: %s", telegram_id, log_err)
+    status = "refunded to the balance" if refunded else "NOT refunded — credit the balance manually!"
+    text = (
+        "Gift paid from balance: gift code was NOT created.\n"
+        f"User TG ID: {telegram_id}\n"
+        f"Gift: {tariff} {period_days} days\n"
+        f"Amount: {amount} RUB — {status}\n"
+        f"Error: {type(error).__name__}: {str(error)[:200]}"
+    )
+    try:
+        from app.services.admin_alerts import send_alert
+        await send_alert(bot, "payment", text, force=True)
+    except Exception as alert_err:  # noqa: BLE001
+        logger.warning("GIFT_BALANCE_ALERT_FAILED user=%s: %s", telegram_id, alert_err)
 
 
 # ====================================================================================
@@ -417,8 +476,8 @@ async def callback_gift_pay_card(callback: CallbackQuery, state: FSMContext):
 
         await state.update_data(gift_purchase_id=purchase_id)
 
-        tariff_name = _tariff_display_name(tariff)
-        period_text = _period_display(period_days)
+        tariff_name = _tariff_display_name(tariff, language)
+        period_text = _period_display(period_days, language)
         description = f"Подарочная подписка {tariff_name} на {period_text}"
         payload = f"purchase:{purchase_id}"
 
@@ -490,8 +549,8 @@ async def callback_gift_pay_stars(callback: CallbackQuery, state: FSMContext):
 
         await state.update_data(gift_purchase_id=purchase_id)
 
-        tariff_name = _tariff_display_name(tariff)
-        period_text = _period_display(period_days)
+        tariff_name = _tariff_display_name(tariff, language)
+        period_text = _period_display(period_days, language)
         description = f"Подарочная подписка {tariff_name} на {period_text}"
         payload = f"purchase:{purchase_id}"
 
@@ -561,8 +620,8 @@ async def callback_gift_pay_crypto(callback: CallbackQuery, state: FSMContext):
 
         await state.update_data(gift_purchase_id=purchase_id)
 
-        tariff_name = _tariff_display_name(tariff)
-        period_text = _period_display(period_days)
+        tariff_name = _tariff_display_name(tariff, language)
+        period_text = _period_display(period_days, language)
         price_rubles = price_kopecks / 100.0
 
         invoice_data = await cryptobot_service.create_invoice(
@@ -575,7 +634,7 @@ async def callback_gift_pay_crypto(callback: CallbackQuery, state: FSMContext):
         pay_url = invoice_data["pay_url"]
 
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id), provider="cryptobot")
         except Exception as e:
             logger.error(f"Failed to save cryptobot invoice_id for gift: purchase_id={purchase_id}, error={e}")
 
@@ -593,99 +652,15 @@ async def callback_gift_pay_crypto(callback: CallbackQuery, state: FSMContext):
             )]
         ])
 
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        _register_invoice_screen(purchase_id, telegram_id, msg)
+        asyncio.create_task(_auto_delete_invoice_msg(callback.bot, telegram_id, msg))
         await callback.answer()
         await state.set_state(None)
         await state.clear()
 
     except Exception as e:
         logger.exception(f"Error creating gift crypto invoice: user={telegram_id}, error={e}")
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-        await state.clear()
-
-
-# ====================================================================================
-# STEP 4E: Оплата через Lava (карта)
-# ====================================================================================
-
-@gift_router.callback_query(F.data == "gift_pay:lava", GiftState.choose_payment_method)
-async def callback_gift_pay_lava(callback: CallbackQuery, state: FSMContext):
-    """Оплата подарка через Lava (карта)."""
-    telegram_id = callback.from_user.id
-
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
-    if not is_allowed:
-        language = await resolve_user_language(telegram_id)
-        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
-        return
-    language = await resolve_user_language(telegram_id)
-
-    fsm_data = await state.get_data()
-    tariff = fsm_data.get("gift_tariff")
-    period_days = fsm_data.get("gift_period_days")
-    price_kopecks = fsm_data.get("gift_price_kopecks")
-
-    if not tariff or not period_days or not price_kopecks:
-        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
-        await state.clear()
-        return
-
-    import lava_service
-    if not lava_service.is_enabled():
-        await callback.answer(i18n_get_text(language, "payment.lava_unavailable"), show_alert=True)
-        return
-
-    try:
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff=tariff,
-            period_days=period_days,
-            price_kopecks=price_kopecks,
-            purchase_type="gift",
-        )
-
-        await state.update_data(gift_purchase_id=purchase_id)
-
-        tariff_name = _tariff_display_name(tariff)
-        period_text = _period_display(period_days)
-        price_rubles = price_kopecks / 100.0
-
-        invoice_data = await lava_service.create_invoice(
-            amount_rubles=price_rubles,
-            purchase_id=purchase_id,
-            comment=f"Подарочная подписка {tariff_name} на {period_text}",
-        )
-
-        invoice_id = invoice_data["invoice_id"]
-        payment_url = invoice_data["payment_url"]
-
-        try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
-        except Exception as e:
-            logger.error(f"Failed to save lava invoice_id for gift: purchase_id={purchase_id}, error={e}")
-
-        text = i18n_get_text(language, "payment.lava_waiting", amount=price_rubles)
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "payment.lava_pay_button"),
-                url=payment_url
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "common.back"),
-                callback_data="gift_subscription",
-                icon_custom_emoji_id=CE["back"],
-                style="primary",
-            )]
-        ])
-
-        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, lava_msg))
-        await callback.answer()
-        await state.set_state(None)
-        await state.clear()
-
-    except Exception as e:
-        logger.exception(f"Error creating gift lava invoice: user={telegram_id}, error={e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
         await state.clear()
 
@@ -730,8 +705,8 @@ async def callback_gift_pay_sbp(callback: CallbackQuery, state: FSMContext):
         )
         await state.update_data(gift_purchase_id=purchase_id)
 
-        tariff_name = _tariff_display_name(tariff)
-        period_text = _period_display(period_days)
+        tariff_name = _tariff_display_name(tariff, language)
+        period_text = _period_display(period_days, language)
         sbp_price_rubles = sbp_price_kopecks / 100.0
 
         tx_data = await platega_service.create_transaction(
@@ -744,7 +719,7 @@ async def callback_gift_pay_sbp(callback: CallbackQuery, state: FSMContext):
         redirect_url = tx_data["redirect_url"]
 
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id), provider="platega")
         except Exception as e:
             logger.error(f"Failed to save platega tx_id for gift: purchase_id={purchase_id}, error={e}")
 
@@ -762,7 +737,8 @@ async def callback_gift_pay_sbp(callback: CallbackQuery, state: FSMContext):
             )],
         ])
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg))
+        _register_invoice_screen(purchase_id, telegram_id, msg)
+        asyncio.create_task(_auto_delete_invoice_msg(callback.bot, telegram_id, msg))
         await callback.answer()
         await state.set_state(None)
         await state.clear()
@@ -777,10 +753,10 @@ async def callback_gift_pay_wata(callback: CallbackQuery, state: FSMContext):
     """Оплата подарка через Wata (admin-only beta)."""
     telegram_id = callback.from_user.id
     import wata_service
-    if not wata_service.is_visible_to(telegram_id):
-        await callback.answer("Wata пока в закрытой бете", show_alert=True)
-        return
     language = await resolve_user_language(telegram_id)
+    if not wata_service.is_visible_to(telegram_id):
+        await callback.answer(i18n_get_text(language, "payment.wata_beta_only"), show_alert=True)
+        return
     fsm_data = await state.get_data()
     tariff = fsm_data.get("gift_tariff")
     period_days = fsm_data.get("gift_period_days")
@@ -798,8 +774,8 @@ async def callback_gift_pay_wata(callback: CallbackQuery, state: FSMContext):
             purchase_type="gift",
         )
         await state.update_data(gift_purchase_id=purchase_id)
-        tariff_name = _tariff_display_name(tariff)
-        period_text = _period_display(period_days)
+        tariff_name = _tariff_display_name(tariff, language)
+        period_text = _period_display(period_days, language)
         price_rubles = price_kopecks / 100.0
         invoice = await wata_service.create_invoice(
             amount_rubles=price_rubles,
@@ -808,18 +784,24 @@ async def callback_gift_pay_wata(callback: CallbackQuery, state: FSMContext):
             user_id=telegram_id,
         )
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]), provider="wata")
         except Exception:
             pass
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"💳 Оплатить {price_rubles:.0f}₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.wata_pay_button", amount=f"{price_rubles:.0f}"),
+                url=invoice["payment_url"],
+            )],
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="gift_subscription", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
+        # 08 #20 / #15: WATA is card / SBP / T-Pay (was «СБП 2», RU only);
+        # the screen is removed after the payment.
         msg = await callback.message.answer(
-            f"💳 <b>СБП 2</b>\n\nПодарок {tariff_name} на {period_text}\n<b>{price_rubles:.0f} ₽</b>",
+            i18n_get_text(language, "payment.wata_waiting", amount=f"{price_rubles:.0f}"),
             reply_markup=keyboard, parse_mode="HTML",
         )
-        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, msg))
+        _register_invoice_screen(purchase_id, telegram_id, msg)
+        asyncio.create_task(_auto_delete_invoice_msg(callback.bot, telegram_id, msg))
         await callback.answer()
         await state.set_state(None)
         await state.clear()
@@ -839,8 +821,8 @@ async def _send_gift_success(bot: Bot, telegram_id: int, language: str, gift_cod
     bot_username = bot_info.username
     gift_link = f"https://t.me/{bot_username}?start=gift_{gift_code}"
 
-    tariff_name = _tariff_display_name(tariff)
-    period_text = _period_display(period_days)
+    tariff_name = _tariff_display_name(tariff, language)
+    period_text = _period_display(period_days, language)
 
     text = i18n_get_text(
         language, "gift.success",
@@ -849,7 +831,9 @@ async def _send_gift_success(bot: Bot, telegram_id: int, language: str, gift_cod
         gift_link=gift_link,
     )
 
-    # Текст для шаринга
+    # Текст для шаринга. t.me/share/url кладёт его в поле ввода пользователя
+    # как обычный текст: HTML и премиум-эмодзи там не парсятся, поэтому
+    # build_share_url прогоняет его через html_to_plain и кодирует.
     share_text = i18n_get_text(
         language, "gift.share_text",
         tariff_name=tariff_name,
@@ -860,7 +844,13 @@ async def _send_gift_success(bot: Bot, telegram_id: int, language: str, gift_cod
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "gift.btn_share", "📤 Отправить ссылку"),
-            url=f"https://t.me/share/url?url={quote(gift_link)}&text={quote(share_text)}",
+            url=build_share_url(gift_link, share_text),
+        )],
+        # 08 #19: «Мои подарки» had no entry point — the link can be found again there.
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "gift.btn_my_gifts"),
+            callback_data="my_gifts:0",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
@@ -936,8 +926,8 @@ async def callback_my_gifts(callback: CallbackQuery):
     for i in range(0, len(page_gifts), 2):
         row = []
         for gift in page_gifts[i:i + 2]:
-            tariff_name = _tariff_display_name(gift["tariff"])
-            period_text = _period_display(gift["period_days"])
+            tariff_name = _tariff_display_name(gift["tariff"], language)
+            period_text = _period_display(gift["period_days"], language)
             status_icon = "✅" if gift["status"] == "activated" else "❌"
             btn_text = f"{tariff_name} {period_text} {status_icon}"
             row.append(InlineKeyboardButton(
@@ -1009,8 +999,8 @@ async def callback_gift_detail(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "gift.error_not_found"), show_alert=True)
         return
 
-    tariff_name = _tariff_display_name(gift["tariff"])
-    period_text = _period_display(gift["period_days"])
+    tariff_name = _tariff_display_name(gift["tariff"], language)
+    period_text = _period_display(gift["period_days"], language)
     gift_code = gift["gift_code"]
 
     bot_info = await callback.bot.get_me()
@@ -1053,7 +1043,7 @@ async def callback_gift_detail(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "gift.btn_share", "📤 Отправить ссылку"),
-                url=f"https://t.me/share/url?url={quote(gift_link)}&text={quote(share_text)}",
+                url=build_share_url(gift_link, share_text),
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "gift.back_to_gifts", "🎁 Назад к подаркам"),

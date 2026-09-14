@@ -2,15 +2,8 @@
 Helpers that return the right subscription URL for a Telegram user
 *depending on whether the bot has cut over to the Remnawave-only flow*.
 
-Why this exists: the legacy `vpn_utils.build_sub_url` is synchronous
-and always returns the samopis-style URL
-`https://atlassecure.ru/api/sub/{token}?id={id}`.  After the Task 2
-cut-over (config.PURCHASE_FLOW_REMNAWAVE=true) we want the bot's
-"Подключиться" buttons / copy-key blocks to surface the Remnawave-
-issued URL instead — but the legacy helper has too many sync call
-sites to flip in one go.
-
-So we add async wrappers that:
+Async helpers that surface the Remnawave-issued URL on the bot's
+"Подключиться" buttons / copy-key blocks:
   1. Read the cached `remnawave_premium_sub_url` /
      `remnawave_bypass_sub_url` from `subscriptions` (populated by
      Task 1 migration + Task 2 purchase flow).
@@ -23,11 +16,8 @@ So we add async wrappers that:
      edge case the migration script missed), provision one on the
      fly so the link is finally a real Remnawave URL.  Per-process
      dedup lock prevents duplicate creation under concurrent clicks.
-  4. Fall back to `build_sub_url(telegram_id)` only as a last resort
-     (legacy URL → handled by `subscription_proxy` if enabled).
 
-These helpers never raise — they always return *some* URL the bot can
-render.
+These helpers never raise.
 """
 from __future__ import annotations
 
@@ -55,9 +45,8 @@ _lazy_provision_locks: dict[int, asyncio.Lock] = {}
 # Единая точка нормализации ИСХОДЯЩИХ ссылок: любой МЁРТВЫЙ host гоним на
 # ЖИВОЙ (тот же, что использует агрегатор — config.SUB_AGGREGATOR_UPSTREAM_HOST,
 # по умолчанию sub.atlassecure.ru). Живые/samopis/прочие хосты НЕ трогаем —
-# rewrite строго по списку мёртвых, иначе сломали бы legacy-samopis фолбэк
-# (get_user_primary_subscription_url → _legacy_sub_url идёт через этот же
-# rewrite). path/shortuuid у vps-cloud.uk и живого host совпадают (это был
+# rewrite строго по списку мёртвых, чтобы не трогать чужие ссылки.
+# path/shortuuid у vps-cloud.uk и живого host совпадают (это был
 # просто фронт к той же панели) → достаточно подменить host.
 _DEAD_SUB_HOST_SUFFIXES = ("vps-cloud.uk",)
 
@@ -89,12 +78,6 @@ def _rewrite_sub_host(url: Optional[str]) -> Optional[str]:
 # этот rewrite централизованно, чтобы raw URL из панели никогда не
 # уходил юзеру с невалидным cert-хостом.
 rewrite_sub_host = _rewrite_sub_host
-
-
-def _legacy_sub_url(telegram_id: int) -> str:
-    """Fallback to the existing samopis-style URL. Sync so it always works."""
-    from vpn_utils import build_sub_url
-    return build_sub_url(telegram_id)
 
 
 async def get_user_premium_url(telegram_id: int) -> Optional[str]:
@@ -229,6 +212,8 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
                     requested_uuid=samopis_uuid or None,
                     expire_at=expire_at,
                     description=("Lazy trial via URL" if is_trial else "Lazy-provisioned via URL"),
+                    # devices by tariff (owner 2026-09-14); trial = Basic
+                    tier=("basic" if is_trial else (sub.get("subscription_type") or "basic")),
                 )
                 if presult.ok:
                     try:
@@ -421,10 +406,9 @@ async def get_user_primary_subscription_url(telegram_id: int) -> str:
       2. Lazy-provision both entities for an active user that somehow
          doesn't have them yet (trial / pre-Task-2 edge cases) — then
          re-query premium.
-      3. Legacy samopis URL via `vpn_utils.build_sub_url`.
 
-    Always returns a non-empty string so handlers can render it without
-    a None-check.
+    Returns "" if neither yields a premium URL (callers treat a falsy
+    URL as "no key").
     """
     premium = await get_user_premium_url(telegram_id)
     if premium:
@@ -436,10 +420,9 @@ async def get_user_primary_subscription_url(telegram_id: int) -> str:
         if premium:
             return premium
 
-    # Legacy samopis URL is served by our own app.atlassecure.ru — nothing
-    # to rewrite in that case, but the helper is a no-op for URLs that don't
-    # contain the old host, so we run it unconditionally for consistency.
-    return _rewrite_sub_host(_legacy_sub_url(telegram_id))
+    # Legacy samopis /api/sub/{token} fallback removed together with
+    # subscription_proxy (the only server of that path).
+    return ""
 
 
 __all__ = [

@@ -26,6 +26,7 @@ in-process, 0ms → следующий запрос клиента = свежи�
 """
 from __future__ import annotations
 
+import hmac
 import asyncio
 import base64
 import json
@@ -33,7 +34,7 @@ import logging
 import re
 import time
 from collections import OrderedDict
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import httpx
 from fastapi import APIRouter, Path, Request, Response
@@ -722,18 +723,17 @@ def _make_response(
 
 # ── Internal endpoint для invalidate ────────────────────────────────
 # Bot зовёт этот путь после mutation'ов подписки (renew, add_traffic,
-# combo). Секрет захардкожен как SUB_AGGREGATOR_INTERNAL_SECRET в config;
-# если пусто — endpoint принимает всё (для беты).
+# combo). Секрет — SUB_AGGREGATOR_INTERNAL_SECRET в config; не задан →
+# endpoint закрыт (fail-closed). Сам бот чистит кеш in-process.
 @router.post("/a/_invalidate/{token}")
 async def invalidate_cache(
     request: Request,
     token: str = Path(..., min_length=4, max_length=128),
 ) -> Response:
     secret = getattr(config, "SUB_AGGREGATOR_INTERNAL_SECRET", "") or ""
-    if secret:
-        client_secret = request.headers.get("x-internal-secret", "")
-        if client_secret != secret:
-            return PlainTextResponse("Forbidden", status_code=403)
+    client_secret = request.headers.get("x-internal-secret", "")
+    if not secret or not hmac.compare_digest(client_secret, secret):
+        return PlainTextResponse("Forbidden", status_code=403)
     if not _TOKEN_RE.match(token):
         return PlainTextResponse("Bad token", status_code=400)
     # Чистим и body-кеш, И pair-кеш (иначе старые sub-URL живут до PAIR_TTL).

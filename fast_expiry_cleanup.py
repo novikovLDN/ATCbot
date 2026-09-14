@@ -18,8 +18,6 @@ import time
 from datetime import datetime, timezone
 import asyncpg
 import database
-import config
-from app.services.vpn import service as vpn_service
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -47,6 +45,27 @@ CLEANUP_INTERVAL_SECONDS = max(60, min(300, CLEANUP_INTERVAL_SECONDS))
 # STEP 3 — PART B: WORKER LOOP SAFETY
 # Minimum safe sleep on failure to prevent tight retry storms
 MINIMUM_SAFE_SLEEP_ON_FAILURE = 10  # seconds
+
+
+async def _notify_trial_expired(bot, pool, telegram_id: int) -> None:
+    """N-05: "trial ended" (+ the promised 30% discount) for a trial row this
+    worker has just expired and committed.
+
+    Exactly once per user: the users.trial_completed_sent claim is the same one
+    trial_notifications uses, so whichever worker gets there first sends it.
+    Short connection for the claim only; the Telegram send holds no connection.
+    Never raises.
+    """
+    try:
+        import trial_notifications
+        async with acquire_connection(pool, "fast_expiry_trial_notice") as conn:
+            claimed = await trial_notifications.claim_trial_expired_notice(telegram_id, conn)
+        if claimed:
+            await trial_notifications.send_trial_expired_notice(bot, telegram_id)
+    except Exception as e:
+        logger.warning(
+            "cleanup: TRIAL_EXPIRED_NOTICE_FAILED user=%s err=%s", telegram_id, type(e).__name__,
+        )
 
 
 async def fast_expiry_cleanup_task(bot=None):
@@ -82,6 +101,8 @@ async def fast_expiry_cleanup_task(bot=None):
         f"range: 60-300 seconds, using UTC time)"
     )
     
+    from app.core import runtime_health  # dashboard liveness (in-memory)
+    runtime_health.register("fast_expiry_cleanup", interval_s=CLEANUP_INTERVAL_SECONDS + 120, initial_delay_s=60)
     # Prevent worker burst at startup
     jitter_s = random.uniform(5, 60)
     await asyncio.sleep(jitter_s)
@@ -228,29 +249,6 @@ async def fast_expiry_cleanup_task(bot=None):
                                         f"cleanup: REMOVING_UUID [user={telegram_id}, uuid={uuid_preview}, "
                                         f"expires_at={expires_at.isoformat()}]"
                                     )
-                                    # POOL_STABILITY: VPN HTTP call OUTSIDE any DB connection.
-                                    uuid_removed = await vpn_service.remove_uuid_if_needed(
-                                        uuid=uuid,
-                                        subscription_status='active',
-                                        subscription_expired=True
-                                    )
-                                    if uuid_removed:
-                                        logger.info(f"cleanup: VPN_API_REMOVED [user={telegram_id}, uuid={uuid_preview}]")
-                                    else:
-                                        vpn_api_disabled = not vpn_service.is_vpn_api_available()
-                                        if vpn_api_disabled:
-                                            logger.warning(
-                                                f"cleanup: VPN_API_DISABLED [user={telegram_id}, uuid={uuid_preview}] - "
-                                                "VPN API is not configured, UUID removal skipped but DB will be cleaned"
-                                            )
-                                        else:
-                                            logger.debug(
-                                                f"cleanup: UUID_REMOVAL_SKIPPED [user={telegram_id}, uuid={uuid_preview}] - "
-                                                "Service layer decided not to remove UUID"
-                                            )
-                                            processing_uuids.discard(uuid)
-                                            continue
-
                                     try:
                                         await database._log_vpn_lifecycle_audit_async(
                                             action="vpn_expire",
@@ -264,8 +262,17 @@ async def fast_expiry_cleanup_task(bot=None):
                                         logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")
 
                                     # POOL_STABILITY: DB update with dedicated short-lived conn (no conn held during HTTP).
+                                    # N-05: set only after the transaction COMMITTED — then the
+                                    # "trial ended" notice is sent with no connection held.
+                                    trial_notice_due = False
+                                    # "bypass" / "paid": «subscription ended» notice, sent
+                                    # after the commit (it used to go out inside the open
+                                    # transaction, and a paid sub without bypass got none).
+                                    expired_notice_due = None
                                     try:
                                         async with acquire_connection(pool, "fast_expiry_update") as conn:
+                                            trial_notice_pending = False
+                                            expired_notice_pending = None
                                             async with conn.transaction():
                                                 check_row = await conn.fetchrow(
                                                     """SELECT uuid, expires_at, status 
@@ -316,19 +323,8 @@ async def fast_expiry_cleanup_task(bot=None):
                                                                     extend_remnawave_for_bypass_bg(telegram_id)
                                                                 except Exception as rmn_err:
                                                                     logger.warning(f"REMNAWAVE_BYPASS_EXTEND_FAIL: tg={telegram_id} {rmn_err}")
-                                                                # Notify user
-                                                                if bot:
-                                                                    try:
-                                                                        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-                                                                        lang = await resolve_user_language(telegram_id)
-                                                                        bypass_text = i18n.get_text(lang, "traffic.subscription_expired_bypass_active")
-                                                                        bypass_kb = InlineKeyboardMarkup(inline_keyboard=[
-                                                                            [InlineKeyboardButton(text=i18n.get_text(lang, "traffic.buy_traffic_btn"), callback_data="buy_traffic")],
-                                                                            [InlineKeyboardButton(text=i18n.get_text(lang, "traffic.buy_subscription"), callback_data="menu_buy_vpn")],
-                                                                        ])
-                                                                        await safe_send_message(bot, telegram_id, bypass_text, parse_mode="HTML", reply_markup=bypass_kb)
-                                                                    except Exception as notif_err:
-                                                                        logger.warning(f"cleanup: failed to send bypass-only notification to {telegram_id}: {notif_err}")
+                                                                # Notify the user after the commit (below).
+                                                                expired_notice_pending = "bypass"
                                                         else:
                                                             update_result = await conn.execute(
                                                                 """UPDATE subscriptions
@@ -339,6 +335,14 @@ async def fast_expiry_cleanup_task(bot=None):
                                                                 telegram_id, uuid
                                                             )
                                                         if update_result == "UPDATE 1":
+                                                            trial_notice_pending = (source == "trial")
+                                                            if not has_remnawave and (source or "") in ("payment", "auto_renew"):
+                                                                expired_notice_pending = "paid"
+                                                            # N7: a paid subscription ended → −15 % offer for
+                                                            # 3 days, in this transaction, once per ended period.
+                                                            await database.grant_expiry_special_offer(
+                                                                conn, telegram_id, source, expires_at,
+                                                            )
                                                             logger.info(
                                                                 f"cleanup: SUBSCRIPTION_EXPIRED [user={telegram_id}, uuid={uuid_preview}, "
                                                                 f"expires_at={expires_at.isoformat()}]"
@@ -376,28 +380,29 @@ async def fast_expiry_cleanup_task(bot=None):
                                                         f"cleanup: UUID_ALREADY_CLEANED [user={telegram_id}, uuid={uuid_preview}] - "
                                                         "UUID was already removed or subscription is no longer active"
                                                     )
+                                            # transaction committed
+                                            trial_notice_due = trial_notice_pending
+                                            expired_notice_due = expired_notice_pending
                                     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
                                         logger.warning(f"fast_expiry_cleanup: Database temporarily unavailable during DB update: {type(e).__name__}: {str(e)[:100]}")
                                     except Exception as e:
                                         logger.error(f"fast_expiry_cleanup: Unexpected error during DB update: {type(e).__name__}: {str(e)[:100]}")
                                         logger.debug(f"fast_expiry_cleanup: Full traceback for DB update", exc_info=True)
 
-                                except vpn_service.VPNRemovalError as e:
-                                    logger.error(
-                                        f"cleanup: VPN_REMOVAL_ERROR [user={telegram_id}, uuid={uuid_preview}, error={str(e)}, "
-                                        f"error_type={type(e).__name__}] - will retry in next cycle"
-                                    )
-                                    try:
-                                        await database._log_vpn_lifecycle_audit_async(
-                                            action="vpn_expire",
-                                            telegram_id=telegram_id,
-                                            uuid=uuid,
-                                            source="auto-expiry",
-                                            result="error",
-                                            details=f"Failed to remove UUID via VPN API: {str(e)}, will retry"
+                                    # N-05: this worker usually expires a trial before
+                                    # trial_notifications (1 min vs 5 min), which then
+                                    # skipped "trial ended". Send it here, exactly once
+                                    # (users.trial_completed_sent claim), after commit.
+                                    if trial_notice_due and bot:
+                                        await _notify_trial_expired(bot, pool, telegram_id)
+
+                                    # «Subscription ended» (+ −15 % until <MSK deadline> while
+                                    # the window is open), once: the UPDATE matched once.
+                                    if expired_notice_due and bot:
+                                        from app.services.notifications import special_offer
+                                        await special_offer.notify_expired(
+                                            bot, telegram_id, has_bypass=expired_notice_due == "bypass",
                                         )
-                                    except Exception:
-                                        pass
 
                                 except ValueError as e:
                                     logger.error(
@@ -455,6 +460,7 @@ async def fast_expiry_cleanup_task(bot=None):
                     pass
             finally:
                 # H2 fix: ITERATION_END always fires in finally block
+                runtime_health.record("fast_expiry_cleanup", outcome, iteration_error_type)
                 duration_ms = (time.time() - iteration_start_time) * 1000
                 log_worker_iteration_end(
                     worker_name="fast_expiry_cleanup",

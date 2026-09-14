@@ -174,6 +174,11 @@ async def _send(bot: Bot, *, title: str, body: str, tag: str, url: str) -> None:
         await push_notifications.send_to_all(
             title=title, body=body, tag=tag, url=url,
         )
+        try:
+            from app.core import runtime_health
+            runtime_health.record_alert(f"push:{(tag or 'other').split(':')[0]}")
+        except Exception:
+            pass
     except Exception as e:
         logger.warning("admin_notifier push send failed: %s", e)
 

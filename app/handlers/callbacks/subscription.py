@@ -1,16 +1,15 @@
 """
 Subscription-related callback handlers: toggle_auto_renew, activate_trial,
-menu_profile, renewal_pay.
+menu_profile.
 """
 import asyncio
 import logging
-import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import config
 import database
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
+from aiogram.types import CallbackQuery
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state
@@ -26,15 +25,6 @@ from app.core.system_state import (
 )
 from app.core.rate_limit import check_rate_limit
 from app.handlers.common.guards import ensure_db_ready_callback
-from app.handlers.common.utils import (
-    safe_edit_text,
-    format_text_with_incident,
-)
-from app.handlers.common.keyboards import (
-    get_profile_keyboard,
-    get_main_menu_keyboard,
-    get_back_keyboard,
-)
 from app.handlers.common.screens import show_profile
 from app.handlers.common.states import PromoCodeInput
 
@@ -148,7 +138,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                 last_checked_at=now
             )
 
-        if config.VPN_ENABLED and config.XRAY_API_URL:
+        if config.REMNAWAVE_ENABLED:
             vpn_component = healthy_component(last_checked_at=now)
         else:
             vpn_component = degraded_component(
@@ -212,37 +202,27 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         pass
 
     try:
-        duration = timedelta(days=3)
-        now = datetime.now(timezone.utc)
-        trial_expires_at = now + duration
-
-        # Сначала выдаём VPN-доступ. Если VPN API зависнет или упадёт,
-        # флаг trial_used_at НЕ будет установлен — юзер сможет повторить попытку
-        # (вместо того, чтобы «потерять» триал из-за таймаута внешнего API).
-        result = await database.grant_access(
-            telegram_id=telegram_id,
-            duration=duration,
-            source="trial",
-            admin_telegram_id=None
-        )
-
-        uuid = result.get("uuid")
-        vpn_key = result.get("vless_url")
-        subscription_end = result.get("subscription_end")
-
-        if not uuid or not vpn_key:
-            raise Exception("Failed to create VPN access for trial")
-
-        # VPN успешно выдан — теперь помечаем trial как использованный.
-        # Если этот шаг упадёт, юзер получит доступ, а флаг останется пустым
-        # (в худшем случае сможет активировать повторно — мелкий приемлемый риск
-        # по сравнению с потерей триала из-за обрыва VPN API).
-        mark_ok = await database.mark_trial_used(telegram_id, trial_expires_at)
-        if not mark_ok:
-            logger.error(
-                f"mark_trial_used FAILED after grant_access succeeded: user={telegram_id} — "
-                f"subscription active but trial_used_at not set"
-            )
+        # T15: the grant lives in trials.service.grant_trial. Flag "trial" off →
+        # the same grant_access → mark_trial_used calls as before (moved as is);
+        # flag on → one tx + provisioning outbox (3 days + TRIAL_BYPASS_MB),
+        # a double click activates one trial.
+        from app.services.trials import service as trial_service
+        grant = await trial_service.grant_trial(telegram_id, bot=callback.bot)
+        if grant is None:
+            # Outbox path only: a concurrent click already activated the trial.
+            not_available_text = i18n_get_text(language, "main.trial_not_available")
+            if placeholder_msg is not None:
+                try:
+                    await placeholder_msg.edit_text(not_available_text, parse_mode="HTML")
+                    return
+                except Exception:
+                    pass
+            await callback.message.answer(not_available_text, parse_mode="HTML")
+            return
+        now = grant.activated_at
+        trial_expires_at = grant.trial_expires_at
+        uuid = grant.uuid
+        subscription_end = grant.subscription_end
 
         # REFERRAL LIFECYCLE: активация + пуш рефереру. Выносим в
         # background task — юзер видит success мгновенно, не ждёт
@@ -255,7 +235,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         logger.info(
             f"trial_activated: user={telegram_id}, trial_used_at={now.isoformat()}, "
             f"trial_expires_at={trial_expires_at.isoformat()}, subscription_expires_at={subscription_end.isoformat()}, "
-            f"uuid={uuid[:8]}..."
+            f"uuid={(uuid or '')[:8]}..."
         )
 
         # Через 5 минут после активации — «Обход подключён» + кнопка на
@@ -278,7 +258,12 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         expires_str = subscription_end.strftime("%d.%m.%Y")
         from html import escape as html_escape
         from app.services.user_subscription_links import get_user_primary_subscription_url
-        sub_url = await get_user_primary_subscription_url(telegram_id)
+        if grant.job_id is not None and not grant.applied:
+            # T15 outbox: the job is queued (panel down) — no lazy entity
+            # provisioning outside the outbox; trial.activated has no link.
+            sub_url = ""
+        else:
+            sub_url = await get_user_primary_subscription_url(telegram_id)
         success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str, sub_url=html_escape(sub_url))
         try:
             if _degradation_notice:
@@ -378,82 +363,3 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
 
 
     await callback.answer()
-
-
-@subscription_router.callback_query(F.data.startswith("renewal_pay:"))
-async def callback_renewal_pay(callback: CallbackQuery):
-    """Обработчик кнопки оплаты продления - отправляет invoice через Telegram Payments"""
-    tariff_key = callback.data.split(":")[1]
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    if not config.TG_PROVIDER_TOKEN:
-        language = await resolve_user_language(telegram_id)
-        await callback.answer(i18n_get_text(language, "errors.payments_unavailable"), show_alert=True)
-        return
-
-    if tariff_key not in config.TARIFFS:
-        error_msg = f"Invalid tariff_key '{tariff_key}' for user {telegram_id}. Valid tariffs: {list(config.TARIFFS.keys())}"
-        logger.error(error_msg)
-        language = await resolve_user_language(telegram_id)
-        await callback.answer(i18n_get_text(language, "errors.tariff"), show_alert=True)
-        return
-
-    if 30 not in config.TARIFFS[tariff_key]:
-        error_msg = f"Period 30 days not found in tariff '{tariff_key}' for user {telegram_id}"
-        logger.error(error_msg)
-        language = await resolve_user_language(telegram_id)
-        await callback.answer(i18n_get_text(language, "errors.tariff"), show_alert=True)
-        return
-
-    tariff_data = config.TARIFFS[tariff_key][30]
-    base_price = tariff_data["price"]
-
-    is_vip = await database.is_vip_user(telegram_id)
-
-    if is_vip:
-        amount = int(base_price * 0.70)
-    else:
-        personal_discount = await database.get_user_discount(telegram_id)
-
-        if personal_discount:
-            discount_percent = personal_discount["discount_percent"]
-            amount = int(base_price * (1 - discount_percent / 100))
-        else:
-            amount = base_price
-
-    payload = f"renew:{telegram_id}:{tariff_key}:{int(time.time())}"
-
-    period_days = 30
-    months = period_days // 30
-    if months == 1:
-        period_text = i18n_get_text(language, "buy.period_text_1", "1 месяц")
-    elif months in [2, 3, 4]:
-        period_text = i18n_get_text(language, "buy.period_text_2_4", "{months} месяца", months=months)
-    else:
-        period_text = i18n_get_text(language, "buy.period_text_5_plus", "{months} месяцев", months=months)
-    description = i18n_get_text(language, "buy.renewal_invoice_description", "Atlas Secure VPN продление подписки на {period_text}", period_text=period_text)
-
-    language = await resolve_user_language(telegram_id)
-    prices = [LabeledPrice(label=i18n_get_text(language, "payment.label"), amount=amount * 100)]
-
-    try:
-        invoice_msg = await callback.bot.send_invoice(
-            chat_id=telegram_id,
-            title="Atlas Secure VPN",
-            description=description,
-            payload=payload,
-            provider_token=config.TG_PROVIDER_TOKEN,
-            currency="RUB",
-            prices=prices
-        )
-        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
-        from app.handlers.callbacks.payments_callbacks import _schedule_invoice_deletion
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
-        await callback.answer()
-    except Exception as e:
-        logger.exception(f"Error sending invoice for renewal: {e}")
-        language = await resolve_user_language(telegram_id)
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-
-

@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, Field
 
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
 from app.services import pricing
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -46,7 +47,7 @@ async def list_tariffs():
     try:
         return await pricing.list_all_prices()
     except Exception as e:
-        raise HTTPException(500, f"list_tariffs_failed: {e}")
+        raise server_error("list_tariffs_failed") from e
 
 
 class OverrideBody(BaseModel):
@@ -68,7 +69,7 @@ async def set_tariff_override(
     except ValueError as ve:
         raise HTTPException(400, str(ve))
     except Exception as e:
-        raise HTTPException(500, f"set_override_failed: {e}")
+        raise server_error("set_override_failed") from e
     return {"ok": True, "tariff": tariff, "period_days": period_days,
             "price_rub": body.price_rub}
 
@@ -82,7 +83,7 @@ async def clear_tariff_override(
     try:
         removed = await pricing.clear_override(tariff, period_days)
     except Exception as e:
-        raise HTTPException(500, f"clear_override_failed: {e}")
+        raise server_error("clear_override_failed") from e
     if not removed:
         raise HTTPException(404, "no override for that tariff/period")
     return {"ok": True, "tariff": tariff, "period_days": period_days,
@@ -95,7 +96,7 @@ async def get_global_discount():
     try:
         return await pricing.get_global_discount()
     except Exception as e:
-        raise HTTPException(500, f"get_discount_failed: {e}")
+        raise server_error("get_discount_failed") from e
 
 
 class DiscountBody(BaseModel):
@@ -134,7 +135,7 @@ async def put_global_discount(
     except ValueError as ve:
         raise HTTPException(400, str(ve))
     except Exception as e:
-        raise HTTPException(500, f"set_discount_failed: {e}")
+        raise server_error("set_discount_failed") from e
     return {"ok": True, "percent": body.percent}
 
 
@@ -144,5 +145,5 @@ async def delete_global_discount(admin: dict = Depends(require_admin)):
     try:
         await pricing.set_global_discount(0, None, None, int(admin["sub"]))
     except Exception as e:
-        raise HTTPException(500, f"clear_discount_failed: {e}")
+        raise server_error("clear_discount_failed") from e
     return {"ok": True, "cleared": True}

@@ -41,6 +41,7 @@ from webauthn.helpers.structs import (
 )
 
 import config
+from app.branding import get_brand
 
 logger = logging.getLogger(__name__)
 
@@ -94,10 +95,10 @@ def _b64url_decode(s: str) -> bytes:
 
 async def _redis():
     try:
-        from app.utils.redis_client import get_client, is_configured
+        from app.utils.redis_client import get_redis, is_configured
         if not is_configured():
             return None
-        return await get_client()
+        return await get_redis()
     except Exception:
         return None
 
@@ -129,7 +130,12 @@ async def pop_challenge(token: str, expected_kind: str) -> Optional[bytes]:
     r = await _redis()
     if r is not None:
         try:
-            raw = await r.getdel(_REDIS_KEY_PREFIX + token)
+            # GET+DEL in one MULTI/EXEC: atomic like GETDEL, but works on
+            # Redis < 6.2 too (GETDEL would fail there and break passkey login).
+            async with r.pipeline(transaction=True) as pipe:
+                pipe.get(_REDIS_KEY_PREFIX + token)
+                pipe.delete(_REDIS_KEY_PREFIX + token)
+                raw, _ = await pipe.execute()
             if raw:
                 if isinstance(raw, bytes):
                     raw = raw.decode("utf-8")
@@ -310,7 +316,7 @@ async def purge_all_passkeys() -> None:
 
 async def make_registration_options(
     username: str,
-    display_name: str = "Atlas Admin",
+    display_name: Optional[str] = None,
 ) -> tuple[dict[str, Any], str]:
     """Returns (publicKeyCredentialCreationOptions, challenge_token).
     Frontend feeds the options into navigator.credentials.create() and
@@ -331,10 +337,10 @@ async def make_registration_options(
 
     options = generate_registration_options(
         rp_id=rp_id,
-        rp_name="Atlas Admin",
+        rp_name=get_brand().admin_title,
         user_id=_user_id_bytes(),
         user_name=username,
-        user_display_name=display_name,
+        user_display_name=display_name or get_brand().admin_title,
         # py-webauthn 2.x requires the enum here, not the bare string.
         # A plain "none" trips an internal call to .value somewhere
         # downstream — that's what produced

@@ -1,5 +1,5 @@
 """
-Database operations: Users, Balance, Farm, Withdrawals, Referrals.
+Database operations: Users, Balance, Farm, Referrals.
 
 All shared state (get_pool, helpers) imported from database.core.
 DB_READY accessed via _core.DB_READY to get live value (not stale import-time copy).
@@ -11,15 +11,12 @@ import json
 import logging
 import secrets
 import string
-import uuid as uuid_lib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional, Dict, Any, Tuple, List
-import config
 import database.core as _core
 from database.core import (
     get_pool, safe_int,
     _to_db_utc, _from_db_utc, _ensure_utc,
-    retry_async,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,6 +36,31 @@ async def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
             "SELECT * FROM users WHERE telegram_id = $1", telegram_id
         )
         return dict(row) if row else None
+
+
+async def mark_user_reachable(telegram_id: int) -> None:
+    """Restore users.is_reachable = TRUE (counterpart of mark_user_unreachable).
+
+    N-02 (docs/notifications/bugs-and-risks.md): the flag used to be one-way,
+    so a user who once blocked the bot never got notifications again. Called on
+    every incoming message / callback (LastSeenMiddleware). Writes only when the
+    flag is FALSE. Never raises.
+    """
+    if not _core.DB_READY:
+        return
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET is_reachable = TRUE WHERE telegram_id = $1 AND is_reachable = FALSE",
+                telegram_id,
+            )
+    except asyncpg.UndefinedColumnError:
+        logger.debug("mark_user_reachable skipped: is_reachable column not present")
+    except Exception as e:
+        logger.warning("mark_user_reachable failed user=%s err=%s", telegram_id, type(e).__name__)
 
 
 async def get_user_balance(telegram_id: int) -> float:
@@ -125,7 +147,7 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
         try:
             await _do_increase(conn)
             return True
-        except Exception as e:
+        except Exception:
             logger.exception(f"Error increasing balance for user {telegram_id}")
             return False
 
@@ -138,7 +160,7 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
             try:
                 await _do_increase(conn_acquired)
                 return True
-            except Exception as e:
+            except Exception:
                 logger.exception(f"Error increasing balance for user {telegram_id}")
                 return False
 
@@ -368,7 +390,7 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
     if conn is not None:
         try:
             return await _do_decrease(conn)
-        except Exception as e:
+        except Exception:
             logger.exception(f"Error decreasing balance for user {telegram_id}")
             return False
 
@@ -380,7 +402,7 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
         async with conn_acquired.transaction():
             try:
                 return await _do_decrease(conn_acquired)
-            except Exception as e:
+            except Exception:
                 logger.exception(f"Error decreasing balance for user {telegram_id}")
                 return False
 
@@ -418,220 +440,9 @@ async def log_balance_transaction(telegram_id: int, amount: float, transaction_t
             )
             logger.info(f"Logged balance transaction: user={telegram_id}, amount={amount} RUB, type={transaction_type}, source={source}")
             return True
-        except Exception as e:
+        except Exception:
             logger.exception(f"Error logging balance transaction for user {telegram_id}")
             return False
-
-
-# ====================================================================================
-# WITHDRAWAL REQUESTS (Atlas Secure balance withdrawal system)
-# ====================================================================================
-
-async def create_withdrawal_request(
-    telegram_id: int,
-    username: Optional[str],
-    amount_kopecks: int,
-    requisites: str,
-) -> Optional[int]:
-    """
-    Создать заявку на вывод средств (в транзакции со списанием баланса).
-    Advisory lock по telegram_id для защиты от гонок.
-
-    Args:
-        telegram_id: Telegram ID пользователя
-        username: Username (опционально)
-        amount_kopecks: Сумма в копейках
-        requisites: Реквизиты (СБП, карта, счёт)
-
-    Returns:
-        ID созданной заявки или None при ошибке/недостатке средств
-    """
-    if amount_kopecks <= 0:
-        logger.error(f"Invalid amount_kopecks for create_withdrawal_request: {amount_kopecks}")
-        return None
-    if not _core.DB_READY:
-        logger.warning("DB not ready, create_withdrawal_request skipped")
-        return None
-    pool = await get_pool()
-    if pool is None:
-        return None
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            try:
-                # CRITICAL: advisory lock per user для защиты от race conditions
-                await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
-                
-                # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
-                row = await conn.fetchrow(
-                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
-                    telegram_id
-                )
-                
-                if not row:
-                    logger.error(f"User {telegram_id} not found for withdrawal")
-                    return None
-                
-                current = row["balance"]
-                
-                if current < amount_kopecks:
-                    logger.warning(f"Insufficient balance for withdrawal: user={telegram_id}, balance={current}, amount={amount_kopecks}")
-                    return None
-                
-                # Обновляем баланс (строка уже заблокирована FOR UPDATE)
-                await conn.execute(
-                    "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
-                    amount_kopecks, telegram_id
-                )
-                await conn.execute(
-                    """INSERT INTO balance_transactions (user_id, amount, type, source, description)
-                       VALUES ($1, $2, $3, $4, $5)""",
-                    telegram_id, -amount_kopecks, "withdrawal", "withdrawal_request",
-                    f"Вывод средств: {requisites[:50]}"
-                )
-                row = await conn.fetchrow(
-                    """INSERT INTO withdrawal_requests (telegram_id, username, amount, requisites, status)
-                       VALUES ($1, $2, $3, $4, 'pending')
-                       RETURNING id""",
-                    telegram_id, username, amount_kopecks, requisites
-                )
-                wid = row["id"]
-                
-                # Structured logging with correlation_id
-                correlation_id = str(uuid_lib.uuid4())
-                logger.info(
-                    f"WITHDRAWAL_REQUEST_CREATED withdrawal_id={wid} user={telegram_id} "
-                    f"amount={amount_kopecks} kopecks correlation_id={correlation_id}"
-                )
-                return wid
-            except Exception as e:
-                logger.exception(f"Error creating withdrawal request for user {telegram_id}: {e}")
-                return None
-
-
-async def get_withdrawal_request(wid: int) -> Optional[Dict[str, Any]]:
-    """Получить заявку на вывод по ID."""
-    if not _core.DB_READY:
-        return None
-    pool = await get_pool()
-    if pool is None:
-        return None
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM withdrawal_requests WHERE id = $1", wid)
-        return dict(row) if row else None
-
-
-async def approve_withdrawal_request(wid: int, processed_by: int) -> bool:
-    """Подтвердить заявку (status=approved). Средства уже списаны при создании."""
-    if not _core.DB_READY:
-        return False
-    pool = await get_pool()
-    if pool is None:
-        return False
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # CRITICAL: SELECT FOR UPDATE для защиты от двойного подтверждения
-            row = await conn.fetchrow(
-                "SELECT id FROM withdrawal_requests WHERE id = $1 AND status = 'pending' FOR UPDATE",
-                wid
-            )
-            if not row:
-                return False
-            
-            # Обновляем статус
-            result = await conn.execute(
-                "UPDATE withdrawal_requests SET status = 'approved', processed_at = NOW(), processed_by = $1 WHERE id = $2",
-                processed_by, wid
-            )
-            if result == "UPDATE 1":
-                # Structured logging
-                logger.info(f"WITHDRAWAL_APPROVED withdrawal_id={wid} processed_by={processed_by}")
-                return True
-            return False
-
-
-async def reject_withdrawal_request(wid: int, processed_by: int) -> bool:
-    """Отклонить заявку и вернуть средства на баланс."""
-    if not _core.DB_READY:
-        return False
-    pool = await get_pool()
-    if pool is None:
-        return False
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                "SELECT id, telegram_id, amount FROM withdrawal_requests WHERE id = $1 AND status = 'pending' FOR UPDATE",
-                wid
-            )
-            if not row:
-                return False
-            telegram_id = row["telegram_id"]
-            amount_kopecks = row["amount"]
-            
-            # CRITICAL: advisory lock per user для защиты от race conditions
-            await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
-            
-            # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
-            user_row = await conn.fetchrow(
-                "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
-                telegram_id
-            )
-            
-            if not user_row:
-                logger.error(f"User {telegram_id} not found for withdrawal rejection refund")
-                return False
-            
-            # Обновляем баланс (строка уже заблокирована FOR UPDATE)
-            await conn.execute(
-                "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
-                amount_kopecks, telegram_id
-            )
-            await conn.execute(
-                """INSERT INTO balance_transactions (user_id, amount, type, source, description)
-                   VALUES ($1, $2, $3, $4, $5)""",
-                telegram_id, amount_kopecks, "refund", "withdrawal_rejected",
-                f"Возврат средств: заявка #{wid} отклонена"
-            )
-            await conn.execute(
-                "UPDATE withdrawal_requests SET status = 'rejected', processed_at = NOW(), processed_by = $1 WHERE id = $2",
-                processed_by, wid
-            )
-            # Structured logging
-            logger.info(
-                f"WITHDRAWAL_REJECTED withdrawal_id={wid} processed_by={processed_by} "
-                f"user={telegram_id} refunded={amount_kopecks} kopecks"
-            )
-            return True
-
-
-async def find_user_by_id_or_username(telegram_id: Optional[int] = None, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Найти пользователя по Telegram ID или username
-
-    Args:
-        telegram_id: Telegram ID пользователя (опционально)
-        username: Username пользователя без @ (опционально)
-
-    Returns:
-        Словарь с данными пользователя или None, если не найден
-
-    Note:
-        Должен быть указан хотя бы один параметр. Если указаны оба, приоритет у telegram_id.
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        if telegram_id is not None:
-            # Поиск по ID имеет приоритет
-            row = await conn.fetchrow(
-                "SELECT * FROM users WHERE telegram_id = $1", telegram_id
-            )
-            return dict(row) if row else None
-        elif username is not None:
-            # Поиск по username (case-insensitive)
-            row = await conn.fetchrow(
-                "SELECT * FROM users WHERE LOWER(username) = LOWER($1)", username
-            )
-            return dict(row) if row else None
-        else:
-            return None
 
 
 async def search_users_dashboard(query: str, limit: int = 25) -> list:
@@ -688,6 +499,182 @@ async def search_users_dashboard(query: str, limit: int = 25) -> list:
             pattern_any, q, pattern_prefix, limit,
         )
     return [dict(r) for r in rows]
+
+
+async def count_users_dashboard(query: str) -> int:
+    """Честный COUNT(*) под тем же WHERE, что и search_users_dashboard.
+
+    Нужен отдельно, потому что search_users_dashboard режет выборку
+    LIMIT'ом: длина возвращённого среза — это НЕ количество совпадений,
+    и UI показывал «25» там, где реально 300 матчей.
+    """
+    pool = await get_pool()
+    if pool is None:
+        return 0
+    q = (query or "").strip().lstrip("@")
+    if not q:
+        return 0
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(
+            """SELECT COUNT(*) FROM users u
+               WHERE CAST(u.telegram_id AS TEXT) ILIKE $1
+                  OR u.username ILIKE $1""",
+            f"%{q}%",
+        )
+    return int(total or 0)
+
+
+# Whitelist: имя из query-параметра НИКОГДА не попадает в SQL напрямую —
+# только значение из этой таблицы. Иначе `sort` = SQL-инъекция, потому
+# что ORDER BY нельзя параметризовать placeholder'ом.
+_USER_LIST_SORT_COLUMNS = {
+    "created_at": "u.created_at",
+    "expires_at": "s.expires_at",
+    "last_seen_at": "u.last_seen_at",
+    "balance": "u.balance",
+}
+
+
+async def list_users_dashboard(
+    q: Optional[str] = None,
+    has_sub: Optional[bool] = None,
+    source: Optional[str] = None,
+    created_after: Optional[datetime] = None,
+    created_before: Optional[datetime] = None,
+    expires_before: Optional[datetime] = None,
+    sort: str = "created_at",
+    order: str = "desc",
+    limit: int = 50,
+    offset: int = 0,
+    rank_by_relevance: bool = False,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Постраничный листинг пользователей для экрана «Пользователи».
+
+    Возвращает `(rows, total)`. `total` — честное количество строк под
+    теми же фильтрами, а не длина среза: считаем через `COUNT(*) OVER ()`
+    в том же запросе, чтобы не платить вторым round-trip'ом и не словить
+    рассинхрон между count и page при конкурентной записи.
+
+    Один запрос, LEFT JOIN на subscriptions (там telegram_id UNIQUE, так
+    что джойн 1:1 и строки не размножаются) — никакого N+1 на 200 строк.
+    VIP удалён (решение владельца 2026-09-14): vip_users не читается.
+
+    `rank_by_relevance` включает ранжирование как в search_users_dashboard
+    (точный id → точный username → префикс → подстрока). Роут включает
+    его только когда юзер ищет и НЕ выбрал сортировку явно: иначе
+    выбранный `sort` молча игнорировался бы.
+    """
+    pool = await get_pool()
+    if pool is None:
+        return [], 0
+
+    where: List[str] = []
+    params: List[Any] = []
+
+    def _p(value: Any) -> str:
+        params.append(value)
+        return f"${len(params)}"
+
+    q_clean = (q or "").strip().lstrip("@")
+    # Пусто, а не "0": голый целочисленный литерал в ORDER BY Postgres
+    # трактует как НОМЕР колонки, и `ORDER BY 0` падает с
+    # "ORDER BY position 0 is not in select list".
+    rank_sql = ""
+    if q_clean:
+        p_any = _p(f"%{q_clean}%")
+        where.append(f"(CAST(u.telegram_id AS TEXT) ILIKE {p_any} OR u.username ILIKE {p_any})")
+        if rank_by_relevance:
+            p_exact = _p(q_clean)
+            p_prefix = _p(f"{q_clean}%")
+            rank_sql = (
+                "CASE"
+                f" WHEN CAST(u.telegram_id AS TEXT) = {p_exact} THEN 0"
+                f" WHEN LOWER(u.username) = LOWER({p_exact}) THEN 1"
+                f" WHEN CAST(u.telegram_id AS TEXT) ILIKE {p_prefix} THEN 2"
+                f" WHEN u.username ILIKE {p_prefix} THEN 3"
+                " ELSE 4 END"
+            )
+
+    # NOW() считаем в SQL, а не в Python: иначе граница «активна/истекла»
+    # разъезжается с тем, что видит fast_expiry_cleanup.
+    active_sql = "(s.status = 'active' AND s.expires_at > NOW())"
+    if has_sub is not None:
+        where.append(f"COALESCE({active_sql}, FALSE) = {_p(bool(has_sub))}")
+    if source is not None:
+        where.append(f"s.source = {_p(source)}")
+    if created_after is not None:
+        where.append(f"u.created_at >= {_p(_to_db_utc(_ensure_utc(created_after)))}")
+    if created_before is not None:
+        where.append(f"u.created_at <= {_p(_to_db_utc(_ensure_utc(created_before)))}")
+    if expires_before is not None:
+        where.append(f"s.expires_at < {_p(_to_db_utc(_ensure_utc(expires_before)))}")
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    sort_col = _USER_LIST_SORT_COLUMNS.get(sort, "u.created_at")
+    direction = "ASC" if str(order).lower() == "asc" else "DESC"
+    # NULLS LAST в обе стороны: юзер без подписки/без last_seen не должен
+    # занимать первую страницу при сортировке по expires_at.
+    order_terms = ([rank_sql] if rank_sql else []) + [
+        f"{sort_col} {direction} NULLS LAST",
+        # Тай-брейк по PK: без него OFFSET-пагинация может показать одну и
+        # ту же строку дважды, а соседнюю — ни разу (порядок равных ключей
+        # в Postgres не гарантирован между запросами).
+        "u.telegram_id DESC",
+    ]
+    order_sql = ", ".join(order_terms)
+
+    p_limit = _p(int(limit))
+    p_offset = _p(int(offset))
+
+    sql = f"""
+        SELECT
+            u.telegram_id,
+            u.username,
+            u.language,
+            u.created_at,
+            u.last_seen_at,
+            COALESCE(u.is_reachable, TRUE) AS is_reachable,
+            COALESCE(u.balance, 0) AS balance_kopecks,
+            u.referral_level,
+            COALESCE({active_sql}, FALSE) AS has_active_sub,
+            s.subscription_type,
+            s.expires_at,
+            s.source,
+            COUNT(*) OVER () AS _total
+        FROM users u
+        LEFT JOIN subscriptions s ON s.telegram_id = u.telegram_id
+        {where_sql}
+        ORDER BY {order_sql}
+        LIMIT {p_limit} OFFSET {p_offset}
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, *params)
+        if rows:
+            total = int(rows[0]["_total"])
+        elif offset > 0:
+            # Пустой срез за концом выборки: окно COUNT(*) OVER () считать
+            # не по чему, но total всё равно ненулевой — иначе UI решит,
+            # что фильтр ничего не нашёл, и сбросит пагинацию.
+            total = int(await conn.fetchval(
+                f"""SELECT COUNT(*)
+                    FROM users u
+                    LEFT JOIN subscriptions s ON s.telegram_id = u.telegram_id
+                    {where_sql}""",
+                *params[:-2],
+            ) or 0)
+        else:
+            total = 0
+
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d.pop("_total", None)
+        for k in ("created_at", "last_seen_at", "expires_at"):
+            if isinstance(d.get(k), datetime):
+                d[k] = _from_db_utc(d[k])
+        d["balance_kopecks"] = safe_int(d.get("balance_kopecks"))
+        out.append(d)
+    return out, total
 
 
 def generate_referral_code(telegram_id: int) -> str:
@@ -902,21 +889,22 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
                 )
 
                 # Обновляем referrer_id у пользователя (IMMUTABLE - устанавливается только один раз)
-                # Также обновляем referred_by для обратной совместимости
+                # Legacy `referred_by` is NOT referenced: the column exists only on
+                # old databases (init_db copies it into referrer_id at boot); a schema
+                # built from migrations has no such column.
                 # DO NOT use referred_at - column doesn't exist in schema
                 result = await conn.execute(
                     """UPDATE users
-                       SET referrer_id = $1, referred_by = $1
+                       SET referrer_id = $1
                        WHERE telegram_id = $2
-                       AND referrer_id IS NULL
-                       AND referred_by IS NULL""",
+                       AND referrer_id IS NULL""",
                     referrer_user_id, referred_user_id
                 )
 
                 # Анти-петля: проверяем ПОСЛЕ INSERT — не стал ли реферер одновременно нашим рефералом.
                 # Защищает от гонки A→B / B→A при одновременных /start командах.
                 referrer_row = await conn.fetchrow(
-                    "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1",
+                    "SELECT referrer_id FROM users WHERE telegram_id = $1",
                     referrer_user_id
                 )
                 if referrer_row:
@@ -931,7 +919,7 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
             if result == "UPDATE 1":
                 # Double-check by reading back
                 saved_user = await conn.fetchrow(
-                    "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1",
+                    "SELECT referrer_id FROM users WHERE telegram_id = $1",
                     referred_user_id
                 )
                 if saved_user and (saved_user.get("referrer_id") == referrer_user_id or saved_user.get("referred_by") == referrer_user_id):
@@ -951,7 +939,7 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
                 # UPDATE 0 means referrer_id was already set (idempotent - this is OK)
                 # Check if it matches expected referrer
                 existing_user = await conn.fetchrow(
-                    "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1",
+                    "SELECT referrer_id FROM users WHERE telegram_id = $1",
                     referred_user_id
                 )
                 if existing_user:
@@ -972,7 +960,7 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
     except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"referrals or users table missing or inaccessible — skipping referral registration: {e}")
         return False
-    except Exception as e:
+    except Exception:
         logger.exception(f"Error registering referral: referrer_id={referrer_user_id}, referred_id={referred_user_id}")
         return False
 
@@ -1046,7 +1034,7 @@ async def _mark_referral_active_internal(referred_user_id: int, conn: asyncpg.Co
     except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"referrals table missing or inaccessible — skipping mark_referral_active: {e}")
         return False
-    except Exception as e:
+    except Exception:
         logger.exception(f"Error marking referral as active: referred_id={referred_user_id}")
         return False
 
@@ -1228,29 +1216,6 @@ async def get_effective_cashback_percent(telegram_id: int) -> int:
     except Exception as e:
         logger.warning("get_effective_cashback_percent floor lookup failed: %s", e)
     return tier
-
-
-def calculate_referral_percent(invited_count: int) -> int:
-    """
-    Рассчитать процент кешбэка на основе количества приглашённых рефералов
-    
-    Прогрессивная шкала:
-    - 0-24 приглашённых → 10%
-    - 25-49 приглашённых → 25%
-    - 50+ приглашённых → 45%
-    
-    Args:
-        invited_count: Количество приглашённых пользователей
-    
-    Returns:
-        Процент кешбэка (10, 25 или 45)
-    """
-    if invited_count >= 50:
-        return 45
-    elif invited_count >= 25:
-        return 25
-    else:
-        return 10
 
 
 async def get_referral_level_info(partner_id: int) -> Dict[str, Any]:
@@ -1686,10 +1651,13 @@ async def process_referral_reward(
     conn: asyncpg.Connection
 ) -> Dict[str, Any]:
     """
-    Начислить реферальный кешбэк рефереру при успешной активации подписки покупателя.
-    
+    Начислить реферальный кешбэк рефереру за покупку покупателя.
+
     КРИТИЧЕСКИ ВАЖНО:
-    - Начисление происходит ТОЛЬКО при успешной активации подписки (source='payment')
+    - Правило владельца (2026-09-14, N17): кешбэк ТОЛЬКО за покупку — любую
+      (подписка, комбо, пакет ГБ, подарок, магазин; оплата провайдером,
+      Telegram/Stars, с баланса, автопродление с баланса) — и НИКОГДА за
+      пополнение баланса. База — сумма, оплаченная за покупку.
     - НЕ начисляется при admin-grant, test-access, free-access
     - Защита от повторного начисления за один purchase_id
     - Защита от самореферала
@@ -1713,7 +1681,7 @@ async def process_referral_reward(
     try:
         # 1. Получаем реферера покупателя
         user = await conn.fetchrow(
-            "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1",
+            "SELECT referrer_id FROM users WHERE telegram_id = $1",
             buyer_id
         )
         
@@ -1782,6 +1750,43 @@ async def process_referral_reward(
                 "reason": "duplicate_reward"
             }
         
+        # 3a. The referrer must exist (REF-DANGLING): a users.referrer_id left by an
+        # old deletion used to raise «Referrer … not found» below → the paid
+        # purchase was rejected (money taken, no access). Lock + read the
+        # referrer row BEFORE any write (same queries as the credit step, only
+        # earlier in the transaction); missing → no referrer: skip the cashback,
+        # clear the dangling link, never fail the purchase.
+        # CRITICAL: advisory lock per referrer для защиты от race conditions
+        # Consistent with increase_balance() locking pattern — prevents concurrent
+        # balance modifications from different purchases for the same referrer
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock($1)",
+            referrer_id
+        )
+        # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
+        balance_row = await conn.fetchrow(
+            "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+            referrer_id
+        )
+        if not balance_row:
+            logger.warning(
+                "REFERRAL_REFERRER_MISSING buyer=%s referrer=%s purchase_id=%s — "
+                "dangling link: no cashback, link cleared, purchase continues",
+                buyer_id, referrer_id, purchase_id,
+            )
+            await conn.execute(
+                "UPDATE users SET referrer_id = NULL WHERE telegram_id = $1 AND referrer_id = $2",
+                buyer_id, referrer_id,
+            )
+            return {
+                "success": False,
+                "referrer_id": None,
+                "percent": None,
+                "reward_amount": None,
+                "message": "Referrer no longer exists",
+                "reason": "referrer_missing",
+            }
+
         # 4. Обновляем first_paid_at в referrals, если это первый платеж реферала
         referral_row = await conn.fetchrow(
             "SELECT first_paid_at FROM referrals WHERE referrer_user_id = $1 AND referred_user_id = $2",
@@ -1839,7 +1844,7 @@ async def process_referral_reward(
 
         # 5a-fix. ADMIN OVERRIDE: cashback_fixed_percent жёстко замещает
         # результат тира + floor. Не суммируется. Работает и в меньшую
-        # сторону (напр. штраф 5%) и в большую (напр. VIP 40%).
+        # сторону (напр. штраф 5%) и в большую (напр. партнёр 40%).
         fixed = await conn.fetchval(
             "SELECT cashback_fixed_percent FROM users WHERE telegram_id = $1",
             referrer_id,
@@ -1924,24 +1929,9 @@ async def process_referral_reward(
             }
         
         # FINANCIAL OPERATIONS (raise exceptions on failure, do not catch):
-        # 7. Начисляем кешбэк на баланс реферера
-        # CRITICAL: advisory lock per referrer для защиты от race conditions
-        # Consistent with increase_balance() locking pattern — prevents concurrent
-        # balance modifications from different purchases for the same referrer
-        await conn.execute(
-            "SELECT pg_advisory_xact_lock($1)",
-            referrer_id
-        )
-        
-        # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
-        balance_row = await conn.fetchrow(
-            "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
-            referrer_id
-        )
-        
-        if not balance_row:
-            raise ValueError(f"Referrer {referrer_id} not found for reward")
-        
+        # 7. Начисляем кешбэк на баланс реферера. The referrer row is already
+        # locked (advisory + FOR UPDATE, step 3a) and known to exist.
+
         # Обновляем баланс (строка уже заблокирована FOR UPDATE)
         await conn.execute(
             "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
@@ -1968,7 +1958,8 @@ async def process_referral_reward(
                ON CONFLICT (buyer_id, purchase_id) WHERE purchase_id IS NOT NULL DO NOTHING""",
             referrer_id, buyer_id, purchase_id, purchase_amount_kopecks, effective_percent, reward_amount_kopecks
         )
-        if insert_result == "INSERT 0":
+        # asyncpg command tag is "INSERT <oid> <rows>": zero rows = "INSERT 0 0"
+        if (insert_result or "").split()[-1:] == ["0"]:
             # Race condition: another concurrent transaction already inserted this reward
             logger.warning(
                 f"REFERRAL_REWARD_DUPLICATE_PREVENTED: buyer_id={buyer_id}, purchase_id={purchase_id} "
@@ -2001,6 +1992,22 @@ async def process_referral_reward(
             f"amount={reward_amount_rubles:.2f} RUB, paid_referrals_count={paid_referrals_count}]"
         )
 
+        # Owner 2026-09-14: the referrer is told about EVERY accrual — from here,
+        # the one place cashback is accrued. Sent only after the caller's
+        # transaction commits (a rolled-back accrual is never announced), once
+        # per (buyer_id, purchase_id). Never raises into the money path.
+        try:
+            from app.services.notifications import referral_cashback
+            referral_cashback.schedule(
+                buyer_id=buyer_id, referrer_id=referrer_id, purchase_id=purchase_id,
+                purchase_amount=amount_rubles, reward_amount=reward_amount_rubles,
+                percent=effective_percent, paid_referrals_count=paid_referrals_count,
+                referrals_needed=referrals_needed,
+            )
+        except Exception as notify_err:  # noqa: BLE001
+            logger.warning("REFERRAL_CASHBACK_NOTIFY_SCHEDULE_FAILED purchase_id=%s: %s",
+                           purchase_id, type(notify_err).__name__)
+
         return {
             "success": True,
             "referrer_id": referrer_id,
@@ -2014,7 +2021,7 @@ async def process_referral_reward(
                 
     except (asyncpg.UniqueViolationError, asyncpg.ForeignKeyViolationError, 
             asyncpg.NotNullViolationError, asyncpg.CheckViolationError,
-            asyncpg.PostgresConnectionError, asyncpg.InterfaceError, asyncpg.TimeoutError) as e:
+            asyncpg.PostgresConnectionError, asyncpg.InterfaceError, TimeoutError) as e:
         # FINANCIAL ERRORS: Database constraint violations, connection issues
         # These MUST propagate to cause transaction rollback
         logger.error(
@@ -2032,6 +2039,39 @@ async def process_referral_reward(
         raise  # Re-raise to cause transaction rollback
 
 
+async def award_referral_cashback(buyer_id: int, purchase_id: str, amount_rubles: float) -> Dict[str, Any]:
+    """Referral cashback for a purchase that is NOT finalized inside a billing
+    transaction: a shop order (after mark_pending_purchase_paid), a gift paid
+    from balance. Owner rule 2026-09-14 (N17): cashback for ANY purchase, never
+    for a balance top-up.
+
+    Own connection + transaction around process_referral_reward, which is
+    idempotent per (buyer_id, purchase_id). Never raises: a failure rolls back
+    the cashback only and is logged — the purchase itself is already done.
+    """
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return {"success": False, "reason": "db_not_ready"}
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                result = await process_referral_reward(
+                    buyer_id=buyer_id, purchase_id=purchase_id, amount_rubles=amount_rubles, conn=conn,
+                )
+        if result.get("success"):
+            logger.info(
+                "REFERRAL_CASHBACK_GRANTED purchase_id=%s buyer=%s referrer=%s amount=%s RUB",
+                purchase_id, buyer_id, result.get("referrer_id"), result.get("reward_amount"),
+            )
+        return result
+    except Exception as e:
+        logger.error(
+            "REFERRAL_CASHBACK_FAILED purchase_id=%s buyer=%s %s: %s",
+            purchase_id, buyer_id, type(e).__name__, e,
+        )
+        return {"success": False, "reason": "error"}
+
+
 async def update_user_language(telegram_id: int, language: str):
     """Обновить язык пользователя"""
     pool = await get_pool()
@@ -2039,16 +2079,6 @@ async def update_user_language(telegram_id: int, language: str):
         await conn.execute(
             "UPDATE users SET language = $1 WHERE telegram_id = $2",
             language, telegram_id
-        )
-
-
-async def update_username(telegram_id: int, username: Optional[str]):
-    """Обновить username пользователя"""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE users SET username = $1 WHERE telegram_id = $2",
-            username, telegram_id
         )
 
 

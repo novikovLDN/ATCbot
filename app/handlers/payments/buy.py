@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 
 @payments_router.message(Command("buy"))
 async def cmd_buy(message: Message, state: FSMContext, bot: Bot):
-    """Обработчик команды /buy — открывает экран покупки"""
+    """/buy — the same screen as «Продлить VPN» / «Купить VPN» (08 M13): a
+    subscriber gets «Управление подпиской», anyone else the tariff screen."""
     if not await ensure_db_ready_message(message):
         return
-    from app.handlers.common.screens import _open_buy_screen
-    await _open_buy_screen(message, bot, state)
+    from app.handlers.payments.callbacks import open_buy_or_manage
+    await open_buy_or_manage(message, bot, state)

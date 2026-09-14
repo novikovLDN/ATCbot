@@ -10,8 +10,12 @@ matter whether the action comes from a Telegram chat or the web UI.
 Bot-only writes (approve_payment_atomic, grant_access, finalize_purchase,
 mark_trial_used) are intentionally NOT exposed here.
 """
+import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Optional
+from app.services.tariffs import normalize_tier
+
+import html as _html
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field, field_validator
@@ -19,9 +23,13 @@ from pydantic import BaseModel, Field, field_validator
 import config
 import database
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
+from app.api.dashboard.idempotency import IdempotentRoute
+from app.branding import get_brand
 from app.events import bus
+from app.utils.referral_link import build_referral_link
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_admin)], route_class=IdempotentRoute)
 
 
 def _serialize_match(row: dict) -> dict:
@@ -50,62 +58,174 @@ async def users_search(
     UI can render "ничего не нашлось" without an exception path.
     """
     try:
-        rows = await database.search_users_dashboard(q, limit=limit)
+        rows, total = await asyncio.gather(
+            database.search_users_dashboard(q, limit=limit),
+            # Отдельный COUNT(*): len(rows) — это длина среза, урезанного
+            # LIMIT'ом, поэтому при 300 совпадениях UI честно показывал «25».
+            database.count_users_dashboard(q),
+        )
     except Exception as e:
-        raise HTTPException(500, f"search_failed: {e}")
+        raise server_error("search_failed") from e
     return {
         "query": q.strip(),
         "matches": [_serialize_match(r) for r in rows],
-        "total": len(rows),
+        "total": total,
     }
+
+
+def _parse_iso(value: Optional[str], field: str) -> Optional[datetime]:
+    """ISO-8601 из query-параметра → datetime. Голая дата (`2026-01-31`)
+    тоже принимается — фронт часто шлёт именно её из <input type=date>."""
+    if value is None or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"invalid_{field}: expected ISO-8601 date")
+
+
+# ВАЖНО: объявлено ДО `/{telegram_id}` — иначе FastAPI матчит "/list"
+# на int-параметр пути и отдаёт 422 вместо листинга.
+@router.get("/list")
+async def users_list(
+    q: Optional[str] = Query(None),
+    has_sub: Optional[bool] = Query(None),
+    source: Optional[str] = Query(None, pattern="^(payment|admin|trial)$"),
+    created_after: Optional[str] = Query(None),
+    created_before: Optional[str] = Query(None),
+    expires_before: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None, pattern="^(created_at|expires_at|last_seen_at|balance)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    limit: int = Query(50, gt=0, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """Paged, filterable user list — то, чего экрану «Пользователи» не
+    хватало: раньше был только поиск по одному юзеру.
+
+    `total` — честный COUNT(*) под теми же фильтрами, не длина среза,
+    чтобы пагинация во фронте считалась правильно.
+
+    Когда задан `q`, но `sort` не передан явно, строки ранжируются как в
+    `/search` (точный id → точный username → префикс → подстрока). Если
+    `sort` передан — он главный, ранжирование не применяется.
+    """
+    try:
+        rows, total = await database.list_users_dashboard(
+            q=q,
+            has_sub=has_sub,
+            source=source,
+            created_after=_parse_iso(created_after, "created_after"),
+            created_before=_parse_iso(created_before, "created_before"),
+            expires_before=_parse_iso(expires_before, "expires_before"),
+            sort=sort or "created_at",
+            order=order,
+            limit=limit,
+            offset=offset,
+            rank_by_relevance=bool(q and q.strip()) and sort is None,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise server_error("users_list_failed") from e
+    return {
+        "rows": [
+            {
+                "telegram_id": r["telegram_id"],
+                "username": r["username"],
+                "language": r["language"],
+                "created_at": _iso(r["created_at"]),
+                "last_seen_at": _iso(r["last_seen_at"]),
+                "is_reachable": bool(r["is_reachable"]),
+                "has_active_sub": bool(r["has_active_sub"]),
+                "subscription_type": normalize_tier(r["subscription_type"]),
+                "expires_at": _iso(r["expires_at"]),
+                "source": r["source"],
+                "balance_kopecks": r["balance_kopecks"],
+                "referral_level": r["referral_level"],
+            }
+            for r in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def _iso(value) -> Optional[str]:
+    return value.isoformat() if hasattr(value, "isoformat") else value
 
 
 @router.get("/{telegram_id}")
 async def user_detail(telegram_id: int = Path(..., gt=0)):
-    """Full card — user, balance, subscription, discount, vip, trial.
+    """Full card — user, balance, subscription, discount, trial.
 
-    Отдельно возвращает:
-      - `premium` — премиум-подписка (когда истекает, активна ли),
-        источник — subscriptions.expires_at при наличии
-        remnawave_premium_uuid.
-      - `bypass` — обход блокировок: сколько ГБ потрачено / всего /
-        осталось. Байты живут только в Remnawave, тянем live.
-    Наличие ключа в подписке ещё не значит, что фича активна —
-    смотрим is_bypass_only / remnawave_premium_uuid.
+    Подписка читается через get_subscription_any, а НЕ get_subscription:
+    последняя первым делом зовёт check_and_disable_expired_subscription,
+    то есть обычный GET карточки писал бы в БД и конкурировал за строку
+    с воркером fast_expiry_cleanup (запрещено —
+    docs/admin_dashboard_implementation_map.md). Побочный вариант оставлен
+    боту, где эффект может быть намеренным.
+
+    Как следствие карточка теперь видит и ИСТЁКШУЮ подписку (раньше
+    subscription был null и о прошлой подписке не показывалось ничего);
+    отличить состояние фронт может по `subscription_is_active`.
+
+    Все чтения независимы и берут собственный коннект из пула, поэтому
+    идут через gather — было ~11 последовательных round-trip на один GET.
     """
+    user = await database.get_user(telegram_id)
+    if not user:
+        raise HTTPException(404, "User not found")
     try:
-        user = await database.get_user(telegram_id)
-        if not user:
-            raise HTTPException(404, "User not found")
-        balance = await database.get_user_balance(telegram_id)
-        subscription = await database.get_subscription(telegram_id)
-        trial = await database.get_trial_info(telegram_id)
-        discount = await database.get_user_discount(telegram_id)
-        traffic_discount = await database.get_user_traffic_discount(telegram_id)
-        is_vip = await database.is_vip_user(telegram_id)
-        cashback_fixed = await database.get_cashback_fixed_percent(telegram_id)
-        cashback_effective = await database.get_effective_cashback_percent(telegram_id)
-
-        premium_block = await _build_premium_block(subscription)
-        bypass_block = await _build_bypass_block(telegram_id, subscription)
-
-        return {
-            "user": user,
-            "balance_rubles": balance,
-            "subscription": subscription,
-            "premium": premium_block,
-            "bypass": bypass_block,
-            "trial": trial,
-            "discount": discount,
-            "traffic_discount": traffic_discount,
-            "is_vip": is_vip,
-            "cashback_fixed_percent": cashback_fixed,
-            "cashback_effective_percent": cashback_effective,
-        }
-    except HTTPException:
-        raise
+        (
+            balance,
+            subscription,
+            trial,
+            discount,
+            traffic_discount,
+            cashback_fixed,
+            cashback_effective,
+            referral_link,
+        ) = await asyncio.gather(
+            database.get_user_balance(telegram_id),
+            database.get_subscription_any(telegram_id),
+            database.get_trial_info(telegram_id),
+            database.get_user_discount(telegram_id),
+            database.get_user_traffic_discount(telegram_id),
+            database.get_cashback_fixed_percent(telegram_id),
+            database.get_effective_cashback_percent(telegram_id),
+            # config.BOT_USERNAME, а не bot.get_me() — незачем ходить в
+            # Telegram API на каждое открытие карточки.
+            build_referral_link(telegram_id, config.BOT_USERNAME),
+        )
     except Exception as e:
-        raise HTTPException(500, f"user_detail_failed: {e}")
+        raise server_error("user_detail_failed") from e
+    sub_is_active = bool(
+        subscription
+        and subscription.get("status") == "active"
+        and subscription.get("expires_at")
+        and subscription["expires_at"] > datetime.now(timezone.utc)
+    )
+    # `premium` — премиум-подписка (истекает когда, активна ли; по
+    # remnawave_premium_uuid + expires_at, НЕ bypass-only).
+    # `bypass` — обход: потрачено / всего / осталось. Байты живут только в
+    # Remnawave, тянем live.
+    premium_block = await _build_premium_block(subscription)
+    bypass_block = await _build_bypass_block(telegram_id, subscription)
+    return {
+        "user": user,
+        "balance_rubles": balance,
+        "subscription": subscription,
+        "subscription_is_active": sub_is_active,
+        "premium": premium_block,
+        "bypass": bypass_block,
+        "trial": trial,
+        "discount": discount,
+        "traffic_discount": traffic_discount,
+        "cashback_fixed_percent": cashback_fixed,
+        "cashback_effective_percent": cashback_effective,
+        "referral_link": referral_link,
+    }
 
 
 async def _build_premium_block(subscription: Optional[dict]) -> dict:
@@ -179,7 +299,7 @@ async def user_history(
     try:
         return await database.get_subscription_history(telegram_id, limit)
     except Exception as e:
-        raise HTTPException(500, f"history_failed: {e}")
+        raise server_error("history_failed") from e
 
 
 @router.get("/{telegram_id}/extended-stats")
@@ -187,7 +307,7 @@ async def user_extended_stats(telegram_id: int = Path(..., gt=0)):
     try:
         return await database.get_user_extended_stats(telegram_id)
     except Exception as e:
-        raise HTTPException(500, f"extended_stats_failed: {e}")
+        raise server_error("extended_stats_failed") from e
 
 
 @router.get("/{telegram_id}/payments")
@@ -203,7 +323,7 @@ async def user_payments(
     try:
         rows = await database.get_user_purchases(telegram_id, limit=limit)
     except Exception as e:
-        raise HTTPException(500, f"payments_failed: {e}")
+        raise server_error("payments_failed") from e
     return [_serialize(r) for r in rows]
 
 
@@ -250,7 +370,7 @@ async def user_grant(
             telegram_id, body.days, int(admin["sub"]), tariff=body.tariff,
         )
     except Exception as e:
-        raise HTTPException(500, f"grant_failed: {e}")
+        raise server_error("grant_failed") from e
     bus.publish({
         "type": "admin:grant",
         "telegram_id": telegram_id,
@@ -280,7 +400,7 @@ async def user_grant_minutes(
             telegram_id, body.minutes, int(admin["sub"]),
         )
     except Exception as e:
-        raise HTTPException(500, f"grant_minutes_failed: {e}")
+        raise server_error("grant_minutes_failed") from e
     bus.publish({
         "type": "admin:grant_minutes",
         "telegram_id": telegram_id,
@@ -302,7 +422,7 @@ async def user_revoke(
     try:
         ok = await database.admin_revoke_access_atomic(telegram_id, int(admin["sub"]))
     except Exception as e:
-        raise HTTPException(500, f"revoke_failed: {e}")
+        raise server_error("revoke_failed") from e
     bus.publish({
         "type": "admin:revoke",
         "telegram_id": telegram_id,
@@ -323,7 +443,7 @@ async def user_reissue_aggregator(
     try:
         new_url = await sub_aggregator.reissue_token(telegram_id)
     except Exception as e:
-        raise HTTPException(500, f"reissue_failed: {e}")
+        raise server_error("reissue_failed") from e
     if not new_url:
         raise HTTPException(
             404,
@@ -358,7 +478,7 @@ async def user_switch_tariff(
     try:
         updated = await database.admin_switch_tariff(telegram_id, body.tariff)
     except Exception as e:
-        raise HTTPException(500, f"switch_tariff_failed: {e}")
+        raise server_error("switch_tariff_failed") from e
     if not updated:
         raise HTTPException(404, "no_active_subscription")
     bus.publish({
@@ -392,7 +512,7 @@ async def user_discount_create(
             created_by=int(admin["sub"]),
         )
     except Exception as e:
-        raise HTTPException(500, f"discount_create_failed: {e}")
+        raise server_error("discount_create_failed") from e
     if not ok:
         raise HTTPException(500, "discount_create_failed")
     bus.publish({
@@ -416,7 +536,7 @@ async def user_discount_delete(
     try:
         ok = await database.delete_user_discount(telegram_id, int(admin["sub"]))
     except Exception as e:
-        raise HTTPException(500, f"discount_delete_failed: {e}")
+        raise server_error("discount_delete_failed") from e
     bus.publish({
         "type": "admin:discount_delete",
         "telegram_id": telegram_id,
@@ -451,7 +571,7 @@ async def user_traffic_discount_create(
             created_by=int(admin["sub"]),
         )
     except Exception as e:
-        raise HTTPException(500, f"traffic_discount_create_failed: {e}")
+        raise server_error("traffic_discount_create_failed") from e
     if not ok:
         raise HTTPException(500, "traffic_discount_create_failed")
     bus.publish({
@@ -475,7 +595,7 @@ async def user_traffic_discount_delete(
     try:
         ok = await database.delete_user_traffic_discount(telegram_id)
     except Exception as e:
-        raise HTTPException(500, f"traffic_discount_delete_failed: {e}")
+        raise server_error("traffic_discount_delete_failed") from e
     bus.publish({
         "type": "admin:traffic_discount_delete",
         "telegram_id": telegram_id,
@@ -503,7 +623,7 @@ async def user_cashback_fix_set(
     except ValueError as ve:
         raise HTTPException(400, str(ve))
     except Exception as e:
-        raise HTTPException(500, f"cashback_fix_set_failed: {e}")
+        raise server_error("cashback_fix_set_failed") from e
     if not ok:
         raise HTTPException(404, "user_not_found")
     bus.publish({
@@ -559,13 +679,13 @@ async def _send_partner_congrats(telegram_id: int, percent: int) -> bool:
         referral_link = await build_referral_link(telegram_id, bot_username)
         text = (
             "🎉 <b>Поздравляем — ты теперь партнёр!</b>\n\n"
-            "Группа компаний <b>Atlas Secure &amp; QoDev</b> подтверждает "
+            f"Группа компаний <b>{_html.escape(get_brand().name)} &amp; QoDev</b> подтверждает "
             f"твой статус партнёра с фиксированной ставкой "
             f"<b>{percent}%</b> с каждой продажи по твоей рекомендации.\n\n"
             "<blockquote expandable>"
             f"💰 За каждую покупку по твоей ссылке — <b>{percent}% на баланс</b>.\n"
             "📈 Процент зафиксирован и не зависит от количества приглашённых — "
-            "это отдельный VIP-статус."
+            "это отдельный партнёрский статус."
             "</blockquote>\n\n"
             "<b>🔗 Твоя партнёрская ссылка</b>\n"
             f"<blockquote expandable><code>{referral_link}</code></blockquote>\n"
@@ -605,7 +725,7 @@ async def user_cashback_fix_clear(
     try:
         ok = await database.clear_cashback_fixed_percent(telegram_id)
     except Exception as e:
-        raise HTTPException(500, f"cashback_fix_clear_failed: {e}")
+        raise server_error("cashback_fix_clear_failed") from e
     if not ok:
         raise HTTPException(404, "user_not_found")
     bus.publish({
@@ -617,42 +737,10 @@ async def user_cashback_fix_clear(
     return {"ok": True, "effective_percent": effective}
 
 
-@router.post("/{telegram_id}/vip")
-async def user_vip_grant(
-    telegram_id: int = Path(..., gt=0),
-    admin: dict = Depends(require_admin),
-):
-    try:
-        ok = await database.grant_vip_status(telegram_id, int(admin["sub"]))
-    except Exception as e:
-        raise HTTPException(500, f"vip_grant_failed: {e}")
-    bus.publish({
-        "type": "admin:vip_grant",
-        "telegram_id": telegram_id,
-        "by": admin.get("sub"),
-    })
-    return {"ok": bool(ok)}
-
-
-@router.delete("/{telegram_id}/vip")
-async def user_vip_revoke(
-    telegram_id: int = Path(..., gt=0),
-    admin: dict = Depends(require_admin),
-):
-    try:
-        ok = await database.revoke_vip_status(telegram_id, int(admin["sub"]))
-    except Exception as e:
-        raise HTTPException(500, f"vip_revoke_failed: {e}")
-    bus.publish({
-        "type": "admin:vip_revoke",
-        "telegram_id": telegram_id,
-        "by": admin.get("sub"),
-    })
-    return {"ok": bool(ok)}
 
 
 class BalanceRequest(BaseModel):
-    delta_rubles: float = Field(..., description="Positive credits, negative debits")
+    delta_rubles: float = Field(..., allow_inf_nan=False, description="Positive credits, negative debits")
     reason: Optional[str] = Field(None, max_length=200)
 
     @field_validator("delta_rubles")
@@ -678,7 +766,7 @@ async def user_delete(
             telegram_id, int(admin["sub"]),
         )
     except Exception as e:
-        raise HTTPException(500, f"delete_failed: {e}")
+        raise server_error("delete_failed") from e
     if not ok:
         raise HTTPException(404, "User not found or delete blocked")
     bus.publish({
@@ -712,7 +800,7 @@ async def user_balance_change(
                 source="admin", description=reason,
             )
     except Exception as e:
-        raise HTTPException(500, f"balance_change_failed: {e}")
+        raise server_error("balance_change_failed") from e
     if not ok:
         raise HTTPException(400, "balance_change_rejected")
     bus.publish({

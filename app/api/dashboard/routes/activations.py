@@ -3,16 +3,17 @@ VPN-provisioning HTTP call to the panel was unreachable at the moment.
 
 The activation_worker.py background task retries them every ~5 min up to
 5 attempts; this endpoint lets the admin see what's queued and force a
-retry NOW without waiting for the next cycle (useful for VIPs)."""
+retry NOW without waiting for the next cycle (useful for an urgent case)."""
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 
-import database
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
+from app.api.dashboard.idempotency import IdempotentRoute
 from app.events import bus
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_admin)], route_class=IdempotentRoute)
 
 
 def _serialize(value):
@@ -88,7 +89,7 @@ async def activations_retry(
             pool=pool,
         )
     except Exception as e:
-        raise HTTPException(500, f"retry_failed: {e}")
+        raise server_error("retry_failed") from e
 
     success = getattr(result, "success", False)
     bus.publish({

@@ -63,7 +63,8 @@ async def reset_premium_unlimited(
                 WHERE remnawave_premium_id IS NOT NULL"""
         )
     if not rows:
-        return {"total": 0, "checked": 0, "limited": 0, "reset": 0, "errors": 0}
+        return {"total": 0, "checked": 0, "limited": 0, "reset": 0, "errors": 0,
+                "dry_run": dry_run, "samples": []}
 
     checked = 0
     limited = 0

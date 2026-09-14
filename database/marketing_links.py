@@ -92,19 +92,6 @@ async def get_stats_link_by_slug(slug: str) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
-async def get_stats_link(link_id: int) -> Optional[Dict[str, Any]]:
-    if not _core.DB_READY:
-        return None
-    pool = await get_pool()
-    if pool is None:
-        return None
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM stats_links WHERE id = $1", link_id,
-        )
-        return dict(row) if row else None
-
-
 async def set_stats_link_active(link_id: int, active: bool) -> bool:
     if not _core.DB_READY:
         return False
@@ -225,13 +212,23 @@ async def get_stats_link_summary(link_id: int) -> Optional[Dict[str, Any]]:
                  AND trial_used_at IS NOT NULL""",
             link_id,
         )
+        # price_kopecks, не amount_kopecks — последней колонки в
+        # pending_purchases не существует. Запрос всегда падал; вызывающий
+        # в routes/links.py глотает исключение, поэтому вся страница
+        # маркетинговых ссылок молча показывала нули по покупкам и доходу,
+        # без единой ошибки в интерфейсе.
+        #
+        # balance_topup исключён — см. get_user_extended_stats: иначе
+        # пополнение засчитывается как покупка, и ссылка выглядит
+        # эффективнее, чем есть.
         paid_row = await conn.fetchrow(
             """SELECT COUNT(DISTINCT u.telegram_id) AS n,
-                      COALESCE(SUM(p.amount_kopecks), 0)::BIGINT AS revenue
+                      COALESCE(SUM(p.price_kopecks), 0)::BIGINT AS revenue
                FROM users u
                JOIN pending_purchases p ON p.telegram_id = u.telegram_id
                WHERE u.acquired_via_stat_link_id = $1
-                 AND p.status = 'paid'""",
+                 AND p.status = 'paid'
+                 AND p.purchase_type <> 'balance_topup'""",
             link_id,
         )
         paid_users = int(paid_row["n"] or 0) if paid_row else 0
@@ -307,19 +304,6 @@ async def list_promo_links(include_inactive: bool = True) -> List[Dict[str, Any]
             include_inactive,
         )
         return [dict(r) for r in rows]
-
-
-async def get_promo_link(link_id: int) -> Optional[Dict[str, Any]]:
-    if not _core.DB_READY:
-        return None
-    pool = await get_pool()
-    if pool is None:
-        return None
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM promo_links WHERE id = $1", link_id,
-        )
-        return dict(row) if row else None
 
 
 async def get_promo_link_by_slug(slug: str) -> Optional[Dict[str, Any]]:

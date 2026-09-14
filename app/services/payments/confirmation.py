@@ -25,6 +25,43 @@ class TransientPaymentError(Exception):
     pass
 
 
+def _outbox_on(provider: str) -> bool:
+    """T8: provisioning outbox flag for this provider's entry point
+    ("telegram" for Telegram-native / Stars, else "webhook"). Env read only."""
+    from app.services import provisioning_flags
+    from database.subscriptions import provisioning_entrypoint
+    return provisioning_flags.is_on(provisioning_entrypoint(provider))
+
+
+async def _outbox_job(provider: str, purchase_id: str) -> Optional[Dict[str, Any]]:
+    """T8: the provisioning job of this purchase, looked up only when the
+    outbox flag is on for the provider (flag off → None, no DB read).
+    A lookup error under flag ON is re-raised: guessing "legacy" could add GB twice."""
+    if not _outbox_on(provider):
+        return None
+    import database.provisioning_jobs as provisioning_jobs
+    return await provisioning_jobs.get_by_key(f"purchase:{purchase_id}")
+
+
+def _pending_activation_keyboard(language: str):
+    """Same buttons as the Telegram-native payment.pending_activation screen."""
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    from app.handlers.common.emoji import CE
+    from app.i18n import get_text as i18n_get_text
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "main.profile"),
+            callback_data="menu_profile",
+            icon_custom_emoji_id=CE["profile"],
+            style="primary",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "main.support"),
+            url="https://t.me/atlas_suppbot",
+        )],
+    ])
+
+
 async def _get_current_bypass_bytes(telegram_id: int) -> Optional[int]:
     """Snapshot текущего trafficLimitBytes bypass entity перед top-up.
     Нужен verify_bypass_delivery — точно сравнить diff после add_traffic.
@@ -98,7 +135,37 @@ async def _deliver_bypass_gb(telegram_id: int, extra_bytes: int) -> bool:
     return False
 
 
+_inflight: set = set()   # strong refs: shielded confirmations outliving a webhook timeout
+
+
+def _finish_inflight(task: "asyncio.Task") -> None:
+    _inflight.discard(task)
+    if not task.cancelled():
+        task.exception()  # retrieved: every branch of the body already logs / alerts
+
+
 async def process_confirmed_payment(
+    provider: str,
+    purchase_id: str,
+    amount_rubles: float,
+    invoice_id: str,
+    telegram_id: int,
+    bot: Bot,
+) -> dict:
+    """P1-1: the confirmation runs as a SHIELDED task. The webhook's
+    wait_for(25 s) cancels only the wait (→ 500 + alert), never the processing
+    half-way: a commit followed by a cancelled delivery could not be redone — a
+    provider retry stops at already_processed. Same result / exceptions as
+    _process_confirmed_payment for an uncancelled caller."""
+    task = asyncio.ensure_future(_process_confirmed_payment(
+        provider, purchase_id, amount_rubles, invoice_id, telegram_id, bot,
+    ))
+    _inflight.add(task)
+    task.add_done_callback(_finish_inflight)
+    return await asyncio.shield(task)
+
+
+async def _process_confirmed_payment(
     provider: str,
     purchase_id: str,
     amount_rubles: float,
@@ -122,6 +189,9 @@ async def process_confirmed_payment(
     Returns:
         Response dict with "status" key ("ok", "already_processed", "error")
     """
+    # Bound before the try: the ValueError replay branch reads `pending`, and a
+    # ValueError may be raised before the lookup below assigns it.
+    pending = None
     try:
         # Check if this is a notification-only purchase (no subscription to activate).
         # Accept both 'pending' and 'expired' — user may have started a new purchase
@@ -131,6 +201,18 @@ async def process_confirmed_payment(
         pending = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
         if not pending or pending.get("telegram_id") != telegram_id:
             logger.error(f"{provider} webhook: pending purchase not found: {purchase_id}")
+            await _report_webhook_anomaly(
+                provider, purchase_id,
+                stage="confirm_purchase_not_found",
+                telegram_id=telegram_id,
+                message=(
+                    f"{provider}: confirmed payment, but the purchase is missing or belongs "
+                    f"to another user\nPurchase: {purchase_id}\nUser TG ID: {telegram_id}\n"
+                    "Payment was NOT credited. Check the provider dashboard and grant "
+                    "access or refund manually."
+                ),
+                alert=True,
+            )
             return {"status": "error", "message": "Purchase not found"}
 
         _purchase_type = pending.get("purchase_type") or "subscription"
@@ -152,6 +234,11 @@ async def process_confirmed_payment(
                 )
                 return {"status": "already_processed", "purchase_id": purchase_id}
             logger.info(f"{provider} webhook: {_purchase_type} marked paid, purchase_id={purchase_id}")
+            # Owner rule 2026-09-14 (N17): referral cashback for ANY purchase, the
+            # shop included — accrued here, in the shared core; never raises.
+            await database.award_referral_cashback(
+                buyer_id=telegram_id, purchase_id=purchase_id, amount_rubles=amount_rubles,
+            )
 
             try:
                 if _purchase_type == "telegram_stars":
@@ -174,9 +261,25 @@ async def process_confirmed_payment(
                     await send_apple_id_success(bot, telegram_id, region, nominal, amount_rubles)
                 elif _purchase_type == "spotify" or _tariff.startswith("spotify_"):
                     from app.handlers.payments.spotify_purchase import send_spotify_success
-                    await send_spotify_success(bot, telegram_id, purchase_id, pending)
+                    await send_spotify_success(bot, telegram_id, purchase_id, pending, provider=provider)
             except Exception as notif_err:
-                logger.error(f"{provider} webhook: notification failed for {_purchase_type}: {notif_err}")
+                # «Заказ не теряется»: already marked paid → a human must fulfil it.
+                logger.error(
+                    f"{provider} webhook: notification failed for {_purchase_type}: "
+                    f"{type(notif_err).__name__}"
+                )
+                await alert_shop_order_not_notified(
+                    bot,
+                    stage="shop_admin_notify_failed",
+                    purchase_id=purchase_id,
+                    telegram_id=telegram_id,
+                    provider=provider,
+                    product=f"{_purchase_type} / {_tariff}",
+                    amount_rubles=amount_rubles,
+                    reason="send_*_success упал после mark_pending_purchase_paid",
+                    error=notif_err,
+                    pending=pending,
+                )
 
             return {"status": "ok", "purchase_id": purchase_id}
 
@@ -191,13 +294,17 @@ async def process_confirmed_payment(
             logger.error(f"{provider} webhook: finalize_purchase failed: {result}")
             raise Exception(f"finalize_purchase returned invalid result: {result}")
 
+        # Premium sync after commit failed (legacy renewal). The billing IS
+        # committed: still notify the user and deliver the bypass GB (a retry
+        # stops at already_processed and would never do it), THEN answer 5xx.
+        # purchase_flow already alerted the admin and scheduled a re-sync.
+        sync_failed_err = None
         if result.get("remnawave_sync_failed"):
-            err = result.get("remnawave_sync_error") or "unknown"
+            sync_failed_err = result.get("remnawave_sync_error") or "unknown"
             logger.error(
                 f"WEBHOOK_RETRY_REQUESTED: provider={provider}, user={telegram_id}, "
-                f"purchase_id={purchase_id}, remnawave_sync_error={err}"
+                f"purchase_id={purchase_id}, remnawave_sync_error={sync_failed_err}"
             )
-            raise TransientPaymentError(f"Remnawave sync failed: {err}")
 
         payment_id = result["payment_id"]
         expires_at = result.get("expires_at")
@@ -231,6 +338,8 @@ async def process_confirmed_payment(
                     purchase_id=purchase_id,
                     traffic_gb=result.get("traffic_gb", 0),
                     tariff_type=result.get("tariff_type", ""),
+                    provisioning_job_id=result.get("provisioning_job_id"),
+                    provisioning_done=result.get("provisioning_done"),
                 )
             else:
                 await _send_confirmation(
@@ -270,26 +379,75 @@ async def process_confirmed_payment(
                 f"purchase_id={purchase_id}, payment_id={payment_id}, "
                 f"error={type(notif_err).__name__}: {notif_err} — payment was successful"
             )
+            # The same block delivers the legacy bypass GB: an unexpected error
+            # here may mean GB not delivered — the admin must know (payment is
+            # committed, a retry would not deliver them).
+            try:
+                from app.services.admin_alerts import alert_payment_failure
+                await alert_payment_failure(
+                    bot, provider, telegram_id, purchase_id, notif_err,
+                    is_transient=False,
+                    amount_rubles=amount_rubles,
+                    tariff=result.get("subscription_type") if isinstance(result, dict) else None,
+                    period_days=result.get("period_days") if isinstance(result, dict) else None,
+                )
+            except Exception as _ae:  # noqa: BLE001
+                logger.warning("PAYMENT_NOTIFICATION_ALERT_FAIL: %s", _ae)
 
-        # Site sync (fire-and-forget — must not fail the payment)
-        try:
-            from app.services.site_sync import full_sync_after_payment, is_enabled as site_sync_enabled
-            if site_sync_enabled() and not is_balance_topup and not is_traffic_pack and not is_gift:
-                period_days = result.get("period_days", 30)
-                tariff_type = result.get("tariff_type", "basic")
-                asyncio.ensure_future(full_sync_after_payment(
-                    telegram_id, period_days, tariff_type, amount_rubles, purchase_id,
-                ))
-        except Exception as sync_err:
-            logger.warning("SITE_SYNC_FIRE_AND_FORGET_ERROR: %s", sync_err)
+        if sync_failed_err is not None:
+            # P2-26: purchase_flow.sync_renewal_to_remnawave already sent the forced
+            # alert and scheduled the re-sync — one incident, one alert: neither the
+            # transient branch below nor the webhook route alerts it again.
+            tpe = TransientPaymentError(f"Remnawave sync failed: {sync_failed_err}")
+            tpe.alerted = True
+            raise tpe
 
+
+    except TransientPaymentError as e:
+        # Уже классифицировано как transient (например, Remnawave sync упал
+        # после commit). Должно дойти до роута вебхука → HTTP 500 → провайдер
+        # ретраит. До T6 его глотал общий `except Exception` ниже → 200 +
+        # ложный PERMANENT-алерт.
+        logger.error(
+            f"PAYMENT_TRANSIENT_ERROR: provider={provider}, user={telegram_id}, "
+            f"purchase_id={purchase_id}, error={type(e).__name__}: {e}"
+        )
+        if getattr(e, "alerted", False):
+            raise  # P2-26: this incident's alert is already out
+        from app.services.admin_alerts import alert_payment_failure
+        tariff, period_days = await _lookup_purchase_tariff(purchase_id)
+        # P1-1: `alerted` = really sent (not cut by the cooldown) → the webhook
+        # route does not alert the same incident a second time.
+        e.alerted = bool(await alert_payment_failure(
+            bot, provider, telegram_id, purchase_id, e, is_transient=True,
+            amount_rubles=amount_rubles, tariff=tariff, period_days=period_days,
+        ))
+        raise
     except ValueError as e:
-        # finalize_purchase кидает ValueError для ДВУХ разных случаев:
-        #  1. "already processed" — идемпотентный дубль webhook'а
-        #  2. "PAYMENT_AMOUNT_MISMATCH" — реальная ошибка, платёж НЕ обработан
-        # До 2026-08 оба обрабатывались одинаково — mismatch тихо шёл в лог
-        # как "already processed" без алерта админу. Теперь разделяем.
+        # P0-1: only PurchaseAlreadyProcessed is the idempotent duplicate.
+        # PAYMENT_AMOUNT_MISMATCH → its own alert below; ANY other ValueError
+        # (invalid status, unknown period, bad date, missing farm plot, …) is a
+        # paid purchase that was NOT credited → PERMANENT forced alert +
+        # payment_errors, never a silent "already processed".
         err_str = str(e)
+        if isinstance(e, database.PurchaseAlreadyProcessed):
+            pass  # → idempotent replay branch below
+        elif not ("PAYMENT_AMOUNT_MISMATCH" in err_str or "amount mismatch" in err_str.lower()):
+            logger.error(
+                "PAYMENT_FINALIZE_REJECTED: provider=%s user=%s purchase_id=%s error=%s",
+                provider, telegram_id, purchase_id, err_str,
+            )
+            await _report_webhook_anomaly(
+                provider, purchase_id, stage="finalize_rejected", telegram_id=telegram_id,
+                message=f"finalize_purchase ValueError: {err_str}", alert=False,
+            )
+            from app.services.admin_alerts import alert_payment_failure
+            tariff, period_days = await _lookup_purchase_tariff(purchase_id)
+            await alert_payment_failure(
+                bot, provider, telegram_id, purchase_id, e, is_transient=False,
+                amount_rubles=amount_rubles, tariff=tariff, period_days=period_days,
+            )
+            return {"status": "error"}
         if "PAYMENT_AMOUNT_MISMATCH" in err_str or "amount mismatch" in err_str.lower():
             logger.error(
                 "PAYMENT_MISMATCH_UNRECOVERABLE: provider=%s user=%s purchase_id=%s error=%s",
@@ -332,6 +490,25 @@ async def process_confirmed_payment(
         # a future expires_at — never resync something we deliberately let
         # expire.
         try:
+            # T8: purchase finalized through the provisioning outbox → the
+            # replay only nudges its job (never provision_subscription): not
+            # done → run_now (never raises), done → nothing. No job (finalized
+            # by the legacy path, or not an access-granting kind) → legacy below.
+            job = await _outbox_job(provider, purchase_id)
+            if job is not None:
+                if job.get("status") != "done":
+                    from app.services import provisioning
+                    await provisioning.run_now(int(job["id"]), bot=bot)
+                    logger.info(
+                        "WEBHOOK_REPLAY_PROVISIONING_RUN_NOW: provider=%s user=%s purchase_id=%s "
+                        "job=%s status=%s", provider, telegram_id, purchase_id, job["id"], job.get("status"),
+                    )
+                else:
+                    logger.info(
+                        "WEBHOOK_REPLAY_PROVISIONING_DONE: provider=%s user=%s purchase_id=%s job=%s",
+                        provider, telegram_id, purchase_id, job["id"],
+                    )
+                return {"status": "already_processed"}
             from app.services import purchase_flow
             from datetime import datetime, timezone
             sub = await database.get_subscription(telegram_id)
@@ -378,9 +555,12 @@ async def process_confirmed_payment(
                 f"WEBHOOK_REPLAY_RESYNC_FAILED: provider={provider}, user={telegram_id}, "
                 f"purchase_id={purchase_id}, error={resync_err}"
             )
-            raise TransientPaymentError(
-                f"Replay resync to Remnawave failed: {resync_err}"
-            ) from resync_err
+            tpe = TransientPaymentError(f"Replay resync to Remnawave failed: {resync_err}")
+            # P2-26: a provider retry while the panel is still down — the premium
+            # problem of this user was already alerted (sync failure + re-sync).
+            from app.services.payments import verify_delivery
+            tpe.alerted = verify_delivery.recently_alerted(telegram_id, "premium")
+            raise tpe from resync_err
         return {"status": "already_processed"}
     except (asyncpg.PostgresError, asyncio.TimeoutError, OSError, RuntimeError) as e:
         # Transient infrastructure error (DB / network / Remnawave provision
@@ -393,13 +573,13 @@ async def process_confirmed_payment(
         )
         from app.services.admin_alerts import alert_payment_failure
         tariff, period_days = await _lookup_purchase_tariff(purchase_id)
-        await alert_payment_failure(
+        alerted = bool(await alert_payment_failure(
             bot, provider, telegram_id, purchase_id, e, is_transient=True,
             amount_rubles=amount_rubles, tariff=tariff, period_days=period_days,
-        )
-        raise TransientPaymentError(
-            f"Transient error during payment: {type(e).__name__}: {e}"
-        ) from e
+        ))
+        tpe = TransientPaymentError(f"Transient error during payment: {type(e).__name__}: {e}")
+        tpe.alerted = alerted
+        raise tpe from e
     except Exception as e:
         logger.exception(
             f"PAYMENT_PERMANENT_ERROR: provider={provider}, user={telegram_id}, "
@@ -442,9 +622,15 @@ async def lookup_pending_purchase(
     or an orphaned provider invoice pointing at a purchase_id we never
     persisted — the latter needs manual admin attention).
 
+    Provider check (T6): if the row has `payment_provider` set and it differs
+    from the webhook's provider → {"status": "provider_mismatch"} + forced
+    admin alert. NULL (legacy rows, most shop rows) is accepted and logged.
+    Shop/notification-only purchases are never rejected by this check.
+
     Returns:
         {"status": "ok", "purchase": dict, "telegram_id": int} on success
-        {"status": "not_found"|"already_processed"|"invalid_status"} on failure
+        {"status": "not_found"|"already_processed"|"invalid_status"|
+         "provider_mismatch"} on failure
     """
     pending_purchase = await database.get_pending_purchase_any_status(purchase_id)
 
@@ -452,6 +638,20 @@ async def lookup_pending_purchase(
         logger.error(
             f"{provider} webhook: purchase not found in DB: purchase_id={purchase_id} — "
             "row missing entirely, payment cannot be reconciled automatically"
+        )
+        # 200 stays (a retry will not create the row), but a human must look.
+        # WATA sends its own forced orphan alert (with tx id / amount) in
+        # wata_service — don't double-alert it here.
+        await _report_webhook_anomaly(
+            provider, purchase_id,
+            stage="webhook_purchase_not_found",
+            message=(
+                f"{provider}: paid webhook for a purchase that is NOT in the DB\n"
+                f"Purchase: {purchase_id}\n"
+                "Payment was NOT credited. Find the transaction in the provider "
+                "dashboard and grant access or refund manually."
+            ),
+            alert=(provider != "wata"),
         )
         return {"status": "not_found"}
 
@@ -472,6 +672,34 @@ async def lookup_pending_purchase(
         )
         return {"status": "invalid_status"}
 
+    stored_provider = str(pending_purchase.get("payment_provider") or "").strip()
+    if not _is_notification_only_purchase(pending_purchase):
+        if stored_provider and stored_provider != provider:
+            logger.error(
+                "PAYMENT_PROVIDER_MISMATCH: webhook_provider=%s stored_provider=%s "
+                "purchase_id=%s user=%s — rejected, not credited",
+                provider, stored_provider, purchase_id, telegram_id,
+            )
+            await _report_webhook_anomaly(
+                provider, purchase_id,
+                stage="webhook_provider_mismatch",
+                telegram_id=telegram_id,
+                message=(
+                    f"Webhook from {provider} for a purchase issued via {stored_provider}\n"
+                    f"Purchase: {purchase_id}\n"
+                    f"User TG ID: {telegram_id}\n"
+                    "Payment was NOT credited. Check both provider dashboards and "
+                    "grant access or refund manually."
+                ),
+                alert=True,
+            )
+            return {"status": "provider_mismatch", "purchase_id": purchase_id}
+        if not stored_provider:
+            logger.info(
+                "%s webhook: purchase has no payment_provider (legacy row) — accepted, "
+                "purchase_id=%s", provider, purchase_id,
+            )
+
     if purchase_status == "expired":
         logger.info(
             f"{provider} webhook: recovering expired purchase (payment arrived after new purchase created): "
@@ -483,6 +711,155 @@ async def lookup_pending_purchase(
         "purchase": pending_purchase,
         "telegram_id": telegram_id,
     }
+
+
+def _is_notification_only_purchase(pending: Dict[str, Any]) -> bool:
+    """Same predicate as the shop/notification-only branch of
+    process_confirmed_payment (mark_pending_purchase_paid + send_*_success).
+    Such purchases keep their historical path: no provider check (SCOPE.md)."""
+    purchase_type = pending.get("purchase_type") or "subscription"
+    tariff = pending.get("tariff") or ""
+    return (
+        purchase_type in ("telegram_stars", "telegram_premium", "steam", "proxy", "spotify")
+        or tariff.startswith("apple_id_")
+        or tariff.startswith("steam_")
+        or tariff.startswith("spotify_")
+    )
+
+
+def _webhook_bot() -> Optional[Bot]:
+    """Bot stored by the webhook router at startup (payment_webhook.setup)."""
+    try:
+        from app.api import payment_webhook
+        return payment_webhook._bot
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _report_webhook_anomaly(
+    provider: str,
+    purchase_id: str,
+    *,
+    stage: str,
+    message: str,
+    telegram_id: Optional[int] = None,
+    alert: bool = True,
+) -> None:
+    """payment_errors row + (optionally) forced admin alert. Best-effort:
+    never raises, the webhook answer must not depend on it."""
+    try:
+        await database.log_payment_error(
+            stage=stage,
+            telegram_id=telegram_id,
+            purchase_id=purchase_id,
+            payment_provider=provider,
+            error_message=message[:500],
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("payment_errors log skipped (%s): %s", stage, e)
+    if not alert:
+        return
+    bot = _webhook_bot()
+    if bot is None:
+        logger.error("%s: admin alert not sent (bot not initialised): %s", stage, message)
+        return
+    try:
+        from app.services.admin_alerts import send_alert
+        await send_alert(bot, "payment", message, force=True)
+    except Exception as e:  # noqa: BLE001
+        logger.error("%s: admin alert failed: %s", stage, e)
+
+
+SHOP_ORDER_NOT_NOTIFIED = "Заказ оплачен, но уведомление админу не доставлено — выполните вручную"
+
+
+def scrub_shop_secrets(text: str, pending: Optional[Dict[str, Any]]) -> str:
+    """Shop rows keep buyer credentials in pending_purchases: Spotify password in
+    promo_code, email in country. Mask them in any text that goes to logs,
+    alerts or payment_errors."""
+    text = str(text)
+    if not pending:
+        return text
+    for secret in (pending.get("promo_code"), pending.get("country")):
+        secret = str(secret or "").strip()
+        if len(secret) >= 3:
+            text = text.replace(secret, "***")
+    return text
+
+
+async def alert_shop_order_not_notified(
+    bot: Optional[Bot],
+    *,
+    stage: str,
+    purchase_id: Optional[str],
+    telegram_id: int,
+    provider: Optional[str],
+    product: str,
+    amount_rubles: Optional[float] = None,
+    username: Optional[str] = None,
+    reason: str = "",
+    error: Optional[BaseException] = None,
+    pending: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """«Заказ не теряется»: a PAID shop order whose admin notification did not
+    go through → payment_errors row + separate FORCED admin alert (short, plain
+    text, never the buyer's password/email). Alert failed too → CRITICAL log.
+    Never raises. Returns True if the alert was delivered."""
+    if username is None:
+        try:
+            user = await database.get_user(telegram_id)
+            username = f"@{user['username']}" if user and user.get("username") else "—"
+        except Exception:  # noqa: BLE001
+            username = "—"
+    lines = [
+        SHOP_ORDER_NOT_NOTIFIED,
+        "",
+        f"Заказ (purchase_id): {purchase_id}",
+        f"Товар: {product}",
+        f"Покупатель TG ID: {telegram_id}",
+        f"Username: {username}",
+    ]
+    if amount_rubles is not None:
+        lines.append(f"Сумма: {amount_rubles} ₽")
+    lines.append(f"Провайдер: {provider or '—'}")
+    if reason:
+        lines.append(f"Причина: {reason}")
+    if error is not None:
+        # Only the exception TYPE: its message may embed buyer credentials in a
+        # form scrub_shop_secrets can't match (truncated, escaped, encoded).
+        lines.append(f"Ошибка: {type(error).__name__}")
+    text = scrub_shop_secrets("\n".join(lines), pending)
+
+    try:
+        await database.log_payment_error(
+            stage=stage,
+            telegram_id=telegram_id,
+            purchase_id=purchase_id,
+            payment_provider=provider,
+            amount_rubles=amount_rubles,
+            error_code=type(error).__name__ if error is not None else None,
+            error_message=text[:500],
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("payment_errors log skipped (%s): %s", stage, type(e).__name__)
+
+    sent = False
+    if bot is not None:
+        try:
+            from app.services import admin_alerts
+            sent = bool(await admin_alerts.send_alert(bot, "payment", text, force=True))
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "SHOP_ORDER_ALERT_ERROR stage=%s purchase_id=%s: %s",
+                stage, purchase_id, type(e).__name__,
+            )
+    if not sent:
+        logger.critical(
+            "SHOP_ORDER_LOST_RISK stage=%s purchase_id=%s user=%s username=%s provider=%s "
+            "product=%s amount=%s — paid order, admin NOT notified, fulfil manually",
+            stage, purchase_id, telegram_id, username, provider, product, amount_rubles,
+        )
+    return sent
 
 
 async def _lookup_purchase_tariff(purchase_id: str) -> tuple:
@@ -517,8 +894,8 @@ async def _send_confirmation(
     language = await resolve_user_language(telegram_id)
 
     # Идемпотентность: mark-before-send через payment_notifications_sent.
-    # finalize_purchase уже гарантирует single-writer через FOR UPDATE
-    # SKIP LOCKED — но на нём защита СТАТУСА покупки, а не факта отправки
+    # finalize_purchase уже гарантирует single-writer через advisory-lock
+    # по purchase_id + FOR UPDATE внутри tx — но на нём защита СТАТУСА покупки, а не факта отправки
     # уведомления. Если между finalize и send прилетит другой путь
     # (fast-poll + webhook, reconciler + webhook, кнопка «Проверить» +
     # webhook) — второй пропустится сразу. Даёт двойной страховщик поверх
@@ -549,11 +926,18 @@ async def _send_confirmation(
     except Exception as _e:  # noqa: BLE001
         logger.debug("invoice_screen_cleanup skipped: %s", _e)
 
+    from app.services.payments.success_message import build_purchase_success, build_topup_success
+    from app.utils.telegram_safe import safe_send_message
+
     if is_balance_topup:
         topup_amount = result.get("amount", amount_rubles)
-        text = i18n_get_text(language, "main.balance_topup_success", amount=topup_amount)
         try:
-            await bot.send_message(telegram_id, text, parse_mode="HTML")
+            new_balance = await database.get_user_balance(telegram_id)
+        except Exception:  # noqa: BLE001 — the credited amount is still shown
+            new_balance = None
+        text, reply_markup = build_topup_success(language, amount=topup_amount, balance=new_balance)
+        try:
+            await safe_send_message(bot, telegram_id, text, reply_markup=reply_markup, parse_mode="HTML")
         except Exception as send_err:
             logger.warning(
                 f"{provider}: failed to send topup confirmation to user={telegram_id}: {send_err}"
@@ -568,27 +952,44 @@ async def _send_confirmation(
         if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
             subscription_type = "basic"
 
-        if config.is_biz_tariff(subscription_type):
-            _label, _emoji = "Business", "🏢"
-        elif subscription_type == "plus":
-            _label, _emoji = "Plus", "⭐️"
-        else:
-            _label, _emoji = "Basic", "📦"
-
-        text = i18n_get_text(
-            language,
-            "payment.success",
-            f"🎉 Оплата получена!\n{_emoji} Тариф: {_label}\n📅 До: {expires_str}",
-            tariff_icon=_emoji,
-            tariff=_label,
-            date=expires_str,
+        # T8: finalized through the provisioning outbox → GB/premium are the
+        # job's; a new issuance whose job did not finish yet (run_now failed,
+        # worker retries) shows payment.pending_activation instead of links.
+        via_outbox = result.get("provisioning_job_id") is not None
+        outbox_pending = (
+            via_outbox
+            and result.get("activation_status") == "pending"
+            and not result.get("is_renewal")
         )
-
-        from app.handlers.common.keyboards import get_connect_keyboard
+        if not via_outbox and not result.get("is_renewal"):
+            # Legacy first purchase: delayed DB↔panel check (renewals with GB are
+            # verified below by verify_premium/bypass_delivery).
+            from app.services.payments import verify_delivery
+            verify_delivery.schedule_legacy_check(
+                telegram_id, source="webhook", ref=str(purchase_id),
+                expect_bypass=True,
+            )
+        if outbox_pending:
+            text = i18n_get_text(language, "payment.pending_activation", date=expires_str)
+            reply_markup = _pending_activation_keyboard(language)
+        else:
+            # One success message for every payment path (08_payments_ux #3):
+            # tariff incl. Combo, period, new end date, GB added, connect keyboard
+            # in the user's language.
+            text, reply_markup = await build_purchase_success(
+                language,
+                subscription_type=subscription_type,
+                is_combo=bool(result.get("is_combo")),
+                period_days=result.get("period_days"),
+                expires_at=expires_at,
+                is_renewal=bool(result.get("is_renewal")),
+                is_upgrade=bool(result.get("is_basic_to_plus_upgrade")),
+                telegram_id=telegram_id,
+            )
 
         try:
-            await bot.send_message(
-                telegram_id, text, reply_markup=get_connect_keyboard(), parse_mode="HTML"
+            await safe_send_message(
+                bot, telegram_id, text, reply_markup=reply_markup, parse_mode="HTML"
             )
         except Exception as send_err:
             logger.warning(
@@ -600,6 +1001,14 @@ async def _send_confirmation(
             f"purchase_id={purchase_id}, subscription_activated=True"
         )
 
+        if via_outbox:
+            logger.info(
+                "BYPASS_GB_VIA_OUTBOX: provider=%s user=%s purchase_id=%s job=%s done=%s pending=%s",
+                provider, telegram_id, purchase_id, result.get("provisioning_job_id"),
+                result.get("provisioning_done"), outbox_pending,
+            )
+            return
+
         # ── Bypass GB accumulation ─────────────────────────────────────
         # Единая точка добавления bypass GB (combo и обычная подписка).
         # sync_renewal_to_remnawave теперь ТОЛЬКО продлевает premium.expireAt
@@ -609,7 +1018,7 @@ async def _send_confirmation(
         # Правила:
         #   combo_basic / combo_plus   → COMBO_TARIFFS[key][period]["gb"] GB
         #   basic / plus (обычные)     → TRAFFIC_LIMITS[tariff][period] bytes
-        #   trial / telegram_* / biz   → skip (не имеют bypass ГБ по ТЗ)
+        #   trial / telegram_*         → skip (не имеют bypass ГБ по ТЗ)
         #
         # ВАЖНО: если bypass entity ТОЛЬКО ЧТО создан (fresh) — provision уже
         # выставил ему финальный лимит (75 GB combo или 10 GB basic 30d).
@@ -620,7 +1029,6 @@ async def _send_confirmation(
         _skip_bypass = (
             not expires_at
             or subscription_type in ("trial", "telegram_premium", "telegram_stars")
-            or subscription_type in config.BIZ_TARIFFS
             or bypass_created_fresh  # fresh entity → уже с финальным лимитом
         )
         if bypass_created_fresh and not _skip_bypass:
@@ -709,12 +1117,16 @@ async def _send_confirmation(
                         purchase_id=str(purchase_id), tariff=tariff_label,
                         period_days=_pd,
                     ))
-                    asyncio.create_task(verify_premium_delivery(
-                        telegram_id=telegram_id, provider=provider,
-                        expected_expire_at=expires_at,
-                        purchase_id=str(purchase_id), tariff=tariff_label,
-                        period_days=_pd,
-                    ))
+                    if result.get("is_renewal") and not result.get("remnawave_sync_failed"):
+                        # P2-26: a failed sync was already alerted (+ re-sync scheduled).
+                        # P2-27: a first purchase's premium is verified by the legacy
+                        # delayed check scheduled above — one verifier per entity.
+                        asyncio.create_task(verify_premium_delivery(
+                            telegram_id=telegram_id, provider=provider,
+                            expected_expire_at=expires_at,
+                            purchase_id=str(purchase_id), tariff=tariff_label,
+                            period_days=_pd,
+                        ))
                 except Exception:
                     pass
 
@@ -735,7 +1147,7 @@ async def _handle_gift_confirmation(
 
     Telegram-native путь (Stars/Payments) делает то же в
     payments_messages.py::process_successful_payment — этот хелпер закрывает
-    внешних провайдеров (platega/lava/cryptobot/wata), для которых confirmation.py
+    внешних провайдеров (platega/cryptobot/wata), для которых confirmation.py
     раньше слал обычное «подписка активирована» и терял ссылку-подарок.
 
     Идемпотентность: mark_payment_notification_sent (как в _send_confirmation) —
@@ -797,10 +1209,23 @@ async def _handle_traffic_pack_confirmation(
     purchase_id: str,
     traffic_gb: int,
     tariff_type: str = "",
+    provisioning_job_id: Optional[int] = None,
+    provisioning_done: Optional[bool] = None,
 ) -> None:
-    """Send traffic pack purchase confirmation and add traffic via Remnawave."""
+    """Send traffic pack purchase confirmation and add traffic via Remnawave.
+
+    T8: when the purchase went through the provisioning outbox (job id passed
+    by the webhook path, or found by key when the flag is on — the
+    Telegram-native caller passes none) the GB are the job's: no delivery
+    here, only the notification (same i18n keys)."""
     from app.services.language_service import resolve_user_language
     from app.i18n import get_text as i18n_get_text
+
+    if provisioning_job_id is None:
+        _job = await _outbox_job(provider, purchase_id)
+        if _job is not None:
+            provisioning_job_id = _job["id"]
+            provisioning_done = _job.get("status") == "done"
 
     language = await resolve_user_language(telegram_id)
     _is_bypass = bool(tariff_type and tariff_type.startswith("bypass_"))
@@ -812,8 +1237,15 @@ async def _handle_traffic_pack_confirmation(
     # Add traffic via Remnawave — clean primitive через numeric bypass id.
     # Если entity нет вообще (первый bypass-buy без подписки) — создаём.
     rmn_success = False
+    _delivery_error: Optional[TransientPaymentError] = None
     pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
-    if pack:
+    if provisioning_job_id is not None:
+        rmn_success = bool(provisioning_done)
+        logger.info(
+            "TRAFFIC_PACK_VIA_OUTBOX provider=%s user=%s gb=%s purchase=%s job=%s done=%s",
+            provider, telegram_id, traffic_gb, purchase_id, provisioning_job_id, provisioning_done,
+        )
+    elif pack:
         traffic_bytes = pack["bytes"]
         try:
             baseline_bytes = await _get_current_bypass_bytes(telegram_id)
@@ -846,8 +1278,12 @@ async def _handle_traffic_pack_confirmation(
                 ))
             except Exception:
                 pass
-        except TransientPaymentError:
-            raise
+        except TransientPaymentError as tpe:
+            if not _is_bypass:
+                raise
+            # Bypass-only: the gift and the user message still go out (the GB
+            # line says "delayed"); raised at the end → the same admin alert.
+            _delivery_error = tpe
         except Exception as rmn_err:
             logger.error(
                 "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
@@ -872,41 +1308,52 @@ async def _handle_traffic_pack_confirmation(
             provider, telegram_id, traffic_gb, purchase_id,
         )
 
-    # Bypass-only: activate 3-day trial if eligible
-    _trial_activated = False
+    # Bypass-only GB purchase without a subscription (owner, 2026-09-14,
+    # docs/audit/SCOPE.md): the purchased GB + the trial's 3 days of premium as a
+    # ONE-TIME gift — regardless of the "trial" flag, without the trial's 500 MB.
+    # After the purchase commit; never raises (failure → forced alert + background
+    # retry). Outbox when the pack went through it (the gift job then queues behind
+    # the pack job, never racing it) or when the "trial" entry point is on.
+    _gift = None
     if _is_bypass:
-        try:
-            from app.services.trials import service as trial_service
-            if await trial_service.is_trial_available(telegram_id):
-                await trial_service.activate_trial(telegram_id)
-                _trial_activated = True
-                logger.info("BYPASS_TRIAL_ACTIVATED provider=%s user=%s", provider, telegram_id)
-        except Exception as trial_err:
-            logger.warning("BYPASS_TRIAL_FAIL provider=%s user=%s: %s", provider, telegram_id, trial_err)
+        from app.services import provisioning_flags
+        from app.services.trials import service as trial_service
+        _gift = await trial_service.grant_bypass_purchase_gift(
+            telegram_id, bot=bot, where=f"traffic_pack:{provider}:{purchase_id}",
+            via_outbox=provisioning_job_id is not None or provisioning_flags.is_on("trial"),
+        )
+        if _gift is not None:
+            logger.info(
+                "BYPASS_GIFT_GRANTED provider=%s user=%s premium_until=%s",
+                provider, telegram_id, _gift.subscription_end.isoformat(),
+            )
 
     if _is_bypass:
         text = i18n_get_text(language, "bypass.purchase_success", gb=traffic_gb)
-        if _trial_activated:
-            text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
+        if not rmn_success:
+            text += "\n\n" + i18n_get_text(language, "bypass.activation_delayed")
+        if _gift is not None:
+            text += "\n\n" + i18n_get_text(
+                language, "bypass.gift_premium_granted",
+                until=trial_service.format_gift_until(_gift.subscription_end),
+            )
     elif rmn_success:
         text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
     else:
         text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
         text += "\n\n⚠️ Активация трафика задерживается. Обратитесь в поддержку, если не применится в течение часа."
-        logger.error(
-            "TRAFFIC_PACK_NOT_APPLIED: provider=%s tg=%s gb=%s purchase=%s — needs manual resolution",
-            provider, telegram_id, traffic_gb, purchase_id,
-        )
-
-    if not rmn_success and _is_bypass:
-        text += "\n\n⚠️ Активация трафика задерживается. Обратитесь в поддержку, если не применится в течение часа."
+        if provisioning_job_id is None:  # outbox: the job retries and alerts itself
+            logger.error(
+                "TRAFFIC_PACK_NOT_APPLIED: provider=%s tg=%s gb=%s purchase=%s — needs manual resolution",
+                provider, telegram_id, traffic_gb, purchase_id,
+            )
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     if _is_bypass:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
-            [InlineKeyboardButton(text="🌐 Купить ещё ГБ", callback_data="buy_traffic")],
-            [InlineKeyboardButton(text="← На главную", callback_data="menu_main")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "bypass.btn_profile"), callback_data="menu_profile")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "bypass.btn_buy_more_gb"), callback_data="buy_traffic")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "bypass.btn_main_menu"), callback_data="menu_main")],
         ])
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -922,5 +1369,7 @@ async def _handle_traffic_pack_confirmation(
             "%s: failed to send traffic pack confirmation to user=%s: %s",
             provider, telegram_id, send_err,
         )
+    if _delivery_error is not None:
+        raise _delivery_error  # legacy GB not delivered → the caller's forced admin alert
 
 

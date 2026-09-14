@@ -185,8 +185,8 @@ def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) 
     # Lava-кнопка подменена на Wata (steam:pay:lava → steam:pay:wata).
     # Код lava_service не удаляем — оставляем гейт видимости.
     try:
-        import lava_service
-        if lava_service.is_enabled():
+        import wata_service
+        if wata_service.is_enabled():
             buttons.append([InlineKeyboardButton(
                 text="💳 Карта (Lava)",
                 callback_data="steam:pay:wata",
@@ -485,59 +485,6 @@ async def callback_steam_pay_card(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
     except Exception:
         pass
-
-
-# ── Payment: Lava ─────────────────────────────────────────────────────
-
-@steam_purchase_router.callback_query(
-    F.data == "steam:pay:lava",
-    StateFilter(SteamPurchaseState.choose_payment_method),
-)
-async def callback_steam_pay_lava(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    res = await _get_steam_fsm(callback, state)
-    if not res:
-        return
-    amount, login, price, language = res
-    telegram_id = callback.from_user.id
-
-    try:
-        import lava_service
-    except ImportError:
-        await callback.answer("Оплата недоступна", show_alert=True)
-        return
-    if not lava_service.is_enabled():
-        await callback.answer("Оплата временно недоступна", show_alert=True)
-        return
-
-    try:
-        purchase_id, _ = await _create_pending_purchase(telegram_id, login, amount, price)
-        invoice = await lava_service.create_invoice(
-            amount_rubles=float(price),
-            purchase_id=purchase_id,
-            comment=f"Steam {login} — {amount} ₽",
-        )
-        pay_url = (invoice or {}).get("url") or (invoice or {}).get("payment_url") or ""
-        if not pay_url:
-            await callback.message.answer("❌ Ошибка создания платежа.", parse_mode="HTML")
-            return
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить", url=pay_url)],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
-        ])
-        msg = await callback.bot.send_message(
-            telegram_id, i18n_get_text(language, "payment.invoice_timeout"),
-            reply_markup=kb, parse_mode="HTML",
-        )
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg.message_id))
-        await state.set_state(SteamPurchaseState.processing_payment)
-    except Exception as e:
-        logger.exception("STEAM_LAVA_ERROR user=%s err=%s", telegram_id, e)
-        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
 
 
 @steam_purchase_router.callback_query(

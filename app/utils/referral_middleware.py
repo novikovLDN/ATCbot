@@ -8,7 +8,6 @@ not just on /start command.
 from typing import Optional
 from aiogram.types import Update, Message, CallbackQuery
 import logging
-import database
 from app.services.referrals import process_referral_registration, ReferralState
 
 logger = logging.getLogger(__name__)

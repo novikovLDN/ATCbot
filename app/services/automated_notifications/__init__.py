@@ -12,6 +12,7 @@ from .registry import (
     all_specs,
 )
 from .helper import (
+    get_custom_notification_text,
     get_notification_text,
     is_notification_enabled,
     is_user_in_segment,
@@ -25,6 +26,7 @@ __all__ = [
     "REGISTRY",
     "register_notification",
     "all_specs",
+    "get_custom_notification_text",
     "get_notification_text",
     "is_notification_enabled",
     "is_user_in_segment",

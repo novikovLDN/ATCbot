@@ -1,5 +1,5 @@
 """
-Regression: платный подарок через ВНЕШНЮЮ оплату (platega/lava/cryptobot/wata)
+Regression: платный подарок через ВНЕШНЮЮ оплату (platega/cryptobot/wata)
 должен доставлять покупателю share-ссылку.
 
 Раньше confirmation.py не ветвил is_gift → покупатель получал обычное

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useIdempotencyKeys } from "@/hooks/useIdempotencyKeys";
 import {
   ArrowLeft,
   ArrowRight,
@@ -17,10 +18,37 @@ import {
   uploadBroadcastPhoto, uploadBroadcastAnimation,
 } from "@/lib/api";
 import { fmtNum } from "@/lib/format";
+import { cn } from "@/lib/cn";
 import { toast } from "@/store/toast";
 import { Spinner } from "@/components/Spinner";
+import { PageHeader, Surface } from "@/components/ui/Surface";
+import { IconButton, Segmented, StatusDot } from "@/components/ui/controls";
+import { ErrorState, Skeleton } from "@/components/ui/states";
 
 type Step = 1 | 2 | 3 | 4;
+
+/** Field caption above an input (replaces the old uppercase eyebrow). */
+const FIELD_LABEL = "t-mute mb-1.5 text-[13px]";
+/** A small chip that stays visible on a `bg-tile-3` row. */
+const CHIP = "badge bg-tile-1 t-mute";
+/** Selectable option row: shade marks the chosen one, no outline. */
+const optionRow = (active: boolean) =>
+  cn(
+    "flex cursor-pointer rounded-row text-[14px] transition-colors",
+    active ? "bg-tile-4 text-ink" : "bg-tile-3 hover:bg-tile-4",
+  );
+
+// Tag colours on v3 tokens — same set as TAG_COLOR_CLASSES in Broadcasts.tsx
+// (backend _VALID_TAG_COLORS). «yellow» is the cream brand accent in v3.
+const TAG_SWATCHES = [
+  { key: "gray", cls: "bg-ink/10 text-body" },
+  { key: "red", cls: "bg-danger/15 text-danger" },
+  { key: "orange", cls: "bg-warning/15 text-warning" },
+  { key: "yellow", cls: "bg-accent/15 text-accent" },
+  { key: "green", cls: "bg-success/15 text-success" },
+  { key: "blue", cls: "bg-info/15 text-info" },
+  { key: "purple", cls: "bg-special/15 text-special" },
+];
 
 const BUTTON_OPTIONS = [
   { key: "buy", label: "🛒 Купить" },
@@ -137,9 +165,23 @@ export function BroadcastCreate() {
     toast.info(`Клон рассылки #${cloneId} — измени и отправь`);
   }, [cloneSrc.data, cloneId]);
 
+  const submitKeys = useIdempotencyKeys();
   const create = useMutation({
-    mutationFn: () =>
-      endpoints.broadcastCreate({
+    mutationFn: (body: Parameters<typeof endpoints.broadcastCreate>[0]) =>
+      endpoints.broadcastCreate(body, submitKeys.opts("create", body)),
+    onSuccess: (data) => {
+      submitKeys.settle("create");
+      toast.success(
+        `Рассылка #${data.broadcast_id} запущена на ${fmtNum(data.audience)} получателей`,
+      );
+      navigate(`/broadcasts`);
+    },
+    onError: (e: unknown) => {
+      submitKeys.settle("create", e);
+      toast.error((e as ApiError)?.detail ?? "Не удалось запустить рассылку");
+    },
+  });
+  const createBody = (): Parameters<typeof endpoints.broadcastCreate>[0] => ({
         title,
         message,
         segment,
@@ -154,15 +196,6 @@ export function BroadcastCreate() {
           : null,
         tag: tag.trim() || null,
         tag_color: tag.trim() ? tagColor : null,
-      }),
-    onSuccess: (data) => {
-      toast.success(
-        `Рассылка #${data.broadcast_id} запущена на ${fmtNum(data.audience)} получателей`,
-      );
-      navigate(`/broadcasts`);
-    },
-    onError: (e: unknown) =>
-      toast.error((e as ApiError)?.detail ?? "Не удалось запустить рассылку"),
   });
 
   // Тест на админе: те же поля, но сообщение уходит ТОЛЬКО админу.
@@ -247,29 +280,24 @@ export function BroadcastCreate() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <header className="flex items-center justify-between">
-        <div>
+    <div className="mx-auto max-w-3xl">
+      <PageHeader
+        title="Новая рассылка"
+        actions={
           <button
             type="button"
             onClick={() => navigate("/broadcasts")}
-            className="btn-ghost mb-2 -ml-2"
+            className="btn-secondary"
           >
             <ArrowLeft className="h-3.5 w-3.5" /> К списку
           </button>
-          <h1 className="text-2xl font-semibold tracking-tight text-fg md:text-3xl">
-            Новая рассылка
-          </h1>
-        </div>
-        <Steps current={step} />
-      </header>
+        }
+      />
 
       {step === 1 && (
-        <StepCard title="Текст" subtitle="Заголовок виден только в админке. Сообщение — то, что увидит пользователь.">
+        <StepCard current={step} title="Текст" subtitle="Заголовок виден только в админке. Сообщение — то, что увидит пользователь.">
           <label className="block">
-            <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Заголовок (внутренний)
-            </div>
+            <div className={FIELD_LABEL}>Заголовок (внутренний)</div>
             <input
               className="input"
               value={title}
@@ -281,59 +309,53 @@ export function BroadcastCreate() {
           </label>
 
           <div>
-            <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Тег / метка (необязательно)
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className={FIELD_LABEL}>Тег / метка (необязательно)</div>
+            <div className="flex flex-wrap items-center gap-3">
               <input
                 type="text"
                 value={tag}
                 onChange={(e) => setTag(e.target.value)}
                 maxLength={40}
                 placeholder="летняя акция / реактивация / A-B тест"
-                className="input flex-1 min-w-[180px]"
+                className="input min-w-[180px] flex-1"
+                aria-label="Тег / метка"
               />
-              <div className="flex flex-wrap items-center gap-1">
-                {[
-                  { key: "gray", cls: "bg-fg/8 text-fg-muted" },
-                  { key: "red", cls: "bg-danger/15 text-danger" },
-                  { key: "orange", cls: "bg-warning/15 text-warning" },
-                  { key: "yellow", cls: "bg-[#F59E0B]/15 text-[#B45309]" },
-                  { key: "green", cls: "bg-success/15 text-success" },
-                  { key: "blue", cls: "bg-info/15 text-info" },
-                  { key: "purple", cls: "bg-special/15 text-special" },
-                ].map((c) => (
-                  <button
-                    type="button"
-                    key={c.key}
-                    onClick={() => setTagColor(c.key)}
-                    title={c.key}
-                    className={
-                      tagColor === c.key
-                        ? `rounded-md px-2 py-0.5 text-[10px] font-semibold ring-2 ring-accent/60 ${c.cls}`
-                        : `rounded-md px-2 py-0.5 text-[10px] font-medium opacity-60 hover:opacity-100 ${c.cls}`
-                    }
-                  >
-                    ●
-                  </button>
-                ))}
+              <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Цвет метки">
+                {TAG_SWATCHES.map((c) => {
+                  const active = tagColor === c.key;
+                  return (
+                    <button
+                      type="button"
+                      key={c.key}
+                      onClick={() => setTagColor(c.key)}
+                      title={c.key}
+                      aria-label={c.key}
+                      aria-pressed={active}
+                      className={cn(
+                        "tap-target grid h-7 w-7 place-items-center rounded-full text-[12px] font-semibold transition-opacity",
+                        c.cls,
+                        active ? "opacity-100" : "opacity-60 hover:opacity-100",
+                      )}
+                    >
+                      {active ? <CheckCircle2 className="h-3.5 w-3.5" /> : "●"}
+                    </button>
+                  );
+                })}
               </div>
             </div>
-            <p className="mt-1 text-[11px] text-fg-subtle">
+            <p className="t-mute mt-1.5 text-[12px] leading-4">
               Метка отображается chip'ом рядом с заголовком в списке рассылок.
               Помогает группировать по кампании/цели. Пусто = без тега.
             </p>
           </div>
           <label className="block">
-            <div className="mb-1.5 flex items-center justify-between text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              <span>Сообщение (HTML)</span>
+            <div className="mb-1.5 flex items-center justify-between gap-3 text-[13px]">
+              <span className="t-mute">Сообщение (HTML)</span>
               <span
-                className={
-                  "font-normal normal-case " +
-                  (photoFileId && message.length > 1024
-                    ? "text-warning"
-                    : "text-fg-subtle")
-                }
+                className={cn(
+                  "tabular text-[12px]",
+                  photoFileId && message.length > 1024 ? "text-warning" : "t-mute",
+                )}
               >
                 {message.length} / {photoFileId ? 1024 : 4000}
                 {photoFileId ? " (caption фото)" : ""}
@@ -347,7 +369,7 @@ export function BroadcastCreate() {
               placeholder="Поддерживается HTML: <b>жирный</b>, <i>курсив</i>, <a href=...>ссылки</a>, <blockquote>цитаты</blockquote>, <blockquote expandable>скрытая</blockquote>"
             />
             {photoFileId && message.length > 1024 && (
-              <p className="mt-1.5 text-xs text-warning">
+              <p className="mt-2 rounded-row bg-warning/15 px-3 py-2 text-[13px] leading-5 text-warning">
                 ⚠️ Caption у фото лимит 1024 символа. У тебя {message.length}.
                 Массовая рассылка упадёт. Либо убери фото, либо сократи текст.
                 «Тест на админе» автоматически разделит на 2 сообщения, чтобы
@@ -357,42 +379,34 @@ export function BroadcastCreate() {
           </label>
 
           <div>
-            <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Медиа (фото или GIF · необязательно)
-            </div>
+            <div className={FIELD_LABEL}>Медиа (фото или GIF · необязательно)</div>
             {/* Attached state — единый блок для photo или animation */}
             {(photoFileId || animationFileId) ? (
-              <div
-                className={
-                  photoFileId
-                    ? "flex items-center gap-3 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm"
-                    : "flex items-center gap-3 rounded-xl border border-info/30 bg-info/10 px-4 py-3 text-sm"
-                }
-              >
+              <div className="flex min-h-[52px] items-center gap-3 rounded-row bg-tile-3 py-2 pl-4 pr-2 text-[14px]">
                 {photoFileId ? (
-                  <CheckCircle2 className="h-4 w-4 text-success" />
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
                 ) : (
-                  <Film className="h-4 w-4 text-info" />
+                  <Film className="h-4 w-4 shrink-0 text-info" />
                 )}
-                <div className="flex-1 truncate text-fg">
+                <div className="flex-1 truncate">
                   {photoFileId ? "🖼 Фото прикреплено" : "🎬 GIF прикреплён"}
                 </div>
-                <button
-                  type="button"
+                <IconButton
+                  small
+                  label="Убрать медиа"
+                  className="bg-tile-1"
                   onClick={() => {
                     setPhotoFileId(null);
                     setAnimationFileId(null);
                   }}
-                  className="btn-ghost"
-                  aria-label="Убрать медиа"
                 >
                   <X className="h-3.5 w-3.5" />
-                </button>
+                </IconButton>
               </div>
             ) : (
               // Два параллельных выбора: фото ИЛИ GIF.
               <div className="grid gap-2 sm:grid-cols-2">
-                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-border bg-bg-subtle/40 px-4 py-4 text-sm text-fg-muted transition hover:border-fg-subtle hover:bg-bg-elevated/60">
+                <label className="t-body flex min-h-[52px] cursor-pointer items-center gap-3 rounded-row bg-tile-3 px-4 py-3 text-[14px] transition-colors hover:bg-tile-4">
                   {uploading ? <Spinner /> : <ImageIcon className="h-4 w-4" />}
                   <span className="flex-1">
                     {uploading ? "Загружаю..." : "🖼 Фото (≤10MB, jpg/png)"}
@@ -405,7 +419,7 @@ export function BroadcastCreate() {
                     onChange={(e) => onPickPhoto(e.target.files?.[0])}
                   />
                 </label>
-                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-border bg-bg-subtle/40 px-4 py-4 text-sm text-fg-muted transition hover:border-fg-subtle hover:bg-bg-elevated/60">
+                <label className="t-body flex min-h-[52px] cursor-pointer items-center gap-3 rounded-row bg-tile-3 px-4 py-3 text-[14px] transition-colors hover:bg-tile-4">
                   {uploadingAnimation ? <Spinner /> : <Film className="h-4 w-4" />}
                   <span className="flex-1">
                     {uploadingAnimation ? "Загружаю..." : "🎬 GIF/MP4 (≤20MB)"}
@@ -420,7 +434,7 @@ export function BroadcastCreate() {
                 </label>
               </div>
             )}
-            <p className="mt-1.5 text-[11px] text-fg-subtle">
+            <p className="t-mute mt-1.5 text-[12px] leading-4">
               Фото и GIF взаимно-эксклюзивные — при выборе одного второе
               сбрасывается. При загрузке бот отправит копию файла в твой
               Telegram — это нужно, чтобы получить <code>file_id</code>.
@@ -436,17 +450,24 @@ export function BroadcastCreate() {
       )}
 
       {step === 2 && (
-        <StepCard title="Аудитория" subtitle="Выбери сегмент. Счётчик обновляется в реальном времени.">
+        <StepCard current={step} title="Аудитория" subtitle="Выбери сегмент. Счётчик обновляется в реальном времени.">
           {segments.isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-fg-muted">
-              <Spinner /> Считаю аудиторию...
+            <div className="flex flex-col gap-2" role="status" aria-label="Считаю аудиторию...">
+              <div className="t-mute flex items-center gap-2 text-[13px]">
+                <Spinner /> Считаю аудиторию...
+              </div>
+              <Skeleton className="h-[52px] w-full rounded-row" />
+              <Skeleton className="h-[52px] w-full rounded-row" />
+              <Skeleton className="h-[52px] w-full rounded-row" />
             </div>
           ) : segments.isError ? (
-            <div className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
-              Не удалось загрузить сегменты.
-            </div>
+            <ErrorState
+              className="bg-tile-3"
+              error={segments.error}
+              onRetry={() => segments.refetch()}
+            />
           ) : (
-            <div className="space-y-4">
+            <div className="flex flex-col gap-5">
               {(() => {
                 const groups = new Map<string, typeof segments.data>();
                 for (const s of segments.data ?? []) {
@@ -456,20 +477,17 @@ export function BroadcastCreate() {
                 }
                 return Array.from(groups.entries()).map(([groupName, items]) => (
                   <section key={groupName}>
-                    <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-fg-subtle">
-                      {groupName}
-                    </div>
-                    <ul className="space-y-1.5">
+                    <h3 className="t-mute mb-2 text-[13px] font-medium">{groupName}</h3>
+                    <ul className="flex flex-col gap-2">
                       {(items ?? []).map((s) => (
                         <li key={s.key}>
                           <label
-                            className={
-                              segment === s.key
-                                ? "flex cursor-pointer items-start justify-between gap-3 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm transition"
-                                : "flex cursor-pointer items-start justify-between gap-3 rounded-xl border border-border bg-bg-card px-4 py-3 text-sm transition hover:border-fg-subtle hover:bg-bg-elevated/60"
-                            }
+                            className={cn(
+                              optionRow(segment === s.key),
+                              "items-start justify-between gap-3 px-4 py-3",
+                            )}
                           >
-                            <div className="flex items-start gap-3">
+                            <div className="flex min-w-0 items-start gap-3">
                               <input
                                 type="radio"
                                 name="segment"
@@ -479,15 +497,20 @@ export function BroadcastCreate() {
                                 className="mt-1 accent-accent"
                               />
                               <div className="min-w-0">
-                                <div className="font-medium text-fg">{s.label}</div>
+                                <div className="font-medium">{s.label}</div>
                                 {s.description && (
-                                  <div className="mt-0.5 text-xs leading-snug text-fg-muted">
+                                  <div className="t-mute mt-0.5 text-[12px] leading-snug">
                                     {s.description}
                                   </div>
                                 )}
                               </div>
                             </div>
-                            <span className="badge-muted shrink-0">
+                            <span
+                              className={cn(
+                                "tabular shrink-0",
+                                segment === s.key ? "badge-accent" : CHIP,
+                              )}
+                            >
                               <UsersIcon className="h-3 w-3" /> {fmtNum(s.count)}
                             </span>
                           </label>
@@ -509,6 +532,7 @@ export function BroadcastCreate() {
 
       {step === 3 && (
         <StepCard
+          current={step}
           title="Кнопки"
           subtitle="Появятся под сообщением. Можно ничего не выбирать — рассылка уйдёт без CTA."
         >
@@ -518,11 +542,10 @@ export function BroadcastCreate() {
               return (
                 <label
                   key={b.key}
-                  className={
-                    checked
-                      ? "flex cursor-pointer items-center gap-3 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2.5 text-sm transition"
-                      : "flex cursor-pointer items-center gap-3 rounded-xl border border-border bg-bg-card px-3 py-2.5 text-sm transition hover:border-fg-subtle"
-                  }
+                  className={cn(
+                    optionRow(checked),
+                    "min-h-[44px] items-center gap-3 px-3 py-2.5",
+                  )}
                 >
                   <input
                     type="checkbox"
@@ -533,22 +556,23 @@ export function BroadcastCreate() {
                     }}
                     className="accent-accent"
                   />
-                  <span className="text-fg">{b.label}</span>
+                  <span>{b.label}</span>
                 </label>
               );
             })}
           </div>
 
           {needsDiscountPercent && (
-            <div className="rounded-xl border border-warning/30 bg-warning/10 p-4">
-              <div className="text-xs font-medium uppercase tracking-wider text-warning">
+            <div className="rounded-row bg-tile-2 p-4">
+              <h3 className="flex items-center gap-2 text-[15px] font-semibold">
+                <StatusDot tone="warn" />
                 Параметры скидки {buttons.includes("promo_traffic")
                   ? "(для «Купить ГБ со скидкой»)"
                   : "(для «Купить со скидкой»)"}
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-2">
+              </h3>
+              <div className="mt-3 grid grid-cols-2 gap-2">
                 <label className="block">
-                  <div className="mb-1 text-xs text-fg-subtle">%</div>
+                  <div className={FIELD_LABEL}>%</div>
                   <input
                     className="input"
                     type="number"
@@ -564,7 +588,7 @@ export function BroadcastCreate() {
                   />
                 </label>
                 <label className="block">
-                  <div className="mb-1 text-xs text-fg-subtle">часов действия</div>
+                  <div className={FIELD_LABEL}>часов действия</div>
                   <input
                     className="input"
                     type="number"
@@ -586,31 +610,23 @@ export function BroadcastCreate() {
               только если админ выбрал эту кнопку в списке выше.
               Продолжительность 48ч зашита в коде callback'а. */}
           {buttons.includes("gift_reveal") && (
-            <div className="rounded-xl border border-accent/40 bg-accent/10 p-4">
-              <div className="text-xs font-medium uppercase tracking-wider text-accent">
+            <div className="rounded-row bg-tile-2 p-4">
+              <h3 className="text-[15px] font-semibold">
                 👀 Посмотреть подарок — скидка после reveal
+              </h3>
+              <div className="t-body mt-1 text-[13px]">
+                Действует <b className="font-semibold text-ink">48 часов</b> после клика. Выбери процент:
               </div>
-              <div className="mt-2 text-xs text-fg-muted">
-                Действует <b>48 часов</b> после клика. Выбери процент:
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {GIFT_REVEAL_PERCENT_CHOICES.map((p) => {
-                  const active = giftRevealPercent === p;
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setGiftRevealPercent(p)}
-                      className={
-                        active
-                          ? "rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-bg shadow-glow-sm"
-                          : "rounded-full border border-border bg-bg-card px-4 py-1.5 text-sm text-fg-muted hover:border-accent/40 hover:text-fg"
-                      }
-                    >
-                      {p} %
-                    </button>
-                  );
-                })}
+              <div className="mt-3">
+                <Segmented
+                  label="Процент скидки подарка"
+                  value={giftRevealPercent}
+                  options={GIFT_REVEAL_PERCENT_CHOICES.map((p) => ({
+                    value: p as number,
+                    label: `${p} %`,
+                  }))}
+                  onChange={setGiftRevealPercent}
+                />
               </div>
             </div>
           )}
@@ -627,51 +643,50 @@ export function BroadcastCreate() {
 
       {step === 4 && (
         <StepCard
+          current={step}
           title="Подтверждение"
           subtitle="Это уйдёт N юзерам прямо сейчас. Отменить нельзя."
         >
-          <div className="rounded-xl border border-border bg-bg-subtle/40 p-4">
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Сегмент
-            </div>
-            <div className="mt-1 text-base font-semibold text-fg">
+          <div className="rounded-row bg-tile-3 p-4">
+            <div className="t-mute text-[13px]">Сегмент</div>
+            <div className="mt-1 text-[15px] font-semibold">
               {segments.data?.find((x) => x.key === segment)?.label}
             </div>
-            <div className="mt-1 text-sm text-fg-muted">
-              <UsersIcon className="mr-1 inline h-3.5 w-3.5" />
-              <b>{fmtNum(audience)}</b> получателей
+            <div className="mt-3 flex flex-wrap items-baseline gap-x-2">
+              <span className="tabular track-metric text-[30px] font-semibold leading-9">
+                {fmtNum(audience)}
+              </span>
+              <span className="t-mute inline-flex items-center gap-1 text-[13px]">
+                <UsersIcon className="h-3.5 w-3.5" /> получателей
+              </span>
             </div>
           </div>
 
-          <div className="card p-4">
-            <div className="mb-2 text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Текст сообщения
-            </div>
+          <div className="rounded-row bg-tile-3 p-4">
+            <div className="t-mute mb-2 text-[13px]">Текст сообщения</div>
             <div
-              className="whitespace-pre-wrap text-sm leading-relaxed text-fg"
+              className="whitespace-pre-wrap text-[14px] leading-relaxed"
               dangerouslySetInnerHTML={{ __html: sanitize(message) }}
             />
             {photoFileId && (
-              <div className="mt-3 inline-flex items-center gap-1.5 text-xs text-success">
+              <div className="mt-3 inline-flex items-center gap-1.5 text-[12px] text-success">
                 <ImageIcon className="h-3 w-3" /> С фото
               </div>
             )}
             {animationFileId && (
-              <div className="mt-3 inline-flex items-center gap-1.5 text-xs text-info">
+              <div className="mt-3 inline-flex items-center gap-1.5 text-[12px] text-info">
                 <Film className="h-3 w-3" /> С GIF
               </div>
             )}
             {buttons.length > 0 && (
-              <div className="mt-3 space-y-1.5">
-                <div className="text-[11px] uppercase tracking-wider text-fg-subtle">
-                  Кнопки:
-                </div>
+              <div className="mt-3 flex flex-col gap-1.5">
+                <div className="t-mute text-[12px]">Кнопки:</div>
                 <div className="flex flex-wrap gap-1.5">
                   {buttons.map((b) => {
                     const label =
                       BUTTON_OPTIONS.find((x) => x.key === b)?.label ?? b;
                     return (
-                      <span key={b} className="badge-muted">
+                      <span key={b} className="badge bg-tile-1 t-body">
                         {label}
                       </span>
                     );
@@ -682,13 +697,13 @@ export function BroadcastCreate() {
           </div>
 
           {audience === 0 && (
-            <div className="flex items-center gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
-              <AlertCircle className="h-4 w-4" />
+            <div role="alert" className="flex items-center gap-2 rounded-row bg-danger/15 px-4 py-3 text-[14px] text-danger">
+              <AlertCircle className="h-4 w-4 shrink-0" />
               Аудитория пустая — отправлять некому.
             </div>
           )}
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <button
               type="button"
               onClick={() => setStep(3)}
@@ -713,7 +728,7 @@ export function BroadcastCreate() {
             </button>
             <button
               type="button"
-              onClick={() => create.mutate()}
+              onClick={() => create.mutate(createBody())}
               disabled={
                 create.isPending ||
                 testSelf.isPending ||
@@ -733,22 +748,23 @@ export function BroadcastCreate() {
 }
 
 function StepCard({
+  current,
   title,
   subtitle,
   children,
 }: {
+  current: Step;
   title: string;
   subtitle?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className="card space-y-4 p-5 md:p-6 animate-slide-up">
-      <div>
-        <h2 className="text-lg font-semibold text-fg">{title}</h2>
-        {subtitle && <p className="mt-1 text-sm text-fg-muted">{subtitle}</p>}
-      </div>
-      {children}
-    </div>
+    <Surface className="animate-slide-up md:p-6" label={title} aside={<Steps current={current} />}>
+      {subtitle && (
+        <p className="t-mute -mt-1 mb-5 max-w-[65ch] text-[13px] leading-5">{subtitle}</p>
+      )}
+      <div className="flex flex-col gap-5">{children}</div>
+    </Surface>
   );
 }
 
@@ -760,35 +776,38 @@ function Steps({ current }: { current: Step }) {
     { n: 4, label: "Запуск" },
   ];
   return (
-    <div className="hidden items-center gap-1.5 md:flex">
+    <ol className="hidden items-center gap-1.5 md:flex" aria-label="Шаги">
       {steps.map((s, i) => (
-        <div key={s.n} className="flex items-center gap-1.5">
-          <div
-            className={
+        <li
+          key={s.n}
+          className="flex items-center gap-1.5"
+          aria-current={s.n === current ? "step" : undefined}
+        >
+          <span
+            className={cn(
+              "tabular grid h-6 w-6 place-items-center rounded-full text-[12px] font-semibold",
               s.n === current
-                ? "grid h-6 w-6 place-items-center rounded-full bg-accent text-[11px] font-semibold text-white"
+                ? "bg-accent text-onaccent"
                 : s.n < current
-                ? "grid h-6 w-6 place-items-center rounded-full bg-success/15 text-[11px] font-semibold text-success ring-1 ring-success/30"
-                : "grid h-6 w-6 place-items-center rounded-full bg-bg-elevated text-[11px] font-semibold text-fg-subtle ring-1 ring-border"
-            }
+                ? "bg-tile-4 text-ink"
+                : "t-mute bg-tile-3",
+            )}
           >
             {s.n}
-          </div>
+          </span>
           <span
             className={
-              s.n === current
-                ? "text-xs font-medium text-fg"
-                : "text-xs text-fg-subtle"
+              s.n === current ? "text-[12px] font-medium text-ink" : "t-mute text-[12px]"
             }
           >
             {s.label}
           </span>
           {i < steps.length - 1 && (
-            <div className="mx-1 h-px w-4 bg-border" />
+            <span className="mx-1 h-px w-4 bg-tile-4" aria-hidden="true" />
           )}
-        </div>
+        </li>
       ))}
-    </div>
+    </ol>
   );
 }
 
@@ -804,7 +823,7 @@ function Nav({
   nextLabel?: string;
 }) {
   return (
-    <div className="flex items-center justify-between pt-2">
+    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
       <button type="button" onClick={onBack} className="btn-secondary">
         <ArrowLeft className="h-3.5 w-3.5" /> Назад
       </button>

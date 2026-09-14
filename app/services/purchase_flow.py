@@ -28,8 +28,11 @@ caller (see database/subscriptions.py:grant_access).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 import uuid as uuid_lib
+from collections import deque
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -89,12 +92,6 @@ def _bypass_bytes_for(
         return int(table)
     # Last resort: 10 GB.
     return 10 * (1024 ** 3)
-
-
-def _device_limit_for(tariff: str) -> int:
-    """Premium device limit from existing DEVICE_LIMITS table."""
-    limits = getattr(config, "DEVICE_LIMITS", {}) or {}
-    return int(limits.get(tariff, 5))
 
 
 def _looks_like_uuid(s: Optional[str]) -> bool:
@@ -165,7 +162,7 @@ async def provision_subscription(
 
     if existing_premium_uuid:
         # Renewal: PATCH expireAt.  Bypass entity is handled below independently.
-        renewed = await remnawave_premium.renew_premium_user(telegram_id, subscription_end)
+        renewed = await remnawave_premium.renew_premium_user(telegram_id, subscription_end, tier=tariff)
         if not renewed:
             logger.warning(
                 "PURCHASE_FLOW: premium renew returned False — falling back to create-flow tg=%s",
@@ -181,6 +178,7 @@ async def provision_subscription(
             requested_uuid=requested_uuid,
             expire_at=subscription_end,
             description=f"Premium via bot ({tariff})",
+            tier=tariff,   # devices by tariff (owner 2026-09-14)
         )
         if not result.ok:
             raise RuntimeError(f"premium provision failed: status={result.status} error={result.error}")
@@ -262,7 +260,11 @@ async def provision_subscription(
                 pass
         else:
             bypass_sub_url = bresult.subscription_url
-            bypass_created_fresh = True
+            # Only a real POST-create carries the final limit. An ADOPTED
+            # entity (recovered: the DB cache was empty, the panel already had
+            # it) keeps its old trafficLimitBytes — confirmation must top it up
+            # or the paid GB are lost (docs/audit/07_e2e.md, E2E-BYPASS-ADOPT).
+            bypass_created_fresh = not bresult.recovered
         if bresult.ok:
             try:
                 await database.set_remnawave_bypass_cache(
@@ -352,11 +354,28 @@ async def sync_renewal_to_remnawave(sync_info: dict) -> None:
 
     Простая логика: renewal = продлить срок на premium. Всё.
     Bypass GB — отдельная зона ответственности confirmation.py.
+
+    Сбой (docs/audit/03_payment_matrix.md, баг M-RENEW-SYNC): БД уже продлена,
+    а панель — нет («подписка до 20 окт., купил месяц, в панели 20 окт.»).
+    Раньше это оставалось только в логе, а ретрай вебхука после commit упирается
+    в already_processed и панель не трогает. Теперь: строка payment_errors +
+    алерт админу (force, с бюджетом) + ОДНА фоновая пересинхронизация к
+    ТЕКУЩЕЙ дате БД (никогда не ниже и не выше БД). Исключение пробрасывается —
+    семантика вызывающих не меняется.
     """
+    try:
+        await _sync_renewal_once(sync_info)
+    except Exception as e:
+        await _report_renewal_sync_failure(sync_info, e, final=False)
+        _schedule_renewal_resync(sync_info)
+        raise
+
+
+async def _sync_renewal_once(sync_info: dict) -> None:
     from app.services import remnawave_premium
     tg = int(sync_info["telegram_id"])
     new_expire = sync_info["subscription_end"]
-    ok = await remnawave_premium.renew_premium_user(tg, new_expire)
+    ok = await remnawave_premium.renew_premium_user(tg, new_expire, tier=sync_info.get("tariff"))
     if not ok:
         # Premium entity не найден — вызовем полный provision, который
         # создаст premium (и bypass если нужно) через preflight+adopt.
@@ -376,6 +395,178 @@ async def sync_renewal_to_remnawave(sync_info: dict) -> None:
         )
 
 
+# ── renewal sync failure: alert + one background re-sync (legacy path) ──────
+#
+# Only the legacy (flag-off) renewal path comes here; the provisioning outbox
+# has its own retry + alerts. Delays are short on purpose: a panel hiccup is the
+# usual cause. The re-sync target is re-read from the DB each time, so a later
+# renewal that already moved the panel forward is never undone.
+
+RESYNC_DELAYS_S = (60, 300, 900)
+ALERT_WINDOW_S = 300.0
+ALERT_FORCED_PER_WINDOW = 5
+
+_forced_alert_times: "deque[float]" = deque()
+_resync_tasks: dict = {}          # telegram_id → pending re-sync task (one per user)
+
+
+async def _resync_sleep(seconds: float) -> None:
+    """Separate hook so tests can control the re-sync timing."""
+    await asyncio.sleep(seconds)
+
+
+def _take_forced_alert_slot() -> bool:
+    """At most ALERT_FORCED_PER_WINDOW forced alerts per window; the rest go on
+    the category cooldown (every failure is still in payment_errors)."""
+    now = time.monotonic()
+    while _forced_alert_times and now - _forced_alert_times[0] >= ALERT_WINDOW_S:
+        _forced_alert_times.popleft()
+    if len(_forced_alert_times) >= ALERT_FORCED_PER_WINDOW:
+        return False
+    _forced_alert_times.append(now)
+    return True
+
+
+def _alert_bot():
+    for module_name in ("app.api.payment_webhook", "app.api.telegram_webhook"):
+        try:
+            import importlib
+            bot = getattr(importlib.import_module(module_name), "_bot", None)
+        except Exception:
+            bot = None
+        if bot is not None:
+            return bot
+    return None
+
+
+def _fmt_dt(value) -> str:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return str(value)
+
+
+async def _report_renewal_sync_failure(sync_info: dict, err: Optional[BaseException], *, final: bool) -> None:
+    """payment_errors row + admin alert. Never raises. No secrets in the text."""
+    tg = sync_info.get("telegram_id")
+    end = sync_info.get("subscription_end")
+    err_text = f"{type(err).__name__}: {err}" if err is not None else "unknown"
+    logger.critical(
+        "RENEWAL_SYNC_%s: tg=%s db_expires=%s tariff=%s period_days=%s err=%s",
+        "GAVE_UP" if final else "FAILED", tg, _fmt_dt(end), sync_info.get("tariff"),
+        sync_info.get("period_days"), err_text,
+    )
+    try:
+        import database
+        await database.log_payment_error(
+            stage="renewal_sync",
+            telegram_id=int(tg) if tg is not None else None,
+            error_code="renewal_sync_gave_up" if final else "renewal_sync_failed",
+            error_message=err_text[:500],
+            raw_payload={
+                "subscription_end": _fmt_dt(end),
+                "tariff": sync_info.get("tariff"),
+                "period_days": sync_info.get("period_days"),
+            },
+        )
+    except Exception as e:
+        logger.warning("RENEWAL_SYNC_PAYMENT_ERROR_LOG_FAILED: tg=%s %s", tg, e)
+    bot = _alert_bot()
+    if bot is None:
+        logger.error("RENEWAL_SYNC_ALERT_NO_BOT: tg=%s", tg)
+        return
+    if final:
+        head = "Premium STILL NOT extended in the panel (automatic re-sync gave up)"
+        action = "Action: set the premium expireAt in the panel to the DB date above."
+    else:
+        head = "Premium NOT extended in the panel after a renewal (DB is extended)"
+        action = "Automatic re-sync to the DB date is scheduled; you get another alert if it fails."
+    text = "\n".join([
+        head,
+        f"user: tg:{tg}",
+        f"DB expires_at: {_fmt_dt(end)}",
+        f"tariff: {sync_info.get('tariff')}, +{sync_info.get('period_days')}d",
+        f"error: {err_text[:300]}",
+        action,
+    ])
+    try:
+        from app.services import admin_alerts
+        sent = await admin_alerts.send_alert(bot, "payment", text, force=final or _take_forced_alert_slot())
+        if sent and tg is not None:
+            # P2-25: the delayed legacy check must not alert this premium problem again.
+            from app.services.payments import verify_delivery
+            verify_delivery.note_alerted(int(tg), "premium")
+    except Exception as e:
+        logger.warning("RENEWAL_SYNC_ALERT_FAILED: tg=%s %s", tg, e)
+
+
+async def _renewal_resync_target(telegram_id: int) -> Optional[datetime]:
+    """The DB expires_at of a still-active subscription (panel must equal it), else None."""
+    import database
+    sub = await database.get_subscription_any(telegram_id)
+    if not sub or sub.get("status") != "active" or sub.get("is_bypass_only"):
+        return None
+    exp = sub.get("expires_at")
+    if not isinstance(exp, datetime):
+        return None
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    return exp if exp > datetime.now(timezone.utc) else None
+
+
+async def _renewal_resync(sync_info: dict) -> bool:
+    """Background re-sync after a failed renewal sync. True = panel updated."""
+    tg = int(sync_info["telegram_id"])
+    last_err: Optional[BaseException] = None
+    for delay in RESYNC_DELAYS_S:
+        await _resync_sleep(delay)
+        try:
+            target = await _renewal_resync_target(tg)
+            if target is None:
+                logger.warning("RENEWAL_RESYNC_SKIPPED: tg=%s — subscription no longer active", tg)
+                return False
+            await _sync_renewal_once({**sync_info, "subscription_end": target})
+        except Exception as e:  # noqa: BLE001 — retried, then alerted
+            last_err = e
+            logger.warning("RENEWAL_RESYNC_ATTEMPT_FAILED: tg=%s %s: %s", tg, type(e).__name__, e)
+            continue
+        logger.warning("RENEWAL_RESYNC_RECOVERED: tg=%s expireAt=%s", tg, _fmt_dt(target))
+        bot = _alert_bot()
+        if bot is not None:
+            try:
+                from app.services import admin_alerts
+                await admin_alerts.send_alert(
+                    bot, "payment",
+                    f"Premium re-sync recovered\nuser: tg:{tg}\nexpireAt: {_fmt_dt(target)}",
+                    force=False,
+                )
+            except Exception:
+                pass
+        return True
+    await _report_renewal_sync_failure(sync_info, last_err, final=True)
+    return False
+
+
+def _schedule_renewal_resync(sync_info: dict) -> None:
+    """One pending background re-sync per user (a later failure reuses it: the
+    target is re-read from the DB anyway)."""
+    try:
+        tg = int(sync_info["telegram_id"])
+        if tg in _resync_tasks and not _resync_tasks[tg].done():
+            return
+        task = asyncio.get_running_loop().create_task(_renewal_resync(dict(sync_info)))
+    except Exception as e:  # no running loop / bad payload — the alert is already out
+        logger.warning("RENEWAL_RESYNC_NOT_SCHEDULED: %s", e)
+        return
+    _resync_tasks[tg] = task
+
+    def _forget(done_task, _tg=tg):
+        if _resync_tasks.get(_tg) is done_task:
+            _resync_tasks.pop(_tg, None)
+    task.add_done_callback(_forget)
+
+
 async def _notify_admin_bypass_failed(
     telegram_id: int,
     tariff: str,
@@ -384,28 +575,39 @@ async def _notify_admin_bypass_failed(
 ) -> None:
     """DM админу что bypass не создался — premium у юзера работает,
     но bypass tier требует ручной добэкфилл (кнопка в dashboard
-    users → tools или через reconciliation flow)."""
+    users → tools или через reconciliation flow).
+
+    08 #25: plain text through admin_alerts (budget + digest) — the panel's
+    answer used to go into HTML unescaped, and a «<» in it (an nginx error
+    page) made Telegram reject the alert; plus a payment_errors row."""
     try:
-        import config
-        from aiogram import Bot
-        from app.api import telegram_webhook
-        bot: Optional[Bot] = getattr(telegram_webhook, "_bot", None)
-        if bot is None or not config.ADMIN_TELEGRAM_ID:
-            return
-        text = (
-            "⚠️ <b>Bypass не создался</b>\n"
-            f"User: <code>tg:{telegram_id}</code>\n"
-            f"Tariff: <b>{tariff}</b>\n"
-            f"Status: <code>{status}</code>\n"
-            f"<i>{(error or 'unknown')[:180]}</i>\n\n"
-            "Premium ключ у юзера работает. Bypass добэкфилить "
-            "через дашборд Юзеры → карточка → «Резолв bypass»."
+        import database
+        await database.log_payment_error(
+            stage="bypass_create_failed",
+            telegram_id=telegram_id,
+            error_code=str(status)[:120],
+            error_message=(error or "unknown")[:500],
+            raw_payload={"tariff": tariff},
         )
-        await bot.send_message(
-            chat_id=config.ADMIN_TELEGRAM_ID,
-            text=text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
+    except Exception as e:
+        logger.warning("bypass-fail payment_errors row failed: %s", type(e).__name__)
+    try:
+        from app.services import admin_alerts
+        bot = _alert_bot()
+        if bot is None:
+            logger.error("BYPASS_CREATE_FAILED_ALERT_NO_BOT: tg=%s", telegram_id)
+            return
+        await admin_alerts.send_alert(
+            bot, "vpn_api",
+            "\n".join([
+                "Bypass NOT created (the premium key works)",
+                f"user: tg:{telegram_id}",
+                f"tariff: {tariff}",
+                f"status: {status}",
+                f"error: {(error or 'unknown')[:300]}",
+                "Action: dashboard → Юзеры → карточка → «Резолв bypass».",
+            ]),
+            force=_take_forced_alert_slot(),
         )
     except Exception as e:
         logger.warning("bypass-fail admin-notify failed: %s", e)

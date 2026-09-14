@@ -122,27 +122,8 @@ async def list_applications(
         return []
 
 
-async def has_applied(telegram_id: int, program: str = "vpn_innovator") -> bool:
-    """Быстрая проверка — заявлялся ли юзер."""
-    if not _core.DB_READY:
-        return False
-    pool = await _core.get_pool()
-    if pool is None:
-        return False
-    try:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT 1 FROM beta_applications WHERE telegram_id = $1 AND program = $2",
-                telegram_id, program,
-            )
-            return row is not None
-    except Exception:
-        return False
-
-
 __all__ = [
     "record_application",
     "count_applications",
     "list_applications",
-    "has_applied",
 ]

@@ -166,25 +166,6 @@ async def ensure_pair(telegram_id: int) -> Optional[str]:
     return build_public_url(token)
 
 
-async def get_url(telegram_id: int) -> Optional[str]:
-    """Return the aggregator URL for the user, if the row already exists.
-    Fast read path — doesn't touch upstream URLs; use ensure_pair() to
-    create/refresh the row after purchases/renewals."""
-    if not is_enabled_for(telegram_id):
-        return None
-    pool = await database.get_pool()
-    if pool is None:
-        return None
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT token, status FROM sub_pairs WHERE telegram_id = $1",
-            telegram_id,
-        )
-    if not row or row.get("status") != "active":
-        return None
-    return build_public_url(row["token"])
-
-
 async def reissue_token(telegram_id: int) -> Optional[str]:
     """Перевыпустить aggregator-ссылку юзера: генерим НОВЫЙ token, обновляем
     его строку в sub_pairs. Старая ссылка (старый token) сразу перестаёт
@@ -307,7 +288,6 @@ __all__ = [
     "is_enabled_for",
     "build_public_url",
     "ensure_pair",
-    "get_url",
     "reissue_token",
     "revoke",
     "invalidate",

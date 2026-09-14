@@ -1,5 +1,5 @@
 """
-Database operations: Admin, Analytics, Broadcasts, Exports, Gifts, VIP, Discounts.
+Database operations: Admin, Analytics, Broadcasts, Exports, Gifts, Discounts.
 
 All shared state (get_pool, helpers) imported from database.core.
 DB_READY accessed via _core.DB_READY to get live value (not stale import-time copy).
@@ -7,22 +7,18 @@ Cross-module calls use lazy imports to avoid circular dependencies.
 """
 import asyncpg
 import logging
-import random
 import uuid as uuid_lib
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import config
-import vpn_utils
 import database.core as _core
 from database.core import (
     get_pool,
     _to_db_utc, _from_db_utc, _ensure_utc,
-    _generate_subscription_uuid, safe_int,
-    retry_async,
 )
 
 if TYPE_CHECKING:
-    from aiogram import Bot
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -148,17 +144,27 @@ async def get_user_extended_stats(telegram_id: int) -> Dict[str, Any]:
                  AND action_type IN ('reissue','manual_reissue')""",
             telegram_id,
         )
-        # Финансы — approved-платежи по всем типам (подписки/трафик/etc).
-        # amount_kopecks * 0.01 = рубли; NULLs исключаем.
+        # Финансы — оплаченные покупки по всем типам.
+        #
+        # Колонки называются price_kopecks и created_at. Запрос обращался к
+        # amount_kopecks и paid_at — таких колонок в pending_purchases нет
+        # (paid_at существует только в payments, миграция 023), поэтому
+        # эндпоинт /users/{id}/extended-stats всегда падал с
+        # UndefinedColumnError, и карточка пользователя не открывалась.
+        #
+        # balance_topup исключён: пополнение баланса — это перекладывание
+        # денег внутрь кошелька, а не покупка. Иначе оно считается дважды:
+        # один раз как пополнение, второй — когда юзер тратит этот баланс.
         pay_row = await conn.fetchrow(
             """SELECT
                    COUNT(*) AS n,
-                   COALESCE(SUM(amount_kopecks), 0)::BIGINT AS total_kopecks,
-                   MIN(paid_at) AS first_paid_at,
-                   MAX(paid_at) AS last_paid_at
+                   COALESCE(SUM(price_kopecks), 0)::BIGINT AS total_kopecks,
+                   MIN(created_at) AS first_paid_at,
+                   MAX(created_at) AS last_paid_at
                FROM pending_purchases
                WHERE telegram_id = $1
-                 AND status = 'paid'""",
+                 AND status = 'paid'
+                 AND purchase_type <> 'balance_topup'""",
             telegram_id,
         )
         total_payments = int(pay_row["n"] or 0) if pay_row else 0
@@ -286,31 +292,45 @@ async def get_business_metrics() -> Dict[str, Any]:
         }
 
 
-async def get_last_audit_logs(limit: int = 10) -> list:
+async def get_last_audit_logs(limit: int = 10, telegram_id: Optional[int] = None) -> list:
     """Получить последние записи из audit_log
-    
+
     Args:
         limit: Количество записей для получения (по умолчанию 10)
-    
+        telegram_id: Если задан — только записи, где юзер участвует.
+            Матчим по ОБЕИМ колонкам: target_user (над кем действие) и
+            telegram_id (кто действовал). Иначе в карточке юзера пропали
+            бы vpn-lifecycle события, где актор и цель — он сам, а в
+            логе админа — его собственные действия.
+
     Returns:
         Список словарей с записями audit_log, отсортированных по created_at DESC
     """
     if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), get_last_audit_logs skipped")
         return []
-    
+
     pool = await get_pool()
     if pool is None:
         return []
-    
+
     try:
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """SELECT * FROM audit_log 
-                   ORDER BY created_at DESC 
-                   LIMIT $1""",
-                limit
-            )
+            if telegram_id is not None:
+                rows = await conn.fetch(
+                    """SELECT * FROM audit_log
+                       WHERE target_user = $2 OR telegram_id = $2
+                       ORDER BY created_at DESC
+                       LIMIT $1""",
+                    limit, telegram_id
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT * FROM audit_log
+                       ORDER BY created_at DESC
+                       LIMIT $1""",
+                    limit
+                )
             return [dict(row) for row in rows]
     except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"audit_log table missing or inaccessible — skipping: {e}")
@@ -787,43 +807,6 @@ async def get_revenue_for_period(
             for r in by_type_rows
         },
     }
-
-
-async def get_payments_by_provider(hours: int) -> list:
-    """Breakdown of paid purchases by payment_provider.
-
-    Uses the payment_provider column (migration 054) when present.
-    NULL rows are bucketed as 'unknown' so old data is still visible.
-    """
-    pool = await get_pool()
-    if pool is None:
-        return []
-    since = _to_db_utc(datetime.now(timezone.utc) - timedelta(hours=hours))
-    async with pool.acquire() as conn:
-        try:
-            rows = await conn.fetch(
-                """SELECT
-                       COALESCE(payment_provider, 'unknown') AS provider,
-                       COUNT(*)::BIGINT AS count,
-                       COALESCE(SUM(price_kopecks), 0)::BIGINT AS revenue_kopecks
-                   FROM pending_purchases
-                   WHERE status = 'paid' AND created_at >= $1
-                   GROUP BY provider
-                   ORDER BY revenue_kopecks DESC""",
-                since,
-            )
-        except asyncpg.UndefinedColumnError:
-            # Migration 054 not applied yet — return only what we can
-            # infer from payments table.
-            rows = []
-    return [
-        {
-            "provider": r["provider"],
-            "count": int(r["count"]),
-            "revenue_rubles": int(r["revenue_kopecks"]) / 100,
-        }
-        for r in rows
-    ]
 
 
 async def get_payments_breakdown(hours: int) -> Dict[str, Any]:
@@ -1441,14 +1424,6 @@ async def get_extended_bot_stats() -> Dict[str, Any]:
         }
 
 
-async def get_all_users_telegram_ids() -> list:
-    """Получить список всех Telegram ID пользователей"""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT telegram_id FROM users")
-        return [row["telegram_id"] for row in rows]
-
-
 async def get_eligible_no_subscription_broadcast_users() -> list:
     """Get users eligible for no-subscription broadcast.
     Eligible = no active paid subscription, no active trial, is_reachable=TRUE.
@@ -1491,83 +1466,34 @@ async def get_eligible_no_subscription_broadcast_users() -> list:
         return [{"telegram_id": row["telegram_id"]} for row in rows]
 
 
-async def check_user_still_eligible_for_no_sub_broadcast(conn, telegram_id: int, now: datetime) -> bool:
-    """Race-condition re-check before sending. Returns True if still eligible."""
-    from database.subscriptions import get_active_paid_subscription
-    paid = await get_active_paid_subscription(conn, telegram_id, now)
-    if paid:
-        return False
-    try:
-        row = await conn.fetchrow(
-            "SELECT trial_expires_at, is_reachable FROM users WHERE telegram_id = $1",
-            telegram_id
-        )
-    except asyncpg.UndefinedColumnError:
-        row = await conn.fetchrow(
-            "SELECT trial_expires_at FROM users WHERE telegram_id = $1",
-            telegram_id
-        )
-    if not row:
-        return False
-    trial_expires_at = row.get("trial_expires_at")
-    if trial_expires_at:
-        trial_expires_at_utc = _from_db_utc(trial_expires_at)
-        now_utc = now if (getattr(now, "tzinfo", None) is not None) else datetime.now(timezone.utc)
-        if trial_expires_at_utc > now_utc:
-            return False
-    is_reachable = row.get("is_reachable")
-    if is_reachable is False:
-        return False
-    return True
-
-
-async def insert_admin_broadcast_record(
-    broadcast_type: str,
-    total_recipients: int,
-    success_count: int = 0,
-    fail_count: int = 0
-) -> Optional[int]:
-    """Insert admin_broadcasts record. Returns id or None."""
-    if not _core.DB_READY:
-        return None
-    try:
-        pool = await get_pool()
-        if pool is None:
-            return None
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """INSERT INTO admin_broadcasts (type, total_recipients, success_count, fail_count)
-                   VALUES ($1, $2, $3, $4) RETURNING id""",
-                broadcast_type, total_recipients, success_count, fail_count
-            )
-            return row["id"] if row else None
-    except asyncpg.UndefinedTableError:
-        logger.debug("admin_broadcasts table not found, skipping audit")
-        return None
-    except Exception as e:
-        logger.warning(f"Failed to insert admin_broadcast record: {e}")
-        return None
-
-
-async def update_admin_broadcast_record(broadcast_id: int, success_count: int, fail_count: int) -> None:
-    """Update admin_broadcasts record after completion."""
-    if not _core.DB_READY or broadcast_id is None:
-        return
-    try:
-        pool = await get_pool()
-        if pool is None:
-            return
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """UPDATE admin_broadcasts
-                   SET success_count = $1, fail_count = $2 WHERE id = $3""",
-                success_count, fail_count, broadcast_id
-            )
-    except Exception as e:
-        logger.warning(f"Failed to update admin_broadcast record: {e}")
-
-
 async def get_users_by_segment(segment: str) -> list:
+    """Получатели рассылки по сегменту — БЕЗ недоступных пользователей.
+
+    HOW_IT_WORKS P2: рассылки уходили и тем, кто заблокировал бота
+    (users.is_reachable = FALSE, его ставит safe_send_message), по 3 попытки на
+    каждого. Фильтр — один запрос для всех сегментов; нет колонки
+    (старая схема) — список без фильтра, как раньше.
+    """
+    ids = await _segment_user_ids(segment)
+    if not ids:
+        return ids
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT telegram_id FROM users WHERE telegram_id = ANY($1::bigint[]) AND is_reachable = FALSE",
+                list(ids),
+            )
+    except Exception as e:
+        logger.warning("BROADCAST_REACHABLE_FILTER_SKIPPED segment=%s: %s", segment, e)
+        return ids
+    unreachable = {r["telegram_id"] for r in rows}
+    if unreachable:
+        logger.info("BROADCAST_SEGMENT_UNREACHABLE_SKIPPED segment=%s skipped=%s", segment, len(unreachable))
+    return [tg for tg in ids if tg not in unreachable]
+
+
+async def _segment_user_ids(segment: str) -> list:
     """Получить список Telegram ID пользователей по сегменту
 
     Args:
@@ -1985,14 +1911,6 @@ async def get_users_by_segment(segment: str) -> list:
                     )"""
             )
             return [row["telegram_id"] for row in rows]
-        elif segment == "vip_active":
-            # VIP-пользователи (users.is_vip=TRUE) — для эксклюзивных
-            # приглашений/апселлов/фидбека.
-            rows = await conn.fetch(
-                """SELECT telegram_id FROM users
-                   WHERE is_vip = TRUE"""
-            )
-            return [row["telegram_id"] for row in rows]
         elif segment == "combo_active":
             # Активные подписки типа combo_basic / combo_plus — целевая
             # для апселла на большие GB-паки обхода / доп. устройств.
@@ -2302,23 +2220,6 @@ async def mark_broadcast_messages_deleted(broadcast_id: int) -> None:
         )
 
 
-async def get_ab_test_broadcasts() -> list:
-    """Получить список всех A/B тестов (уведомлений с is_ab_test = true)
-    
-    Returns:
-        Список словарей с данными A/B тестов, отсортированных по created_at DESC
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT id, title, created_at 
-               FROM broadcasts 
-               WHERE is_ab_test = TRUE 
-               ORDER BY created_at DESC"""
-        )
-        return [dict(row) for row in rows]
-
-
 async def get_incident_settings() -> Dict[str, Any]:
     """Получить настройки инцидента
     
@@ -2387,73 +2288,6 @@ async def set_incident_mode(is_active: bool, incident_text: Optional[str] = None
         logger.warning(f"Error setting incident mode: {e}")
 
 
-async def get_ab_test_stats(broadcast_id: int) -> Optional[Dict[str, Any]]:
-    """Получить статистику A/B теста
-    
-    Args:
-        broadcast_id: ID уведомления (должно быть A/B тестом)
-    
-    Returns:
-        Словарь с статистикой:
-        - variant_a_sent: количество отправок варианта A
-        - variant_b_sent: количество отправок варианта B
-        - variant_a_failed: количество неудачных отправок варианта A
-        - variant_b_failed: количество неудачных отправок варианта B
-        - total_sent: общее количество отправленных
-        - total: общее количество (sent + failed)
-        Или None, если данных недостаточно
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Проверяем, что это A/B тест
-        broadcast = await conn.fetchrow(
-            "SELECT is_ab_test FROM broadcasts WHERE id = $1", broadcast_id
-        )
-        if not broadcast or not broadcast["is_ab_test"]:
-            return None
-        
-        # Статистика по варианту A
-        variant_a_sent = await conn.fetchval(
-            "SELECT COUNT(*) FROM broadcast_log WHERE broadcast_id = $1 AND variant = 'A' AND status = 'sent'",
-            broadcast_id
-        )
-        variant_a_failed = await conn.fetchval(
-            "SELECT COUNT(*) FROM broadcast_log WHERE broadcast_id = $1 AND variant = 'A' AND status = 'failed'",
-            broadcast_id
-        )
-        
-        # Статистика по варианту B
-        variant_b_sent = await conn.fetchval(
-            "SELECT COUNT(*) FROM broadcast_log WHERE broadcast_id = $1 AND variant = 'B' AND status = 'sent'",
-            broadcast_id
-        )
-        variant_b_failed = await conn.fetchval(
-            "SELECT COUNT(*) FROM broadcast_log WHERE broadcast_id = $1 AND variant = 'B' AND status = 'failed'",
-            broadcast_id
-        )
-        
-        variant_a_sent = variant_a_sent or 0
-        variant_a_failed = variant_a_failed or 0
-        variant_b_sent = variant_b_sent or 0
-        variant_b_failed = variant_b_failed or 0
-        
-        total_sent = variant_a_sent + variant_b_sent
-        total_failed = variant_a_failed + variant_b_failed
-        total = total_sent + total_failed
-        
-        if total == 0:
-            return None
-        
-        return {
-            "variant_a_sent": variant_a_sent,
-            "variant_b_sent": variant_b_sent,
-            "variant_a_failed": variant_a_failed,
-            "variant_b_failed": variant_b_failed,
-            "total_sent": total_sent,
-            "total": total
-        }
-
-
 async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_id: int, tariff: str = "basic") -> Tuple[datetime, str]:
     """Атомарно выдать доступ пользователю на N дней (админ)
 
@@ -2475,7 +2309,24 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
         Exception: При любых ошибках (транзакция откатывается, исключение пробрасывается)
         Гарантированно возвращает значения или выбрасывает исключение. Никогда не возвращает None.
     """
-    from database.subscriptions import grant_access, _log_audit_event_atomic, _log_subscription_history_atomic
+    from database.subscriptions import grant_access
+    from app.services import provisioning_flags
+
+    if provisioning_flags.is_on("admin"):
+        # T13: premium only, 0 GB (§G0), panel work via the provisioning outbox.
+        from app.services import tariffs
+        tariff_out = (tariff or "basic").strip().lower()
+        if tariff_out not in config.VALID_SUBSCRIPTION_TYPES:
+            tariff_out = "basic"
+        return await _admin_grant_outbox(
+            telegram_id,
+            duration=timedelta(days=days),
+            admin_telegram_id=admin_telegram_id,
+            tariff=tariff_out,
+            admin_grant_days=days,
+            ent=tariffs.for_grant(tariff_out, days),
+            reason="admin_grant_days",
+        )
 
     duration = timedelta(days=days)
     now_pre = datetime.now(timezone.utc)
@@ -2598,35 +2449,10 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                             "forcing Phase 1 on attempt 2"
                         )
                     else:
-                        if uuid_to_cleanup_on_failure:
-                            try:
-                                await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                                logger.critical(
-                                    f"ORPHAN_PREVENTED uuid={uuid_to_cleanup_on_failure[:8]}... "
-                                    f"reason=admin_grant_access_atomic_tx_failed user={telegram_id} error={e}"
-                                )
-                            except Exception as remove_err:
-                                logger.critical(
-                                    f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_to_cleanup_on_failure[:8]}... "
-                                    f"reason={remove_err} user={telegram_id}"
-                                )
                         logger.exception(f"Error in admin_grant_access_atomic for user {telegram_id}, transaction rolled back")
                         raise
                 except Exception as e:
                     last_error = e
-                    if uuid_to_cleanup_on_failure:
-                        try:
-                            await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                            logger.critical(
-                                f"ORPHAN_PREVENTED uuid={uuid_preview} reason=admin_grant_access_atomic_tx_failed "
-                                f"user={telegram_id} error={e}"
-                            )
-                        except Exception as remove_err:
-                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                            logger.critical(
-                                f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} user={telegram_id}"
-                            )
                     logger.exception(f"Error in admin_grant_access_atomic for user {telegram_id}, transaction rolled back")
                     raise
 
@@ -2643,16 +2469,6 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
         # means the retry loop fell through without a success. Surface
         # whatever error we saved.
         raise last_error or RuntimeError("admin_grant_access_atomic: unknown failure")
-    if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
-        old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
-        try:
-            await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
-            logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
-        except Exception as e:
-            logger.critical(
-                "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
-                extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
-            )
     if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
         sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
         try:
@@ -2663,7 +2479,127 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                 "RENEWAL_REMNAWAVE_SYNC_FAILED",
                 extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
             )
+    from app.services.payments import verify_delivery  # legacy: delayed panel check, alert-only
+    verify_delivery.schedule_legacy_check(telegram_id, source="admin_grant", ref=f"admin:{admin_telegram_id}:{days}d")
     return ret_val
+
+
+async def _admin_grant_outbox(
+    telegram_id: int,
+    *,
+    duration: timedelta,
+    admin_telegram_id: int,
+    tariff: str,
+    admin_grant_days: Optional[int],
+    ent,
+    reason: str,
+) -> Tuple[datetime, str]:
+    """T13 (docs/audit/02_payment_core_plan.md §A flow 6, §G0): admin grant via
+    the provisioning outbox. ONE transaction, zero HTTP:
+    grant_access(defer_panel=True, source="admin") → provisioning.enqueue.
+    After commit: provisioning.run_now (never raises). No Phase-1 provisioning,
+    no sync_renewal_to_remnawave, no bypass GB (ent.bypass_bytes == 0).
+
+    Idempotency key: no row the grant writes has a usable id (subscription_history
+    is skipped for a pending activation and its INSERT returns no id; audit_log
+    likewise), so the key is a uuid4 generated ONCE per call. That is safe: this
+    path runs its transaction exactly once (no automatic retry loop), and each
+    admin entry point calls it once per confirmed action (the flex-grant handler
+    claims its FSM state against double clicks).
+
+    Returns (expires_at, vpn_key) like the legacy path; vpn_key is re-read after
+    run_now, so it is "" only while a new issuance is still pending.
+    """
+    from app.services import provisioning
+    from database.subscriptions import grant_access
+
+    key = f"admin:{uuid_lib.uuid4().hex}"
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            result = await grant_access(
+                telegram_id=telegram_id,
+                duration=duration,
+                source="admin",
+                admin_telegram_id=admin_telegram_id,
+                admin_grant_days=admin_grant_days,
+                conn=conn,
+                pre_provisioned_uuid=None,
+                _caller_holds_transaction=True,
+                tariff=tariff,
+                defer_panel=True,
+            )
+            expires_at = result["subscription_end"]
+            if not expires_at:
+                raise ValueError(f"grant_access returned invalid result: expires_at={expires_at}")
+            job_id = await provisioning.enqueue(
+                conn,
+                key=key,
+                telegram_id=telegram_id,
+                ent=ent,
+                premium_until=expires_at,
+                source="admin",
+                context={
+                    "admin_id": int(admin_telegram_id),
+                    "reason": reason,
+                    "tariff": tariff,
+                    "duration_s": int(duration.total_seconds()),
+                    "action": result.get("action"),
+                },
+            )
+    logger.info(
+        f"{reason}: SUCCESS_OUTBOX [admin={admin_telegram_id}, user={telegram_id}, key={key}, "
+        f"job={job_id}, duration={duration}, expires_at={expires_at.isoformat()}, action={result.get('action')}]"
+    )
+    # Committed. Fast path; on failure the job stays queued (worker + alert).
+    await provisioning.run_now(job_id)
+
+    vpn_key = result.get("vless_url") or ""
+    if not vpn_key:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT vpn_key FROM subscriptions WHERE telegram_id = $1", telegram_id)
+        vpn_key = (row.get("vpn_key") if row else None) or ""
+    return expires_at, vpn_key
+
+
+# P1-2: a double tap on «Оплатить с баланса» with a Redis FSM passes the
+# handler's FSM guard twice (read state → write state = two round trips).
+# While holding the per-user advisory lock, a second IDENTICAL purchase
+# (same user, tariff_period, amount) committed within this window is refused
+# before any debit.
+BALANCE_PURCHASE_DEDUP_WINDOW_S = 60
+
+
+class DuplicateBalancePurchase(ValueError):
+    """finalize_balance_purchase: an identical balance purchase of this user was
+    committed a moment ago (double tap). Nothing debited — user-side, no alert."""
+
+
+async def _reject_duplicate_balance_purchase(conn, telegram_id: int, tariff_str: str,
+                                             amount_kopecks: int) -> None:
+    """Call inside the billing transaction, AFTER pg_advisory_xact_lock(telegram_id):
+    the first tap has committed by then, so its payments row is visible.
+
+    Only rows WITHOUT purchase_id count (balance purchases / auto-renewals insert
+    none; every provider / Telegram payment has one): a provider payment of the
+    same tariff a moment ago is not a double tap (E2E-DEDUP-FP)."""
+    previous = await conn.fetchrow(
+        """SELECT id FROM payments
+           WHERE telegram_id = $1 AND tariff = $2 AND amount = $3 AND status = 'approved'
+             AND purchase_id IS NULL
+             AND created_at > NOW() - make_interval(secs => $4)
+           ORDER BY id DESC LIMIT 1""",
+        telegram_id, tariff_str, amount_kopecks, float(BALANCE_PURCHASE_DEDUP_WINDOW_S),
+    )
+    if previous:
+        logger.warning(
+            "BALANCE_PURCHASE_DUPLICATE_REJECTED user=%s tariff=%s amount=%s previous_payment=%s",
+            telegram_id, tariff_str, amount_kopecks, previous["id"],
+        )
+        raise DuplicateBalancePurchase(
+            f"Duplicate balance purchase within {BALANCE_PURCHASE_DEDUP_WINDOW_S}s: user={telegram_id}, "
+            f"tariff={tariff_str}, previous payment_id={previous['id']}"
+        )
 
 
 async def finalize_balance_purchase(
@@ -2673,11 +2609,17 @@ async def finalize_balance_purchase(
     amount_rubles: float,
     description: Optional[str] = None,
     promo_code: Optional[str] = None,
-    country: Optional[str] = None
+    country: Optional[str] = None,
+    is_combo: bool = False,
 ) -> Dict[str, Any]:
     """
     Атомарно обработать покупку подписки с баланса.
-    
+
+    T10: при USE_NEW_PROVISIONING=on для entrypoint "balance" работает
+    _finalize_balance_purchase_outbox (выдача через provisioning outbox,
+    is_combo выбирает тариф combo_*). Флаг выключен → поведение прежнее,
+    is_combo игнорируется.
+
     Выполняет в одной транзакции:
     - Списывает баланс
     - Активирует подписку
@@ -2719,9 +2661,25 @@ async def finalize_balance_purchase(
     if pool is None:
         raise RuntimeError("Database pool is not available")
 
+    from app.services import provisioning_flags
+    if provisioning_flags.is_on("balance"):
+        return await _finalize_balance_purchase_outbox(
+            pool,
+            telegram_id=telegram_id,
+            tariff_type=tariff_type,
+            period_days=period_days,
+            amount_rubles=amount_rubles,
+            amount_kopecks=amount_kopecks,
+            description=description,
+            promo_code=promo_code,
+            country=country,
+            is_combo=is_combo,
+        )
+
     duration = timedelta(days=period_days)
     now_pre = datetime.now(timezone.utc)
-    subscription_end_pre = now_pre + duration
+    from app.services.tariffs import extend_expiry as _extend_expiry
+    subscription_end_pre = _extend_expiry(now_pre, period_days)  # calendar months
 
     # PHASE 1 (outside DB transaction): Provision UUID via VPN API if new issuance needed
     pre_provisioned_uuid = None
@@ -2777,6 +2735,10 @@ async def finalize_balance_purchase(
                     "SELECT pg_advisory_xact_lock($1)",
                     telegram_id
                 )
+                await _reject_duplicate_balance_purchase(
+                    conn, telegram_id, f"{tariff_type}_{period_days}", amount_kopecks,
+                )
+
                 
                 # STEP 1: Проверяем и списываем баланс (SELECT FOR UPDATE для блокировки строки)
                 row = await conn.fetchrow(
@@ -2827,6 +2789,7 @@ async def finalize_balance_purchase(
                     _caller_holds_transaction=True,
                     tariff=tariff_type or "basic",
                     country=country,
+                    tariff_period_days=period_days,
                 )
 
                 expires_at = grant_result["subscription_end"]
@@ -2903,31 +2866,8 @@ async def finalize_balance_purchase(
                     "referral_reward": referral_reward_result,
                     "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
                 }
-        except Exception as e:
-            if uuid_to_cleanup_on_failure:
-                try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                    logger.critical(
-                        f"ORPHAN_PREVENTED uuid={uuid_preview} reason=finalize_balance_purchase_tx_failed "
-                        f"user={telegram_id} error={e}"
-                    )
-                except Exception as remove_err:
-                    uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                    logger.critical(
-                        f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} user={telegram_id}"
-                    )
+        except Exception:
             raise
-        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
-            old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
-            try:
-                await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
-                logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
-            except Exception as rem_err:
-                logger.critical(
-                    "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
-                    extra={"uuid": old_uuid[:8] + "...", "error": str(rem_err)[:200]}
-                )
         if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
             sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
             try:
@@ -2938,7 +2878,177 @@ async def finalize_balance_purchase(
                     "RENEWAL_REMNAWAVE_SYNC_FAILED",
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
+        if ret_val:  # legacy: delayed panel check (premium; bypass GB come from the handler), alert-only
+            from app.services.payments import verify_delivery
+            verify_delivery.schedule_legacy_check(telegram_id, source="balance", ref=f"balance_purchase_{ret_val.get('payment_id')}", expect_bypass=True)
         return ret_val
+
+
+async def _finalize_balance_purchase_outbox(
+    pool,
+    *,
+    telegram_id: int,
+    tariff_type: str,
+    period_days: int,
+    amount_rubles: float,
+    amount_kopecks: int,
+    description: Optional[str],
+    promo_code: Optional[str],
+    country: Optional[str],
+    is_combo: bool,
+) -> Dict[str, Any]:
+    """T10 (docs/audit/02_payment_core_plan.md §A flow 3): balance purchase via
+    the provisioning outbox. ONE transaction, zero HTTP:
+    advisory lock → debit → promo → grant_access(defer_panel) → payments →
+    referral → is_combo → provisioning.enqueue("balance:{payment_id}").
+    After commit: provisioning.run_now (never raises).
+
+    No Phase-1 panel provisioning and no "vpn_key is missing" failure: with the
+    panel down a new issuance stays activation_status='pending' (the handler
+    shows payment.pending_activation), the job retries in the worker + alert.
+    Same return shape as finalize_balance_purchase + "provisioning_job_id".
+    """
+    from app.services import provisioning, tariffs
+    from database.subscriptions import grant_access
+    from database.users import process_referral_reward
+
+    tariff_norm = (tariff_type or "basic").strip().lower()
+    # Resolved BEFORE any debit: a bad tariff/period raises TariffConfigError
+    # with nothing charged. Legacy biz_* counts as Plus (tariffs.normalize_tier).
+    ent = tariffs.for_purchase(tariffs.tariff_key(tariff_norm, is_combo), period_days)
+    duration = timedelta(days=period_days)
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+            await _reject_duplicate_balance_purchase(
+                conn, telegram_id, f"{tariff_type}_{period_days}", amount_kopecks,
+            )
+
+            row = await conn.fetchrow(
+                "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                telegram_id
+            )
+            if not row:
+                raise ValueError(f"User {telegram_id} not found")
+            current_balance = row["balance"]
+            if current_balance < amount_kopecks:
+                raise ValueError(
+                    f"Insufficient balance: {current_balance} < {amount_kopecks} "
+                    f"(user={telegram_id}, required={amount_rubles:.2f} RUB)"
+                )
+
+            await conn.execute(
+                "UPDATE users SET balance = $1 WHERE telegram_id = $2",
+                current_balance - amount_kopecks, telegram_id
+            )
+            transaction_description = description or f"Оплата подписки {tariff_type} на {period_days} дней"
+            await conn.execute(
+                """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+                   VALUES ($1, $2, $3, $4, $5)""",
+                telegram_id, -amount_kopecks, "subscription_payment", "subscription_payment", transaction_description
+            )
+
+            if promo_code:
+                from database.subscriptions import _consume_promo_in_transaction
+                await _consume_promo_in_transaction(conn, promo_code, telegram_id, None)
+
+            grant_result = await grant_access(
+                telegram_id=telegram_id,
+                duration=duration,
+                source="payment",
+                admin_telegram_id=None,
+                admin_grant_days=None,
+                conn=conn,
+                pre_provisioned_uuid=None,
+                _caller_holds_transaction=True,
+                tariff=tariff_type or "basic",
+                country=country,
+                defer_panel=True,
+                tariff_period_days=period_days,
+            )
+            expires_at = grant_result["subscription_end"]
+            if not expires_at:
+                raise ValueError(f"grant_access returned invalid result: expires_at={expires_at}")
+            action = grant_result.get("action")
+            is_renewal = action == "renewal"
+
+            payment_id = await conn.fetchval(
+                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
+                telegram_id, f"{tariff_type}_{period_days}", amount_kopecks
+            )
+            if not payment_id:
+                raise ValueError(f"Failed to create payment record for user {telegram_id}")
+
+            purchase_id = f"balance_purchase_{payment_id}"
+            try:
+                referral_reward_result = await process_referral_reward(
+                    buyer_id=telegram_id,
+                    purchase_id=purchase_id,
+                    amount_rubles=amount_rubles,
+                    conn=conn
+                )
+            except Exception as e:
+                logger.error(
+                    f"finalize_balance_purchase: Referral reward financial error "
+                    f"(transaction will rollback): user={telegram_id}, purchase_id={purchase_id}, error={e}"
+                )
+                raise
+
+            if is_combo:
+                # Same column/value as database.set_combo_flag, inside the billing tx.
+                await conn.execute(
+                    "UPDATE subscriptions SET is_combo = TRUE WHERE telegram_id = $1", telegram_id
+                )
+
+            job_id = await provisioning.enqueue(
+                conn,
+                key=f"balance:{payment_id}",
+                telegram_id=telegram_id,
+                ent=ent,
+                premium_until=expires_at,
+                source="balance",
+                context={
+                    "payment_id": int(payment_id),
+                    "tariff": tariff_type,
+                    "period_days": int(period_days),
+                    "is_combo": bool(is_combo),
+                    "amount_kopecks": int(amount_kopecks),
+                    "action": action,
+                },
+            )
+
+            new_balance_kopecks = await conn.fetchval(
+                "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+            )
+            new_balance = (new_balance_kopecks or 0) / 100.0
+
+            # The pending branch of grant_access carries no subscription_type.
+            subscription_type_ret = (grant_result.get("subscription_type") or tariff_norm).strip().lower()
+            if subscription_type_ret not in config.VALID_SUBSCRIPTION_TYPES:
+                subscription_type_ret = "basic"
+            ret_val = {
+                "success": True,
+                "payment_id": payment_id,
+                "expires_at": expires_at,
+                "vpn_key": grant_result.get("vless_url") or grant_result.get("vpn_key") or "",
+                "vpn_key_plus": grant_result.get("vpn_key_plus") or grant_result.get("vless_url_plus"),
+                "is_renewal": is_renewal,
+                "subscription_type": subscription_type_ret,
+                "new_balance": new_balance,
+                "referral_reward": referral_reward_result,
+                "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
+                "provisioning_job_id": job_id,
+            }
+
+    logger.info(
+        f"finalize_balance_purchase: SUCCESS_OUTBOX [user={telegram_id}, payment_id={payment_id}, "
+        f"job={job_id}, tariff={ent.tariff_key}, period={period_days}, amount={amount_rubles:.2f} RUB, "
+        f"expires_at={expires_at.isoformat()}, action={action}, new_balance={new_balance:.2f} RUB]"
+    )
+    # Committed. Fast path; on failure the job stays queued (worker + alert).
+    await provisioning.run_now(job_id)
+    return ret_val
 
 
 async def finalize_balance_topup(
@@ -2982,8 +3092,6 @@ async def finalize_balance_topup(
         ValueError: При некорректной сумме или отсутствии provider_charge_id
         asyncpg exceptions: При финансовых ошибках (откат транзакции)
     """
-    from database.users import process_referral_reward
-
     if amount_rubles <= 0:
         raise ValueError(f"Invalid amount for balance topup: {amount_rubles}")
 
@@ -3005,6 +3113,8 @@ async def finalize_balance_topup(
             # Defensive check: ensure idempotency columns exist before querying
             provider_column_map = {
                 'telegram': 'telegram_payment_charge_id',
+                # Stars charge ids are Telegram charge ids (same column, same idempotency check)
+                'telegram_stars': 'telegram_payment_charge_id',
                 'cryptobot': 'cryptobot_payment_id',
                 'platega': 'platega_payment_id',
                 'crypto2328': 'crypto2328_payment_id',
@@ -3087,7 +3197,7 @@ async def finalize_balance_topup(
                 )
                 VALUES (
                     $1, $2, $3, 'approved',
-                    CASE WHEN $4 = 'telegram' THEN $5 ELSE NULL END,
+                    CASE WHEN $4 IN ('telegram', 'telegram_stars') THEN $5 ELSE NULL END,
                     CASE WHEN $4 = 'cryptobot' THEN $5 ELSE NULL END,
                     CASE WHEN $4 = 'platega' THEN $5 ELSE NULL END,
                     CASE WHEN $4 = 'crypto2328' THEN $5 ELSE NULL END
@@ -3123,20 +3233,8 @@ async def finalize_balance_topup(
             purchase_id = f"balance_topup_{payment_id}"
             referral_reward_result = None
             
-            try:
-                referral_reward_result = await process_referral_reward(
-                    buyer_id=telegram_id,
-                    purchase_id=purchase_id,
-                    amount_rubles=amount_rubles,
-                    conn=conn
-                )
-            except Exception as e:
-                # FINANCIAL errors propagate and rollback transaction
-                logger.error(
-                    f"finalize_balance_topup: Referral reward financial error "
-                    f"(transaction will rollback): user={telegram_id}, purchase_id={purchase_id}, error={e}"
-                )
-                raise
+            # Owner rule 2026-09-14 (N17): NO referral cashback for a balance
+            # top-up — the purchase later paid from this balance earns it.
             
             # STEP 8: Получаем новый баланс
             new_balance_kopecks = await conn.fetchval(
@@ -3180,7 +3278,22 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
         Exception: При любых ошибках (транзакция откатывается, исключение пробрасывается)
         Гарантированно возвращает значения или выбрасывает исключение. Никогда не возвращает None.
     """
-    from database.subscriptions import grant_access, _log_audit_event_atomic, _log_subscription_history_atomic
+    from database.subscriptions import grant_access
+    from app.services import provisioning_flags
+
+    if provisioning_flags.is_on("admin"):
+        # T13: exact premium_until (no rounding to days), 0 GB, via the outbox.
+        # tariff "basic" = the grant_access default this function uses today.
+        from app.services import tariffs
+        return await _admin_grant_outbox(
+            telegram_id,
+            duration=timedelta(minutes=minutes),
+            admin_telegram_id=admin_telegram_id,
+            tariff="basic",
+            admin_grant_days=None,
+            ent=tariffs.for_grant_duration("basic", timedelta(minutes=minutes)),
+            reason="admin_grant_minutes",
+        )
 
     duration = timedelta(minutes=minutes)
     now_pre = datetime.now(timezone.utc)
@@ -3285,35 +3398,10 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
                             "forcing Phase 1 on attempt 2"
                         )
                     else:
-                        if uuid_to_cleanup_on_failure:
-                            try:
-                                await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                                logger.critical(
-                                    f"ORPHAN_PREVENTED uuid={uuid_to_cleanup_on_failure[:8]}... "
-                                    f"reason=admin_grant_access_minutes_atomic_tx_failed user={telegram_id} error={e}"
-                                )
-                            except Exception as remove_err:
-                                logger.critical(
-                                    f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_to_cleanup_on_failure[:8]}... "
-                                    f"reason={remove_err} user={telegram_id}"
-                                )
                         logger.exception(f"Error in admin_grant_access_minutes_atomic for user {telegram_id}, transaction rolled back")
                         raise
                 except Exception as e:
                     last_error = e
-                    if uuid_to_cleanup_on_failure:
-                        try:
-                            await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                            logger.critical(
-                                f"ORPHAN_PREVENTED uuid={uuid_preview} reason=admin_grant_access_minutes_tx_failed "
-                                f"user={telegram_id} error={e}"
-                            )
-                        except Exception as remove_err:
-                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                            logger.critical(
-                                f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} user={telegram_id}"
-                            )
                     logger.exception(f"Error in admin_grant_access_minutes_atomic for user {telegram_id}, transaction rolled back")
                     raise
 
@@ -3324,16 +3412,6 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
 
     if ret_val is None:
         raise last_error or RuntimeError("admin_grant_access_minutes_atomic: unknown failure")
-    if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
-        old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
-        try:
-            await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
-            logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
-        except Exception as e:
-            logger.critical(
-                "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
-                extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
-            )
     if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
         sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
         try:
@@ -3344,7 +3422,50 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
                 "RENEWAL_REMNAWAVE_SYNC_FAILED",
                 extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
             )
+    from app.services.payments import verify_delivery  # legacy: delayed panel check, alert-only
+    verify_delivery.schedule_legacy_check(telegram_id, source="admin_grant", ref=f"admin:{admin_telegram_id}:{minutes}min")
     return ret_val
+
+
+async def _disable_premium_after_revoke(telegram_id: int, admin_telegram_id: int) -> None:
+    """Admin revoke must cut VPN access in the panel too (after commit — no
+    HTTP inside the DB transaction). Before this, revoke only expired the DB
+    row: the premium entity kept its expireAt and the key kept working.
+
+    The entity is addressed by the cached premium uuid, or by our username when
+    the cache is empty (first legacy purchase, docs/audit/07_e2e.md E2E-CACHE).
+    Paid bypass GB are not touched. Not confirmed → forced admin alert.
+    """
+    if not config.REMNAWAVE_ENABLED:
+        return
+    try:
+        from app.services import remnawave_api, remnawave_premium
+        if await remnawave_premium.disable_premium_user(telegram_id):
+            return
+        ent = await remnawave_api.find_user_by_username(
+            remnawave_premium.build_premium_username(telegram_id))
+        if ent and ent.get("id") is not None:
+            if await remnawave_api.update_user(int(ent["id"]), status="DISABLED") is not None:
+                logger.info("ADMIN_REVOKE_PREMIUM_DISABLED: tg=%s id=%s (by username)", telegram_id, ent["id"])
+                return
+        reason = "premium entity not found or the panel refused status=DISABLED"
+    except Exception as e:
+        reason = f"{type(e).__name__}: {e}"
+    logger.critical("ADMIN_REVOKE_PANEL_NOT_DISABLED: tg=%s admin=%s %s", telegram_id, admin_telegram_id, reason)
+    try:
+        from app.services import admin_alerts
+        from app.services.purchase_flow import _alert_bot
+        bot = _alert_bot()
+        if bot is not None:
+            await admin_alerts.send_alert(
+                bot, "admin_revoke",
+                f"Admin revoke: the subscription of {telegram_id} is expired in the DB, but the "
+                f"premium entity in Remnawave was NOT disabled ({reason}). The VPN key may keep "
+                "working until its expireAt — disable it in the panel.",
+                force=True,
+            )
+    except Exception as e:
+        logger.error("ADMIN_REVOKE_ALERT_FAILED: tg=%s %s", telegram_id, e)
 
 
 async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -> bool:
@@ -3408,19 +3529,11 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
                 logger.info(f"Admin {admin_telegram_id} revoked access for user {telegram_id}")
                 ret = True
                 
-            except Exception as e:
+            except Exception:
                 logger.exception(f"Error in admin_revoke_access_atomic for user {telegram_id}, transaction rolled back")
                 raise
-        # PHASE 2 (outside transaction): Remove UUID from Xray API
-        if uuid_to_remove:
-            try:
-                await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_remove)
-                logger.info("ADMIN_REVOKE_UUID_REMOVED", extra={"uuid": uuid_to_remove[:8] + "..."})
-            except Exception as e:
-                logger.critical(
-                    "ADMIN_REVOKE_UUID_REMOVAL_FAILED",
-                    extra={"uuid": uuid_to_remove[:8] + "...", "error": str(e)[:200]}
-                )
+    if ret:
+        await _disable_premium_after_revoke(telegram_id, admin_telegram_id)
     return ret
 
 
@@ -3456,7 +3569,8 @@ async def get_user_discount(telegram_id: int, conn: Optional[asyncpg.Connection]
         return dict(row) if row else None
 
 
-async def create_user_discount(telegram_id: int, discount_percent: int, expires_at: Optional[datetime], created_by: int) -> bool:
+async def create_user_discount(telegram_id: int, discount_percent: int, expires_at: Optional[datetime], created_by: int,
+                               keep_max: bool = False) -> bool:
     """Создать или обновить персональную скидку пользователя
 
     Args:
@@ -3464,22 +3578,36 @@ async def create_user_discount(telegram_id: int, discount_percent: int, expires_
         discount_percent: Процент скидки (10, 15, 25, и т.д.)
         expires_at: Дата истечения скидки (None для бессрочной)
         created_by: Telegram ID администратора, создавшего скидку
-    
+        keep_max: кнопки, которые жмёт пользователь (−15 %, скидки из рассылок):
+            действующая БОЛЬШАЯ скидка не перезаписывается (HOW_IT_WORKS P2).
+            Истёкшая или меньшая — заменяется. Админ из дашборда — без флага
+            (ставит ровно то, что выбрал).
+
     Returns:
-        True если успешно, False в случае ошибки
+        True если успешно (в т.ч. когда осталась бо́льшая скидка), False в случае ошибки
     """
     from database.subscriptions import _log_audit_event_atomic
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         try:
-            await conn.execute(
+            result = await conn.execute(
                 """INSERT INTO user_discounts (telegram_id, discount_percent, expires_at, created_by)
                    VALUES ($1, $2, $3, $4)
                    ON CONFLICT (telegram_id)
-                   DO UPDATE SET discount_percent = $2, expires_at = $3, created_by = $4, created_at = CURRENT_TIMESTAMP""",
-                telegram_id, discount_percent, _to_db_utc(expires_at) if expires_at else None, created_by
+                   DO UPDATE SET discount_percent = $2, expires_at = $3, created_by = $4, created_at = CURRENT_TIMESTAMP
+                   WHERE NOT $5
+                      OR user_discounts.discount_percent <= EXCLUDED.discount_percent
+                      OR (user_discounts.expires_at IS NOT NULL AND user_discounts.expires_at <= $6)""",
+                telegram_id, discount_percent, _to_db_utc(expires_at) if expires_at else None, created_by,
+                keep_max, _to_db_utc(datetime.now(timezone.utc)),
             )
+            if keep_max and str(result).endswith(" 0"):
+                logger.info(
+                    "USER_DISCOUNT_KEPT_BIGGER user=%s offered=%s%% (existing active discount is bigger)",
+                    telegram_id, discount_percent,
+                )
+                return True
 
             # Логируем создание/обновление скидки
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if expires_at else "бессрочно"
@@ -3597,229 +3725,9 @@ async def delete_user_discount(telegram_id: int, deleted_by: int) -> bool:
             return False
 
 
-# ==================== ФУНКЦИИ ДЛЯ РАБОТЫ С VIP-СТАТУСОМ ====================
-
-async def is_vip_user(telegram_id: int, conn: Optional[asyncpg.Connection] = None) -> bool:
-    """Проверить, является ли пользователь VIP
-    
-    Args:
-        telegram_id: Telegram ID пользователя
-        conn: Опциональное соединение (если передано — используется оно, без pool.acquire)
-    
-    Returns:
-        True если пользователь VIP, False иначе
-    """
-    if conn is not None:
-        row = await conn.fetchrow(
-            "SELECT telegram_id FROM vip_users WHERE telegram_id = $1",
-            telegram_id
-        )
-        return row is not None
-    pool = await get_pool()
-    async with pool.acquire() as acquired:
-        row = await acquired.fetchrow(
-            "SELECT telegram_id FROM vip_users WHERE telegram_id = $1",
-            telegram_id
-        )
-        return row is not None
-
-
-async def grant_vip_status(telegram_id: int, granted_by: int) -> bool:
-    """Назначить VIP-статус пользователю
-
-    Args:
-        telegram_id: Telegram ID пользователя
-        granted_by: Telegram ID администратора, назначившего VIP
-
-    Returns:
-        True если успешно, False в случае ошибки
-    """
-    from database.subscriptions import _log_audit_event_atomic
-
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        try:
-            await conn.execute(
-                """INSERT INTO vip_users (telegram_id, granted_by)
-                   VALUES ($1, $2)
-                   ON CONFLICT (telegram_id) 
-                   DO UPDATE SET granted_by = $2, granted_at = CURRENT_TIMESTAMP""",
-                telegram_id, granted_by
-            )
-            
-            # Логируем назначение VIP
-            details = f"VIP status granted to user {telegram_id}"
-            await _log_audit_event_atomic(conn, "vip_granted", granted_by, telegram_id, details)
-            
-            return True
-        except Exception as e:
-            logger.exception(f"Error granting VIP status: {e}")
-            return False
-
-
-async def revoke_vip_status(telegram_id: int, revoked_by: int) -> bool:
-    """Отозвать VIP-статус у пользователя
-
-    Args:
-        telegram_id: Telegram ID пользователя
-        revoked_by: Telegram ID администратора, отозвавшего VIP
-
-    Returns:
-        True если успешно, False в случае ошибки
-    """
-    from database.subscriptions import _log_audit_event_atomic
-
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        try:
-            # Проверяем, есть ли VIP-статус
-            existing = await conn.fetchrow(
-                "SELECT telegram_id FROM vip_users WHERE telegram_id = $1",
-                telegram_id
-            )
-            
-            if not existing:
-                return False
-            
-            # Удаляем VIP-статус
-            await conn.execute(
-                "DELETE FROM vip_users WHERE telegram_id = $1",
-                telegram_id
-            )
-            
-            # Логируем отзыв VIP
-            details = f"VIP status revoked from user {telegram_id}"
-            await _log_audit_event_atomic(conn, "vip_revoked", revoked_by, telegram_id, details)
-            
-            return True
-        except Exception as e:
-            logger.exception(f"Error revoking VIP status: {e}")
-            return False
-
-
 # ============================================================================
 # ФИНАНСОВАЯ АНАЛИТИКА
 # ============================================================================
-
-async def get_total_revenue() -> float:
-    """
-    Получить общий доход от всех успешных платежей
-    
-    Returns:
-        Общий доход в рублях (только утвержденные платежи)
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Суммируем все утвержденные платежи
-        total_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(amount), 0) 
-               FROM payments 
-               WHERE status = 'approved'"""
-        ) or 0
-        
-        return total_kopecks / 100.0  # Конвертируем из копеек в рубли
-
-
-async def get_paying_users_count() -> int:
-    """
-    Получить количество платящих пользователей
-    
-    Returns:
-        Количество уникальных пользователей с хотя бы одним утвержденным платежом
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        count = await conn.fetchval(
-            """SELECT COUNT(DISTINCT telegram_id) 
-               FROM payments 
-               WHERE status = 'approved'"""
-        ) or 0
-        
-        return count
-
-
-async def get_user_ltv(telegram_id: int) -> float:
-    """
-    Получить LTV (Lifetime Value) пользователя
-    
-    LTV = общая сумма платежей за подписки (исключая кешбэк)
-    
-    Args:
-        telegram_id: Telegram ID пользователя
-    
-    Returns:
-        LTV в рублях
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Суммируем все утвержденные платежи за подписки
-        total_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(amount), 0) 
-               FROM payments 
-               WHERE telegram_id = $1 AND status = 'approved'""",
-            telegram_id
-        ) or 0
-        
-        return total_kopecks / 100.0  # Конвертируем из копеек в рубли
-
-
-async def get_average_ltv() -> float:
-    """
-    Получить средний LTV по всем пользователям
-    
-    Returns:
-        Средний LTV в рублях
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Получаем LTV для каждого пользователя
-        ltv_data = await conn.fetch(
-            """SELECT telegram_id, COALESCE(SUM(amount), 0) as total_payments
-               FROM payments
-               WHERE status = 'approved'
-               GROUP BY telegram_id"""
-        )
-        
-        if not ltv_data:
-            return 0.0
-        
-        total_ltv = sum(row["total_payments"] for row in ltv_data)
-        avg_ltv = total_ltv / len(ltv_data)
-        
-        return avg_ltv / 100.0  # Конвертируем из копеек в рубли
-
-
-async def get_arpu() -> float:
-    """
-    Получить ARPU (Average Revenue Per User)
-    
-    ARPU = общий доход / количество платящих пользователей
-    
-    Returns:
-        ARPU в рублях
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Общий доход (только утвержденные платежи)
-        total_revenue_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(amount), 0) 
-               FROM payments 
-               WHERE status = 'approved'"""
-        ) or 0
-        
-        total_revenue = total_revenue_kopecks / 100.0
-        
-        # Количество платящих пользователей
-        paying_users_count = await conn.fetchval(
-            """SELECT COUNT(DISTINCT telegram_id) 
-               FROM payments 
-               WHERE status = 'approved'"""
-        ) or 0
-        
-        # ARPU = общий доход / платящие пользователи
-        arpu = total_revenue / paying_users_count if paying_users_count > 0 else 0.0
-        
-        return arpu
 
 
 # ── Bypass-overwrite audit & recovery ──────────────────────────────
@@ -4079,84 +3987,6 @@ async def fix_bypass_overwrite_victim(telegram_id: int) -> Dict[str, Any]:
     }
 
 
-async def get_daily_timeseries(days: int) -> Dict[str, Any]:
-    """Daily аггрегаты за последние `days` суток UTC.
-
-    Один payload — три серии: revenue, new_users, new_subscriptions.
-    Все пустые дни в окне присутствуют с нулями (через generate_series),
-    чтобы фронту не приходилось их добивать самому — графики получают
-    непрерывный X.
-
-    Используем UTC-cast явно (`AT TIME ZONE 'UTC'`), а не голый NOW(),
-    чтобы границы дня не съезжали при session-TZ ≠ UTC. См. tz-коммент
-    в get_users_by_segment.
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            WITH days AS (
-                SELECT generate_series(
-                    DATE_TRUNC('day', (NOW() AT TIME ZONE 'UTC')) - ($1::int - 1) * INTERVAL '1 day',
-                    DATE_TRUNC('day', (NOW() AT TIME ZONE 'UTC')),
-                    INTERVAL '1 day'
-                )::date AS day
-            ),
-            pay AS (
-                SELECT DATE_TRUNC('day', created_at AT TIME ZONE 'UTC')::date AS day,
-                       COALESCE(SUM(amount), 0)::bigint AS revenue_kopecks,
-                       COUNT(*)::int AS payments_count
-                FROM payments
-                WHERE status = 'approved'
-                  AND created_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
-                GROUP BY 1
-            ),
-            usr AS (
-                SELECT DATE_TRUNC('day', created_at AT TIME ZONE 'UTC')::date AS day,
-                       COUNT(*)::int AS new_users
-                FROM users
-                WHERE created_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
-                GROUP BY 1
-            ),
-            sub AS (
-                SELECT DATE_TRUNC('day', activated_at AT TIME ZONE 'UTC')::date AS day,
-                       COUNT(*)::int AS new_subs,
-                       COUNT(*) FILTER (WHERE source = 'payment')::int AS new_paid_subs
-                FROM subscriptions
-                WHERE activated_at IS NOT NULL
-                  AND activated_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
-                GROUP BY 1
-            )
-            SELECT
-                d.day,
-                COALESCE(pay.revenue_kopecks, 0)  AS revenue_kopecks,
-                COALESCE(pay.payments_count, 0)   AS payments_count,
-                COALESCE(usr.new_users, 0)        AS new_users,
-                COALESCE(sub.new_subs, 0)         AS new_subs,
-                COALESCE(sub.new_paid_subs, 0)    AS new_paid_subs
-            FROM days d
-            LEFT JOIN pay ON pay.day = d.day
-            LEFT JOIN usr ON usr.day = d.day
-            LEFT JOIN sub ON sub.day = d.day
-            ORDER BY d.day
-            """,
-            days,
-        )
-
-    series = [
-        {
-            "date": r["day"].isoformat(),
-            "revenue_rubles": float(r["revenue_kopecks"]) / 100.0,
-            "payments_count": int(r["payments_count"]),
-            "new_users": int(r["new_users"]),
-            "new_subscriptions": int(r["new_subs"]),
-            "new_paid_subscriptions": int(r["new_paid_subs"]),
-        }
-        for r in rows
-    ]
-    return {"days": days, "series": series}
-
-
 async def get_hourly_timeseries(days: int) -> Dict[str, Any]:
     """Hour-of-day аггрегаты за последние `days` суток.
 
@@ -4227,112 +4057,6 @@ async def get_hourly_timeseries(days: int) -> Dict[str, Any]:
         for r in rows
     ]
     return {"days": days, "tz": "Europe/Moscow", "series": series}
-
-
-async def get_ltv() -> float:
-    """
-    Получить средний LTV (Lifetime Value) по всем платящим пользователям
-    
-    LTV = средняя сумма всех платежей пользователя за подписки
-    
-    Returns:
-        Средний LTV в рублях
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Получаем средний LTV через агрегацию (оптимизированный запрос)
-        avg_ltv_kopecks = await conn.fetchval(
-            """SELECT COALESCE(AVG(user_total), 0)
-               FROM (
-                   SELECT telegram_id, SUM(amount) as user_total
-                   FROM payments
-                   WHERE status = 'approved'
-                   GROUP BY telegram_id
-               ) as user_ltvs"""
-        ) or 0
-        
-        # PART D.8: Fix Decimal arithmetic bug
-        # avg_ltv_kopecks may be Decimal from PostgreSQL
-        # Use float() conversion to avoid TypeError: unsupported operand type(s) for /: 'Decimal' and 'float'
-        return float(avg_ltv_kopecks) / 100.0  # Конвертируем из копеек в рубли
-
-
-async def get_referral_analytics() -> Dict[str, Any]:
-    """
-    Получить реферальную аналитику
-    
-    Returns:
-        Словарь с ключами:
-        - referral_revenue: доход от рефералов (сумма платежей приглашенных пользователей)
-        - cashback_paid: выплаченный кешбэк
-        - net_profit: чистая прибыль (referral_revenue - cashback_paid)
-        - referred_users_count: количество приглашенных пользователей
-        - active_referrals: количество активных рефералов
-    """
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            # Доход от рефералов: сумма всех платежей пользователей, у которых есть referrer_id
-            referral_revenue_kopecks = await conn.fetchval(
-                """SELECT COALESCE(SUM(p.amount), 0)
-                   FROM payments p
-                   JOIN users u ON p.telegram_id = u.telegram_id
-                   WHERE p.status = 'approved'
-                   AND (u.referrer_id IS NOT NULL OR u.referred_by IS NOT NULL)"""
-            ) or 0
-
-            referral_revenue = referral_revenue_kopecks / 100.0
-
-            # Выплаченный кешбэк (сумма всех транзакций типа cashback)
-            cashback_paid_kopecks = await conn.fetchval(
-                """SELECT COALESCE(SUM(amount), 0)
-                   FROM balance_transactions
-                   WHERE type = 'cashback'"""
-            ) or 0
-
-            cashback_paid = cashback_paid_kopecks / 100.0
-
-            # Чистая прибыль
-            net_profit = referral_revenue - cashback_paid
-
-            # Количество приглашенных пользователей
-            referred_users_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM referrals"
-            ) or 0
-
-            # Количество активных рефералов (с активной подпиской)
-            active_referrals = await conn.fetchval(
-                """SELECT COUNT(DISTINCT r.referred_user_id)
-                   FROM referrals r
-                   JOIN subscriptions s ON r.referred_user_id = s.telegram_id
-                   WHERE s.expires_at > NOW()"""
-            ) or 0
-
-            return {
-                "referral_revenue": referral_revenue,
-                "cashback_paid": cashback_paid,
-                "net_profit": net_profit,
-                "referred_users_count": referred_users_count,
-                "active_referrals": active_referrals,
-            }
-    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
-        logger.warning(f"referrals or related tables missing or inaccessible — skipping referral analytics: {e}")
-        return {
-            "referral_revenue": 0.0,
-            "cashback_paid": 0.0,
-            "net_profit": 0.0,
-            "referred_users_count": 0,
-            "active_referrals": 0
-        }
-    except Exception as e:
-        logger.warning(f"Error getting referral analytics: {e}")
-        return {
-            "referral_revenue": 0.0,
-            "cashback_paid": 0.0,
-            "net_profit": 0.0,
-            "referred_users_count": 0,
-            "active_referrals": 0
-        }
 
 
 async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
@@ -4408,71 +4132,39 @@ async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
         }
 
 
-async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
-    """
-    Получить ежемесячную сводку
-    
-    Args:
-        year: Год
-        month: Месяц (1-12)
-    
-    Returns:
-        Словарь с ключами: revenue, payments_count, new_users, new_subscriptions
-    """
-    start_date = datetime(year, month, 1, tzinfo=timezone.utc)
-    if month == 12:
-        end_date = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-    else:
-        end_date = datetime(year, month + 1, 1, tzinfo=timezone.utc)
-    
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        start_naive = _to_db_utc(start_date)
-        end_naive = _to_db_utc(end_date)
-        # Доход за месяц (утвержденные платежи)
-        revenue_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(amount), 0) 
-               FROM payments 
-               WHERE status = 'approved' 
-               AND created_at >= $1 AND created_at < $2""",
-            start_naive, end_naive
-        ) or 0
-        
-        revenue = revenue_kopecks / 100.0
-        
-        # Количество платежей
-        payments_count = await conn.fetchval(
-            """SELECT COUNT(*) 
-               FROM payments 
-               WHERE status = 'approved' 
-               AND created_at >= $1 AND created_at < $2""",
-            start_naive, end_naive
-        ) or 0
-        
-        # Новые пользователи
-        new_users = await conn.fetchval(
-            """SELECT COUNT(*) 
-               FROM users 
-               WHERE created_at >= $1 AND created_at < $2""",
-            start_naive, end_naive
-        ) or 0
-        
-        # Новые подписки
-        new_subscriptions = await conn.fetchval(
-            """SELECT COUNT(*)
-               FROM subscriptions
-               WHERE activated_at >= $1 AND activated_at < $2""",
-            start_naive, end_naive
-        ) or 0
+async def _delete_remnawave_entity(telegram_id: int, *, numeric_id, uuid, username_hint) -> None:
+    """Delete one Remnawave entity (bypass or premium) of a user removed from the DB.
 
-        return {
-            "year": year,
-            "month": month,
-            "revenue": revenue,
-            "payments_count": payments_count,
-            "new_users": new_users,
-            "new_subscriptions": new_subscriptions
-        }
+    UUID auto-резолв через subscriptions-lookup здесь НЕ работает (запись уже
+    удалена). Действуем явно: если есть numeric id — удаляем по нему, иначе
+    резолв через find_user_by_username по НАШЕМУ шаблону username → id → удаление.
+    Remnawave 3.x: remnawave_api.delete_user → DELETE /api/users/{id} (путь
+    /api/users/delete/{id} в 3.x не существует). Best effort: логирует, не кидает.
+    """
+    if numeric_id is None and not uuid:
+        return
+    try:
+        from app.services import remnawave_api
+        target_id = numeric_id
+        if target_id is None and username_hint:
+            entity = await remnawave_api.find_user_by_username(username_hint)
+            if entity and entity.get("id") is not None:
+                try:
+                    target_id = int(entity["id"])
+                except (TypeError, ValueError):
+                    pass
+        if target_id is None:
+            logger.warning(
+                "REMNAWAVE_ADMIN_DELETE_SKIP: tg=%s no numeric id, uuid=%s",
+                telegram_id, str(uuid or "")[:16],
+            )
+            return
+        await remnawave_api.delete_user(int(target_id))
+    except Exception as e:
+        logger.warning(
+            "REMNAWAVE_ADMIN_DELETE_ENTITY_FAIL: tg=%s err=%s",
+            telegram_id, e,
+        )
 
 
 async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -> bool:
@@ -4542,6 +4234,10 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
             await conn.execute("DELETE FROM broadcast_log WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM traffic_purchases WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM subscriptions WHERE telegram_id = $1", telegram_id)
+            # The users he invited stay: a dangling users.referrer_id made their
+            # next paid purchase fail in process_referral_reward ("Referrer … not
+            # found for reward" → finalize rejected, money taken, no access).
+            await conn.execute("UPDATE users SET referrer_id = NULL WHERE referrer_id = $1", telegram_id)
             await conn.execute("DELETE FROM users WHERE telegram_id = $1", telegram_id)
 
             # Записываем в audit_log
@@ -4552,55 +4248,18 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
 
             logger.info(f"Admin {admin_telegram_id} deleted user {telegram_id} completely from DB")
 
-    # PHASE 2 (outside transaction): Remove UUID from Xray API
-    if uuid_to_remove:
-        try:
-            await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_remove)
-            logger.info(f"ADMIN_DELETE_UUID_REMOVED uuid={uuid_to_remove[:8]}...")
-        except Exception as e:
-            logger.error(f"ADMIN_DELETE_UUID_REMOVAL_FAILED uuid={uuid_to_remove[:8]}... error={e}")
 
-    # Delete Remnawave entities — bypass + premium (оба!).
-    # UUID auto-резолв через subscriptions-lookup здесь НЕ работает
-    # (запись уже удалена). Действуем явно: если есть numeric id —
-    # DELETE напрямую, иначе резолв через find_user_by_username по
-    # НАШЕМУ шаблону username → берём id из entity → DELETE.
-    async def _delete_pair(*, numeric_id, uuid, username_hint):
-        if numeric_id is None and not uuid:
-            return
-        try:
-            from app.services import remnawave_api
-            target_id = numeric_id
-            if target_id is None and username_hint:
-                entity = await remnawave_api.find_user_by_username(username_hint)
-                if entity and entity.get("id") is not None:
-                    try:
-                        target_id = int(entity["id"])
-                    except (TypeError, ValueError):
-                        pass
-            if target_id is None:
-                logger.warning(
-                    "REMNAWAVE_ADMIN_DELETE_SKIP: tg=%s no numeric id, uuid=%s",
-                    telegram_id, str(uuid or "")[:16],
-                )
-                return
-            await remnawave_api._request(
-                "DELETE", f"/api/users/delete/{target_id}", quiet=True,
-            )
-        except Exception as e:
-            logger.warning(
-                "REMNAWAVE_ADMIN_DELETE_ENTITY_FAIL: tg=%s err=%s",
-                telegram_id, e,
-            )
-
+    # Delete Remnawave entities — bypass + premium (оба!), see _delete_remnawave_entity.
     try:
         import asyncio as _aio
-        _aio.create_task(_delete_pair(
+        _aio.create_task(_delete_remnawave_entity(
+            telegram_id,
             numeric_id=remnawave_bypass_id,
             uuid=remnawave_bypass_uuid,
             username_hint=str(telegram_id),
         ))
-        _aio.create_task(_delete_pair(
+        _aio.create_task(_delete_remnawave_entity(
+            telegram_id,
             numeric_id=remnawave_premium_id,
             uuid=remnawave_premium_uuid,
             username_hint=f"tg_{telegram_id}_premium",
@@ -4661,23 +4320,6 @@ async def create_gift_subscription(
     return {"gift_code": row["gift_code"], "id": row["id"]}
 
 
-async def get_gift_subscription(gift_code: str) -> Optional[Dict[str, Any]]:
-    """Получает подарочную подписку по коду."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM gift_subscriptions WHERE gift_code = $1",
-            gift_code.upper().strip(),
-        )
-    if row is None:
-        return None
-    d = dict(row)
-    for k in ("created_at", "expires_at", "activated_at"):
-        if k in d and d[k] is not None and isinstance(d[k], datetime):
-            d[k] = _from_db_utc(d[k])
-    return d
-
-
 async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[str, Any]:
     """
     Активирует подарочную подписку для пользователя.
@@ -4690,7 +4332,6 @@ async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[
         {"success": bool, "error": str | None, "tariff": str, "period_days": int}
     """
     from database.subscriptions import grant_access
-    from database.users import process_referral_reward
 
     pool = await get_pool()
     now = datetime.now(timezone.utc)
@@ -4728,11 +4369,23 @@ async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[
     period_days = gift["period_days"]
     duration = timedelta(days=period_days)
 
+    # T14 (docs/audit/02_payment_core_plan.md §A flow 7): under the "gift" flag
+    # the panel work goes through the provisioning outbox — no Phase 1 HTTP.
+    # A gift is a paid purchase by the gifter: the recipient gets the gifted
+    # tariff's entitlement (basic/plus → +10 GB; gifts are never combo, legacy
+    # biz → plus). Computed before any write: a catalog error changes nothing.
+    from app.services import provisioning_flags
+    use_outbox = provisioning_flags.is_on("gift")
+    gift_ent = None
+    if use_outbox:
+        from app.services import tariffs
+        gift_ent = tariffs.for_purchase(tariffs.tariff_key(tariff, False), period_days)
+
     # =========================================================================
     # PHASE 1: Провизия VPN UUID вне транзакции (если нужна новая выдача)
     # =========================================================================
     pre_provisioned = None
-    if config.VPN_ENABLED:
+    if config.VPN_ENABLED and not use_outbox:
         async with pool.acquire() as conn:
             sub_row = await conn.fetchrow(
                 "SELECT status, expires_at, uuid FROM subscriptions WHERE telegram_id = $1",
@@ -4750,7 +4403,8 @@ async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[
                 needs_new_issuance = False
 
         if needs_new_issuance:
-            subscription_end = now + duration
+            from app.services.tariffs import extend_expiry as _extend_expiry
+            subscription_end = _extend_expiry(now, period_days)  # paid gift: calendar months
             # Task 2 cut-over: provision premium + bypass entities in
             # Remnawave instead of the legacy samopis xray master.
             from app.services import purchase_flow
@@ -4771,6 +4425,7 @@ async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[
     # =========================================================================
     # PHASE 2: Атомарная транзакция — обновление подарка + выдача доступа
     # =========================================================================
+    job_id = None
     async with pool.acquire() as conn:
         async with conn.transaction():
             # Повторная проверка с блокировкой (защита от race condition)
@@ -4793,17 +4448,90 @@ async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[
                 activated_by, _to_db_utc(now), gift["id"],
             )
 
-            # Активируем подписку через grant_access
-            grant_result = await grant_access(
-                telegram_id=activated_by,
-                duration=duration,
-                source="gift",
-                tariff=tariff,
-                conn=conn,
-                _caller_holds_transaction=True,
-                pre_provisioned_uuid=pre_provisioned,
+            if use_outbox:
+                # T14: DB-only grant + outbox job in the SAME tx (row lock above +
+                # the idempotency key → one grant per code). Zero HTTP here.
+                from app.services import provisioning
+                grant_result = await grant_access(
+                    telegram_id=activated_by,
+                    duration=duration,
+                    source="gift",
+                    tariff=tariff,
+                    conn=conn,
+                    _caller_holds_transaction=True,
+                    pre_provisioned_uuid=None,
+                    defer_panel=True,
+                    tariff_period_days=period_days,
+                )
+                premium_until = (grant_result or {}).get("subscription_end")
+                if premium_until is None:
+                    raise RuntimeError(f"grant_access returned no subscription_end for gift {gift['gift_code']}")
+                job_id = await provisioning.enqueue(
+                    conn,
+                    key=f"gift:{gift['gift_code']}",
+                    telegram_id=activated_by,
+                    ent=gift_ent,
+                    premium_until=premium_until,
+                    source="gift",
+                    context={
+                        "code": gift["gift_code"],
+                        "gifter": gift["buyer_telegram_id"],
+                        "recipient": activated_by,
+                        "tariff": tariff,
+                        "period_days": period_days,
+                        "action": grant_result.get("action"),
+                    },
+                )
+            else:
+                # Активируем подписку через grant_access
+                grant_result = await grant_access(
+                    telegram_id=activated_by,
+                    duration=duration,
+                    source="gift",
+                    tariff=tariff,
+                    conn=conn,
+                    _caller_holds_transaction=True,
+                    pre_provisioned_uuid=pre_provisioned,
+                    tariff_period_days=period_days,
+                )
+
+    if job_id is not None:
+        # Committed. Fast path; on failure the job stays queued (worker + admin alert),
+        # the activation itself is durable and the user sees the normal success text.
+        applied = await provisioning.run_now(job_id)
+        logger.info(
+            f"GIFT_ACTIVATED_OUTBOX code={gift_code} by={activated_by} tariff={tariff} "
+            f"period={period_days}d buyer={gift['buyer_telegram_id']} job={job_id} "
+            f"applied={applied} action={grant_result.get('action')}"
+        )
+        return {
+            "success": True,
+            "error": None,
+            "tariff": tariff,
+            "period_days": period_days,
+            "grant_result": grant_result,
+            "outbox": True,
+            "provisioning_job_id": job_id,
+            "provisioning_applied": applied,
+        }
+
+    # Behaviour fix (T14, "Находки T0" item 2): for an already-active recipient
+    # grant_access (caller holds the tx) only extends the DB row and returns
+    # renewal_xray_sync_after_commit; without running it the panel premium
+    # expireAt was never extended. Run it post-commit, as finalize_purchase does.
+    sync_info = (grant_result or {}).get("renewal_xray_sync_after_commit")
+    if sync_info:
+        try:
+            from app.services import purchase_flow
+            await purchase_flow.sync_renewal_to_remnawave(sync_info)
+        except Exception as e:
+            logger.critical(
+                "GIFT_RENEWAL_REMNAWAVE_SYNC_FAILED",
+                extra={"telegram_id": sync_info.get("telegram_id"), "code": gift_code, "error": str(e)[:200]},
             )
 
+    from app.services.payments import verify_delivery  # legacy: delayed panel check, alert-only
+    verify_delivery.schedule_legacy_check(activated_by, source="gift", ref=f"gift:{gift_code}", expect_bypass=True)
     logger.info(
         f"GIFT_ACTIVATED code={gift_code} by={activated_by} "
         f"tariff={tariff} period={period_days}d buyer={gift['buyer_telegram_id']}"
@@ -4842,330 +4570,3 @@ async def get_user_gifts(telegram_id: int) -> list:
 # To roll back, we need each user's REAL last paid premium end date,
 # computed from pending_purchases (paid status, non-bypass tariff).
 # ====================================================================
-
-async def get_premium_recovery_candidates() -> list:
-    """Users whose bypass-only row is still pinned to a premium uuid AND
-    whose expires_at is parked in the far future (the 10-year marker).
-
-    Returns dicts with: telegram_id, remnawave_premium_uuid, db_expires_at.
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT telegram_id, remnawave_premium_uuid, expires_at
-               FROM subscriptions
-               WHERE is_bypass_only = TRUE
-                 AND remnawave_premium_uuid IS NOT NULL
-                 AND expires_at > NOW() + INTERVAL '5 years'"""
-        )
-    return [dict(r) for r in rows]
-
-
-async def get_user_paid_subscription_history(telegram_id: int) -> list:
-    """Chronological list of the user's PAID subscription purchases
-    (excludes balance top-ups, traffic packs, and pending/expired rows).
-
-    Returns list of {created_at, period_days, tariff} in ascending order.
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT created_at, period_days, tariff
-               FROM pending_purchases
-               WHERE telegram_id = $1
-                 AND status = 'paid'
-                 AND period_days > 0
-                 AND tariff IN ('basic', 'plus', 'biz_starter', 'biz_team',
-                                'biz_business', 'biz_pro', 'biz_enterprise',
-                                'biz_ultimate')
-               ORDER BY created_at ASC""",
-            telegram_id,
-        )
-    return [dict(r) for r in rows]
-
-
-async def get_paid_subscription_history_bulk(telegram_ids: list) -> dict:
-    """Bulk-fetch paid subscription history for many users in ONE query.
-
-    Returns a dict: telegram_id -> [{created_at, period_days, tariff}, ...]
-    sorted ascending by created_at. Missing users get an empty list.
-
-    Used by the premium recovery scan instead of 1k+ separate roundtrips.
-    """
-    if not telegram_ids:
-        return {}
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT telegram_id, created_at, period_days, tariff
-               FROM pending_purchases
-               WHERE telegram_id = ANY($1::bigint[])
-                 AND status = 'paid'
-                 AND period_days > 0
-                 AND tariff IN ('basic', 'plus', 'biz_starter', 'biz_team',
-                                'biz_business', 'biz_pro', 'biz_enterprise',
-                                'biz_ultimate')
-               ORDER BY telegram_id, created_at ASC""",
-            telegram_ids,
-        )
-    out: dict = {tg: [] for tg in telegram_ids}
-    for r in rows:
-        out[r["telegram_id"]].append({
-            "created_at": r["created_at"],
-            "period_days": r["period_days"],
-            "tariff": r["tariff"],
-        })
-    return out
-
-
-async def get_activated_gifts_bulk(telegram_ids: list) -> dict:
-    """Bulk-fetch activated gift subscriptions for users in ONE query.
-
-    Returns dict: telegram_id -> [{activated_at, period_days}, ...]
-    Ascending by activated_at. Missing users get empty list.
-
-    Recovery uses this to honour gift subscriptions when computing
-    real premium end date — paid history might be empty but a real
-    gift still grants premium time.
-    """
-    if not telegram_ids:
-        return {}
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT activated_by, activated_at, period_days
-               FROM gift_subscriptions
-               WHERE activated_by = ANY($1::bigint[])
-                 AND status = 'activated'
-                 AND activated_at IS NOT NULL
-                 AND period_days > 0
-               ORDER BY activated_by, activated_at ASC""",
-            telegram_ids,
-        )
-    out: dict = {tg: [] for tg in telegram_ids}
-    for r in rows:
-        out[r["activated_by"]].append({
-            "activated_at": r["activated_at"],
-            "period_days": r["period_days"],
-        })
-    return out
-
-
-async def get_max_subscription_end_bulk(telegram_ids: list) -> dict:
-    """Bulk-fetch the user's MAX(subscription_history.end_date) per user.
-
-    subscription_history is the source-of-truth ledger for every
-    subscription event — purchases, renewals, gifts, admin grants —
-    so the maximum end_date is the user's actual last legitimate
-    premium expiry, regardless of which acquisition path they came
-    through. Recovery uses this as the primary signal instead of
-    reconstructing dates from pending_purchases.
-
-    Returns dict: telegram_id -> datetime | None.
-    """
-    if not telegram_ids:
-        return {}
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT telegram_id, MAX(end_date) AS last_end
-               FROM subscription_history
-               WHERE telegram_id = ANY($1::bigint[])
-               GROUP BY telegram_id""",
-            telegram_ids,
-        )
-    out: dict = {tg: None for tg in telegram_ids}
-    for r in rows:
-        out[r["telegram_id"]] = r["last_end"]
-    return out
-
-
-async def get_paid_payments_via_purchases_bulk(telegram_ids: list) -> dict:
-    """Bulk-fetch settled `payments` rows joined onto pending_purchases.
-
-    A user paid through a provider can have rows in `payments` even
-    when pending_purchases status didn't flip to 'paid' for some reason
-    (legacy flows, admin approve, edge-case webhooks). Joining on
-    purchase_id reconstructs period_days from pending_purchases so we
-    can still compute an end date.
-
-    Returns dict: telegram_id -> [{created_at, period_days, tariff}, ...]
-    ordered ascending. Used as belt-and-suspenders fallback in recovery.
-    """
-    if not telegram_ids:
-        return {}
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT p.telegram_id,
-                      COALESCE(p.paid_at, p.created_at) AS created_at,
-                      pp.period_days,
-                      COALESCE(p.tariff, pp.tariff) AS tariff
-               FROM payments p
-               LEFT JOIN pending_purchases pp ON pp.purchase_id = p.purchase_id
-               WHERE p.telegram_id = ANY($1::bigint[])
-                 AND p.status IN ('paid', 'approved')
-                 AND pp.period_days IS NOT NULL
-                 AND pp.period_days > 0
-                 AND COALESCE(p.tariff, pp.tariff) IN
-                     ('basic', 'plus', 'biz_starter', 'biz_team',
-                      'biz_business', 'biz_pro', 'biz_enterprise',
-                      'biz_ultimate')
-               ORDER BY p.telegram_id, COALESCE(p.paid_at, p.created_at) ASC""",
-            telegram_ids,
-        )
-    out: dict = {tg: [] for tg in telegram_ids}
-    for r in rows:
-        out[r["telegram_id"]].append({
-            "created_at": r["created_at"],
-            "period_days": r["period_days"],
-            "tariff": r["tariff"],
-        })
-    return out
-
-
-
-async def get_active_premium_subscribers() -> list:
-    """All subscriptions currently considered active premium (NOT bypass-only).
-
-    For the audit-tool: we want users whose premium subscription is
-    nominally active in the bot's DB so we can cross-check it against
-    payments and the Remnawave panel.
-
-    Filters:
-      - status='active' AND expires_at > NOW (still in their paid window)
-      - NOT is_bypass_only (we never audit bypass-only rows, those are
-        traffic-pack only and live on +10y by design)
-      - subscription_type in the real premium tariffs
-
-    Returns list of dicts: telegram_id, remnawave_premium_uuid,
-    expires_at, subscription_type.
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT telegram_id, remnawave_premium_uuid,
-                      expires_at, subscription_type
-               FROM subscriptions
-               WHERE status = 'active'
-                 AND expires_at > NOW()
-                 AND COALESCE(is_bypass_only, FALSE) = FALSE
-                 AND subscription_type IN
-                     ('basic', 'plus', 'biz_starter', 'biz_team',
-                      'biz_business', 'biz_pro', 'biz_enterprise',
-                      'biz_ultimate')
-               ORDER BY telegram_id"""
-        )
-    return [dict(r) for r in rows]
-
-
-async def get_subscriptions_with_far_future_expires() -> list:
-    """All subscriptions whose DB expires_at is parked in the far future.
-
-    This is the symptom of the bug discovered during the audit: when a
-    user's premium expired and they had a bypass entity, the
-    fast_expiry_cleanup transition rewrote expires_at to NOW + 10 years
-    as a bypass-only marker — but the user's subsequent purchases never
-    overwrote that marker, leaving the bot UI showing "expires in 10
-    years" even though the panel was rolled back to the real date.
-
-    Returns dicts with telegram_id, expires_at, status,
-    subscription_type, is_bypass_only.
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT telegram_id, expires_at, status, subscription_type,
-                      is_bypass_only, remnawave_premium_uuid
-               FROM subscriptions
-               WHERE status = 'active'
-                 AND expires_at > NOW() + INTERVAL '2 years'
-               ORDER BY telegram_id"""
-        )
-    return [dict(r) for r in rows]
-
-
-async def update_subscription_expires_at_bulk(updates: list) -> int:
-    """Bulk-update subscriptions.expires_at.
-
-    Args:
-        updates: list of {"telegram_id": int, "new_expires_at": datetime}
-
-    Returns count of rows successfully updated.
-
-    Uses asyncpg.executemany — one round-trip for the whole batch.
-    """
-    if not updates:
-        return 0
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Coerce to naive UTC (the column is TIMESTAMPTZ but the bot's
-        # other writers pass naive — keep consistent so equality
-        # comparisons elsewhere don't drift across tz casts).
-        rows = [
-            (u["new_expires_at"], u["telegram_id"])
-            for u in updates
-        ]
-        async with conn.transaction():
-            await conn.executemany(
-                "UPDATE subscriptions SET expires_at = $1 WHERE telegram_id = $2 AND status = 'active'",
-                rows,
-            )
-    return len(updates)
-
-
-async def get_active_trial_telegram_ids() -> list:
-    """Telegram IDs of users currently on an active trial — and ONLY
-    on a trial (no live PAID premium subscription).
-
-    Trial activation writes a `subscriptions` row with source='trial',
-    status='active', subscription_type='basic' (default tariff in
-    grant_access), expires_at = trial end, is_bypass_only=FALSE. That
-    means the "looks like an active paid sub" filter MUST exclude
-    source='trial' explicitly — otherwise the audience comes out
-    empty (every trial user gets filtered as if they were already
-    paying).
-
-    Time comparison uses an explicit `$1` parameter (not NOW()):
-    `users.trial_expires_at` is TIMESTAMP without tz in this DB while
-    `subscriptions.expires_at` is TIMESTAMPTZ. Mixing NOW() with a
-    naive TIMESTAMP column triggers `operator does not exist`
-    failures — the same class of error we hit before in this repo.
-    `_to_db_utc` produces the naive-UTC datetime asyncpg can compare
-    against both columns.
-
-    Filters:
-      - users.trial_expires_at > $1                  → trial running
-      - NO subscriptions row with:
-          - status='active', expires_at > $1
-          - source != 'trial'                        → really paid
-          - is_bypass_only=FALSE
-          - subscription_type IN paid tariffs
-
-    Returns sorted list of telegram_id integers.
-    """
-    pool = await get_pool()
-    now = _to_db_utc(datetime.now(timezone.utc))
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT u.telegram_id
-               FROM users u
-               WHERE u.trial_expires_at IS NOT NULL
-                 AND u.trial_expires_at > $1
-                 AND NOT EXISTS (
-                     SELECT 1 FROM subscriptions s
-                     WHERE s.telegram_id = u.telegram_id
-                       AND s.status = 'active'
-                       AND s.expires_at > $1
-                       AND COALESCE(s.source, '') != 'trial'
-                       AND COALESCE(s.is_bypass_only, FALSE) = FALSE
-                       AND s.subscription_type IN (
-                           'basic', 'plus', 'biz_starter', 'biz_team',
-                           'biz_business', 'biz_pro', 'biz_enterprise',
-                           'biz_ultimate'
-                       )
-                 )
-               ORDER BY u.telegram_id""",
-            now,
-        )
-    return [r["telegram_id"] for r in rows]

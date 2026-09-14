@@ -18,8 +18,9 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
 from app.services.automated_notifications import (
-    REGISTRY, get_trigger_config, sync_registry_to_db,
+    REGISTRY, sync_registry_to_db,
 )
 from app.services.automated_notifications.registry import VALID_CATEGORIES
 from app.services.automated_notifications.helper import (
@@ -357,11 +358,12 @@ async def test_send_notification(
     title = (title_row["title"] if title_row else None) or key
 
     admin_id = int(admin["sub"])
-    # Импорт лениво — bot instance живёт в main.py.
-    try:
-        from main import bot  # noqa: WPS433
-    except Exception as e:
-        raise HTTPException(500, f"bot instance unavailable: {e}")
+    # Живой бот main.py кладёт в telegram_webhook._bot (как broadcasts._get_bot).
+    # `from main import bot` не работал: bot — локальная переменная main().
+    from app.api import telegram_webhook
+    bot = getattr(telegram_webhook, "_bot", None)
+    if bot is None:
+        raise HTTPException(503, "bot_not_ready")
     try:
         await bot.send_message(
             chat_id=admin_id,
@@ -370,5 +372,5 @@ async def test_send_notification(
             disable_web_page_preview=True,
         )
     except Exception as e:
-        raise HTTPException(500, f"send_failed: {e}")
+        raise server_error("send_failed") from e
     return {"ok": True, "sent_to": admin_id, "key": key}

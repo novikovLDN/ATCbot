@@ -130,7 +130,7 @@ async def callback_share_discount_open(callback: CallbackQuery):
     refd-ссылкой пользователя. Telegram сам отрисует нативный picker
     получателя. Друг по этой ссылке получит 30%/24ч (см. start.py
     обработку `refd_<code>`)."""
-    from urllib.parse import quote
+    from app.utils.text_format import build_share_url
 
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -143,11 +143,9 @@ async def callback_share_discount_open(callback: CallbackQuery):
         bot_info = await callback.bot.get_me()
         share_link = await build_share_discount_link(telegram_id, bot_info.username)
 
+        # Plain text + full URL-encoding (t.me/share/url не парсит HTML).
         share_text = i18n_get_text(language, "share_discount.share_text")
-        share_url = (
-            f"https://t.me/share/url?url={quote(share_link, safe='')}"
-            f"&text={quote(share_text, safe='')}"
-        )
+        share_url = build_share_url(share_link, share_text)
 
         text = i18n_get_text(language, "share_discount.screen", link=share_link)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[

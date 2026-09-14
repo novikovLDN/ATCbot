@@ -1,39 +1,38 @@
 """
-Low-level HTTP client for Remnawave Panel API (v3.x, verified 3.3.0).
+Low-level HTTP client for Remnawave Panel API (verified against backend 3.4.3).
 
 Все методы возвращают parsed JSON dict / list при успехе, None при
 неудаче. Ошибки логируются, не бросаются — caller обязан проверить None.
+Полная сверка с контрактом: docs/providers/remnawave_3.4.3.md.
 
-⚠️ Совместимость: код рассчитан на Remnawave Panel 3.0.0+.
-2.7.4 endpoints НЕ поддерживаются. Смотри docs/REMNAWAVE_3_MIGRATION.md.
-
-Ключевые точки 3.x, отражённые здесь:
-  - Все user-scoped path используют NUMERIC id (`{userId}`). UUID
-    удалён из ответов панели полностью — использовать бесполезно.
-    Наш кеш `remnawave_id` в БД заполнен pre-migration скриптом
-    (см. scripts/prep_remnawave_v3_migration.py + migration 078).
-  - POST /api/users и PATCH /api/users — без /create /update.
-    PATCH идентифицирует юзера по `id` в body, не `uuid`.
-  - Поиск: GET /api/users/stream с фильтрами (`telegramId`, `email`,
-    `tag`, `username`) вместо удалённых `/by-*/{value}`. Курсорная
-    пагинация: `nextCursor` (integer) → передавать в `cursor`.
+Ключевые точки 3.4.3 (libs/contract), отражённые здесь:
+  - Все user-scoped path используют NUMERIC id (`{userId}`). Поля `uuid`
+    в ответе нет — есть `vlessUuid`; его бот и хранит в *_uuid колонках.
+    Числовой id кешируется в remnawave_id / remnawave_premium_id.
+  - POST /api/users (201) и PATCH /api/users (200) — без /create /update.
+    PATCH идентифицирует юзера по `id` (или `username`) в body.
+    PATCH: status только ACTIVE|DISABLED, expireAt только в будущем
+    (иначе 400).
+  - Поиск по username/shortUuid: POST /api/users/resolve → только
+    {id, username, shortUuid}, полную entity дочитываем GET по id.
+    (GET /api/users/by-username/{u} и /by-short-uuid/{s} в 3.4.3 тоже
+    есть и отдают полную entity.)
+  - GET /api/users/stream: фильтры telegramId/email/tag/status/
+    trafficLimitStrategy/externalSquadUuid (username НЕТ). Курсор:
+    `nextCursor` — string|null, передавать как есть в `cursor`; `hasMore`.
+  - Дубль username на POST — HTTP 400 errorCode A019 (не 409),
+    см. is_username_conflict.
   - DELETE — HTTP 204 No Content без тела. `_request` возвращает {}
     вместо None (иначе caller увидит "неудачу").
-  - Bulk/async POST — HTTP 202 Accepted без тела, без `affectedRows`.
-    Тоже возвращаем {}.
-  - HWID: DELETE (не POST) на delete/delete-all; body поле `userId`.
-  - Модуль IP-control переименован → /api/connections.
+  - Bulk/async POST (add-many-users) — HTTP 202 Accepted. Тоже {}.
+  - HWID: POST /api/hwid/devices/delete | delete-all, body `userId`.
   - Actions user-scoped: /users/{userId}/actions/enable |disable
     |revoke |reset-traffic |extend.
-
-Backwards-compat helpers:
-  - resolve_user_id(username|id): один запрос к /users/stream, чтобы
-    достать numeric id по username. Нужно на fallback-путях, когда в
-    БД нет закешированного id (не забэкфильнутый юзер).
+  - Троттлера в панели нет; вне dev панель требует X-Forwarded-For и
+    X-Forwarded-Proto=https — бот шлёт их сам (_headers).
 """
 import logging
-from typing import Optional, Dict, Any, Union
-from urllib.parse import quote
+from typing import Optional, Dict, Any, Literal, Union
 
 import httpx
 import config
@@ -44,9 +43,15 @@ _TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 
 
 def _headers() -> dict:
+    # 3.4.3 proxy-check middleware: outside dev, a request without
+    # X-Forwarded-For AND X-Forwarded-Proto=https gets its socket closed.
+    # Sent always — harmless behind the HTTPS proxy, required for a direct
+    # backend URL (docs/providers/remnawave_3.4.3.md F12).
     return {
         "Authorization": f"Bearer {config.REMNAWAVE_API_TOKEN}",
         "Content-Type": "application/json",
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-For": "127.0.0.1",
     }
 
 
@@ -140,6 +145,30 @@ async def _request_raw(
     return {"ok": ok, "status": resp.status_code, "body": body, "response": unwrapped}
 
 
+# Remnawave 3.4.3 answers a duplicate username on POST /api/users with
+# HTTP 400 {"errorCode": "A019", "message": "User username already exists"}
+# (libs/contract/constants/errors/errors.ts USER_USERNAME_ALREADY_EXISTS,
+# src/common/exception/http-exception.filter.ts) — never 409. 409 is kept for
+# a reverse proxy / older panel that might still send it.
+_USERNAME_CONFLICT_CODE = "A019"
+
+
+def is_username_conflict(raw: Optional[Dict[str, Any]]) -> bool:
+    """True when a _request_raw envelope of POST /api/users means "this
+    username is already taken" (a concurrent/interrupted run created it)."""
+    status = int((raw or {}).get("status") or 0)
+    if status == 409:
+        return True
+    if status != 400:
+        return False
+    body = (raw or {}).get("body")
+    if isinstance(body, dict):
+        if str(body.get("errorCode") or "") == _USERNAME_CONFLICT_CODE:
+            return True
+        return "username already exists" in str(body.get("message") or "").lower()
+    return "username already exists" in str(body or "").lower()
+
+
 # ── User CRUD ──────────────────────────────────────────────────────────
 
 async def create_user(
@@ -181,9 +210,9 @@ async def create_user(
         "trafficLimitStrategy": traffic_limit_strategy,
         "status": "ACTIVE",
         "expireAt": expire_at,
-        # 3.x переименовал deviceLimit → hwidDeviceLimit. Шлём оба поля.
+        # 3.x: только hwidDeviceLimit (create-user.command.ts:105-112);
+        # deviceLimit в контракте нет — ZodValidationPipe его вырезал.
         "hwidDeviceLimit": device_limit,
-        "deviceLimit": device_limit,
     }
     if uuid:
         body["vlessUuid"] = uuid
@@ -385,13 +414,33 @@ async def _resolve_to_int_id(value: Union[str, int]) -> Optional[int]:
     tg_id = await _lookup_telegram_id_by_uuid(s)
     if tg_id is None:
         return None
-    entity = await find_user_by_telegram_id(tg_id)
-    if entity and entity.get("id") is not None:
-        try:
-            return int(entity["id"])
-        except (TypeError, ValueError):
-            pass
-    return None
+    # Bypass and premium entities share telegramId, so stream?telegramId=
+    # returns BOTH; taking the first one sent the PATCH to the other entity.
+    # Pick the entity whose vlessUuid is the value we were given (the bot
+    # stores vlessUuid — 3.4.3 UsersSchema has no `uuid`). A lone result is
+    # still accepted (legacy rows cached a 2.x uuid that is no vlessUuid).
+    page = await _request("GET", f"/api/users/stream?telegramId={int(tg_id)}")
+    if isinstance(page, dict):
+        users = page.get("users") or []
+    elif isinstance(page, list):
+        users = page
+    else:
+        users = []
+    users = [u for u in users if isinstance(u, dict)]
+    matched = [u for u in users if s in (str(u.get("vlessUuid") or ""), str(u.get("uuid") or ""))]
+    if not matched and len(users) == 1:
+        matched = users
+    if len(matched) != 1:
+        if users:
+            logger.warning(
+                "REMNAWAVE_RESOLVE_AMBIGUOUS: uuid=%s tg=%s entities=%d matched=%d — not guessing",
+                s[:8], tg_id, len(users), len(matched),
+            )
+        return None
+    try:
+        return int(matched[0]["id"])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 async def get_all_users(
@@ -403,7 +452,9 @@ async def get_all_users(
     """GET /api/users/stream с курсорной пагинацией (3.x).
 
     3.x перевёл общий scan на stream-endpoint. Default size = 250,
-    max = 1000. Пагинация через `nextCursor` (integer, был string в 2.x).
+    max = 1000. Пагинация: ответ {users, nextCursor: string|null, hasMore}
+    (get-users-stream.command.ts:50-58), `nextCursor` передаём как есть в
+    `cursor`. Поля `total` в 3.4.3 нет — progress_cb получает total=None.
 
     Retries: `max_retries` попыток на страницу с exponential backoff.
     `page_delay` — пауза (сек) МЕЖДУ успешными страницами. Без неё стрим
@@ -542,62 +593,12 @@ async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, 
     return await _request("PATCH", "/api/users", json=body)
 
 
-async def reset_user_traffic(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
-    """POST /api/users/{userId}/actions/reset-traffic (3.x)."""
-    resolved = await _resolve_to_int_id(user_id)
-    if resolved is None:
-        return None
-    return await _request("POST", f"/api/users/{resolved}/actions/reset-traffic")
-
-
-async def enable_user(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
-    """POST /api/users/{userId}/actions/enable (3.x dedicated)."""
-    resolved = await _resolve_to_int_id(user_id)
-    if resolved is None:
-        return None
-    return await _request("POST", f"/api/users/{resolved}/actions/enable")
-
-
-async def disable_user(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
-    """POST /api/users/{userId}/actions/disable (3.x dedicated)."""
-    resolved = await _resolve_to_int_id(user_id)
-    if resolved is None:
-        return None
-    return await _request("POST", f"/api/users/{resolved}/actions/disable")
-
-
 async def revoke_user_subscription(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
     """POST /api/users/{userId}/actions/revoke — invalidate subscription URL."""
     resolved = await _resolve_to_int_id(user_id)
     if resolved is None:
         return None
     return await _request("POST", f"/api/users/{resolved}/actions/revoke")
-
-
-async def extend_user_expiry(
-    user_id: Union[str, int],
-    *,
-    days: Optional[int] = None,
-    expire_at: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    """POST /api/users/{userId}/actions/extend (3.x new).
-
-    days      — прибавить дни к текущему expireAt (EXPIRED → +N от now
-                и перевод в ACTIVE; ACTIVE → +N к дате истечения).
-    expire_at — ISO-строка, полная замена expireAt.
-    Один из параметров обязателен.
-    """
-    body: Dict[str, Any] = {}
-    if days is not None:
-        body["days"] = int(days)
-    if expire_at is not None:
-        body["expireAt"] = expire_at
-    if not body:
-        raise ValueError("extend_user_expiry: pass either days or expire_at")
-    resolved = await _resolve_to_int_id(user_id)
-    if resolved is None:
-        return None
-    return await _request("POST", f"/api/users/{resolved}/actions/extend", json=body)
 
 
 # ── HWID devices (3.x) ─────────────────────────────────────────────────
@@ -697,15 +698,14 @@ async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     conflict_unrelated_user.
 
     Правильный 3.x-путь: POST /api/users/resolve с body { username } —
-    единый resolver, принимающий { id | shortUuid | username | email
-    | tag } и возвращающий одну entity.
+    resolver принимает ровно одно из { id | shortUuid | username }
+    (resolve-user.command.ts:18-34), 404 A025 если нет.
 
-    ⚠️ /resolve возвращает УРЕЗАННЫЙ user (id/username/telegramId/etc)
-    БЕЗ `subscriptionUrl` — критично для preflight+adopt в
-    create_bypass/premium_user_entity. Если в ответе subscriptionUrl
-    отсутствует — дозапросим полную entity через GET /api/users/{id},
-    иначе клиент получит пустой vless_url и платёж уйдёт в
-    PAYMENT_PERMANENT_ERROR (юзер заплатил — доступа нет).
+    ⚠️ /resolve возвращает ТОЛЬКО {id, username, shortUuid}
+    (resolve-user.command.ts:36-42): без trafficLimitBytes, expireAt,
+    subscriptionUrl. Дочитываем полную entity через GET /api/users/{id};
+    если это не удалось — возвращаем None (урезанная entity давала
+    limit=0 → add_bypass_traffic стирал накопленные ГБ, adopt — пустой URL).
     """
     if not username:
         return None
@@ -724,28 +724,35 @@ async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
             entity = result
     if entity is None:
         return None
-    # subscriptionUrl обязателен для клиента → дозагрузка через GET по id.
-    if not entity.get("subscriptionUrl") and entity.get("id") is not None:
+    if all(k in entity for k in _STATE_REQUIRED_KEYS):
+        return entity
+    # 3.4.3 /resolve returns ONLY {id, username, shortUuid}
+    # (commands/users/resolve-user.command.ts) → complete it via GET by id.
+    full = None
+    if entity.get("id") is not None:
         try:
             full = await _request(
                 "GET", f"/api/users/{int(entity['id'])}", quiet=True,
             )
-            if isinstance(full, dict):
-                # Merge full over entity — полная entity обязана быть super-set.
-                return {**entity, **full}
         except Exception as e:
             logger.warning(
                 "find_user_by_username: full-fetch failed username=%s id=%s err=%s",
                 username, entity.get("id"), e,
             )
-    return entity
-
-
-async def find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
-    """GET /api/users/stream?email=X (3.x replacement for /by-email)."""
-    if not email:
-        return None
-    return await _stream_first(f"email={quote(email, safe='')}")
+            full = None
+    if isinstance(full, dict):
+        # Merge full over entity — полная entity обязана быть super-set.
+        return {**entity, **full}
+    # The trimmed entity has no trafficLimitBytes / expireAt / subscriptionUrl.
+    # Returning it made callers read limit=0 (add_bypass_traffic then PATCHed
+    # trafficLimitBytes=+N only, wiping the accumulated GB) or adopt with an
+    # empty URL. A failed completion is a failed lookup.
+    logger.warning(
+        "REMNAWAVE_RESOLVE_INCOMPLETE: username=%s id=%s — full entity not "
+        "fetched, lookup reported as failed",
+        username, entity.get("id"),
+    )
+    return None
 
 
 async def find_user_by_short_uuid(short_uuid: str) -> Optional[Dict[str, Any]]:
@@ -859,6 +866,164 @@ async def get_bypass_entity_safe(telegram_id: int) -> Optional[Dict[str, Any]]:
     return ent
 
 
+# ── Precise state readers (provisioning CAS, docs/audit/02 §B) ─────────
+#
+# get_bypass_entity_safe() returns None both for "no entity" and "panel down";
+# the provisioning core must never mistake an outage for a missing entity
+# (it would create instead of retrying). These readers classify explicitly:
+#
+#   ("present", entity)   2xx with an entity that passes the ownership check
+#   ("absent", None)      404, or 4xx whose body says "not found"
+#   ("unavailable", None) transport error/timeout (status 0), 5xx, 401, 403,
+#                         408, 429, any other 4xx (ambiguous → retry, never
+#                         create), an unexpected payload, REMNAWAVE disabled
+#
+# Lookup order = get_bypass_entity_safe: cached numeric id (GET /api/users/{id})
+# → username resolve (POST /api/users/resolve). A cached-id 404/400 or an
+# entity that fails the ownership check falls through to the username path;
+# an "unavailable" cached-id read does NOT (no guessing while the panel is sick).
+# Read-only: unlike get_bypass_entity_safe these never write the DB cache.
+
+StateKind = Literal["present", "absent", "unavailable"]
+
+_STATE_UNAVAILABLE_STATUSES = frozenset({401, 403, 408, 429})
+_STATE_REQUIRED_KEYS = ("id", "trafficLimitBytes", "expireAt", "subscriptionUrl")
+
+
+def _raw_status(raw: Optional[Dict[str, Any]]) -> int:
+    try:
+        return int((raw or {}).get("status") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _raw_is_unavailable(raw: Optional[Dict[str, Any]]) -> bool:
+    status = _raw_status(raw)
+    return status == 0 or status >= 500 or status in _STATE_UNAVAILABLE_STATUSES
+
+
+def _raw_is_not_found(raw: Optional[Dict[str, Any]]) -> bool:
+    status = _raw_status(raw)
+    if status == 404:
+        return True
+    return 400 <= status < 500 and "not found" in str((raw or {}).get("body") or "").lower()
+
+
+def _raw_entity(raw: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    resp = (raw or {}).get("response")
+    if isinstance(resp, dict):
+        if isinstance(resp.get("user"), dict):
+            return resp["user"]
+        if "id" in resp or "username" in resp:
+            return resp
+    return None
+
+
+async def _entity_state(
+    *,
+    username: str,
+    cached_id: Optional[int],
+    accept,
+    what: str,
+) -> "tuple[StateKind, Optional[Dict[str, Any]]]":
+    if not config.REMNAWAVE_ENABLED:
+        return "unavailable", None
+
+    # 1) cached numeric id
+    if cached_id is not None:
+        raw = await _request_raw("GET", f"/api/users/{int(cached_id)}")
+        if _raw_is_unavailable(raw):
+            return "unavailable", None
+        if raw.get("ok"):
+            ent = _raw_entity(raw)
+            if ent is not None and accept(ent):
+                return "present", ent
+            logger.warning(
+                "REMNAWAVE_%s_STATE_CACHE_MISMATCH: cached id=%s username=%r (expected %r) — "
+                "falling back to username resolve",
+                what, cached_id, (ent or {}).get("username"), username,
+            )
+
+    # 2) username resolve
+    raw = await _request_raw("POST", "/api/users/resolve", json={"username": username})
+    if not raw.get("ok"):
+        if _raw_is_unavailable(raw):
+            return "unavailable", None
+        if _raw_is_not_found(raw):
+            return "absent", None
+        return "unavailable", None
+    ent = _raw_entity(raw)
+    if ent is None or str(ent.get("username") or "").strip() != username:
+        logger.warning(
+            "REMNAWAVE_%s_STATE_UNEXPECTED: resolve(%r) returned username=%r",
+            what, username, (ent or {}).get("username"),
+        )
+        return "unavailable", None
+    if any(k not in ent for k in _STATE_REQUIRED_KEYS):
+        # /resolve returns a trimmed user — complete it by numeric id.
+        try:
+            ent_id = int(ent["id"])
+        except (KeyError, TypeError, ValueError):
+            return "unavailable", None
+        full = await _request_raw("GET", f"/api/users/{ent_id}")
+        if not full.get("ok"):
+            if _raw_is_unavailable(full):
+                return "unavailable", None
+            return ("absent", None) if _raw_is_not_found(full) else ("unavailable", None)
+        full_ent = _raw_entity(full)
+        if full_ent is None:
+            return "unavailable", None
+        ent = {**ent, **full_ent}
+    return "present", ent
+
+
+async def get_bypass_state(telegram_id: int) -> "tuple[StateKind, Optional[Dict[str, Any]]]":
+    """Bypass entity (username == str(tg), same check as get_bypass_entity_safe)
+    classified as present / absent / unavailable — see the block comment above."""
+    import database
+    try:
+        cached_id = await database.get_remnawave_id(telegram_id)
+    except Exception:
+        cached_id = None
+    expected = str(telegram_id)
+
+    def _accept(ent: Dict[str, Any]) -> bool:
+        return str(ent.get("username") or "").strip() == expected
+
+    return await _entity_state(username=expected, cached_id=cached_id, accept=_accept, what="BYPASS")
+
+
+async def get_premium_state(telegram_id: int) -> "tuple[StateKind, Optional[Dict[str, Any]]]":
+    """Premium entity classified as present / absent / unavailable.
+
+    Cached remnawave_premium_id is accepted if the entity has the premium
+    username, or (legacy username) telegramId == tg and it is not the bypass
+    entity (username == str(tg)). Username resolve uses build_premium_username
+    — the same name create_premium_user_entity preflights/adopts by.
+    """
+    import database
+    from app.services import remnawave_premium  # lazy: remnawave_premium imports this module
+    try:
+        cached_id = await database.get_remnawave_premium_id(telegram_id)
+    except Exception:
+        cached_id = None
+    expected = remnawave_premium.build_premium_username(telegram_id)
+    bypass_username = str(telegram_id)
+
+    def _accept(ent: Dict[str, Any]) -> bool:
+        uname = str(ent.get("username") or "").strip()
+        if uname == expected:
+            return True
+        if uname == bypass_username:
+            return False
+        try:
+            return int(ent.get("telegramId")) == int(telegram_id)
+        except (TypeError, ValueError):
+            return False
+
+    return await _entity_state(username=expected, cached_id=cached_id, accept=_accept, what="PREMIUM")
+
+
 async def get_bypass_traffic_safe(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Same as get_user_traffic, но гарантированно возвращает bypass
     (не premium). Self-heal DB кеш если поломан. Все bot-flow отображения
@@ -918,38 +1083,64 @@ async def get_user_traffic(user_id: Union[str, int]) -> Optional[Dict[str, Any]]
     }
 
 
-async def resolve_user_id(username_or_tg: Union[str, int]) -> Optional[int]:
-    """Резолвит numeric user.id по username или telegram_id (3.x).
+# ── Read-only panel statistics (dashboard) ────────────────────────────
+#
+# Contract: remnawave/backend tag 3.4.3, libs/contract. GET only — these
+# helpers never mutate the panel. Short timeout: the dashboard must not
+# hang on a slow panel, it shows "panel unavailable" instead. Callers
+# cache the results (app/services/panel_stats.py); never call these in a
+# loop per user and never while holding a DB connection.
 
-    В 3.x — единственный fallback-путь для callers, у которых нет id в
-    кеше (не забэкфильнутый юзер, впервые сталкиваемся). Порядок:
-      1. Если уже integer / строка-цифра — возвращаем как есть.
-      2. Пробуем как telegram_id (наш default username = str(tg_id)).
-      3. Пробуем как username-строку.
+_READ_TIMEOUT = httpx.Timeout(connect=3.0, read=6.0, write=3.0, pool=3.0)
 
-    Возвращает None если не нашли — caller обязан обработать.
+
+async def _get_readonly(path: str, params: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+    return await _request("GET", path, params=params, timeout=_READ_TIMEOUT)
+
+
+async def get_system_stats(tz: str = "Europe/Moscow") -> Optional[Dict[str, Any]]:
+    """GET /api/system/stats (commands/system/get-stats.command.ts).
+
+    users.statusCounts {ACTIVE, DISABLED, LIMITED, EXPIRED}, users.totalUsers,
+    onlineStats {lastDay, lastWeek, neverOnline, onlineNow},
+    nodes {totalOnline, totalBytesLifetime (string of bytes)}, cpu, memory, uptime.
     """
-    if not username_or_tg:
-        return None
-    if isinstance(username_or_tg, int):
-        return int(username_or_tg)
-    s = str(username_or_tg)
-    if s.isdigit():
-        # Может быть либо уже id панели, либо telegram_id (наш username).
-        # Пробуем find_by_telegram_id — если наш → вернёт entity с .id.
-        user = await find_user_by_telegram_id(int(s))
-        if user and user.get("id") is not None:
-            try:
-                return int(user["id"])
-            except (TypeError, ValueError):
-                pass
-        # Иначе — трактуем как уже numeric id панели.
-        return int(s)
-    # Нецифровая строка → username.
-    user = await find_user_by_username(s)
-    if user and user.get("id") is not None:
-        try:
-            return int(user["id"])
-        except (TypeError, ValueError):
-            pass
-    return None
+    return await _get_readonly("/api/system/stats", {"tz": tz})
+
+
+async def get_bandwidth_stats(tz: str = "Europe/Moscow") -> Optional[Dict[str, Any]]:
+    """GET /api/system/stats/bandwidth (get-bandwidth-stats.command.ts).
+
+    bandwidthLastTwoDays / LastSevenDays / Last30Days / CalendarMonth /
+    CurrentYear, each {current, previous, difference} as IEC strings ("1.2 TiB").
+    """
+    return await _get_readonly("/api/system/stats/bandwidth", {"tz": tz})
+
+
+async def get_nodes() -> Optional[list]:
+    """GET /api/nodes (nodes/get-nodes.command.ts, models/nodes.schema.ts)."""
+    return await _get_readonly("/api/nodes")
+
+
+async def get_nodes_metrics() -> Optional[Dict[str, Any]]:
+    """GET /api/system/nodes/metrics (get-nodes-metrics.command.ts):
+    {nodes: [{nodeUuid, nodeName, countryEmoji, providerName, usersOnline,
+    inboundsStats, outboundsStats}]}."""
+    return await _get_readonly("/api/system/nodes/metrics")
+
+
+async def get_nodes_usage(start: str, end: str, top_nodes: int = 20) -> Optional[Dict[str, Any]]:
+    """GET /api/bandwidth-stats/nodes?start&end&topNodesLimit
+    (bandwidth-stats/nodes/get-stats-nodes-usage.command.ts). Dates are
+    YYYY-MM-DD. Returns {categories, sparklineData, topNodes, series}."""
+    return await _get_readonly(
+        "/api/bandwidth-stats/nodes",
+        {"start": start, "end": end, "topNodesLimit": int(top_nodes)},
+    )
+
+
+async def get_hwid_stats() -> Optional[Dict[str, Any]]:
+    """GET /api/hwid/devices/stats (hwid/get-hwid-devices-stats.command.ts):
+    {byPlatform: [{platform, count, byApp}], stats: {totalUniqueDevices,
+    totalHwidDevices, averageHwidDevicesPerUser}}."""
+    return await _get_readonly("/api/hwid/devices/stats")

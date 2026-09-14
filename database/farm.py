@@ -11,7 +11,7 @@ import json
 import logging
 import random
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import database.core as _core
 from database.core import get_pool, _to_db_utc, _from_db_utc
@@ -123,51 +123,6 @@ async def schedule_next_storm(now: Optional[datetime] = None) -> Optional[int]:
             return None
 
 
-async def replace_pending_storm_at(scheduled_at: datetime, announce_now: bool = True) -> int:
-    """Reschedule (or create) the pending storm at an exact moment.
-
-    Used by the admin "schedule in N hours" tool: replaces the existing
-    pending storm in-place so already-purchased shields carry over, and
-    optionally stamps announced_at=NOW so the announce-push goes out
-    immediately instead of waiting for the worker to notice the 24h window.
-
-    Returns the storm id.
-    """
-    if not _core.DB_READY:
-        raise RuntimeError("DB not ready")
-    pool = await get_pool()
-    if pool is None:
-        raise RuntimeError("DB not ready")
-    sched_naive = _to_db_utc(scheduled_at)
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            existing = await conn.fetchrow(
-                "SELECT id FROM farm_storms WHERE executed_at IS NULL FOR UPDATE",
-            )
-            if existing is None:
-                row = await conn.fetchrow(
-                    """INSERT INTO farm_storms (scheduled_at, announced_at)
-                       VALUES ($1, CASE WHEN $2 THEN CURRENT_TIMESTAMP ELSE NULL END)
-                       RETURNING id""",
-                    sched_naive, announce_now,
-                )
-                storm_id = row["id"]
-            else:
-                storm_id = existing["id"]
-                await conn.execute(
-                    """UPDATE farm_storms
-                       SET scheduled_at = $2,
-                           announced_at = CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE NULL END
-                       WHERE id = $1""",
-                    storm_id, sched_naive, announce_now,
-                )
-    logger.info(
-        "STORM_RESCHEDULED storm_id=%s scheduled_at=%s announce_now=%s",
-        storm_id, scheduled_at, announce_now,
-    )
-    return storm_id
-
-
 # ──────────────────────────────────────────────────────────────────────
 # Plot operations during storm
 # ──────────────────────────────────────────────────────────────────────
@@ -217,7 +172,7 @@ async def apply_storm_shield_atomic(
 
     If deduct_balance=True, also deducts cost_kopecks from balance under the
     same advisory lock (path for purchases paid via balance).  Otherwise
-    just flips the flag (path for purchases paid via Lava/Платега, where
+    just flips the flag (path for purchases paid via Платега, where
     the balance is not used).
 
     If `conn` is passed, runs on the caller's connection without acquiring
@@ -295,17 +250,153 @@ async def apply_storm_shield_atomic(
             return await _do(own_conn)
 
 
+def _empty_plot(plot_id: int) -> Dict[str, Any]:
+    return {
+        "plot_id": plot_id,
+        "status": "empty",
+        "plant_type": None,
+        "planted_at": None,
+        "ready_at": None,
+        "dead_at": None,
+        "notified_ready": False,
+        "notified_12h": False,
+        "notified_dead": False,
+        "water_used_at": None,
+        "fertilizer_used_at": None,
+    }
+
+
+async def _lock_and_read_farm(conn, telegram_id: int):
+    """Inside the caller's transaction: take the per-user lock (the same one as
+    harvest_plot_atomic / apply_storm_shield_atomic) and read the FRESH row.
+    Returns (plots, plot_count, balance) or None when the user does not exist."""
+    await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+    row = await conn.fetchrow(
+        "SELECT farm_plots, farm_plot_count, balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+        telegram_id,
+    )
+    if not row:
+        return None
+    plots = row["farm_plots"]
+    if isinstance(plots, str):
+        plots = json.loads(plots)
+    if not isinstance(plots, list):
+        plots = []
+    return plots, int(row["farm_plot_count"] or 1), int(row["balance"] or 0)
+
+
+async def buy_farm_plot_atomic(
+    telegram_id: int,
+    price_kopecks: int,
+    max_plots: int,
+    *,
+    expected_count: Optional[int] = None,
+) -> Tuple[bool, str]:
+    """Buy one plot: re-check count and balance, debit, append the plot — one
+    locked transaction (N4). The handler used to debit and then save its stale
+    copy: a double tap charged twice for one plot.
+
+    expected_count = the plot count the tapped screen showed; when the row already
+    has another count (the first tap bought it) nothing is charged.
+    Returns (ok, reason), reason ∈ {"ok", "max_plots", "already_bought",
+    "insufficient_balance", "user_not_found", "db_not_ready"}.
+    """
+    if not _core.DB_READY:
+        return False, "db_not_ready"
+    pool = await get_pool()
+    if pool is None:
+        return False, "db_not_ready"
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            fresh = await _lock_and_read_farm(conn, telegram_id)
+            if fresh is None:
+                return False, "user_not_found"
+            plots, count, balance = fresh
+            if count >= max_plots:
+                return False, "max_plots"
+            if expected_count is not None and count != expected_count:
+                return False, "already_bought"
+            if balance < price_kopecks:
+                return False, "insufficient_balance"
+            await conn.execute(
+                "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
+                price_kopecks, telegram_id,
+            )
+            await conn.execute(
+                """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+                   VALUES ($1, $2, 'subscription_payment', 'farm_buy_plot', 'Farm plot purchase')""",
+                telegram_id, -price_kopecks,
+            )
+            if not plots:
+                plots = [_empty_plot(0)]
+            if not any(int(p.get("plot_id", -1)) == count for p in plots):
+                plots.append(_empty_plot(count))
+            await conn.execute(
+                "UPDATE users SET farm_plots = $1::jsonb, farm_plot_count = $2 WHERE telegram_id = $3",
+                json.dumps(plots), count + 1, telegram_id,
+            )
+    logger.info("FARM_PLOT_BOUGHT user=%s plot=%s price_kopecks=%s", telegram_id, count, price_kopecks)
+    return True, "ok"
+
+
+async def update_farm_plot_atomic(
+    telegram_id: int,
+    plot_id: int,
+    mutate: Callable[[Dict[str, Any], datetime], Optional[str]],
+) -> Tuple[bool, str]:
+    """Plant / water / fertilize ONE plot as a locked read-modify-write (N4).
+
+    `mutate(plot, now)` gets the plot from the FRESH row, changes it in place and
+    returns None, or returns a reason string to refuse (nothing is written). The
+    handlers used to check and save a stale copy of the whole farm: a concurrent
+    action (water + fertilize, plant + buy plot) was silently overwritten.
+    Returns (ok, reason); reason is "ok", mutate's reason, "plot_not_found",
+    "user_not_found" or "db_not_ready".
+    """
+    if not _core.DB_READY:
+        return False, "db_not_ready"
+    pool = await get_pool()
+    if pool is None:
+        return False, "db_not_ready"
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            fresh = await _lock_and_read_farm(conn, telegram_id)
+            if fresh is None:
+                return False, "user_not_found"
+            plots = fresh[0]
+            target = next((p for p in plots if int(p.get("plot_id", -1)) == plot_id), None)
+            if target is None:
+                return False, "plot_not_found"
+            reason = mutate(target, datetime.now(timezone.utc))
+            if reason:
+                return False, reason
+            await conn.execute(
+                "UPDATE users SET farm_plots = $1::jsonb WHERE telegram_id = $2",
+                json.dumps(plots), telegram_id,
+            )
+    return True, "ok"
+
+
 async def execute_storm_for_user(
     telegram_id: int,
     farm_plots: List[Dict[str, Any]],
     last_seen_at: Optional[datetime],
     announced_at: datetime,
     plant_rewards: Dict[str, int],
+    *,
+    storm_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Apply storm effects to one user's plots.
 
+    The plots are re-read under the user's lock (N2): `farm_plots` from the
+    worker's earlier listing is NOT used — a plot harvested (paid) in between
+    must not be auto-harvested and paid again.
+
     For each growing plot:
-        - shielded → keep growing, reset shield (one-shot), count as shielded
+        - shielded → keep growing, reset shield (one-shot), count as shielded,
+          mark `storm_survived = storm_id`
+        - already marked `storm_survived == storm_id` → skipped: a rerun of the
+          same storm after a worker timeout must not kill it (N3)
         - online user (last_seen >= announced_at) → status=dead
         - offline user → auto-harvest at 50% reward, status=empty (reuse plot)
 
@@ -344,56 +435,50 @@ async def execute_storm_for_user(
     killed_plants: List[Tuple[int, str]] = []
     autoharv_plants: List[Tuple[int, str, int]] = []
 
-    new_plots = []
-    for p in farm_plots:
-        if p.get("status") != "growing":
-            new_plots.append(p)
-            continue
-
-        if p.get("storm_shielded") is True:
-            shielded += 1
-            new_plots.append({**p, "storm_shielded": False})  # one-shot reset
-            continue
-
-        plant_type = p.get("plant_type") or ""
-        plot_id = int(p.get("plot_id", -1))
-
-        if is_online:
-            killed += 1
-            killed_plants.append((plot_id, plant_type))
-            new_plots.append({
-                **p,
-                "status": "dead",
-                "dead_at": datetime.now(timezone.utc).isoformat(),
-                "storm_shielded": False,
-            })
-        else:
-            reward = plant_rewards.get(plant_type, 0)
-            half = reward // 2
-            autoharv += 1
-            autoharv_kopecks += half
-            autoharv_plants.append((plot_id, plant_type, half))
-            new_plots.append({
-                "plot_id": plot_id,
-                "status": "empty",
-                "plant_type": None,
-                "planted_at": None,
-                "ready_at": None,
-                "dead_at": None,
-                "notified_ready": False,
-                "notified_12h": False,
-                "notified_dead": False,
-                "water_used_at": None,
-                "fertilizer_used_at": None,
-                "storm_shielded": False,
-            })
-
-    if killed == 0 and shielded == 0 and autoharv == 0:
-        return empty_result
-
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+            fresh = await _lock_and_read_farm(conn, telegram_id)
+            if fresh is None:
+                return empty_result
+            new_plots = []
+            for p in fresh[0]:
+                if p.get("status") != "growing":
+                    new_plots.append(p)
+                    continue
+
+                if storm_id is not None and p.get("storm_survived") == storm_id:
+                    new_plots.append(p)                     # rerun of the same storm (N3)
+                    continue
+
+                if p.get("storm_shielded") is True:
+                    shielded += 1
+                    # one-shot reset + "this storm is done with this plot"
+                    new_plots.append({**p, "storm_shielded": False, "storm_survived": storm_id})
+                    continue
+
+                plant_type = p.get("plant_type") or ""
+                plot_id = int(p.get("plot_id", -1))
+
+                if is_online:
+                    killed += 1
+                    killed_plants.append((plot_id, plant_type))
+                    new_plots.append({
+                        **p,
+                        "status": "dead",
+                        "dead_at": datetime.now(timezone.utc).isoformat(),
+                        "storm_shielded": False,
+                    })
+                else:
+                    reward = plant_rewards.get(plant_type, 0)
+                    half = reward // 2
+                    autoharv += 1
+                    autoharv_kopecks += half
+                    autoharv_plants.append((plot_id, plant_type, half))
+                    new_plots.append({**_empty_plot(plot_id), "storm_shielded": False})
+
+            if killed == 0 and shielded == 0 and autoharv == 0:
+                return empty_result
+
             await conn.execute(
                 "UPDATE users SET farm_plots = $1::jsonb WHERE telegram_id = $2",
                 json.dumps(new_plots), telegram_id,
@@ -423,6 +508,57 @@ async def execute_storm_for_user(
         "killed_plants": killed_plants,
         "autoharv_plants": autoharv_plants,
     }
+
+
+_NOTIFY_FIELDS = frozenset({"status", "notified_ready", "notified_12h", "notified_dead"})
+
+
+async def apply_farm_notification_flags(telegram_id: int, updates: List[Dict[str, Any]]) -> int:
+    """Set the notification worker's flags (status / notified_*) on plots that
+    are still the same planting (plot_id + plant_type + planted_at) and still
+    growing/ready — under the same lock as harvest_plot_atomic, on a fresh read.
+
+    The worker used to save back its whole stale copy of farm_plots: a plot
+    harvested (paid) in between came back ripe and was paid again; a storm
+    shield or a plot bought in between was erased.
+    Each update: {"plot_id", "plant_type", "planted_at", "set": {field: value}}.
+    Returns the number of plots changed.
+    """
+    if not updates or not _core.DB_READY:
+        return 0
+    pool = await get_pool()
+    if pool is None:
+        return 0
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+            row = await conn.fetchrow(
+                "SELECT farm_plots FROM users WHERE telegram_id = $1 FOR UPDATE",
+                telegram_id,
+            )
+            if not row:
+                return 0
+            plots = row["farm_plots"]
+            if isinstance(plots, str):
+                plots = json.loads(plots)
+            if not isinstance(plots, list):
+                return 0
+            changed = 0
+            for upd in updates:
+                for p in plots:
+                    if (int(p.get("plot_id", -1)) == int(upd["plot_id"])
+                            and p.get("plant_type") == upd.get("plant_type")
+                            and p.get("planted_at") == upd.get("planted_at")
+                            and p.get("status") in ("growing", "ready")):
+                        p.update({k: v for k, v in upd["set"].items() if k in _NOTIFY_FIELDS})
+                        changed += 1
+                        break
+            if changed:
+                await conn.execute(
+                    "UPDATE users SET farm_plots = $1::jsonb WHERE telegram_id = $2",
+                    json.dumps(plots), telegram_id,
+                )
+            return changed
 
 
 async def harvest_plot_atomic(

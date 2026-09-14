@@ -24,8 +24,8 @@ Over-issuance events are written by `record_over_issuance()` — called by
 `app.services.subscription_watchdog` after every write to `expires_at`.
 """
 from __future__ import annotations
+from app.services.tariffs import extend_expiry, normalize_tier
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -39,9 +39,6 @@ logger = logging.getLogger(__name__)
 
 # Threshold — anything above this from NOW is considered suspicious.
 _EIGHT_YEARS = timedelta(days=365 * 8)
-
-# Max parallel Remnawave API calls when cross-checking candidate panel dates.
-_PANEL_FETCH_CONCURRENCY = 8
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -109,34 +106,6 @@ async def _fetch_panel_expires_at(
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
-
-
-async def _bulk_fetch_panel_expires_at(
-    entries: List[Dict[str, Any]],
-) -> Dict[int, Optional[datetime]]:
-    """Fetch Remnawave `expireAt` for many candidates in parallel with a
-    concurrency cap so we don't hammer the panel. Returns a dict
-    `telegram_id → datetime | None`."""
-    if not entries:
-        return {}
-
-    sem = asyncio.Semaphore(_PANEL_FETCH_CONCURRENCY)
-
-    async def _one(row: Dict[str, Any]):
-        tg = row["telegram_id"]
-        uuid = row.get("remnawave_premium_uuid")
-        async with sem:
-            dt = await _fetch_panel_expires_at(tg, uuid)
-        return tg, dt
-
-    results = await asyncio.gather(*[_one(r) for r in entries], return_exceptions=True)
-    out: Dict[int, Optional[datetime]] = {}
-    for res in results:
-        if isinstance(res, Exception):
-            continue
-        tg, dt = res
-        out[tg] = dt
-    return out
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -294,7 +263,7 @@ async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]
         out.append({
             "telegram_id": tg,
             "username": (db.get("username") or None) or None,
-            "subscription_type": db.get("subscription_type"),
+            "subscription_type": normalize_tier(db.get("subscription_type")),
             "source": db.get("source"),
             "status": db.get("status"),
             "admin_grant_days": db.get("admin_grant_days"),
@@ -525,7 +494,7 @@ async def get_reconciliation_detail(telegram_id: int) -> Dict[str, Any]:
         "subscription": {
             "expires_at": expires_at.isoformat() if expires_at else None,
             "activated_at": activated_at.isoformat() if activated_at else None,
-            "subscription_type": sub_row["subscription_type"],
+            "subscription_type": normalize_tier(sub_row["subscription_type"]),
             "source": sub_row["source"],
             "status": sub_row["status"],
             "is_bypass_only": sub_row["is_bypass_only"],
@@ -580,10 +549,14 @@ def _simulate_expiry_from_payments(
     the resulting end. Mirrors how admins actually use the grant flow:
     they hand out extra days after the standard payment history.
 
+    A payment period is extended by tariffs.extend_expiry — CALENDAR months
+    for the catalog periods (owner decision 2026-09-14), exactly like
+    grant_access; admin grant days stay days.
+
     Example (matches product spec):
-      payments=[(01.07.2026, 30)], admin=0 → 31.07.2026
-      payments=[(01.06, 30), (25.06, 30)], admin=0 → 31.07 (extend)
-      payments=[(01.01.2020, 30), (01.07.2026, 30)], admin=0 → 31.07.2026
+      payments=[(01.07.2026, 30)], admin=0 → 01.08.2026
+      payments=[(01.06, 30), (25.06, 30)], admin=0 → 01.08 (extend)
+      payments=[(01.01.2020, 30), (01.07.2026, 30)], admin=0 → 01.08.2026
         — 6-year gap → last payment starts fresh.
 
     Args:
@@ -602,10 +575,10 @@ def _simulate_expiry_from_payments(
             continue
         if current_end is None or paid_at > current_end:
             # Gap or first payment: start fresh from this payment.
-            current_end = paid_at + timedelta(days=period)
+            current_end = extend_expiry(paid_at, period)
         else:
             # Renewal — extend current window.
-            current_end += timedelta(days=period)
+            current_end = extend_expiry(current_end, period)
 
     if admin_grant_days and admin_grant_days > 0:
         base = current_end or datetime.now(timezone.utc)

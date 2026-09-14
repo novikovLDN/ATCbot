@@ -5,9 +5,8 @@ All shared state (get_pool, helpers) imported from database.core.
 DB_READY accessed via _core.DB_READY to get live value (not stale import-time copy).
 Cross-module calls (increase_balance, process_referral_reward) use lazy imports.
 """
-import asyncpg
 import asyncio
-import json
+import asyncpg
 import logging
 import random
 import string
@@ -15,8 +14,8 @@ import uuid as uuid_lib
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import config
-import vpn_utils
 import database.core as _core
+from app.services.tariffs import normalize_tier
 
 
 def _notify_watchdog_expires_at(
@@ -60,8 +59,7 @@ from database.core import (
     get_pool,
     _to_db_utc, _from_db_utc, _ensure_utc,
     _normalize_subscription_row, _generate_subscription_uuid,
-    safe_int, mark_payment_notification_sent,
-    retry_async,
+    safe_int,
 )
 
 if TYPE_CHECKING:
@@ -85,66 +83,6 @@ async def get_pending_payment_by_user(telegram_id: int) -> Optional[Dict[str, An
             telegram_id
         )
         return dict(row) if row else None
-
-
-async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
-    """Создать платеж и вернуть его ID. Возвращает None, если уже есть pending платеж
-    
-    Автоматически применяет скидки в следующем порядке приоритета:
-    1. VIP-статус (30%) - ВЫСШИЙ ПРИОРИТЕТ
-    2. Персональная скидка (admin)
-    """
-    # Проверяем наличие pending платежа
-    existing_payment = await get_pending_payment_by_user(telegram_id)
-    if existing_payment:
-        return None  # У пользователя уже есть pending платеж
-    
-    # Рассчитываем цену с учетом скидки
-    # TARIFFS is nested: tariff -> period_days -> {price}. Default to 30-day period.
-    tariff_periods = config.TARIFFS.get(tariff, config.TARIFFS.get("basic", {}))
-    tariff_data = tariff_periods.get(30, {})
-    base_price = tariff_data.get("price", 149)
-    
-    # ПРИОРИТЕТ 1: Проверяем VIP-статус (высший приоритет)
-    from database.admin import is_vip_user, get_user_discount
-    is_vip = await is_vip_user(telegram_id)
-    discount_applied = None
-    discount_type = None
-    
-    if is_vip:
-        # Применяем VIP-скидку 30% ко всем тарифам
-        discounted_price = int(base_price * 0.70)  # 30% скидка
-        amount = discounted_price
-        discount_applied = 30
-        discount_type = "vip"
-    else:
-        # ПРИОРИТЕТ 2: Проверяем персональную скидку
-        personal_discount = await get_user_discount(telegram_id)
-        
-        if personal_discount:
-            # Применяем персональную скидку
-            discount_percent = personal_discount["discount_percent"]
-            discounted_price = int(base_price * (1 - discount_percent / 100))
-            amount = discounted_price
-            discount_applied = discount_percent
-            discount_type = "personal"
-        else:
-            # Без скидки - используем базовую цену
-            amount = base_price
-    
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        payment_id = await conn.fetchval(
-            "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
-            telegram_id, tariff, amount
-        )
-        
-        # Логируем применение скидки
-        if discount_applied:
-            details = f"{discount_type} discount applied: tariff={tariff}, base_price={base_price}, discount={discount_applied}%, final_price={amount}"
-            await _log_audit_event_atomic(conn, f"{discount_type}_discount_applied", telegram_id, telegram_id, details)
-        
-        return payment_id
 
 
 async def get_payment(payment_id: int) -> Optional[Dict[str, Any]]:
@@ -188,35 +126,29 @@ async def get_last_approved_payment(telegram_id: int, conn: Optional[asyncpg.Con
         return dict(row) if row else None
 
 
-async def update_payment_status(payment_id: int, status: str, admin_telegram_id: Optional[int] = None):
-    """Обновить статус платежа
-    
-    Args:
-        payment_id: ID платежа
-        status: Новый статус ('approved', 'rejected', и т.д.)
-        admin_telegram_id: Telegram ID администратора (опционально, для аудита)
-    """
+# payments.tariff of a SUBSCRIPTION purchase / renewal: "basic_30", "plus_90" (combo is
+# recorded as its base tier), legacy biz "biz_team_30" (renews as Plus), legacy months
+# "1" / "3" / "6" / "12". Not: balance_topup, gift_*, traffic_* / bypass_*, farm_*,
+# apple_id_* … Postgres `~` (the payment-matrix fake applies the same pattern).
+SUBSCRIPTION_PAYMENT_TARIFF_RE = r"^((basic|plus)_[0-9]+|biz_[a-z0-9_]+_[0-9]+|[0-9]+)$"
+
+
+async def get_last_subscription_payment(telegram_id: int, conn: Optional[asyncpg.Connection] = None) -> Optional[Dict[str, Any]]:
+    """The last approved SUBSCRIPTION purchase / renewal payment — the tariff and
+    period auto-renewal renews. get_last_approved_payment returns ANY payment, so a
+    top-up, gift, GB pack or farm shield made after the purchase was parsed as
+    «basic, 30 days» (P1, 2026-09-14)."""
+    sql = """SELECT * FROM payments
+             WHERE telegram_id = $1 AND status = 'approved' AND tariff ~ $2
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1"""
+    if conn is not None:
+        row = await conn.fetchrow(sql, telegram_id, SUBSCRIPTION_PAYMENT_TARIFF_RE)
+        return dict(row) if row else None
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # Получаем информацию о платеже для аудита
-            payment_row = await conn.fetchrow(
-                "SELECT telegram_id FROM payments WHERE id = $1",
-                payment_id
-            )
-            target_user = payment_row["telegram_id"] if payment_row else None
-            
-            # Обновляем статус
-            await conn.execute(
-                "UPDATE payments SET status = $1 WHERE id = $2",
-                status, payment_id
-            )
-            
-            # Записываем в audit_log, если указан admin_telegram_id
-            if admin_telegram_id is not None:
-                action_type = "payment_rejected" if status == "rejected" else f"payment_status_changed_{status}"
-                details = f"Payment ID: {payment_id}, Status: {status}"
-                await _log_audit_event_atomic(conn, action_type, admin_telegram_id, target_user, details)
+    async with pool.acquire() as acquired:
+        row = await acquired.fetchrow(sql, telegram_id, SUBSCRIPTION_PAYMENT_TARIFF_RE)
+        return dict(row) if row else None
 
 
 async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
@@ -279,7 +211,6 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
     removal_success = True
     if uuid_to_remove:
         try:
-            await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_remove)
             logger.info(
                 "EXPIRY_REMOVE_SUCCESS",
                 extra={"telegram_id": telegram_id, "uuid": uuid_to_remove[:8] + "..."}
@@ -310,6 +241,8 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
     # between Phase 1 and Phase 3, this UPDATE must match 0 rows — subscription stays active.
     if not uuid_to_remove:
         return False
+    rows = 0
+    expired_notice = None  # "bypass" / "paid": the user is told after the commit
     async with pool.acquire() as conn:
         async with conn.transaction():
             # Check if user has Remnawave bypass traffic — if so, transition to bypass-only
@@ -345,53 +278,72 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                         extend_remnawave_for_bypass_bg(telegram_id)
                     except Exception as rmn_err:
                         logger.warning("REMNAWAVE_BYPASS_EXTEND_FAIL: tg=%s %s", telegram_id, rmn_err)
-                return rows > 0
+                    # N7: a paid premium that ended → −15 % offer (this branch used to
+                    # return before it; most users have a bypass entity).
+                    await grant_expiry_special_offer(
+                        conn, telegram_id, subscription.get("source"), subscription.get("expires_at"),
+                    )
+                    expired_notice = "bypass"
+            else:
+                rows = await _expire_row_fully(conn, telegram_id, subscription, subscription_id, uuid_to_remove, now_db)
+                if rows > 0 and (subscription.get("source") or "") in _PAID_SUBSCRIPTION_SOURCES:
+                    expired_notice = "paid"
+    # Committed: tell the user (08_payments_ux P1 #5 — a paid subscription without
+    # bypass used to end in silence). Once per period: the UPDATE above matches once.
+    if expired_notice:
+        try:
+            from app.services.notifications import special_offer
+            special_offer.schedule_expired_notice(telegram_id, has_bypass=expired_notice == "bypass")
+        except Exception as notify_err:  # noqa: BLE001
+            logger.warning("EXPIRY_NOTICE_SCHEDULE_FAILED user=%s: %s", telegram_id, type(notify_err).__name__)
+    return rows > 0
 
-            result = await conn.execute(
-                """UPDATE subscriptions
-                   SET status = 'expired', uuid = NULL, vpn_key = NULL
-                   WHERE id = $1 AND telegram_id = $2 AND uuid = $3 AND status = 'active'
-                     AND expires_at <= $4""",
-                subscription_id, telegram_id, uuid_to_remove, now_db
-            )
-            rows = int(result.split()[-1]) if result else 0
-            if rows > 0:
-                logger.info(
-                    "EXPIRY_DB_UPDATE_SUCCESS",
-                    extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
-                )
-                # Disable Remnawave — ОБА entity: bypass (по трафику) + premium.
-                # Panel-side auto-expiry по expireAt тоже сработал бы,
-                # но explicit disable гарантирует что subscriptionUrl
-                # немедленно инвалидируется даже если DB.expires_at
-                # разошёлся с panel.expireAt (см. audit bucket
-                # `panel_ahead_of_paid` в admin/audit_subs).
-                try:
-                    from app.services.remnawave_service import disable_remnawave_user_bg
-                    disable_remnawave_user_bg(telegram_id)
-                except Exception as rmn_err:
-                    logger.warning("REMNAWAVE_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
-                try:
-                    import asyncio as _aio
-                    from app.services import remnawave_premium
-                    _aio.create_task(remnawave_premium.disable_premium_user(telegram_id))
-                except Exception as rmn_err:
-                    logger.warning("REMNAWAVE_PREMIUM_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
 
-                # Создаем спецпредложение -15% на 3 дня для пользователей с оплаченной подпиской
-                sub_source = subscription.get("source", "")
-                if sub_source == "payment":
-                    try:
-                        await set_special_offer(telegram_id)
-                        logger.info(f"SPECIAL_OFFER_CREATED for user {telegram_id} after paid subscription expired")
-                    except Exception as e:
-                        logger.warning(f"Failed to create special offer for {telegram_id}: {e}")
-            elif rows == 0 and subscription_id and uuid_to_remove:
-                logger.debug(
-                    "EXPIRY_SKIPPED_RENEWED",
-                    extra={"telegram_id": telegram_id, "uuid": uuid_to_remove[:8] + "..."}
-                )
-            return rows > 0
+async def _expire_row_fully(conn, telegram_id, subscription, subscription_id, uuid_to_remove, now_db) -> int:
+    """check_and_disable_expired_subscription, no bypass entity: mark the row
+    expired (inside the caller's transaction). Returns the updated row count."""
+    result = await conn.execute(
+        """UPDATE subscriptions
+           SET status = 'expired', uuid = NULL, vpn_key = NULL
+           WHERE id = $1 AND telegram_id = $2 AND uuid = $3 AND status = 'active'
+             AND expires_at <= $4""",
+        subscription_id, telegram_id, uuid_to_remove, now_db
+    )
+    rows = int(result.split()[-1]) if result else 0
+    if rows > 0:
+        logger.info(
+            "EXPIRY_DB_UPDATE_SUCCESS",
+            extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
+        )
+        # Disable Remnawave — ОБА entity: bypass (по трафику) + premium.
+        # Panel-side auto-expiry по expireAt тоже сработал бы,
+        # но explicit disable гарантирует что subscriptionUrl
+        # немедленно инвалидируется даже если DB.expires_at
+        # разошёлся с panel.expireAt (см. audit bucket
+        # `panel_ahead_of_paid` в admin/audit_subs).
+        try:
+            from app.services.remnawave_service import disable_remnawave_user_bg
+            disable_remnawave_user_bg(telegram_id)
+        except Exception as rmn_err:
+            logger.warning("REMNAWAVE_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
+        try:
+            import asyncio as _aio
+            from app.services import remnawave_premium
+            _aio.create_task(remnawave_premium.disable_premium_user(telegram_id))
+        except Exception as rmn_err:
+            logger.warning("REMNAWAVE_PREMIUM_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
+
+        # Спецпредложение −15 % (72 ч) за оплаченную подписку — в этой же
+        # транзакции, одно окно на период (N7, решение владельца 2026-09-14).
+        await grant_expiry_special_offer(
+            conn, telegram_id, subscription.get("source"), subscription.get("expires_at"),
+        )
+    elif rows == 0 and subscription_id and uuid_to_remove:
+        logger.debug(
+            "EXPIRY_SKIPPED_RENEWED",
+            extra={"telegram_id": telegram_id, "uuid": uuid_to_remove[:8] + "..."}
+        )
+    return rows
 
 
 async def set_combo_flag(telegram_id: int, is_combo: bool = True):
@@ -428,8 +380,14 @@ async def set_bypass_only_flag(telegram_id: int, is_bypass_only: bool = True):
         logger.info(f"set_bypass_only_flag: user={telegram_id} is_bypass_only={is_bypass_only} result={result}")
 
 
-async def ensure_bypass_only_subscription(telegram_id: int) -> bool:
+async def ensure_bypass_only_subscription(telegram_id: int, conn=None) -> bool:
     """Создать bypass-only subscription row, если её нет.
+
+    `conn` — соединение открытой транзакции вызывающего (finalize_purchase,
+    ветка пакета `bypass_*`): строка должна появиться в той же транзакции,
+    ДО задачи outbox, иначе её запись кеша bypass (remnawave_uuid/id) не
+    найдёт строки, а при истечении очистка сочтёт юзера «без bypass» и
+    отключит bypass-сущность (E2E-CACHE на пути «Только обход»).
 
     Поведение:
       • Если subscription отсутствует — INSERT bypass_only row на 10 лет.
@@ -450,56 +408,69 @@ async def ensure_bypass_only_subscription(telegram_id: int) -> bool:
     Returns:
         True on success.
     """
+    if conn is not None:
+        # No ALTER TABLE here: inside the caller's transaction it would hold an
+        # ACCESS EXCLUSIVE lock on subscriptions until commit (column: migration 036).
+        return await _ensure_bypass_only_row(conn, telegram_id)
     pool = await get_pool()
     if pool is None:
         return False
-    async with pool.acquire() as conn:
+    async with pool.acquire() as own_conn:
         try:
-            await conn.execute(
+            await own_conn.execute(
                 "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_bypass_only BOOLEAN DEFAULT FALSE"
             )
         except Exception:
             pass
-        existing = await conn.fetchrow(
-            """SELECT telegram_id, expires_at, is_bypass_only, status
-               FROM subscriptions WHERE telegram_id = $1""",
-            telegram_id,
+        return await _ensure_bypass_only_row(own_conn, telegram_id)
+
+
+async def _ensure_bypass_only_row(conn, telegram_id: int) -> bool:
+    """ensure_bypass_only_subscription on a given connection (see its docstring)."""
+    existing = await conn.fetchrow(
+        """SELECT telegram_id, expires_at, is_bypass_only, status
+           FROM subscriptions WHERE telegram_id = $1""",
+        telegram_id,
+    )
+    far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+    if existing:
+        is_active_paid = (
+            existing["expires_at"] is not None
+            and _from_db_utc(existing["expires_at"]) > datetime.now(timezone.utc)
+            and not bool(existing["is_bypass_only"])
         )
-        far_future = datetime.now(timezone.utc) + timedelta(days=3650)
-        if existing:
-            is_active_paid = (
-                existing["expires_at"] is not None
-                and _from_db_utc(existing["expires_at"]) > datetime.now(timezone.utc)
-                and not bool(existing["is_bypass_only"])
+        if is_active_paid:
+            # Юзер с активной платной — bypass-пак добавляется
+            # только в Remnawave (трафик), subscription не трогаем.
+            logger.info(
+                "ensure_bypass_only_subscription: SKIP active paid sub "
+                "(user=%s expires=%s) — only Remnawave traffic top-up",
+                telegram_id, existing["expires_at"],
             )
-            if is_active_paid:
-                # Юзер с активной платной — bypass-пак добавляется
-                # только в Remnawave (трафик), subscription не трогаем.
-                logger.info(
-                    "ensure_bypass_only_subscription: SKIP active paid sub "
-                    "(user=%s expires=%s) — only Remnawave traffic top-up",
-                    telegram_id, existing["expires_at"],
-                )
-                return True
-            # Истёкшая или уже bypass_only — продлеваем на 10 лет и
-            # помечаем как bypass_only.
-            await conn.execute(
-                """UPDATE subscriptions
-                   SET is_bypass_only = TRUE, status = 'active',
-                       expires_at = $2,
-                       source = CASE WHEN status = 'expired' OR expires_at < NOW()
-                                     THEN 'bypass_only' ELSE source END
-                   WHERE telegram_id = $1""",
-                telegram_id, _to_db_utc(far_future),
-            )
-        else:
-            await conn.execute(
-                """INSERT INTO subscriptions (telegram_id, status, subscription_type, is_bypass_only, expires_at, source)
-                   VALUES ($1, 'active', 'basic', TRUE, $2, 'bypass_only')""",
-                telegram_id, _to_db_utc(far_future),
-            )
-        logger.info(f"ensure_bypass_only_subscription: user={telegram_id} created/updated")
-        return True
+            return True
+        # Истёкшая или уже bypass_only — продлеваем на 10 лет и
+        # помечаем как bypass_only. Ключ закончившегося premium снимается, как
+        # это делают воркеры истечения: иначе строка «active + uuid + заглушка
+        # на 10 лет» выглядела для grant_access продлеваемой подпиской, а очистка
+        # её больше не выбирала (expires_at в будущем).
+        await conn.execute(
+            """UPDATE subscriptions
+               SET is_bypass_only = TRUE, status = 'active',
+                   uuid = NULL, vpn_key = NULL, vpn_key_plus = NULL,
+                   expires_at = $2,
+                   source = CASE WHEN status = 'expired' OR expires_at < NOW()
+                                 THEN 'bypass_only' ELSE source END
+               WHERE telegram_id = $1""",
+            telegram_id, _to_db_utc(far_future),
+        )
+    else:
+        await conn.execute(
+            """INSERT INTO subscriptions (telegram_id, status, subscription_type, is_bypass_only, expires_at, source)
+               VALUES ($1, 'active', 'basic', TRUE, $2, 'bypass_only')""",
+            telegram_id, _to_db_utc(far_future),
+        )
+    logger.info(f"ensure_bypass_only_subscription: user={telegram_id} created/updated")
+    return True
 
 
 async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
@@ -535,8 +506,17 @@ async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
 
 async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить подписку пользователя независимо от статуса (активная или истекшая)
-    
+
     Возвращает подписку, если она существует, даже если expires_at <= now.
+
+    Строго read-only — в отличие от get_subscription() не дёргает
+    check_and_disable_expired_subscription(). Поэтому именно её зовут
+    GET-роуты админки: открытие карточки юзера не должно писать в БД и
+    конкурировать за строку с воркером fast_expiry_cleanup.
+
+    ORDER BY добавлен на всякий случай: сейчас subscriptions.telegram_id
+    UNIQUE, строка максимум одна, но если ограничение когда-нибудь снимут —
+    fetchrow без сортировки начнёт возвращать произвольную запись.
     """
     # Защита от работы с неинициализированной БД
     if not _core.DB_READY:
@@ -548,7 +528,9 @@ async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
         return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM subscriptions WHERE telegram_id = $1",
+            """SELECT * FROM subscriptions WHERE telegram_id = $1
+               ORDER BY expires_at DESC NULLS LAST, id DESC
+               LIMIT 1""",
             telegram_id
         )
         return _normalize_subscription_row(row) if row else None
@@ -585,36 +567,6 @@ async def admin_switch_tariff(telegram_id: int, new_tariff: str, vpn_key_plus: O
             telegram_id
         )
         return _normalize_subscription_row(row) if row else None
-
-
-async def has_any_subscription(telegram_id: int) -> bool:
-    """Проверить, есть ли у пользователя хотя бы одна подписка (любого статуса)
-    
-    Returns:
-        True если есть хотя бы одна запись в subscriptions, False иначе
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT 1 FROM subscriptions WHERE telegram_id = $1 LIMIT 1",
-            telegram_id
-        )
-        return row is not None
-
-
-async def has_any_payment(telegram_id: int) -> bool:
-    """Проверить, есть ли у пользователя хотя бы один платёж (любого статуса)
-    
-    Returns:
-        True если есть хотя бы одна запись в payments, False иначе
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT 1 FROM payments WHERE telegram_id = $1 LIMIT 1",
-            telegram_id
-        )
-        return row is not None
 
 
 async def has_trial_used(telegram_id: int) -> bool:
@@ -787,6 +739,78 @@ async def set_special_offer(telegram_id: int) -> bool:
         return False
 
 
+_PAID_SUBSCRIPTION_SOURCES = ("payment", "auto_renew")
+
+# Owner 2026-09-14: ONE −15 % window of 72 h per subscription period, opened by
+# whatever offers it first — the pre-expiry reminder (paid 3 h / trial 3 h) or
+# the expiry itself. Pressing a −15 % button again never extends it.
+SPECIAL_OFFER_DURATION = timedelta(hours=72)
+# "Already offered in this period" = created at or after (period end − 7 days).
+# A paid period is at least one calendar month, so the previous period's offer
+# is always older than that; the 3 h reminder's offer is newer.
+_SPECIAL_OFFER_PERIOD_GUARD = timedelta(days=7)
+
+
+def _offer_cutoff(period_end):
+    """Naive-UTC cutoff: an offer created before it belongs to an earlier period."""
+    if getattr(period_end, "tzinfo", None) is not None:
+        period_end = _to_db_utc(period_end)
+    return period_end - _SPECIAL_OFFER_PERIOD_GUARD
+
+
+async def claim_special_offer(telegram_id: int, period_end) -> Optional[Dict[str, Any]]:
+    """Open the −15 % window of the period that ends at `period_end`, unless one
+    was already opened in this period. Returns the ACTIVE window (just opened or
+    already open) as get_special_offer_info does, or None when this period's
+    window has run out — it is never re-opened and never extended."""
+    if not _core.DB_READY or period_end is None:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                """UPDATE users SET special_offer_created_at = $1
+                   WHERE telegram_id = $2
+                     AND (special_offer_created_at IS NULL OR special_offer_created_at < $3)""",
+                _to_db_utc(datetime.now(timezone.utc)), telegram_id, _offer_cutoff(period_end),
+            )
+        if (result or "").endswith(" 1"):
+            logger.info("SPECIAL_OFFER_OPENED user=%s period_end=%s", telegram_id, period_end)
+    except Exception as e:
+        logger.warning("SPECIAL_OFFER_CLAIM_FAILED user=%s: %s", telegram_id, type(e).__name__)
+        return None
+    return await get_special_offer_info(telegram_id)
+
+
+async def grant_expiry_special_offer(conn, telegram_id: int, source: Optional[str], period_end) -> bool:
+    """−15 % for 3 days when a PAID subscription ends (N7, docs/audit/06_bug_hunt.md).
+
+    Called by BOTH expiry paths — the fast expiry worker and
+    check_and_disable_expired_subscription, on both branches (fully expired /
+    bypass-only) — inside their expiry transaction (DB only, no HTTP). Before,
+    only check_and_disable's full-expiry branch granted it, so it almost never
+    happened. Paid = source 'payment' (bought) or 'auto_renew' (renewed from
+    balance). One window per period (owner 2026-09-14): skipped when the
+    period's window was already opened — by the 3 h reminder, the other path or
+    a rerun (created at or after period_end − 7 days). Applied at checkout by
+    calculate_final_price via get_special_offer_info.
+    """
+    if (source or "") not in _PAID_SUBSCRIPTION_SOURCES or period_end is None:
+        return False
+    result = await conn.execute(
+        """UPDATE users SET special_offer_created_at = $1
+           WHERE telegram_id = $2
+             AND (special_offer_created_at IS NULL OR special_offer_created_at < $3)""",
+        _to_db_utc(datetime.now(timezone.utc)), telegram_id, _offer_cutoff(period_end),
+    )
+    granted = (result or "").endswith(" 1")
+    if granted:
+        logger.info("SPECIAL_OFFER_CREATED user=%s source=%s period_end=%s", telegram_id, source, period_end)
+    return granted
+
+
 async def get_special_offer_info(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить информацию о спецпредложении пользователя.
 
@@ -810,7 +834,7 @@ async def get_special_offer_info(telegram_id: int) -> Optional[Dict[str, Any]]:
 
             created_at = _from_db_utc(row["special_offer_created_at"])
             now = datetime.now(timezone.utc)
-            expires_at = created_at + timedelta(days=3)
+            expires_at = created_at + SPECIAL_OFFER_DURATION
             remaining = expires_at - now
 
             if remaining.total_seconds() <= 0:
@@ -835,160 +859,6 @@ async def get_special_offer_info(telegram_id: int) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"Failed to get special offer for {telegram_id}: {e}")
         return None
-
-
-async def has_active_special_offer(telegram_id: int) -> bool:
-    """Проверить, есть ли активное спецпредложение."""
-    info = await get_special_offer_info(telegram_id)
-    return info is not None
-
-
-async def get_active_subscription(subscription_id: int) -> Optional[Dict[str, Any]]:
-    """Получить активную подписку по ID
-    
-    Args:
-        subscription_id: ID подписки
-    
-    Returns:
-        Словарь с данными подписки или None, если:
-        - подписка не найдена
-        - статус != "active"
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        now = datetime.now(timezone.utc)
-        row = await conn.fetchrow(
-            """SELECT * FROM subscriptions 
-               WHERE id = $1 
-               AND status = 'active' 
-               AND expires_at > $2""",
-            subscription_id, _to_db_utc(now)
-        )
-        return _normalize_subscription_row(row) if row else None
-
-
-async def update_subscription_uuid(subscription_id: int, new_uuid: str, vpn_key: Optional[str] = None) -> None:
-    """Обновить UUID подписки (и vpn_key при перевыпуске)
-    
-    Args:
-        subscription_id: ID подписки
-        new_uuid: Новый UUID
-        vpn_key: VLESS URL (опционально, при перевыпуске)
-    
-    Note:
-        НЕ меняет статус
-        НЕ трогает даты
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        if vpn_key is not None:
-            await conn.execute(
-                "UPDATE subscriptions SET uuid = $1, vpn_key = $2 WHERE id = $3",
-                new_uuid, vpn_key, subscription_id
-            )
-        else:
-            await conn.execute(
-                "UPDATE subscriptions SET uuid = $1 WHERE id = $2",
-                new_uuid, subscription_id
-            )
-        logger.info(f"Subscription UUID updated: subscription_id={subscription_id}, new_uuid={new_uuid[:8]}...")
-
-
-async def get_all_active_subscriptions() -> List[Dict[str, Any]]:
-    """Получить все активные подписки
-    
-    Returns:
-        Список подписок со статусом 'active' и expires_at > now
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        now = datetime.now(timezone.utc)
-        rows = await conn.fetch(
-            """SELECT * FROM subscriptions 
-               WHERE status = 'active' 
-               AND expires_at > $1
-               ORDER BY id ASC""",
-            _to_db_utc(now)
-        )
-        return [_normalize_subscription_row(row) for row in rows]
-
-
-async def reissue_subscription_key(subscription_id: int) -> "Tuple[str, str]":
-    """Перевыпустить VPN ключ для подписки (сервисная функция)
-    
-    Алгоритм:
-    1) Получить подписку через get_active_subscription
-    2) Если None → выбросить бизнес-ошибку
-    3) Сохранить old_uuid
-    4) Вызвать reissue_vpn_access(old_uuid) — API returns vless_link (single source of truth)
-    5) Получить new_uuid, vless_url
-    6) Обновить uuid, vpn_key в БД через update_subscription_uuid
-    7) Вернуть (new_uuid, vless_url)
-    
-    Args:
-        subscription_id: ID подписки
-    
-    Returns:
-        (new_uuid, vless_url) — оба из API
-    
-    Raises:
-        ValueError: Если подписка не найдена или не активна
-        VPNAPIError: При ошибках VPN API
-    """
-    # 1. Получаем активную подписку
-    subscription = await get_active_subscription(subscription_id)
-    if not subscription:
-        error_msg = f"Subscription {subscription_id} not found or not active"
-        logger.error(f"reissue_subscription_key: {error_msg}")
-        raise ValueError(error_msg)
-    
-    old_uuid = subscription.get("uuid")
-    if not old_uuid:
-        error_msg = f"Subscription {subscription_id} has no UUID"
-        logger.error(f"reissue_subscription_key: {error_msg}")
-        raise ValueError(error_msg)
-    
-    telegram_id = subscription.get("telegram_id")
-    uuid_preview = f"{old_uuid[:8]}..." if old_uuid and len(old_uuid) > 8 else (old_uuid or "N/A")
-    logger.info(
-        f"reissue_subscription_key: START [subscription_id={subscription_id}, "
-        f"telegram_id={telegram_id}, old_uuid={uuid_preview}]"
-    )
-    
-    # 2. Перевыпускаем VPN доступ
-    expires_at_raw = subscription.get("expires_at")
-    expires_at = _ensure_utc(expires_at_raw) if expires_at_raw else None
-    if not expires_at:
-        error_msg = f"Subscription {subscription_id} has no expires_at"
-        logger.error(f"reissue_subscription_key: {error_msg}")
-        raise ValueError(error_msg)
-    
-    # 3.x: samopis-мастер мёртв, vpn_utils.reissue_vpn_access — no-op
-    # (возвращает пустой vless_link → VPNAPIError). Делегируем в
-    # atomic-версию, которая работает через
-    # remnawave_premium.reissue_premium_user_entity.
-    try:
-        new_uuid, vless_url = await reissue_vpn_key_atomic(telegram_id)
-    except Exception as e:
-        logger.error(
-            f"reissue_subscription_key: REMNAWAVE_REISSUE_FAILED "
-            f"[subscription_id={subscription_id}, telegram_id={telegram_id}, "
-            f"error={str(e)}]"
-        )
-        raise
-    if not new_uuid or not vless_url:
-        raise ValueError(
-            f"reissue_vpn_key_atomic returned empty result "
-            f"(new_uuid={new_uuid!r}, vless_url_present={bool(vless_url)})"
-        )
-
-    new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
-    logger.info(
-        f"reissue_subscription_key: SUCCESS [subscription_id={subscription_id}, "
-        f"telegram_id={telegram_id}, old_uuid={uuid_preview}, new_uuid={new_uuid_preview}]"
-    )
-
-    return new_uuid, vless_url
 
 
 async def _log_audit_event_atomic(
@@ -1032,7 +902,7 @@ async def _log_audit_event_atomic(
                    VALUES ($1, $2, $3, $4)""",
                 action, telegram_id, target_user, details
             )
-    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError):
         # STEP 5 — PART F: FAILURE SAFETY
         # Log warning but never throw
         logger.warning(f"audit_log table missing or inaccessible — skipping audit log: action={action}, telegram_id={telegram_id}")
@@ -1087,36 +957,6 @@ async def _log_vpn_lifecycle_audit_async(
     except Exception as e:
         # Не блокируем основной flow при ошибках логирования
         logger.warning(f"Failed to log VPN audit event: action={action}, user={telegram_id}, error={e}")
-
-
-def _log_vpn_lifecycle_audit_fire_and_forget(
-    action: str,
-    telegram_id: int,
-    uuid: Optional[str] = None,
-    source: Optional[str] = None,
-    result: str = "success",
-    details: Optional[str] = None
-):
-    """
-    Записать событие VPN lifecycle в audit_log (fire-and-forget, не блокирует).
-    
-    Создаёт async task для логирования, не ожидает завершения.
-    Используется когда нужно залогировать событие вне async контекста.
-    """
-    import asyncio
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Если event loop уже запущен, создаём task
-            asyncio.create_task(
-                _log_vpn_lifecycle_audit_async(action, telegram_id, uuid, source, result, details)
-            )
-        else:
-            # Если event loop не запущен, запускаем корутину
-            asyncio.run(_log_vpn_lifecycle_audit_async(action, telegram_id, uuid, source, result, details))
-    except Exception as e:
-        # Не блокируем основной flow
-        logger.warning(f"Failed to schedule VPN audit log: action={action}, user={telegram_id}, error={e}")
 
 
 async def _log_subscription_history_atomic(conn, telegram_id: int, vpn_key: str, start_date: datetime, end_date: datetime, action_type: str):
@@ -1184,7 +1024,7 @@ async def _log_audit_event_atomic_standalone(
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await _log_audit_event_atomic(conn, action, telegram_id, target_user, details, correlation_id)
-    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError):
         # STEP 5 — PART F: FAILURE SAFETY
         # Log warning but never throw
         logger.warning(f"audit_log table missing or inaccessible — skipping audit log: action={action}, telegram_id={telegram_id}")
@@ -1192,149 +1032,6 @@ async def _log_audit_event_atomic_standalone(
         # STEP 5 — PART F: FAILURE SAFETY
         # Log warning but never throw
         logger.warning(f"Error logging audit event (standalone): {e}")
-
-
-async def reissue_vpn_key_atomic(
-    telegram_id: int,
-    admin_telegram_id: int,
-    correlation_id: Optional[str] = None,
-) -> Tuple[Optional[str], Optional[str]]:
-    """Атомарно перевыпустить VPN-ключ для пользователя.
-
-    Strict two-phase activation: add_vless_user OUTSIDE DB transaction.
-    Phase 1: Session lock, fetch sub, add_vless_user (new UUID).
-    Phase 2: DB transaction (UPDATE). On failure: safe_remove_vless_user_with_retry.
-    After commit: remove old UUID from Xray.
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Session-level lock (prevents concurrent reissue for same user)
-        await conn.execute("SELECT pg_advisory_lock($1)", telegram_id)
-        try:
-            now = datetime.now(timezone.utc)
-            subscription_row = await conn.fetchrow(
-                """SELECT * FROM subscriptions
-                   WHERE telegram_id = $1 AND status = 'active' AND expires_at > $2""",
-                telegram_id, _to_db_utc(now)
-            )
-            if not subscription_row:
-                logger.error(f"Cannot reissue VPN key for user {telegram_id}: no active subscription")
-                return None, None
-
-            subscription = dict(subscription_row)
-            old_uuid = subscription.get("uuid")
-            old_vpn_key = subscription.get("vpn_key", "")
-            expires_at = _ensure_utc(subscription["expires_at"])
-            reissue_tariff = (subscription.get("subscription_type") or "basic").strip().lower()
-            if reissue_tariff not in config.VALID_SUBSCRIPTION_TYPES:
-                reissue_tariff = "basic"
-
-            # PHASE 1 (outside DB transaction): reissue the premium entity.
-            # Task 2 cut-over: delete the user's current Remnawave premium
-            # entity and create a fresh one — the old subscription URL and
-            # connection UUID stop working, exactly like the legacy
-            # add_vless_user + remove-old-uuid flow did.
-            from app.services import remnawave_premium
-            import uuid as _uuid_lib
-            new_uuid = str(_uuid_lib.uuid4())
-            reissue_result = await remnawave_premium.reissue_premium_user_entity(
-                telegram_id,
-                requested_uuid=new_uuid,
-                expire_at=expires_at,
-                description=f"Premium reissued via bot ({reissue_tariff})",
-            )
-            if not reissue_result.ok:
-                raise RuntimeError(
-                    f"Remnawave premium reissue failed: status={reissue_result.status} "
-                    f"error={reissue_result.error}"
-                )
-            new_vpn_key = reissue_result.subscription_url
-            if not new_vpn_key:
-                raise RuntimeError("Remnawave reissue returned empty subscription URL")
-            uuid_from_api = new_uuid
-
-            logger.info(
-                "REISSUE_TWO_PHASE_ACTIVATION",
-                extra={"user": telegram_id, "new_uuid": new_uuid[:8] + "...", "phase": "phase1_complete"}
-            )
-
-            # On Phase-2 failure we delete the freshly-created panel entity
-            # (its panel UUID, not a samopis uuid).
-            uuid_to_cleanup_on_failure = reissue_result.panel_uuid
-
-            try:
-                async with conn.transaction():
-                    await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
-                    sub_check = await conn.fetchrow(
-                        """SELECT telegram_id FROM subscriptions
-                           WHERE telegram_id = $1 AND status = 'active' AND expires_at > $2""",
-                        telegram_id, _to_db_utc(now)
-                    )
-                    if not sub_check:
-                        raise Exception("Subscription no longer active")
-                    new_subscription_type = reissue_tariff
-                    if new_subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
-                        new_subscription_type = "basic"
-                    await conn.execute(
-                        """UPDATE subscriptions
-                           SET uuid = $1, vpn_key = $2, subscription_type = $4,
-                               remnawave_premium_uuid = $5,
-                               remnawave_premium_sub_url = $6,
-                               remnawave_premium_short_uuid = $7
-                           WHERE telegram_id = $3""",
-                        new_uuid, new_vpn_key, telegram_id, new_subscription_type,
-                        reissue_result.panel_uuid,
-                        reissue_result.subscription_url,
-                        reissue_result.short_uuid,
-                    )
-                    await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, now, expires_at, "manual_reissue")
-                    old_key_preview = f"{old_vpn_key[:20]}..." if old_vpn_key and len(old_vpn_key) > 20 else (old_vpn_key or "N/A")
-                    new_key_preview = f"{new_vpn_key[:20]}..." if new_vpn_key and len(new_vpn_key) > 20 else (new_vpn_key or "N/A")
-                    details = f"User {telegram_id}, Old key: {old_key_preview}, New key: {new_key_preview}, Expires: {expires_at.isoformat()}"
-                    await _log_audit_event_atomic(conn, "admin_reissue", admin_telegram_id, telegram_id, details)
-            except Exception as tx_err:
-                # Phase 2 (DB) failed — the fresh premium entity created in
-                # Phase 1 is now orphaned in Remnawave; delete it.
-                try:
-                    from app.services import remnawave_api
-                    if uuid_to_cleanup_on_failure:
-                        await remnawave_api.delete_user(uuid_to_cleanup_on_failure)
-                    logger.critical(
-                        f"ORPHAN_PREVENTED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... reason=reissue_phase2_failed "
-                        f"user={telegram_id} error={tx_err}"
-                    )
-                except Exception as remove_err:
-                    logger.critical(
-                        f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... "
-                        f"reason={remove_err} user={telegram_id}"
-                    )
-                logger.exception(f"Error in reissue_vpn_key_atomic for user {telegram_id}, transaction rolled back")
-                raise
-
-            # The old premium entity was already deleted in Phase 1 by
-            # reissue_premium_user_entity — no separate teardown needed here.
-            if old_uuid:
-                try:
-                    await _log_vpn_lifecycle_audit_async(
-                        action="vpn_remove_user",
-                        telegram_id=telegram_id,
-                        uuid=old_uuid,
-                        source="admin_reissue",
-                        result="success",
-                        details=f"Old premium entity deleted during reissue, expires_at={expires_at.isoformat()}"
-                    )
-                except Exception:
-                    pass
-
-            new_uuid_preview = f"{new_uuid[:8]}..." if len(new_uuid) > 8 else "***"
-            logger.info(
-                f"VPN key reissued [action=admin_reissue, user={telegram_id}, admin={admin_telegram_id}, "
-                f"new_uuid={new_uuid_preview}]",
-                extra={"correlation_id": correlation_id} if correlation_id else {}
-            )
-            return new_vpn_key, old_vpn_key
-        finally:
-            await conn.execute("SELECT pg_advisory_unlock($1)", telegram_id)
 
 
 """
@@ -1355,6 +1052,11 @@ SINGLE SOURCE OF TRUTH: grant_access
 """
 
 
+# Grant sources that are a PAID period (payment, balance auto-renewal, paid gift
+# activation). A paid grant clears admin_grant_days (N-04).
+_PAID_GRANT_SOURCES = frozenset({"payment", "auto_renew", "gift"})
+
+
 async def grant_access(
     telegram_id: int,
     duration: timedelta,
@@ -1366,6 +1068,8 @@ async def grant_access(
     _caller_holds_transaction: bool = False,
     tariff: str = "basic",
     country: Optional[str] = None,
+    defer_panel: bool = False,
+    tariff_period_days: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     ЕДИНАЯ ФУНКЦИЯ ВЫДАЧИ ДОСТУПА (SINGLE SOURCE OF TRUTH)
@@ -1396,7 +1100,7 @@ async def grant_access(
         - Получить {uuid, vless_url}
         - Создать/обновить подписку:
             - subscription_start = now (activated_at)
-            - subscription_end = now + duration
+            - subscription_end = now + duration (paid tariff: calendar months)
             - status = "active"
             - source = source
             - uuid = new_uuid
@@ -1419,7 +1123,20 @@ async def grant_access(
         pre_provisioned_uuid: Опционально. При двухфазной активации: {"uuid": str, "vless_url": str, "subscription_type": str}.
             Если задан — add_vless_user НЕ вызывается (UUID уже создан вне транзакции).
         tariff: "basic" или "plus" — тип тарифа для VPN API (и для subscription_type в БД при new issuance).
-    
+        defer_panel: T7 (docs/audit/02_payment_core_plan.md §A.5). True → ONLY DB work, zero
+            HTTP/panel calls; the panel side is done later by the provisioning outbox
+            (app/services/provisioning.py), which calls complete_activation():
+              - new issuance → the pending_activation branch (activation_status='pending');
+                a given pre_provisioned_uuid is still written (no HTTP involved);
+              - renewal (incl. basic↔plus) → DB extension as usual, no
+                sync_renewal_to_remnawave and no "renewal_xray_sync_after_commit".
+            The result carries "deferred": True. False (default) → behaviour unchanged.
+        tariff_period_days: a PAID tariff period (catalog key 30/90/180/365/730).
+            Given → the new end is tariffs.extend_expiry(base, tariff_period_days):
+            CALENDAR months (owner decision 2026-09-14), base = max(current end, now)
+            or now. None (day grants: admin, game, promo, trial) → base + duration.
+            `duration` stays timedelta(days=period) for logs / the period_days key.
+
     Returns:
         Dict[str, Any] with keys:
             - "uuid": Optional[str] - UUID (None for pending activation)
@@ -1443,9 +1160,19 @@ async def grant_access(
     try:
         now = datetime.now(timezone.utc)
         
+        # The ONE expiry rule of this function: a paid tariff period counts in
+        # calendar months (tariffs.extend_expiry), a day grant in `duration`.
+        def _end_from(base: datetime) -> datetime:
+            if tariff_period_days is not None:
+                from app.services.tariffs import extend_expiry
+                return extend_expiry(base, tariff_period_days)
+            return base + duration
+
         # Логируем начало операции с полными данными
         duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
         logger.info(f"grant_access: START [telegram_id={telegram_id}, source={source}, duration={duration_str}]")
+        # Legacy business tariffs (biz_*) are granted as Plus (tariffs.normalize_tier).
+        tariff = normalize_tier(tariff)
         
         # =====================================================================
         # STEP 1: Получить текущую подписку
@@ -1494,8 +1221,16 @@ async def grant_access(
         # 3. expires_at > now() (не истекла)
         # 4. uuid IS NOT NULL (UUID существует)
         if subscription and status == "active" and uuid and expires_at and expires_at > now:
-            current_sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+            current_sub_type = (normalize_tier(subscription.get("subscription_type")) or "basic").strip().lower()
             incoming_tariff = (tariff.strip().lower() if tariff else None) or current_sub_type
+            # A bypass-only row's expires_at is a placeholder (now + 3650 d), never a
+            # premium date: every branch below counts from now and validates against
+            # now. Such a row may still carry an ended premium's key (older
+            # ensure_bypass_only_subscription did not clear it) — before this,
+            # Basic → «Invalid renewal» (paid, not credited), Plus → placeholder + months.
+            _is_bypass_row = bool(subscription.get("is_bypass_only"))
+            _period_base = now if _is_bypass_row else max(expires_at, now)
+            _must_exceed = now if _is_bypass_row else expires_at
 
             # Basic→Plus upgrade: tariffs live only in subscription_type
             # (Remnawave entity is identical for both tariffs).  Just flip
@@ -1511,17 +1246,22 @@ async def grant_access(
                 )
                 try:
                     old_expires_at = expires_at
-                    subscription_end = max(expires_at, now) + duration
+                    subscription_end = _end_from(_period_base)
                     _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
                     subscription_start = _ensure_utc(_start_raw) if _start_raw else now
-                    if subscription_end <= old_expires_at:
+                    if subscription_end <= _must_exceed:
                         raise Exception(f"Invalid upgrade: new_end={subscription_end} <= old_end={old_expires_at}")
                     await conn.execute(
+                        # N-01: all reminder flags reset (7d/1d too); N-04: a paid
+                        # period is not an admin grant — this branch is payment-only.
                         """UPDATE subscriptions
                            SET expires_at = $1, subscription_type = 'plus',
                                status = 'active', source = $2,
                                reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE,
-                               reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, activation_status = 'active'
+                               reminder_3h_sent = FALSE, reminder_6h_sent = FALSE,
+                               reminder_7d_sent = FALSE, reminder_1d_sent = FALSE,
+                               admin_grant_days = NULL, activation_status = 'active',
+                               is_bypass_only = FALSE
                            WHERE telegram_id = $3""",
                         _to_db_utc(subscription_end), source, telegram_id
                     )
@@ -1555,6 +1295,10 @@ async def grant_access(
                     # the normal renewal branch below — passes the NEW
                     # tariff so bypass top-up uses plus-tier limits.
                     _upgrade_period_days = max(1, int(duration.total_seconds() // 86400))
+                    if defer_panel:
+                        # T7: panel work belongs to the provisioning outbox.
+                        result_dict["deferred"] = True
+                        return result_dict
                     if _caller_holds_transaction:
                         result_dict["renewal_xray_sync_after_commit"] = {
                             "telegram_id": telegram_id,
@@ -1584,19 +1328,23 @@ async def grant_access(
                     f"grant_access: PLUS_TO_BASIC_DOWNGRADE [user={telegram_id}, uuid={uuid[:8]}..., source={source}]"
                 )
                 old_expires_at = expires_at
-                subscription_end = max(expires_at, now) + duration
+                subscription_end = _end_from(_period_base)
                 _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
                 subscription_start = _ensure_utc(_start_raw) if _start_raw else now
-                if subscription_end <= old_expires_at:
+                if subscription_end <= _must_exceed:
                     raise Exception(f"Invalid downgrade: new_end={subscription_end} <= old_end={old_expires_at}")
                 vpn_key_existing = subscription.get("vpn_key")
                 vpn_key_plus_existing = subscription.get("vpn_key_plus")
                 await conn.execute(
+                    # N-01 / N-04: same as the Basic→Plus branch (payment-only).
                     """UPDATE subscriptions
                        SET expires_at = $1, subscription_type = 'basic',
                            status = 'active', source = $2,
                            reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE,
-                           reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, activation_status = 'active'
+                           reminder_3h_sent = FALSE, reminder_6h_sent = FALSE,
+                           reminder_7d_sent = FALSE, reminder_1d_sent = FALSE,
+                           admin_grant_days = NULL, activation_status = 'active',
+                           is_bypass_only = FALSE
                        WHERE telegram_id = $3""",
                     _to_db_utc(subscription_end), source, telegram_id
                 )
@@ -1624,6 +1372,10 @@ async def grant_access(
                     "subscription_type": "basic",
                 }
                 _downgrade_period_days = max(1, int(duration.total_seconds() // 86400))
+                if defer_panel:
+                    # T7: panel work belongs to the provisioning outbox.
+                    result_dict["deferred"] = True
+                    return result_dict
                 if _caller_holds_transaction:
                     result_dict["renewal_xray_sync_after_commit"] = {
                         "telegram_id": telegram_id,
@@ -1659,18 +1411,14 @@ async def grant_access(
             else:
                 # UUID НЕ МЕНЯЕТСЯ - только продлеваем subscription_end
                 old_expires_at = expires_at
-                # Bypass-only: фиктивный expires_at (10 лет), считаем от now
-                _is_bypass = subscription.get("is_bypass_only", False)
-                if _is_bypass:
-                    subscription_end = now + duration
-                else:
-                    subscription_end = max(expires_at, now) + duration
+                # Bypass-only: фиктивный expires_at (10 лет) — считаем и проверяем от now
+                subscription_end = _end_from(_period_base)
                 # subscription_start сохраняется (activated_at не меняется при продлении)
                 _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
                 subscription_start = _ensure_utc(_start_raw) if _start_raw else now
-                
+
                 # ВАЛИДАЦИЯ: Проверяем что subscription_end увеличен
-                if subscription_end <= old_expires_at:
+                if subscription_end <= _must_exceed:
                     error_msg = f"Invalid renewal: new_end={subscription_end} <= old_end={old_expires_at} for user {telegram_id}"
                     logger.error(f"grant_access: ERROR_INVALID_RENEWAL [user={telegram_id}, error={error_msg}]")
                     raise Exception(error_msg)
@@ -1690,9 +1438,33 @@ async def grant_access(
                 expiry_ms = int(subscription_end.timestamp() * 1000)
                 logger.info(f"XRAY_UUID_FLOW [user={telegram_id}, uuid={uuid[:8]}..., operation=renewal_db_first]")
 
+                # N-07 (docs/notifications/bugs-and-risks.md): a free "trial" gift
+                # (broadcast «🎁 Получить пробный ключ») on top of an active PAID /
+                # granted subscription only adds days: it must not turn the row into
+                # source='trial' (reminders skip trial rows) nor flip Plus→Basic.
+                # Trial and bypass-only rows keep the old behaviour.
+                row_source = source
+                _current_source = (subscription.get("source") or "").strip().lower()
+                if (
+                    source == "trial"
+                    and _current_source
+                    and _current_source not in ("trial", "bypass_only")
+                    and not subscription.get("is_bypass_only")
+                ):
+                    row_source = subscription.get("source")
+                    incoming_tariff = current_sub_type
+                    logger.info(
+                        f"grant_access: TRIAL_GIFT_KEEPS_SOURCE [user={telegram_id}, "
+                        f"source={row_source}, tariff={incoming_tariff}]"
+                    )
+                # N-04: a paid period ends the admin/promo grant semantics
+                # (admin_grant_days drives the "free access expires" reminders).
+                _clear_admin_grant_days = source in _PAID_GRANT_SOURCES
+
                 # PHASE 1: DB update (inside caller's tx if any)
                 # UUID НЕ МЕНЯЕТСЯ - VPN соединение продолжает работать без перерыва
                 try:
+                    # N-01: reminder_7d_sent / reminder_1d_sent reset like the others.
                     await conn.execute(
                         """UPDATE subscriptions
                            SET expires_at = $1,
@@ -1705,10 +1477,14 @@ async def grant_access(
                                reminder_24h_sent = FALSE,
                                reminder_3h_sent = FALSE,
                                reminder_6h_sent = FALSE,
+                               reminder_7d_sent = FALSE,
+                               reminder_1d_sent = FALSE,
+                               admin_grant_days = CASE WHEN $6 THEN NULL ELSE admin_grant_days END,
                                activation_status = 'active',
                                is_bypass_only = FALSE
                            WHERE telegram_id = $3""",
-                        _to_db_utc(subscription_end), source, telegram_id, uuid, incoming_tariff
+                        _to_db_utc(subscription_end), row_source, telegram_id, uuid, incoming_tariff,
+                        _clear_admin_grant_days,
                     )
                     
                     # ВАЛИДАЦИЯ: Проверяем что запись обновлена
@@ -1819,6 +1595,10 @@ async def grant_access(
                 # (premium expireAt + bypass top-up) instead of syncing to
                 # the legacy samopis xray master.
                 _renewal_period_days = max(1, int(duration.total_seconds() // 86400))
+                if defer_panel:
+                    # T7: DB-only renewal; the provisioning outbox extends the panel.
+                    result_dict["deferred"] = True
+                    return result_dict
                 if _caller_holds_transaction:
                     # provision_subscription opens its own connections — it
                     # MUST run post-commit, never inside the caller's tx.
@@ -1858,18 +1638,24 @@ async def grant_access(
         
         # ЗАЩИТА: Проверяем доступность VPN API перед созданием UUID
         import config
-        if not config.VPN_ENABLED:
+        _has_pre_provisioned = bool(
+            pre_provisioned_uuid and pre_provisioned_uuid.get("uuid") and pre_provisioned_uuid.get("vless_url")
+        )
+        # T7: defer_panel takes the same pending branch (zero HTTP) unless the
+        # UUID was already provisioned by the caller (then it is just written).
+        if not config.VPN_ENABLED or (defer_panel and not _has_pre_provisioned):
             # PREMIUM FLOW: Delayed activation - create subscription with pending status
             # Payment succeeds, subscription is created, but VPN key will be generated later
+            _pending_reason = "VPN_API_not_available" if not config.VPN_ENABLED else "defer_panel"
             logger.info(
                 f"grant_access: ACTIVATION_PENDING [user={telegram_id}, source={source}, "
-                f"reason=VPN_API_not_available] - "
+                f"reason={_pending_reason}] - "
                 "Creating subscription with pending activation status"
             )
             
             # Вычисляем даты
             subscription_start = now
-            subscription_end = now + duration
+            subscription_end = _end_from(now)
             
             # ВАЛИДАЦИЯ: Проверяем что subscription_end вычислен корректно
             if not subscription_end or subscription_end <= subscription_start:
@@ -1918,6 +1704,8 @@ async def grant_access(
                            reminder_24h_sent = FALSE,
                            reminder_3h_sent = FALSE,
                            reminder_6h_sent = FALSE,
+                           reminder_7d_sent = FALSE,
+                           reminder_1d_sent = FALSE,
                            admin_grant_days = $4,
                            activated_at = $5,
                            last_bytes = 0,
@@ -1980,7 +1768,8 @@ async def grant_access(
             # Audit log
             if admin_telegram_id:
                 duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
-                details = f"Granted {duration_str} access via {source}, Expires: {subscription_end.isoformat()}, Activation: pending (VPN API unavailable)"
+                _pending_detail = "VPN API unavailable" if not config.VPN_ENABLED else "deferred to provisioning"
+                details = f"Granted {duration_str} access via {source}, Expires: {subscription_end.isoformat()}, Activation: pending ({_pending_detail})"
                 await _log_audit_event_atomic(conn, "subscription_created", admin_telegram_id, telegram_id, details)
             
             duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
@@ -1989,19 +1778,22 @@ async def grant_access(
                 f"subscription_end={subscription_end.isoformat()}, duration={duration_str}, source={source}]"
             )
             
-            return {
+            pending_result = {
                 "uuid": None,
                 "vless_url": None,
                 "subscription_end": subscription_end,
                 "action": "pending_activation"
             }
+            if defer_panel:
+                pending_result["deferred"] = True
+            return pending_result
         
         # Capture old UUID for removal AFTER transaction commits (no external call inside tx).
         old_uuid_to_remove_after_commit = uuid if uuid else None
         
         # Вычисляем subscription_end ДО вызова VPN API (передаётся в Xray как expiryTime)
         subscription_start = now
-        subscription_end = now + duration
+        subscription_end = _end_from(now)
         assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
         assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
         duration_days = duration.days
@@ -2233,6 +2025,8 @@ async def grant_access(
                        reminder_24h_sent = FALSE,
                        reminder_3h_sent = FALSE,
                        reminder_6h_sent = FALSE,
+                       reminder_7d_sent = FALSE,
+                       reminder_1d_sent = FALSE,
                        admin_grant_days = $7,
                        activated_at = COALESCE($8, subscriptions.activated_at),
                        last_bytes = 0,
@@ -2320,7 +2114,7 @@ async def grant_access(
         )
         
         # ВАЛИДАЦИЯ: Возвращаем только если все данные сохранены в БД
-        return {
+        issuance_result = {
             "uuid": new_uuid,
             "vless_url": vless_url,
             "vpn_key_plus": vless_url_plus,
@@ -2329,6 +2123,9 @@ async def grant_access(
             "subscription_type": subscription_type_value,
             "old_uuid_to_remove_after_commit": old_uuid_to_remove_after_commit
         }
+        if defer_panel:
+            issuance_result["deferred"] = True
+        return issuance_result
         
     except Exception as e:
         logger.error(
@@ -2343,6 +2140,51 @@ async def grant_access(
                 await _acquired_pool.release(conn)
             except Exception as release_err:
                 logger.error(f"grant_access: failed to release connection: {release_err}")
+
+
+async def complete_activation(
+    telegram_id: int,
+    *,
+    vpn_key: Optional[str],
+    vpn_key_plus: Optional[str],
+    uuid: Optional[str] = None,
+    conn=None,
+) -> bool:
+    """Finish a deferred activation (T7): activation_status 'pending' → 'active'.
+
+    Called by the provisioning outbox (app/services/provisioning.py) once the
+    panel entities exist. Only a row still in activation_status='pending' is
+    touched, so it is idempotent and never rewrites an active subscription's
+    keys. A None / empty argument keeps the current column value (COALESCE).
+    DB only — no HTTP. Returns True if it changed a row.
+    """
+    sql = """UPDATE subscriptions
+                SET activation_status = 'active',
+                    vpn_key = COALESCE($2, vpn_key),
+                    vpn_key_plus = COALESCE($3, vpn_key_plus),
+                    uuid = COALESCE($4, uuid),
+                    last_activation_error = NULL
+              WHERE telegram_id = $1 AND activation_status = 'pending'"""
+    args = (telegram_id, vpn_key or None, vpn_key_plus or None, uuid or None)
+    if conn is not None:
+        status = await conn.execute(sql, *args)
+    else:
+        pool = await get_pool()
+        if pool is None:
+            logger.warning(f"complete_activation: pool is None, skipped [user={telegram_id}]")
+            return False
+        async with pool.acquire() as own_conn:
+            status = await own_conn.execute(sql, *args)
+    try:
+        changed = int(str(status).split()[-1]) > 0
+    except (ValueError, IndexError):
+        changed = False
+    if changed:
+        logger.info(
+            f"complete_activation: ACTIVATED [user={telegram_id}, "
+            f"vpn_key={'set' if vpn_key else 'kept'}, vpn_key_plus={'set' if vpn_key_plus else 'kept'}]"
+        )
+    return changed
 
 
 def _calculate_subscription_days(months: int) -> int:
@@ -2404,7 +2246,8 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
         now_pre = datetime.now(timezone.utc)
         days = _calculate_subscription_days(months)
         tariff_duration = timedelta(days=days)
-        subscription_end_pre = now_pre + tariff_duration
+        from app.services.tariffs import extend_expiry as _extend_expiry
+        subscription_end_pre = _extend_expiry(now_pre, days)  # calendar months
         
         sub_row = await conn_pre.fetchrow("SELECT * FROM subscriptions WHERE telegram_id = $1", telegram_id)
         is_new_issuance = True
@@ -2478,7 +2321,8 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                     admin_grant_days=None,
                     conn=conn,
                     pre_provisioned_uuid=pre_provisioned_uuid,
-                    _caller_holds_transaction=True
+                    _caller_holds_transaction=True,
+                    tariff_period_days=days,
                 )
                 expires_at = result["subscription_end"]
                 # Если vless_url есть - это новый UUID, используем его
@@ -2553,7 +2397,7 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 
                 logger.info(f"Payment {payment_id} approved atomically for user {telegram_id}, is_renewal={is_renewal}")
                 ret_val = (expires_at, is_renewal, final_vpn_key)
-            except Exception as e:
+            except Exception:
                 if uuid_to_cleanup_on_failure:
                     # When Task-2 cut-over is on the entity lives in Remnawave,
                     # not in the samopis xray master.  Don't dial samopis on
@@ -2567,32 +2411,8 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                             "payment_id=%s user=%s — clean via Remnawave panel",
                             uuid_preview, payment_id, telegram_id,
                         )
-                    else:
-                        try:
-                            await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                            logger.critical(
-                                f"ORPHAN_PREVENTED uuid={uuid_preview} reason=approve_payment_atomic_tx_failed "
-                                f"payment_id={payment_id} user={telegram_id} error={e}"
-                            )
-                        except Exception as remove_err:
-                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                            logger.critical(
-                                f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} "
-                                f"payment_id={payment_id} user={telegram_id}"
-                            )
                 logger.exception(f"Error in atomic approve for payment {payment_id}, transaction rolled back")
                 raise
-        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
-            old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
-            try:
-                await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
-                logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
-            except Exception as e:
-                logger.critical(
-                    "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
-                    extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
-                )
         if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
             sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
             try:
@@ -2734,6 +2554,44 @@ async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
         await conn.execute(query, telegram_id)
 
 
+async def remember_telegram_charge(payment_id: int, charge_id: str) -> None:
+    """Store the Telegram charge id of a finalized Telegram purchase on its
+    payments row (payments.telegram_payment_charge_id, unique, migration 012),
+    so a re-delivered successful_payment is recognised (TG-RT-2,
+    docs/audit/11_telegram_runtime.md). Best effort, never raises."""
+    if not _core.DB_READY or not payment_id or not charge_id:
+        return
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE payments SET telegram_payment_charge_id = $2 "
+                "WHERE id = $1 AND telegram_payment_charge_id IS NULL",
+                int(payment_id), str(charge_id),
+            )
+    except Exception as e:  # noqa: BLE001 — a missed record only re-enables the alert
+        logger.warning("TELEGRAM_CHARGE_REMEMBER_FAILED payment_id=%s: %s", payment_id, type(e).__name__)
+
+
+async def telegram_charge_seen(charge_id: str) -> bool:
+    """True when this Telegram charge id is already on a payments row (a
+    finalized purchase or top-up). Errors → False (the caller keeps its alert)."""
+    if not _core.DB_READY or not charge_id:
+        return False
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return False
+        async with pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                "SELECT 1 FROM payments WHERE telegram_payment_charge_id = $1 LIMIT 1", str(charge_id)))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("TELEGRAM_CHARGE_LOOKUP_FAILED: %s", type(e).__name__)
+        return False
+
+
 async def mark_user_unreachable(telegram_id: int) -> None:
     """Mark user as unreachable (chat not found, blocked). Background workers filter by is_reachable."""
     if not _core.DB_READY:
@@ -2820,14 +2678,6 @@ async def get_active_promo_by_code(conn, code: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-async def has_active_promo(code: str) -> bool:
-    """Проверить, есть ли активный промокод с таким кодом"""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        promo = await get_active_promo_by_code(conn, code)
-        return promo is not None
-
-
 async def check_promo_code_valid(code: str) -> Optional[Dict[str, Any]]:
     """Проверить, валиден ли промокод и вернуть его данные (только активный)."""
     pool = await get_pool()
@@ -2879,11 +2729,6 @@ async def get_promo_stats() -> list:
             ORDER BY code, created_at DESC
         """)
         return [dict(row) for row in rows]
-
-
-def generate_promo_code(length: int = 6) -> str:
-    """Генерировать случайный промокод из заглавных букв A-Z"""
-    return ''.join(random.choices(string.ascii_uppercase, k=length))
 
 
 async def create_promocode_atomic(
@@ -3136,6 +2981,77 @@ async def _consume_promo_in_transaction(
     )
 
 
+async def _consume_promo_for_paid_purchase(
+    conn, code: str, telegram_id: int, purchase_id: str, sink: Optional[Dict[str, Any]] = None,
+) -> None:
+    """P0-1: promo of an ALREADY PAID purchase (finalize_purchase). The user paid
+    the discounted price that was invoiced, so the purchase is always honoured:
+    if the promo got exhausted / expired / deactivated after the invoice, the
+    usage is still counted (used_count may exceed max_uses — every discounted
+    sale stays visible) and sink["promo_warning"] tells the caller to send a
+    non-blocking info alert. Balance purchases keep the strict
+    _consume_promo_in_transaction (nothing is paid before their transaction)."""
+    try:
+        await _consume_promo_in_transaction(conn, code, telegram_id, purchase_id)
+        return
+    except ValueError as promo_err:
+        reason = str(promo_err).split(":", 1)[0]
+    code_normalized = code.upper().strip()
+    # The schema forbids used_count > max_uses (CHECK promocodes_used_not_exceed_max):
+    # counting over the cap raised CheckViolation → "transient" 500 → the provider
+    # retried forever and the PAID purchase was never credited (docs/audit/07_e2e.md,
+    # E2E-PROMO-CAP). The purchase is still honoured; the counter stops at the cap
+    # and the over-cap sale is reported in the admin alert below.
+    row = await conn.fetchrow(
+        """
+        UPDATE promo_codes
+           SET used_count = CASE WHEN max_uses IS NULL OR used_count < max_uses
+                                 THEN used_count + 1 ELSE used_count END
+        WHERE id = (SELECT id FROM promo_codes WHERE UPPER(code) = UPPER($1)
+                    ORDER BY id DESC NULLS LAST LIMIT 1)
+        RETURNING used_count, max_uses
+        """,
+        code_normalized,
+    )
+    logger.warning(
+        "PROMO_HONOURED_AFTER_PAYMENT code=%s user=%s purchase_id=%s reason=%s counted=%s",
+        code_normalized, telegram_id, purchase_id, reason, bool(row),
+    )
+    if sink is not None:
+        sink["promo_warning"] = {
+            "code": code_normalized,
+            "reason": reason,
+            "telegram_id": telegram_id,
+            "used_count": row["used_count"] if row else None,
+            "max_uses": row["max_uses"] if row else None,
+        }
+
+
+async def _alert_promo_honoured(result: Dict[str, Any], purchase_id: str) -> None:
+    """Non-blocking info alert for a promo honoured after payment (P0-1).
+    Never raises and is time-bounded: the payment is already committed."""
+    warning = result.get("promo_warning") or {}
+    telegram_id = warning.get("telegram_id")
+    text = (
+        "ℹ️ Promo honoured after payment (P0-1)\n"
+        f"Promo: {warning.get('code')} — {warning.get('reason')}\n"
+        f"Used: {warning.get('used_count')}/{warning.get('max_uses') or '∞'}\n"
+        f"User TG ID: {telegram_id}\nPurchase: {purchase_id}\n"
+        "The purchase was paid at the invoiced (discounted) price and finalized. "
+        "No action needed unless the promo must be capped harder."
+    )
+    try:
+        from app.api import payment_webhook
+        from app.services.admin_alerts import send_alert
+        bot = payment_webhook._bot
+        if bot is None:
+            logger.warning("PROMO_HONOURED_ALERT_SKIPPED (no bot): %s", text)
+            return
+        await asyncio.wait_for(send_alert(bot, "payment", text, force=True), timeout=5.0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("PROMO_HONOURED_ALERT_FAILED purchase_id=%s err=%s", purchase_id, e)
+
+
 async def validate_promocode_atomic(code: str) -> Dict[str, Any]:
     """
     Валидация промокода без инкремента счетчика.
@@ -3163,150 +3079,6 @@ async def validate_promocode_atomic(code: str) -> Dict[str, Any]:
         except Exception as e:
             logger.exception(f"Error validating promocode {code_normalized}: {e}")
             return {"success": False, "promo_data": None, "error": "invalid"}
-
-
-async def consume_promocode_atomic(code: str, telegram_id: int) -> None:
-    """
-    Потребление промокода — инкремент счетчика использований.
-    Вызывается ТОЛЬКО при успешной оплате.
-    
-    CRITICAL: Эта функция должна вызываться только после успешной оплаты.
-    
-    Raises:
-        ValueError: Если промокод не найден, уже исчерпан или невалиден
-    """
-    if not _core.DB_READY:
-        raise ValueError("PROMO_DB_NOT_READY")
-    
-    pool = await get_pool()
-    if pool is None:
-        raise ValueError("PROMO_DB_NOT_READY")
-    
-    code_normalized = code.upper().strip()
-    
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            try:
-                # CRITICAL: Advisory lock на код для защиты от race conditions
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1))",
-                    code_normalized
-                )
-                
-                # CRITICAL: SELECT FOR UPDATE для блокировки строки
-                row = await conn.fetchrow(
-                    """
-                    SELECT *
-                    FROM promo_codes
-                    WHERE code = $1
-                    FOR UPDATE
-                    """,
-                    code_normalized
-                )
-                
-                if not row:
-                    raise ValueError("PROMO_NOT_FOUND")
-                
-                # Проверяем активность
-                if not row.get("is_active", False):
-                    raise ValueError("PROMO_INACTIVE")
-                
-                # Проверяем срок действия
-                expires_at = row.get("expires_at")
-                if expires_at:
-                    expired_check = await conn.fetchval(
-                        "SELECT expires_at < NOW() FROM promo_codes WHERE code = $1",
-                        row["code"]
-                    )
-                    if expired_check:
-                        await conn.execute(
-                            "UPDATE promo_codes SET is_active = FALSE WHERE code = $1",
-                            row["code"]
-                        )
-                        raise ValueError("PROMO_EXPIRED")
-                
-                # Проверяем лимит использований
-                used_count = row.get("used_count", 0)
-                max_uses = row.get("max_uses")
-                if max_uses is not None and used_count >= max_uses:
-                    raise ValueError("PROMO_ALREADY_CONSUMED")
-                
-                # SUCCESS — увеличиваем счетчик использований атомарно
-                await conn.execute(
-                    """
-                    UPDATE promo_codes
-                    SET used_count = used_count + 1
-                    WHERE code = $1
-                    """,
-                    row["code"]
-                )
-                
-                # Получаем обновленное значение used_count
-                updated_row = await conn.fetchrow(
-                    "SELECT used_count, max_uses FROM promo_codes WHERE code = $1",
-                    row["code"]
-                )
-                new_count = updated_row["used_count"]
-                
-                # Автоматическая деактивация при достижении лимита
-                if max_uses is not None and new_count >= max_uses:
-                    await conn.execute(
-                        """
-                        UPDATE promo_codes
-                        SET is_active = FALSE
-                        WHERE code = $1
-                        AND used_count >= max_uses
-                        """,
-                        row["code"]
-                    )
-                
-                logger.info(
-                    f"PROMOCODE_CONSUMED code={code_normalized} user={telegram_id} "
-                    f"used_count={new_count}/{max_uses if max_uses else 'unlimited'}"
-                )
-                
-            except ValueError:
-                # Пробрасываем ValueError как есть
-                raise
-            except Exception as e:
-                logger.exception(f"Error consuming promocode {code_normalized}: {e}")
-                raise ValueError("PROMO_CONSUME_ERROR")
-
-
-async def is_user_first_purchase(telegram_id: int) -> bool:
-    """Проверить, является ли это первой покупкой пользователя
-    
-    Пользователь считается новым, если:
-    - у него НИКОГДА не было подтверждённой оплаты (status = 'approved')
-    - у него НИКОГДА не было активной или истёкшей подписки
-    
-    Returns:
-        True если это первая покупка, False иначе
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Проверяем наличие подтверждённых платежей
-        approved_payment = await conn.fetchrow(
-            "SELECT id FROM payments WHERE telegram_id = $1 AND status = 'approved' LIMIT 1",
-            telegram_id
-        )
-        
-        if approved_payment:
-            return False
-        
-        # Проверяем наличие подписок в истории (любых, включая истёкшие)
-        subscription_history = await conn.fetchrow(
-            """SELECT id FROM subscription_history 
-               WHERE telegram_id = $1 
-               AND action_type IN ('purchase', 'renewal', 'reissue')
-               LIMIT 1""",
-            telegram_id
-        )
-        
-        if subscription_history:
-            return False
-        
-        return True
 
 
 async def get_subscriptions_for_reminders() -> list:
@@ -3972,12 +3744,28 @@ async def get_referral_rewards_history_count(
         return count
 
 
+def pick_largest_discount(candidates) -> Tuple[Optional[str], int]:
+    """Owner rule 2026-09-14: when several discounts apply, the LARGEST single one
+    wins — no stacking. `candidates`: ordered (type, percent) pairs; a tie keeps
+    the earlier entry. Percent is clamped to 0..100; bad values are ignored.
+    Returns (type, percent), (None, 0) when nothing applies."""
+    best_type: Optional[str] = None
+    best_pct = 0
+    for kind, pct in candidates:
+        try:
+            pct = max(0, min(int(pct or 0), 100))
+        except (TypeError, ValueError):
+            continue
+        if pct > best_pct:
+            best_type, best_pct = kind, pct
+    return best_type, best_pct
+
+
 async def calculate_final_price(
     telegram_id: int,
     tariff: str,
     period_days: int,
     promo_code: Optional[str] = None,
-    country: Optional[str] = None,
     base_price_override_rubles: Optional[int] = None
 ) -> Dict[str, Any]:
     """
@@ -3985,10 +3773,11 @@ async def calculate_final_price(
     
     Рассчитывает финальную цену тарифа с учетом всех скидок:
     - Базовая цена из config.TARIFFS
-    - Промокод (высший приоритет)
-    - VIP-скидка 30% (если нет промокода)
-    - Спецпредложение -15% (если нет промокода и VIP, подписка истекла)
-    - Персональная скидка (если нет промокода, VIP и спецпредложения)
+    - Промокод
+    - Спецпредложение -15% (платная подписка закончилась, 3 дня)
+    - Персональная скидка (кнопки −15 %, триал −30 %, рассылки, админ)
+    Действует НАИБОЛЬШАЯ из применимых скидок, они не суммируются
+    (решение владельца 2026-09-14; VIP удалён). При равенстве — промокод.
     
     Args:
         telegram_id: Telegram ID пользователя
@@ -4002,7 +3791,7 @@ async def calculate_final_price(
             "discount_amount_kopecks": int, # Размер скидки в копейках
             "final_price_kopecks": int,     # Финальная цена в копейках
             "discount_percent": int,        # Процент скидки (0-100)
-            "discount_type": str,           # "promo", "vip", "personal", None
+            "discount_type": str,           # "promo", "special_offer", "personal", None
             "promo_code": Optional[str],    # Промокод (если применен)
             "is_valid": bool                # True если цена >= 64 RUB
         }
@@ -4026,10 +3815,6 @@ async def calculate_final_price(
 
         # Получаем базовую цену в рублях из конфига
         base_price_rubles = config.TARIFFS[tariff][period_days]["price"]
-        # Для бизнес-тарифов применяем множитель страны
-        if country and config.is_biz_tariff(tariff):
-            multiplier = config.BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
-            base_price_rubles = int(round(base_price_rubles * multiplier / 100) * 100)
     base_price_kopecks = round(base_price_rubles * 100)
     
     # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
@@ -4039,56 +3824,24 @@ async def calculate_final_price(
     
     has_promo = promo_data is not None
     
-    # ПРИОРИТЕТ 1: VIP-статус (только если нет промокода)
-    from database.admin import is_vip_user as _is_vip, get_user_discount as _get_discount
-    is_vip = await _is_vip(telegram_id) if not has_promo else False
-
-    # ПРИОРИТЕТ 2: Спецпредложение -15% (только если нет промокода и VIP)
-    special_offer = None
-    if not has_promo and not is_vip:
-        special_offer = await get_special_offer_info(telegram_id)
-
-    # ПРИОРИТЕТ 3: Персональная скидка (только если нет промокода, VIP и спецпредложения)
-    personal_discount = None
-    if not has_promo and not is_vip and not special_offer:
-        personal_discount = await _get_discount(telegram_id)
-
-    # Применяем скидку в порядке приоритета
-    discount_amount_kopecks = 0
-    discount_percent = 0
-    discount_type = None
-    final_price_kopecks = base_price_kopecks
-
-    if has_promo:
-        discount_percent = promo_data["discount_percent"]
-        # КРИТИЧНО: Защита от скидки > 100% - ограничиваем до 100%
-        discount_percent = min(discount_percent, 100)
-        discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
-        final_price_kopecks = base_price_kopecks - discount_amount_kopecks
-        # КРИТИЧНО: Гарантируем, что финальная цена >= 0
-        final_price_kopecks = max(final_price_kopecks, 0)
-        discount_type = "promo"
-        applied_promo_code = promo_code.upper()
-    elif is_vip:
-        discount_percent = 30
-        discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
-        final_price_kopecks = base_price_kopecks - discount_amount_kopecks
-        discount_type = "vip"
-        applied_promo_code = None
-    elif special_offer:
-        discount_percent = special_offer["discount_percent"]
-        discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
-        final_price_kopecks = base_price_kopecks - discount_amount_kopecks
-        discount_type = "special_offer"
-        applied_promo_code = None
-    elif personal_discount:
-        discount_percent = personal_discount["discount_percent"]
-        discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
-        final_price_kopecks = base_price_kopecks - discount_amount_kopecks
-        discount_type = "personal"
-        applied_promo_code = None
-    else:
-        applied_promo_code = None
+    # Owner rule 2026-09-14 (VIP removed): every discount that applies is a
+    # candidate — the promo code, the −15 % special offer after a paid
+    # subscription ended, the personal discount (−15 % buttons, trial −30 %,
+    # broadcast / admin discounts). The LARGEST single one wins, nothing
+    # stacks; on a tie the promo code the user typed wins. A promo code that
+    # lost is not reported as applied (promo_code=None) → not consumed.
+    from database.admin import get_user_discount as _get_discount
+    special_offer = await get_special_offer_info(telegram_id)
+    personal_discount = await _get_discount(telegram_id)
+    discount_type, discount_percent = pick_largest_discount([
+        ("promo", promo_data["discount_percent"] if has_promo else 0),
+        ("special_offer", special_offer["discount_percent"] if special_offer else 0),
+        ("personal", personal_discount["discount_percent"] if personal_discount else 0),
+    ])
+    discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
+    # КРИТИЧНО: финальная цена >= 0 (процент уже ограничен 0..100)
+    final_price_kopecks = max(base_price_kopecks - discount_amount_kopecks, 0)
+    applied_promo_code = promo_code.upper() if discount_type == "promo" else None
     
     # Округляем до целых копеек
     final_price_kopecks = int(final_price_kopecks)
@@ -4111,10 +3864,14 @@ async def calculate_final_price(
 async def create_pending_balance_topup_purchase(
     telegram_id: int,
     amount_kopecks: int,
+    credit_kopecks: Optional[int] = None,
 ) -> str:
     """
     Create pending purchase for balance top-up only.
     No tariff, no period_days. Separate from subscription logic.
+
+    amount_kopecks — charged (price_kopecks, revenue). credit_kopecks — what to
+    credit when it is less (SBP markup, migration 083); None = as before.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -4124,11 +3881,24 @@ async def create_pending_balance_topup_purchase(
         )
         purchase_id = f"purchase_{uuid_lib.uuid4().hex[:16]}"
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
-        await conn.execute(
-            """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, price_kopecks, status, expires_at)
-               VALUES ($1, $2, 'balance_topup', $3, 'pending', $4)""",
-            purchase_id, telegram_id, amount_kopecks, _to_db_utc(expires_at)
-        )
+        if credit_kopecks is not None:
+            import asyncpg
+            try:
+                await conn.execute(
+                    """INSERT INTO pending_purchases
+                           (purchase_id, telegram_id, purchase_type, price_kopecks, credit_kopecks, status, expires_at)
+                       VALUES ($1, $2, 'balance_topup', $3, $5, 'pending', $4)""",
+                    purchase_id, telegram_id, amount_kopecks, _to_db_utc(expires_at), int(credit_kopecks),
+                )
+            except asyncpg.exceptions.UndefinedColumnError:
+                logger.warning("BALANCE_TOPUP_CREDIT_COLUMN_MISSING (migration 083 not applied) — credit = charged")
+                credit_kopecks = None
+        if credit_kopecks is None:
+            await conn.execute(
+                """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, price_kopecks, status, expires_at)
+                   VALUES ($1, $2, 'balance_topup', $3, 'pending', $4)""",
+                purchase_id, telegram_id, amount_kopecks, _to_db_utc(expires_at)
+            )
         logger.info(
             f"BALANCE_TOPUP_PURCHASE_CREATED purchase_id={purchase_id} telegram_id={telegram_id} "
             f"amount={amount_kopecks} kopecks"
@@ -4138,7 +3908,7 @@ async def create_pending_balance_topup_purchase(
 
 async def create_pending_purchase(
     telegram_id: int,
-    tariff: str,  # "basic", "plus", or "biz_*"
+    tariff: str,  # "basic" or "plus"
     period_days: int,
     price_kopecks: int,
     promo_code: Optional[str] = None,
@@ -4320,14 +4090,23 @@ async def cancel_pending_purchases(telegram_id: int, reason: str = "user_action"
             logger.info(f"Pending purchases cancelled: telegram_id={telegram_id}, reason={reason}")
 
 
-async def update_pending_purchase_invoice_id(purchase_id: str, invoice_id: str) -> bool:
+async def update_pending_purchase_invoice_id(
+    purchase_id: str,
+    invoice_id: str,
+    provider: Optional[str] = None,
+) -> bool:
     """
     Обновить provider_invoice_id для pending покупки
-    
+
     Args:
         purchase_id: ID покупки
         invoice_id: Invoice ID от платежного провайдера
-    
+        provider: Провайдер инвойса ('wata', 'platega', 'cryptobot', ...).
+            Если задан — также пишется в pending_purchases.payment_provider
+            (колонка из миграции 054), чтобы воркеры (wata_reconciler) могли
+            отличать инвойсы провайдеров. None — колонку не трогаем
+            (обратная совместимость: магазин проставляет её при финализации).
+
     Returns:
         True если успешно, False если покупка не найдена
     """
@@ -4336,11 +4115,18 @@ async def update_pending_purchase_invoice_id(purchase_id: str, invoice_id: str) 
         # Для crypto purchases устанавливаем TTL = 30 минут с момента создания invoice
         now_utc = datetime.now(timezone.utc)
         expires_at_utc = now_utc + timedelta(minutes=30)
-        
-        result = await conn.execute(
-            "UPDATE pending_purchases SET provider_invoice_id = $1, expires_at = $3 WHERE purchase_id = $2 AND status = 'pending'",
-            invoice_id, purchase_id, _to_db_utc(expires_at_utc)
-        )
+
+        if provider:
+            result = await conn.execute(
+                "UPDATE pending_purchases SET provider_invoice_id = $1, expires_at = $3, payment_provider = $4 "
+                "WHERE purchase_id = $2 AND status = 'pending'",
+                invoice_id, purchase_id, _to_db_utc(expires_at_utc), provider
+            )
+        else:
+            result = await conn.execute(
+                "UPDATE pending_purchases SET provider_invoice_id = $1, expires_at = $3 WHERE purchase_id = $2 AND status = 'pending'",
+                invoice_id, purchase_id, _to_db_utc(expires_at_utc)
+            )
         
         if result == "UPDATE 1":
             logger.info(f"Pending purchase invoice_id updated: purchase_id={purchase_id}, invoice_id={invoice_id}")
@@ -4416,11 +4202,263 @@ async def mark_proxy_purchased(telegram_id: int) -> None:
         )
 
 
+# Namespace (classid) для advisory-lock финализации: пара (int4, int4) не
+# пересекается с однo-ключевыми bigint-локами (telegram_id, hashtext) в коде.
+_FINALIZE_LOCK_NS = 0x46494E  # 'FIN'
+
+
+class PurchaseAlreadyProcessed(ValueError):
+    """finalize_purchase: the purchase is already paid — the idempotent duplicate
+    (webhook retry / poll / «Проверить»). The ONLY ValueError callers may treat
+    as "already processed" (P0-1); every other ValueError is a real failure.
+    Subclasses ValueError so existing `except ValueError` callers keep working."""
+
+# T8: provisioning entry point of a finalize_purchase call (app/services/provisioning_flags).
+_TELEGRAM_PAYMENT_PROVIDERS = frozenset({"telegram_payment", "telegram_stars", "telegram"})
+
+
+def provisioning_entrypoint(payment_provider: Optional[str]) -> str:
+    """"telegram" for Telegram-native payments / Stars, "webhook" for every
+    external provider (platega, wata, cryptobot, their reconcilers)."""
+    provider = (payment_provider or "").strip().lower()
+    return "telegram" if provider in _TELEGRAM_PAYMENT_PROVIDERS else "webhook"
+
+
+def _outbox_entitlement(
+    entrypoint: str,
+    *,
+    purchase_id: str,
+    tariff_type: Optional[str],
+    period_days: Optional[int],
+    is_combo: bool,
+    is_traffic_pack: bool,
+):
+    """T8: the Entitlement to enqueue when the provisioning outbox is ON for
+    `entrypoint`; None → the legacy path (flag off, or a tariff the catalog
+    cannot resolve — never fail a paid purchase on the catalog). Pure, no I/O."""
+    from app.services import provisioning_flags, tariffs
+    try:
+        if not provisioning_flags.is_on(entrypoint):
+            return None
+    except ValueError as e:
+        logger.error("finalize_purchase: PROVISIONING_FLAG_ERROR purchase_id=%s: %s", purchase_id, e)
+        return None
+    try:
+        if is_traffic_pack:
+            return tariffs.for_pack(tariffs.parse_pack_gb(tariff_type or ""))
+        return tariffs.for_purchase(
+            tariffs.tariff_key(tariff_type or "", bool(is_combo)), period_days,
+        )
+    except tariffs.TariffConfigError as e:
+        logger.error(
+            "finalize_purchase: PROVISIONING_OUTBOX_FALLBACK purchase_id=%s tariff=%s "
+            "period_days=%s is_combo=%s — %s; legacy provisioning path used",
+            purchase_id, tariff_type, period_days, is_combo, e,
+        )
+        return None
+
+
+async def _run_provisioning_after_commit(result: Dict[str, Any], telegram_id: int) -> None:
+    """T8 fast path after commit (and after the DB connection is released):
+    provisioning.run_now; on success a deferred new issuance is re-read so the
+    caller shows the keys instead of payment.pending_activation. Never raises —
+    billing is committed; a failed apply stays in the queue (worker + alert)."""
+    job_id = result.get("provisioning_job_id")
+    done = False
+    try:
+        from app.services import provisioning
+        done = await provisioning.run_now(int(job_id))
+    except Exception as e:  # noqa: BLE001 — run_now never raises; belt and braces
+        logger.error("finalize_purchase: PROVISIONING_RUN_NOW_ERROR job=%s: %s", job_id, e)
+    result["provisioning_done"] = bool(done)
+    if not done or result.get("activation_status") != "pending":
+        return
+    try:
+        import database as _db  # package attribute: same reader as provisioning.apply
+        sub = await _db.get_subscription_any(telegram_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("finalize_purchase: activation re-read failed user=%s: %s", telegram_id, e)
+        return
+    if sub and sub.get("activation_status") == "active" and sub.get("vpn_key"):
+        result.update(
+            activation_status="active",
+            vpn_key=sub.get("vpn_key"),
+            vpn_key_plus=sub.get("vpn_key_plus"),
+        )
+
+
+async def _enqueue_purchase_job(
+    conn,
+    *,
+    purchase_id: str,
+    telegram_id: int,
+    ent,
+    premium_until: Optional[datetime],
+    source: str,
+    payment_provider: str,
+    amount_rubles: float,
+) -> int:
+    """T8: outbox job "purchase:{id}" in the caller's billing transaction
+    (idempotent by key). No HTTP."""
+    from app.services import provisioning
+    job_id = await provisioning.enqueue(
+        conn,
+        key=f"purchase:{purchase_id}",
+        telegram_id=telegram_id,
+        ent=ent,
+        premium_until=premium_until,
+        source=source,
+        context={"provider": payment_provider, "purchase_id": purchase_id, "amount": amount_rubles},
+    )
+    logger.info(
+        "finalize_purchase: PROVISIONING_ENQUEUED [purchase_id=%s, user=%s, job=%s, tariff_key=%s, "
+        "premium_days=%s, bypass_bytes=%s, source=%s]",
+        purchase_id, telegram_id, job_id, ent.tariff_key, ent.premium_days, ent.bypass_bytes, source,
+    )
+    return job_id
+
+
+async def _record_traffic_purchase_in_tx(conn, telegram_id: int, gb_amount: int, price_rub: int,
+                                         payment_method: str = "balance") -> None:
+    """Same rows as database.traffic.record_traffic_purchase, on the caller's
+    connection (inside the billing transaction)."""
+    has_pm_col = await conn.fetchval(
+        """SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'traffic_purchases' AND column_name = 'payment_method'
+        )"""
+    )
+    if has_pm_col:
+        await conn.fetchval(
+            """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, payment_method)
+               VALUES ($1, $2, $3, $4) RETURNING id""",
+            telegram_id, gb_amount, price_rub, payment_method,
+        )
+    else:
+        await conn.fetchval(
+            """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub)
+               VALUES ($1, $2, $3) RETURNING id""",
+            telegram_id, gb_amount, price_rub,
+        )
+
+
+async def _finalize_subscription_via_outbox(
+    conn,
+    *,
+    purchase_id: str,
+    telegram_id: int,
+    payment_id: int,
+    duration: timedelta,
+    tariff_type: str,
+    period_days: int,
+    country: Optional[str],
+    is_combo: bool,
+    promo_code: Optional[str],
+    amount_rubles: float,
+    payment_provider: str,
+    ent,
+    source: str,
+    promo_sink: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """T8 subscription / combo branch of finalize_purchase, inside its billing
+    transaction: grant_access(defer_panel=True) (zero HTTP; a new issuance lands
+    in activation_status='pending') → promo → payment approved → referral →
+    combo traffic_purchases row → outbox job. Returns finalize_purchase's dict
+    (same keys as the legacy branches + "provisioning_job_id")."""
+    from app.services.tariffs import vpn_period_days
+    grant_result = await grant_access(
+        telegram_id=telegram_id,
+        duration=duration,
+        source="payment",
+        admin_telegram_id=None,
+        admin_grant_days=None,
+        conn=conn,
+        pre_provisioned_uuid=None,
+        _caller_holds_transaction=True,
+        tariff=tariff_type or "basic",
+        country=country,
+        defer_panel=True,
+        tariff_period_days=vpn_period_days(tariff_type, period_days),
+    )
+    if not grant_result:
+        raise Exception(f"grant_access returned None: purchase_id={purchase_id}, user={telegram_id}")
+    expires_at = grant_result.get("subscription_end")
+    if not expires_at:
+        raise Exception(f"grant_access returned None expires_at: purchase_id={purchase_id}, user={telegram_id}")
+    action = grant_result.get("action")
+    is_renewal = action == "renewal"
+    is_pending = action == "pending_activation"
+
+    if promo_code:
+        await _consume_promo_for_paid_purchase(conn, promo_code, telegram_id, purchase_id, promo_sink)
+    await conn.execute("UPDATE payments SET status = 'approved' WHERE id = $1", payment_id)
+
+    from database.users import process_referral_reward as _prr
+    referral_reward_result = await _prr(
+        buyer_id=telegram_id, purchase_id=purchase_id, amount_rubles=amount_rubles, conn=conn,
+    )
+    if referral_reward_result.get("success"):
+        logger.info(
+            f"finalize_purchase: referral_reward_processed: purchase_id={purchase_id}, "
+            f"user={telegram_id}, referrer={referral_reward_result.get('referrer_id')}, "
+            f"amount={referral_reward_result.get('reward_amount')} RUB"
+        )
+
+    if is_combo:
+        # Traffic Audit row (was post-commit in confirmation._send_confirmation).
+        await _record_traffic_purchase_in_tx(conn, telegram_id, int(ent.bypass_bytes // (1024 ** 3)), 0)
+
+    job_id = await _enqueue_purchase_job(
+        conn, purchase_id=purchase_id, telegram_id=telegram_id, ent=ent,
+        premium_until=expires_at, source=source,
+        payment_provider=payment_provider, amount_rubles=amount_rubles,
+    )
+
+    subscription_type_ret = (grant_result.get("subscription_type") or tariff_type or "basic").strip().lower()
+    vpn_key = grant_result.get("vless_url") or grant_result.get("vpn_key")
+    if is_renewal:
+        sub_row = await conn.fetchrow(
+            "SELECT subscription_type, vpn_key FROM subscriptions WHERE telegram_id = $1", telegram_id,
+        )
+        if sub_row and sub_row.get("subscription_type"):
+            subscription_type_ret = (normalize_tier(sub_row["subscription_type"]) or "basic").strip().lower()
+        if not vpn_key and sub_row:
+            vpn_key = sub_row.get("vpn_key")
+    if subscription_type_ret not in config.VALID_SUBSCRIPTION_TYPES:
+        subscription_type_ret = "basic"
+
+    logger.info(
+        f"finalize_purchase: SUCCESS_OUTBOX [purchase_id={purchase_id}, user={telegram_id}, "
+        f"provider={payment_provider}, payment_id={payment_id}, expires_at={expires_at.isoformat()}, "
+        f"action={action}, job={job_id}]"
+    )
+    ret_val: Dict[str, Any] = {
+        "success": True,
+        "payment_id": payment_id,
+        "expires_at": expires_at,
+        "vpn_key": None if is_pending else vpn_key,
+        "vpn_key_plus": grant_result.get("vpn_key_plus") or grant_result.get("vless_url_plus"),
+        "is_renewal": is_renewal,
+        "subscription_type": subscription_type_ret,
+        "referral_reward": referral_reward_result,
+        "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
+        "is_combo": is_combo,
+        "period_days": period_days,
+        "bypass_created_fresh": False,
+        "provisioning_job_id": job_id,
+    }
+    if is_pending:
+        ret_val["activation_status"] = "pending"
+    return ret_val
+
+
 async def finalize_purchase(
     purchase_id: str,
     payment_provider: str,
     amount_rubles: float,
-    invoice_id: Optional[str] = None
+    invoice_id: Optional[str] = None,
+    *,
+    entrypoint: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     ЕДИНАЯ ФУНКЦИЯ ФИНАЛИЗАЦИИ ПОКУПКИ (SINGLE SOURCE OF TRUTH)
@@ -4453,496 +4491,676 @@ async def finalize_purchase(
             "is_renewal": bool
         }
     
+    Конкурентность (T6): вся функция выполняется под session-level
+    advisory-lock по purchase_id; внутри транзакции статус перепроверяется
+    блокирующим SELECT … FOR UPDATE. Дубль вебхука ждёт и получает
+    ValueError("already processed").
+
+    Пополнение баланса зачисляет min(amount_rubles, price_kopecks/100):
+    переплата (комиссия провайдера) не зачисляется, только логируется.
+
+    T8 (docs/audit/02_payment_core_plan.md §A flows 1-2): when
+    provisioning_flags.is_on(entrypoint) — entrypoint defaults to
+    provisioning_entrypoint(payment_provider) — subscription / combo /
+    traffic-pack purchases skip Phase 1 and every panel call: the billing tx
+    runs grant_access(defer_panel=True) + promo + referral (+ combo
+    traffic_purchases row) and enqueues provisioning job "purchase:{id}";
+    after commit provisioning.run_now. The result gains "provisioning_job_id"
+    and "provisioning_done". Flag off → unchanged.
+
     Raises:
         ValueError: Если pending_purchase не найден или уже обработан
         Exception: При любых ошибках активации подписки
     """
-    from datetime import timedelta
-
+    outbox_ep = entrypoint or provisioning_entrypoint(payment_provider)
+    post_commit: Dict[str, Any] = {}
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Pre-fetch with FOR UPDATE SKIP LOCKED to prevent concurrent finalization
-        # SECURITY: Row-level lock ensures only one webhook can process a purchase at a time
-        pending_row = await conn.fetchrow(
-            "SELECT * FROM pending_purchases WHERE purchase_id = $1 FOR UPDATE SKIP LOCKED",
-            purchase_id
+        # T6: вся финализация одной покупки сериализуется session-level
+        # advisory-lock'ом по purchase_id (на ЭТОМ ЖЕ соединении, без открытой
+        # транзакции — Phase 1 ходит в панель по HTTP, держать tx нельзя).
+        # Второй дубль вебхука ждёт здесь, затем перечитывает статус и уходит
+        # в идемпотентный ValueError("already processed"). Раньше pre-fetch
+        # делал FOR UPDATE SKIP LOCKED ВНЕ транзакции — блокировка снималась
+        # сразу, оба дубля шли в provisioning, проигравший падал на
+        # UPDATE != "UPDATE 1" → ложный PERMANENT-алерт.
+        # Блокирующее ожидание ограничено command_timeout пула (30 с) и
+        # таймаутом вебхука (25 с) → TimeoutError → Transient → 500 → ретрай.
+        # fetchrow (а не execute) — единый способ вызова для lock/unlock.
+        await conn.fetchrow(
+            "SELECT pg_advisory_lock($1, hashtext($2))", _FINALIZE_LOCK_NS, purchase_id,
         )
-        if not pending_row:
-            # Could be not found OR locked by another concurrent finalization
-            error_msg = f"Pending purchase not found or locked: purchase_id={purchase_id}"
-            logger.error(f"finalize_purchase: payment_rejected: reason=purchase_not_found_or_locked, {error_msg}")
-            raise ValueError(error_msg)
-        pending_purchase = dict(pending_row)
-        telegram_id = pending_purchase["telegram_id"]
-        status = pending_purchase.get("status")
-        promo_code = pending_purchase.get("promo_code")
-        if status == "paid":
-            error_msg = f"Pending purchase already processed: purchase_id={purchase_id}, status={status}"
-            logger.warning(f"finalize_purchase: payment_rejected: reason=already_processed, {error_msg}")
-            raise ValueError(error_msg)
-        if status not in ("pending", "expired"):
-            error_msg = f"Pending purchase invalid status: purchase_id={purchase_id}, status={status}"
-            logger.warning(f"finalize_purchase: payment_rejected: reason=invalid_status, {error_msg}")
-            raise ValueError(error_msg)
-        if status == "expired":
-            logger.info(f"finalize_purchase: recovering expired purchase: purchase_id={purchase_id}, user={telegram_id}")
-        tariff_type = pending_purchase.get("tariff")
-        period_days = pending_purchase.get("period_days")
-        purchase_type = pending_purchase.get("purchase_type", "subscription")
-        price_kopecks = pending_purchase["price_kopecks"]
-        purchase_country = pending_purchase.get("country")
-        is_combo_purchase = pending_purchase.get("is_combo", False)
-        expected_amount_rubles = price_kopecks / 100.0
-        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift", "apple_id", "telegram_premium", "telegram_stars", "farm_effect"))
-        is_gift_purchase = (purchase_type == "gift")
-        is_traffic_pack = (purchase_type == "traffic_pack")
-        is_apple_id = (purchase_type == "apple_id")
-        is_farm_effect = (purchase_type == "farm_effect")
-        # SECURITY: асимметричный tolerance.
-        #
-        # Overpayment (юзер заплатил БОЛЬШЕ ожидаемого) — принимаем всегда.
-        # Обычно это комиссия эквайринга customer-pays-fee (Wata ~2%,
-        # Lava ~1.5%, Platega ~1%). Деньги дошли, ничего не теряем.
-        # Не важно 2% или 20% — если провайдер решил накинуть больше,
-        # это его дело, наша логика видит подтверждённый платёж.
-        #
-        # Underpayment (юзер заплатил МЕНЬШЕ) — отклоняем строго (±0.5%
-        # или минимум 0.5₽). Реалистично разница может возникнуть только
-        # из-за rounding (₽.копейки), НЕ должно быть больше нескольких копеек.
-        # Всё что больше — потенциальная подмена суммы: атакующий пытается
-        # активировать дорогую подписку за копейки.
-        #
-        # Раньше проверка была симметричная 0.5% → при 199₽ комиссия
-        # Wata 4.06₽ ломала легитимные оплаты.
-        payment_delta = amount_rubles - expected_amount_rubles  # >0 если overpay
-        underpayment_tolerance = max(0.50, expected_amount_rubles * 0.005)
-        if payment_delta < -underpayment_tolerance:
-            amount_diff = abs(payment_delta)
-            max_tolerance = underpayment_tolerance
-            error_msg = (
-                f"Payment amount mismatch: purchase_id={purchase_id}, user={telegram_id}, "
-                f"expected={expected_amount_rubles:.2f} RUB, actual={amount_rubles:.2f} RUB, "
-                f"diff={amount_diff:.2f} RUB (tolerance={max_tolerance:.2f} RUB)"
-            )
-            logger.error(f"finalize_purchase: PAYMENT_AMOUNT_MISMATCH: {error_msg}")
-            raise ValueError(error_msg)
-
-        # TWO-PHASE: Phase 1 — add_vless_user OUTSIDE transaction (orphan prevention)
-        pre_provisioned_uuid = None
-        uuid_to_cleanup_on_failure = None
-        if not is_balance_topup and not is_gift_purchase and tariff_type and period_days and period_days > 0:
-            sub_row = await conn.fetchrow("SELECT * FROM subscriptions WHERE telegram_id = $1", telegram_id)
-            now_pre = datetime.now(timezone.utc)
-            is_new_issuance = True
-            if sub_row:
-                sub = dict(sub_row)
-                exp_raw = sub.get("expires_at")
-                exp = _from_db_utc(exp_raw) if exp_raw else None
-                is_new_issuance = (
-                    sub.get("status") != "active"
-                    or not exp
-                    or exp <= now_pre
-                    or not sub.get("uuid")
-                )
-            if is_new_issuance:
-                try:
-                    duration_pre = timedelta(days=period_days)
-                    subscription_end_pre = now_pre + duration_pre
-                    new_uuid_pre = _generate_subscription_uuid()
-                    # Task 2 cut-over: always provision premium + bypass
-                    # entities in Remnawave; samopis xray master is no
-                    # longer called from the create path.  Return shape
-                    # matches the historical add_vless_user contract so
-                    # the rest of finalize_purchase (uuid_to_cleanup_on_failure,
-                    # pre_provisioned_uuid dict) is unchanged.
-                    from app.services import purchase_flow
-                    vless_result = await purchase_flow.provision_subscription(
-                        telegram_id,
-                        tariff=tariff_type or "basic",
-                        subscription_end=subscription_end_pre,
-                        period_days=period_days,
-                        is_trial=False,  # finalize_purchase is paid flow only
-                        is_combo=is_combo_purchase,  # 🆕 fresh combo → bypass с 75 GB
-                    )
-                    pre_provisioned_uuid = {
-                        "uuid": vless_result["uuid"].strip(),
-                        "vless_url": vless_result["vless_url"],
-                        "vless_url_plus": vless_result.get("vless_url_plus"),
-                        "subscription_type": vless_result.get("subscription_type") or tariff_type or "basic",
-                        # 🆕 True if we just created the bypass entity — confirmation
-                        # SHOULD NOT top-up again (иначе double-add: 75+75=150 для combo,
-                        # 10+10=20 для обычной basic 30d).
-                        "bypass_created_fresh": bool(vless_result.get("bypass_created_fresh", False)),
-                    }
-                    uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
-                    logger.info(
-                        f"finalize_purchase: TWO_PHASE_PHASE1_DONE [purchase_id={purchase_id}, "
-                        f"user={telegram_id}, uuid={uuid_to_cleanup_on_failure[:8]}...]"
-                    )
-                except Exception as phase1_err:
-                    logger.warning(
-                        f"finalize_purchase: Phase 1 add_vless_user failed (grant_access may use pending_activation): "
-                        f"purchase_id={purchase_id}, user={telegram_id}, error={phase1_err}"
-                    )
-                    pre_provisioned_uuid = None
-                    uuid_to_cleanup_on_failure = None
-
         try:
-            async with conn.transaction():
-                assert conn is not None, "finalize_purchase requires an active DB connection"
-                logger.info(
-                    f"finalize_purchase: START [purchase_id={purchase_id}, user={telegram_id}, "
-                    f"provider={payment_provider}, amount={amount_rubles:.2f} RUB (expected={expected_amount_rubles:.2f} RUB), "
-                    f"purchase_type={purchase_type}, tariff={tariff_type}, period_days={period_days}]"
+            result = await _finalize_purchase_locked(
+                conn, purchase_id, payment_provider, amount_rubles, invoice_id,
+                outbox_ep=outbox_ep, post_commit=post_commit,
+            )
+        finally:
+            try:
+                await conn.fetchrow(
+                    "SELECT pg_advisory_unlock($1, hashtext($2))", _FINALIZE_LOCK_NS, purchase_id,
                 )
-                logger.info(
-                    f"payment_event_received: purchase_id={purchase_id}, user={telegram_id}, "
-                    f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, invoice_id={invoice_id or 'N/A'}"
+            except Exception as unlock_err:  # noqa: BLE001
+                # Сброс соединения при возврате в пул (asyncpg reset →
+                # pg_advisory_unlock_all) всё равно снимет lock.
+                logger.warning(
+                    "finalize_purchase: advisory unlock failed purchase_id=%s err=%s",
+                    purchase_id, unlock_err,
                 )
+    # P0-1: promo exhausted / expired after the invoice — the paid purchase was
+    # honoured; tell the admin (info, after commit, never blocks the payment).
+    if isinstance(result, dict) and post_commit.get("promo_warning"):
+        result["promo_warning"] = post_commit["promo_warning"]
+        await _alert_promo_honoured(result, purchase_id)
+    # T8: panel work only after commit AND with no DB connection held.
+    if isinstance(result, dict) and result.get("provisioning_job_id") is not None:
+        await _run_provisioning_after_commit(result, post_commit["telegram_id"])
+    return result
+
+
+async def _finalize_purchase_locked(
+    conn,
+    purchase_id: str,
+    payment_provider: str,
+    amount_rubles: float,
+    invoice_id: Optional[str],
+    *,
+    outbox_ep: str = "webhook",
+    post_commit: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Тело finalize_purchase. Вызывается ТОЛЬКО под advisory-lock покупки."""
+    from datetime import timedelta
+    from app.services.tariffs import extend_expiry, vpn_period_days
+
+    # Pre-read under the purchase advisory lock (taken by finalize_purchase):
+    # a concurrent duplicate has already committed by now, so its status is
+    # visible here. The authoritative re-check is the blocking FOR UPDATE
+    # inside the transaction below.
+    pending_row = await conn.fetchrow(
+        "SELECT * FROM pending_purchases WHERE purchase_id = $1",
+        purchase_id
+    )
+    if not pending_row:
+        error_msg = f"Pending purchase not found: purchase_id={purchase_id}"
+        logger.error(f"finalize_purchase: payment_rejected: reason=purchase_not_found, {error_msg}")
+        raise ValueError(error_msg)
+    pending_purchase = dict(pending_row)
+    telegram_id = pending_purchase["telegram_id"]
+    status = pending_purchase.get("status")
+    promo_code = pending_purchase.get("promo_code")
+    if status == "paid":
+        error_msg = f"Pending purchase already processed: purchase_id={purchase_id}, status={status}"
+        logger.warning(f"finalize_purchase: payment_rejected: reason=already_processed, {error_msg}")
+        raise PurchaseAlreadyProcessed(error_msg)
+    if status not in ("pending", "expired"):
+        error_msg = f"Pending purchase invalid status: purchase_id={purchase_id}, status={status}"
+        logger.warning(f"finalize_purchase: payment_rejected: reason=invalid_status, {error_msg}")
+        raise ValueError(error_msg)
+    if status == "expired":
+        logger.info(f"finalize_purchase: recovering expired purchase: purchase_id={purchase_id}, user={telegram_id}")
+    tariff_type = pending_purchase.get("tariff")
+    period_days = pending_purchase.get("period_days")
+    purchase_type = pending_purchase.get("purchase_type", "subscription")
+    price_kopecks = pending_purchase["price_kopecks"]
+    purchase_country = pending_purchase.get("country")
+    is_combo_purchase = pending_purchase.get("is_combo", False)
+    expected_amount_rubles = price_kopecks / 100.0
+    is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift", "apple_id", "telegram_premium", "telegram_stars", "farm_effect"))
+    is_gift_purchase = (purchase_type == "gift")
+    is_traffic_pack = (purchase_type == "traffic_pack")
+    is_apple_id = (purchase_type == "apple_id")
+    is_farm_effect = (purchase_type == "farm_effect")
+    # SECURITY: асимметричный tolerance.
+    #
+    # Overpayment (юзер заплатил БОЛЬШЕ ожидаемого) — принимаем всегда.
+    # Обычно это комиссия эквайринга customer-pays-fee (Wata ~2%,
+    # Platega ~1%). Деньги дошли, ничего не теряем.
+    # Не важно 2% или 20% — если провайдер решил накинуть больше,
+    # это его дело, наша логика видит подтверждённый платёж.
+    #
+    # Underpayment (юзер заплатил МЕНЬШЕ) — отклоняем строго (±0.5%
+    # или минимум 0.5₽). Реалистично разница может возникнуть только
+    # из-за rounding (₽.копейки), НЕ должно быть больше нескольких копеек.
+    # Всё что больше — потенциальная подмена суммы: атакующий пытается
+    # активировать дорогую подписку за копейки.
+    #
+    # Раньше проверка была симметричная 0.5% → при 199₽ комиссия
+    # Wata 4.06₽ ломала легитимные оплаты.
+    payment_delta = amount_rubles - expected_amount_rubles  # >0 если overpay
+    underpayment_tolerance = max(0.50, expected_amount_rubles * 0.005)
+    if payment_delta < -underpayment_tolerance:
+        amount_diff = abs(payment_delta)
+        max_tolerance = underpayment_tolerance
+        error_msg = (
+            f"Payment amount mismatch: purchase_id={purchase_id}, user={telegram_id}, "
+            f"expected={expected_amount_rubles:.2f} RUB, actual={amount_rubles:.2f} RUB, "
+            f"diff={amount_diff:.2f} RUB (tolerance={max_tolerance:.2f} RUB)"
+        )
+        logger.error(f"finalize_purchase: PAYMENT_AMOUNT_MISMATCH: {error_msg}")
+        raise ValueError(error_msg)
+
+    # T8: provisioning outbox (flagged) for the kinds that grant access —
+    # subscription / combo / traffic pack. Balance top-up, gift purchase,
+    # Apple ID and farm effects keep their path unchanged.
+    outbox_ent = None
+    if not (is_balance_topup or is_gift_purchase or is_apple_id or is_farm_effect):
+        outbox_ent = _outbox_entitlement(
+            outbox_ep, purchase_id=purchase_id, tariff_type=tariff_type,
+            period_days=period_days, is_combo=bool(is_combo_purchase),
+            is_traffic_pack=is_traffic_pack,
+        )
+    if outbox_ent is not None and post_commit is not None:
+        post_commit["telegram_id"] = telegram_id
+
+    # TWO-PHASE: Phase 1 — add_vless_user OUTSIDE transaction (orphan prevention)
+    pre_provisioned_uuid = None
+    uuid_to_cleanup_on_failure = None
+    # M-RENEW-OUTSIDE-TX (docs/audit/03_payment_matrix.md): a renewal must run
+    # inside the billing transaction. Before, it ran on its OWN autocommit
+    # connection (conn=None): if the inline panel sync failed afterwards, the
+    # billing rolled back but the extension stayed — a webhook retry extended the
+    # subscription AGAIN, and a Telegram payment ended with money taken, no
+    # payments row and the panel behind the DB. In the caller's transaction
+    # grant_access returns renewal_xray_sync_after_commit → synced after commit
+    # below (failure → remnawave_sync_failed + alert + re-sync in purchase_flow).
+    renewal_in_tx = False
+    if outbox_ent is None and not is_balance_topup and not is_gift_purchase and tariff_type and period_days and period_days > 0:
+        sub_row = await conn.fetchrow("SELECT * FROM subscriptions WHERE telegram_id = $1", telegram_id)
+        now_pre = datetime.now(timezone.utc)
+        is_new_issuance = True
+        if sub_row:
+            sub = dict(sub_row)
+            exp_raw = sub.get("expires_at")
+            exp = _from_db_utc(exp_raw) if exp_raw else None
+            is_new_issuance = (
+                sub.get("status") != "active"
+                or not exp
+                or exp <= now_pre
+                or not sub.get("uuid")
+            )
+        renewal_in_tx = not is_new_issuance
+        if is_new_issuance:
+            try:
+                duration_pre = timedelta(days=period_days)
+                # Same end as grant_access below: calendar months for a VPN tariff,
+                # plain days for a shop bonus period (spotify_*).
+                _cal_pd = vpn_period_days(tariff_type, period_days)
+                subscription_end_pre = extend_expiry(now_pre, _cal_pd) if _cal_pd else now_pre + duration_pre
+                new_uuid_pre = _generate_subscription_uuid()
+                # Task 2 cut-over: always provision premium + bypass
+                # entities in Remnawave; samopis xray master is no
+                # longer called from the create path.  Return shape
+                # matches the historical add_vless_user contract so
+                # the rest of finalize_purchase (uuid_to_cleanup_on_failure,
+                # pre_provisioned_uuid dict) is unchanged.
+                from app.services import purchase_flow
+                vless_result = await purchase_flow.provision_subscription(
+                    telegram_id,
+                    tariff=tariff_type or "basic",
+                    subscription_end=subscription_end_pre,
+                    period_days=period_days,
+                    is_trial=False,  # finalize_purchase is paid flow only
+                    is_combo=is_combo_purchase,  # 🆕 fresh combo → bypass с 75 GB
+                )
+                pre_provisioned_uuid = {
+                    "uuid": vless_result["uuid"].strip(),
+                    "vless_url": vless_result["vless_url"],
+                    "vless_url_plus": vless_result.get("vless_url_plus"),
+                    "subscription_type": vless_result.get("subscription_type") or tariff_type or "basic",
+                    # 🆕 True if we just created the bypass entity — confirmation
+                    # SHOULD NOT top-up again (иначе double-add: 75+75=150 для combo,
+                    # 10+10=20 для обычной basic 30d).
+                    "bypass_created_fresh": bool(vless_result.get("bypass_created_fresh", False)),
+                }
+                uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                 logger.info(
-                    f"payment_verified: purchase_id={purchase_id}, user={telegram_id}, "
-                    f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, amount_match=True, purchase_status={status}"
+                    f"finalize_purchase: TWO_PHASE_PHASE1_DONE [purchase_id={purchase_id}, "
+                    f"user={telegram_id}, uuid={uuid_to_cleanup_on_failure[:8]}...]"
+                )
+            except Exception as phase1_err:
+                logger.warning(
+                    f"finalize_purchase: Phase 1 add_vless_user failed (grant_access may use pending_activation): "
+                    f"purchase_id={purchase_id}, user={telegram_id}, error={phase1_err}"
+                )
+                pre_provisioned_uuid = None
+                uuid_to_cleanup_on_failure = None
+
+    try:
+        async with conn.transaction():
+            assert conn is not None, "finalize_purchase requires an active DB connection"
+            logger.info(
+                f"finalize_purchase: START [purchase_id={purchase_id}, user={telegram_id}, "
+                f"provider={payment_provider}, amount={amount_rubles:.2f} RUB (expected={expected_amount_rubles:.2f} RUB), "
+                f"purchase_type={purchase_type}, tariff={tariff_type}, period_days={period_days}]"
+            )
+            logger.info(
+                f"payment_event_received: purchase_id={purchase_id}, user={telegram_id}, "
+                f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, invoice_id={invoice_id or 'N/A'}"
+            )
+            logger.info(
+                f"payment_verified: purchase_id={purchase_id}, user={telegram_id}, "
+                f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, amount_match=True, purchase_status={status}"
+            )
+
+            # Authoritative idempotency check: BLOCKING row lock held until
+            # commit. Covers writers that don't take the advisory lock
+            # (mark_pending_purchase_paid, expiry updates) — a row paid in the
+            # meantime ends in the idempotent "already processed" ValueError,
+            # not in the generic UPDATE != "UPDATE 1" failure.
+            locked_row = await conn.fetchrow(
+                "SELECT status FROM pending_purchases WHERE purchase_id = $1 FOR UPDATE",
+                purchase_id,
+            )
+            locked_status = locked_row["status"] if locked_row else None
+            if locked_status == "paid":
+                error_msg = f"Pending purchase already processed: purchase_id={purchase_id}, status=paid"
+                logger.warning(f"finalize_purchase: payment_rejected: reason=already_processed, {error_msg}")
+                raise PurchaseAlreadyProcessed(error_msg)
+            if locked_status not in ("pending", "expired"):
+                error_msg = f"Pending purchase invalid status: purchase_id={purchase_id}, status={locked_status}"
+                logger.warning(f"finalize_purchase: payment_rejected: reason=invalid_status, {error_msg}")
+                raise ValueError(error_msg)
+
+            # STEP 3: Обновляем pending_purchase → paid + payment_provider
+            # payment_provider added for analytics (migration 054). The
+            # column may be missing on freshly-deployed-but-not-migrated
+            # boxes; we ignore the error in that case so the payment
+            # still settles.
+            try:
+                result = await conn.execute(
+                    """UPDATE pending_purchases
+                       SET status = 'paid', payment_provider = $2
+                       WHERE purchase_id = $1
+                         AND status IN ('pending', 'expired')""",
+                    purchase_id, payment_provider,
+                )
+            except Exception as e:
+                logger.warning(
+                    "finalize_purchase: provider write skipped (%s) — "
+                    "falling back to status-only update", e,
+                )
+                result = await conn.execute(
+                    "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status IN ('pending', 'expired')",
+                    purchase_id,
                 )
 
-                # STEP 3: Обновляем pending_purchase → paid + payment_provider
-                # payment_provider added for analytics (migration 054). The
-                # column may be missing on freshly-deployed-but-not-migrated
-                # boxes; we ignore the error in that case so the payment
-                # still settles.
-                try:
-                    result = await conn.execute(
-                        """UPDATE pending_purchases
-                           SET status = 'paid', payment_provider = $2
-                           WHERE purchase_id = $1
-                             AND status IN ('pending', 'expired')""",
-                        purchase_id, payment_provider,
+            if result != "UPDATE 1":
+                error_msg = f"Failed to mark pending purchase as paid: purchase_id={purchase_id}"
+                logger.error(f"finalize_purchase: payment_rejected: reason=db_update_failed, {error_msg}")
+                raise Exception(error_msg)
+
+            if is_balance_topup:
+                # CRITICAL: Balance top-up MUST run inside the same transaction as finalize_purchase.
+                # increase_balance is called with conn=conn to ensure atomicity.
+                # Do NOT remove conn parameter — this prevents free balance on partial rollback.
+                # ОБРАБОТКА ПОПОЛНЕНИЯ БАЛАНСА
+                # T6: зачисляем ОЖИДАЕМУЮ сумму (price_kopecks/100), а не сумму
+                # из вебхука — переплата = комиссия провайдера (customer-pays-fee),
+                # до нас она не доходит. Недоплата в пределах tolerance —
+                # зачисляем фактически полученное (min), сверх tolerance —
+                # отклонено выше (PAYMENT_AMOUNT_MISMATCH).
+                # Owner 2026-09-14: SBP markup is charged but NOT credited —
+                # credit_kopecks (migration 083) caps the credit at the amount
+                # the user asked for; payments.amount keeps what was charged.
+                paid_rubles = min(amount_rubles, expected_amount_rubles)
+                credit_cap_rubles = expected_amount_rubles
+                _credit_k = pending_purchase.get("credit_kopecks")
+                if _credit_k is not None and 0 < int(_credit_k) <= price_kopecks:
+                    credit_cap_rubles = int(_credit_k) / 100.0
+                credited_rubles = min(amount_rubles, credit_cap_rubles)
+                if credit_cap_rubles < expected_amount_rubles:
+                    logger.info(
+                        "finalize_purchase: BALANCE_TOPUP_MARKUP_NOT_CREDITED purchase_id=%s user=%s "
+                        "charged=%.2f credited=%.2f", purchase_id, telegram_id, paid_rubles, credited_rubles,
                     )
-                except Exception as e:
+                overpayment_rubles = round(max(0.0, amount_rubles - expected_amount_rubles), 2)
+                if overpayment_rubles > 0:
                     logger.warning(
-                        "finalize_purchase: provider write skipped (%s) — "
-                        "falling back to status-only update", e,
+                        "finalize_purchase: BALANCE_TOPUP_OVERPAYMENT purchase_id=%s user=%s "
+                        "provider=%s paid=%.2f expected=%.2f overpayment=%.2f — credited expected amount",
+                        purchase_id, telegram_id, payment_provider,
+                        amount_rubles, expected_amount_rubles, overpayment_rubles,
                     )
-                    result = await conn.execute(
-                        "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status IN ('pending', 'expired')",
-                        purchase_id,
-                    )
-            
-                if result != "UPDATE 1":
-                    error_msg = f"Failed to mark pending purchase as paid: purchase_id={purchase_id}"
-                    logger.error(f"finalize_purchase: payment_rejected: reason=db_update_failed, {error_msg}")
-                    raise Exception(error_msg)
-
-                if is_balance_topup:
-                    # CRITICAL: Balance top-up MUST run inside the same transaction as finalize_purchase.
-                    # increase_balance is called with conn=conn to ensure atomicity.
-                    # Do NOT remove conn parameter — this prevents free balance on partial rollback.
-                    # ОБРАБОТКА ПОПОЛНЕНИЯ БАЛАНСА
-                    logger.info(
-                        f"finalize_purchase: BALANCE_TOPUP [purchase_id={purchase_id}, user={telegram_id}, "
-                        f"amount={amount_rubles:.2f} RUB]"
-                    )
-                    from database.users import increase_balance, process_referral_reward as _process_referral_reward
-                    balance_increased = await increase_balance(
-                        telegram_id=telegram_id,
-                        amount=amount_rubles,
-                        source=payment_provider or "telegram_payment",
-                        description=f"Balance top-up via {payment_provider}",
-                        conn=conn
-                    )
-                    if not balance_increased:
-                        error_msg = f"Failed to increase balance: purchase_id={purchase_id}, user={telegram_id}"
-                        logger.error(f"finalize_purchase: {error_msg}")
-                        raise Exception(error_msg)
-                    now_utc = datetime.now(timezone.utc)
-                    payment_id = await conn.fetchval(
-                        """INSERT INTO payments (telegram_id, tariff, amount, status, paid_at)
-                           VALUES ($1, $2, $3, 'approved', $4) RETURNING id""",
-                        telegram_id,
-                        "balance_topup",
-                        round(amount_rubles * 100),
-                        _to_db_utc(now_utc)
-                    )
-                    if not payment_id:
-                        error_msg = f"Failed to create payment record: purchase_id={purchase_id}, user={telegram_id}"
-                        logger.error(f"finalize_purchase: {error_msg}")
-                        raise Exception(error_msg)
-                    if promo_code:
-                        await _consume_promo_in_transaction(conn, promo_code, telegram_id, purchase_id)
-                    referral_reward_result = await _process_referral_reward(
-                        buyer_id=telegram_id,
-                        purchase_id=purchase_id,
-                        amount_rubles=amount_rubles,
-                        conn=conn
-                    )
-                    if referral_reward_result.get("success"):
-                        logger.info(
-                            f"finalize_purchase: REFERRAL_CASHBACK_GRANTED [BALANCE_TOPUP] "
-                            f"purchase_id={purchase_id}, user={telegram_id}, "
-                            f"referrer={referral_reward_result.get('referrer_id')}, "
-                            f"amount={referral_reward_result.get('reward_amount')} RUB"
-                        )
-                    else:
-                        reason = referral_reward_result.get("reason", "unknown")
-                        logger.debug(
-                            f"finalize_purchase: Referral reward skipped for balance topup: "
-                            f"purchase_id={purchase_id}, user={telegram_id}, reason={reason}"
-                        )
-                    logger.info(
-                        f"balance_topup_completed: purchase_id={purchase_id}, user={telegram_id}, "
-                        f"provider={payment_provider}, payment_id={payment_id}, amount={amount_rubles:.2f} RUB"
-                    )
-                    logger.info(
-                        f"finalize_purchase: SUCCESS [BALANCE_TOPUP] [purchase_id={purchase_id}, user={telegram_id}, "
-                        f"provider={payment_provider}, payment_id={payment_id}, amount={amount_rubles:.2f} RUB]"
-                    )
-                    return {
-                        "success": True,
-                        "payment_id": payment_id,
-                        "expires_at": None,
-                        "vpn_key": None,
-                        "is_renewal": False,
-                        "is_balance_topup": True,
-                        "amount": amount_rubles,
-                        "referral_reward": referral_reward_result
-                    }
-
-                # STEP 4.4b: ОБРАБОТКА ПОКУПКИ APPLE ID
-                if is_apple_id:
-                    logger.info(
-                        f"finalize_purchase: APPLE_ID [purchase_id={purchase_id}, user={telegram_id}, "
-                        f"tariff={tariff_type}, amount={amount_rubles:.2f} RUB]"
-                    )
-                    now_utc = datetime.now(timezone.utc)
-                    payment_id = await conn.fetchval(
-                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
-                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
-                        telegram_id, tariff_type, round(amount_rubles * 100),
-                        purchase_id, _to_db_utc(now_utc),
-                    )
-                    return {
-                        "success": True,
-                        "payment_id": payment_id,
-                        "expires_at": None,
-                        "vpn_key": None,
-                        "is_renewal": False,
-                        "is_balance_topup": False,
-                        "is_traffic_pack": False,
-                        "tariff_type": tariff_type,
-                        "price_kopecks": price_kopecks,
-                        "amount": amount_rubles,
-                    }
-
-                # STEP 4.5: ОБРАБОТКА ПОДАРОЧНОЙ ПОДПИСКИ (gift)
-                if is_gift_purchase:
-                    logger.info(
-                        f"finalize_purchase: GIFT_PURCHASE [purchase_id={purchase_id}, user={telegram_id}, "
-                        f"tariff={tariff_type}, period_days={period_days}, amount={amount_rubles:.2f} RUB]"
-                    )
-                    now_utc = datetime.now(timezone.utc)
-                    payment_id = await conn.fetchval(
-                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
-                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
-                        telegram_id,
-                        f"gift_{tariff_type}_{period_days}",
-                        round(amount_rubles * 100),
-                        purchase_id,
-                        _to_db_utc(now_utc),
-                    )
-                    if not payment_id:
-                        raise Exception(f"Failed to create payment record for gift: purchase_id={purchase_id}")
-
-                    # Создаём подарочную подписку
-                    from database.admin import generate_gift_code
-                    gift_code = generate_gift_code()
-                    gift_expires = now_utc + timedelta(days=90)
-                    await conn.execute(
-                        """INSERT INTO gift_subscriptions
-                           (gift_code, buyer_telegram_id, tariff, period_days, price_kopecks,
-                            purchase_id, status, created_at, expires_at)
-                           VALUES ($1, $2, $3, $4, $5, $6, 'paid', $7, $8)""",
-                        gift_code, telegram_id, tariff_type, period_days, price_kopecks,
-                        purchase_id, _to_db_utc(now_utc), _to_db_utc(gift_expires),
-                    )
-
-                    logger.info(
-                        f"finalize_purchase: GIFT_CREATED [purchase_id={purchase_id}, user={telegram_id}, "
-                        f"gift_code={gift_code}, tariff={tariff_type}, period={period_days}d]"
-                    )
-                    return {
-                        "success": True,
-                        "payment_id": payment_id,
-                        "expires_at": None,
-                        "vpn_key": None,
-                        "is_renewal": False,
-                        "is_gift": True,
-                        "gift_code": gift_code,
-                        "gift_tariff": tariff_type,
-                        "gift_period_days": period_days,
-                    }
-
-                # STEP 4.6: ОБРАБОТКА ПОКУПКИ ТРАФИКА (traffic_pack)
-                if is_traffic_pack:
-                    logger.info(
-                        f"finalize_purchase: TRAFFIC_PACK [purchase_id={purchase_id}, user={telegram_id}, "
-                        f"tariff={tariff_type}, amount={amount_rubles:.2f} RUB]"
-                    )
-                    now_utc = datetime.now(timezone.utc)
-                    payment_id = await conn.fetchval(
-                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
-                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
-                        telegram_id,
-                        tariff_type or "traffic_pack",
-                        round(amount_rubles * 100),
-                        purchase_id,
-                        _to_db_utc(now_utc),
-                    )
-                    if not payment_id:
-                        raise Exception(f"Failed to create payment record for traffic pack: purchase_id={purchase_id}")
-
-                    # Extract GB amount from tariff field (e.g., "traffic_5gb" → 5, "bypass_10gb" → 10)
-                    _gb = 0
-                    if tariff_type and tariff_type.endswith("gb") and ("traffic_" in tariff_type or "bypass_" in tariff_type):
-                        _prefix = "bypass_" if tariff_type.startswith("bypass_") else "traffic_"
-                        try:
-                            _gb = int(tariff_type[len(_prefix):-len("gb")])
-                        except ValueError:
-                            logger.error(
-                                "finalize_purchase: TRAFFIC_PACK_GB_PARSE_FAIL tariff=%s purchase_id=%s",
-                                tariff_type, purchase_id,
-                            )
-                    if _gb <= 0:
-                        logger.error(
-                            "finalize_purchase: TRAFFIC_PACK_INVALID_GB gb=%s tariff=%s purchase_id=%s",
-                            _gb, tariff_type, purchase_id,
-                        )
-
-                    # Record in traffic_purchases (payment_method column may not exist yet)
-                    _payment_method = payment_provider or "card"
-                    _has_pm_col = await conn.fetchval(
-                        """SELECT EXISTS (
-                            SELECT 1 FROM information_schema.columns
-                            WHERE table_name = 'traffic_purchases' AND column_name = 'payment_method'
-                        )"""
-                    )
-                    if _has_pm_col:
-                        await conn.execute(
-                            """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, payment_method, created_at)
-                               VALUES ($1, $2, $3, $4, $5)""",
-                            telegram_id, _gb, round(amount_rubles), _payment_method, _to_db_utc(now_utc),
-                        )
-                    else:
-                        await conn.execute(
-                            """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, created_at)
-                               VALUES ($1, $2, $3, $4)""",
-                            telegram_id, _gb, round(amount_rubles), _to_db_utc(now_utc),
-                        )
-
-                    logger.info(
-                        f"finalize_purchase: TRAFFIC_PACK_DONE [purchase_id={purchase_id}, user={telegram_id}, "
-                        f"payment_id={payment_id}, gb={_gb}, method={_payment_method}]"
-                    )
-                    return {
-                        "success": True,
-                        "payment_id": payment_id,
-                        "expires_at": None,
-                        "vpn_key": None,
-                        "is_renewal": False,
-                        "is_traffic_pack": True,
-                        "traffic_gb": _gb,
-                        "tariff_type": tariff_type,
-                    }
-
-                # STEP 4.7: ОБРАБОТКА ПОКУПКИ ЭФФЕКТА ФЕРМЫ (farm_storm_shield)
-                if is_farm_effect:
-                    plot_id = pending_purchase.get("farm_plot_id")
-                    logger.info(
-                        f"finalize_purchase: FARM_EFFECT [purchase_id={purchase_id}, user={telegram_id}, "
-                        f"tariff={tariff_type}, plot_id={plot_id}, amount={amount_rubles:.2f} RUB]"
-                    )
-                    if plot_id is None:
-                        raise ValueError(
-                            f"farm_effect purchase {purchase_id} has no farm_plot_id"
-                        )
-                    now_utc = datetime.now(timezone.utc)
-                    payment_id = await conn.fetchval(
-                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
-                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
-                        telegram_id,
-                        tariff_type or "farm_storm_shield",
-                        round(amount_rubles * 100),
-                        purchase_id,
-                        _to_db_utc(now_utc),
-                    )
-                    if not payment_id:
-                        raise Exception(
-                            f"Failed to create payment record for farm_effect: purchase_id={purchase_id}"
-                        )
-
-                    # Apply shield WITHOUT touching balance — already paid via PSP.
-                    # Pass our connection so the row update happens in the same
-                    # transaction (no nested advisory lock, no deadlock risk).
-                    from database.farm import apply_storm_shield_atomic
-                    shield_ok, shield_reason = await apply_storm_shield_atomic(
-                        telegram_id, plot_id, cost_kopecks=0, deduct_balance=False,
-                        conn=conn,
-                    )
-                    logger.info(
-                        f"finalize_purchase: FARM_EFFECT_SHIELD [purchase_id={purchase_id}, "
-                        f"plot_id={plot_id}, ok={shield_ok}, reason={shield_reason}]"
-                    )
-                    # Even on shield_ok=False (plot already harvested, already shielded,
-                    # status no longer growing) we keep the payment recorded — refund
-                    # logic, if needed, can run separately.  PSP webhook must not fail.
-
-                    return {
-                        "success": True,
-                        "payment_id": payment_id,
-                        "expires_at": None,
-                        "vpn_key": None,
-                        "is_renewal": False,
-                        "is_farm_effect": True,
-                        "farm_plot_id": plot_id,
-                        "farm_shield_applied": shield_ok,
-                        "farm_shield_reason": shield_reason,
-                        "tariff_type": tariff_type,
-                    }
-
-                # STEP 5: ОБРАБОТКА ПОДПИСКИ (subscription only)
-                if tariff_type is None or period_days is None or period_days <= 0:
-                    error_msg = f"Invalid subscription purchase: tariff={tariff_type}, period_days={period_days}"
+                logger.info(
+                    f"finalize_purchase: BALANCE_TOPUP [purchase_id={purchase_id}, user={telegram_id}, "
+                    f"paid={amount_rubles:.2f} RUB, credited={credited_rubles:.2f} RUB]"
+                )
+                from database.users import increase_balance
+                balance_increased = await increase_balance(
+                    telegram_id=telegram_id,
+                    amount=credited_rubles,
+                    source=payment_provider or "telegram_payment",
+                    description=f"Balance top-up via {payment_provider}",
+                    conn=conn
+                )
+                if not balance_increased:
+                    error_msg = f"Failed to increase balance: purchase_id={purchase_id}, user={telegram_id}"
                     logger.error(f"finalize_purchase: {error_msg}")
-                    raise ValueError(error_msg)
+                    raise Exception(error_msg)
                 now_utc = datetime.now(timezone.utc)
                 payment_id = await conn.fetchval(
-                    """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, cryptobot_payment_id, paid_at)
-                       VALUES ($1, $2, $3, 'pending', $4, $5, $6) RETURNING id""",
+                    """INSERT INTO payments (telegram_id, tariff, amount, status, paid_at)
+                       VALUES ($1, $2, $3, 'approved', $4) RETURNING id""",
                     telegram_id,
-                    f"{tariff_type}_{period_days}",
-                    round(amount_rubles * 100),
-                    purchase_id,
-                    str(invoice_id) if invoice_id else None,
+                    "balance_topup",
+                    round(paid_rubles * 100),  # charged (= credited unless an SBP markup was added)
                     _to_db_utc(now_utc)
                 )
                 if not payment_id:
                     error_msg = f"Failed to create payment record: purchase_id={purchase_id}, user={telegram_id}"
                     logger.error(f"finalize_purchase: {error_msg}")
                     raise Exception(error_msg)
-                duration = timedelta(days=period_days)
+                if promo_code:
+                    await _consume_promo_for_paid_purchase(conn, promo_code, telegram_id, purchase_id, post_commit)
+                # Owner rule 2026-09-14 (N17): NO referral cashback for a balance
+                # top-up — the purchase later paid from this balance earns it.
+                referral_reward_result = None
+                logger.info(
+                    f"balance_topup_completed: purchase_id={purchase_id}, user={telegram_id}, "
+                    f"provider={payment_provider}, payment_id={payment_id}, amount={credited_rubles:.2f} RUB"
+                )
+                logger.info(
+                    f"finalize_purchase: SUCCESS [BALANCE_TOPUP] [purchase_id={purchase_id}, user={telegram_id}, "
+                    f"provider={payment_provider}, payment_id={payment_id}, amount={credited_rubles:.2f} RUB]"
+                )
+                return {
+                    "success": True,
+                    "payment_id": payment_id,
+                    "expires_at": None,
+                    "vpn_key": None,
+                    "is_renewal": False,
+                    "is_balance_topup": True,
+                    "amount": credited_rubles,
+                    "paid_amount": amount_rubles,
+                    "overpayment_rubles": overpayment_rubles,
+                    "referral_reward": referral_reward_result
+                }
+
+            # STEP 4.4b: ОБРАБОТКА ПОКУПКИ APPLE ID
+            if is_apple_id:
+                logger.info(
+                    f"finalize_purchase: APPLE_ID [purchase_id={purchase_id}, user={telegram_id}, "
+                    f"tariff={tariff_type}, amount={amount_rubles:.2f} RUB]"
+                )
+                now_utc = datetime.now(timezone.utc)
+                payment_id = await conn.fetchval(
+                    """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
+                       VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                    telegram_id, tariff_type, round(amount_rubles * 100),
+                    purchase_id, _to_db_utc(now_utc),
+                )
+                # Owner rule 2026-09-14 (N17): cashback for ANY purchase, once per purchase_id.
+                from database.users import process_referral_reward as _prr
+                await _prr(buyer_id=telegram_id, purchase_id=purchase_id, amount_rubles=amount_rubles, conn=conn)
+                return {
+                    "success": True,
+                    "payment_id": payment_id,
+                    "expires_at": None,
+                    "vpn_key": None,
+                    "is_renewal": False,
+                    "is_balance_topup": False,
+                    "is_traffic_pack": False,
+                    "tariff_type": tariff_type,
+                    "price_kopecks": price_kopecks,
+                    "amount": amount_rubles,
+                }
+
+            # STEP 4.5: ОБРАБОТКА ПОДАРОЧНОЙ ПОДПИСКИ (gift)
+            if is_gift_purchase:
+                logger.info(
+                    f"finalize_purchase: GIFT_PURCHASE [purchase_id={purchase_id}, user={telegram_id}, "
+                    f"tariff={tariff_type}, period_days={period_days}, amount={amount_rubles:.2f} RUB]"
+                )
+                now_utc = datetime.now(timezone.utc)
+                payment_id = await conn.fetchval(
+                    """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
+                       VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                    telegram_id,
+                    f"gift_{tariff_type}_{period_days}",
+                    round(amount_rubles * 100),
+                    purchase_id,
+                    _to_db_utc(now_utc),
+                )
+                if not payment_id:
+                    raise Exception(f"Failed to create payment record for gift: purchase_id={purchase_id}")
+                # Owner rule 2026-09-14 (N17): cashback for ANY purchase (a gift too),
+                # in this billing transaction, once per purchase_id.
+                from database.users import process_referral_reward as _prr
+                referral_reward_result = await _prr(
+                    buyer_id=telegram_id, purchase_id=purchase_id, amount_rubles=amount_rubles, conn=conn,
+                )
+
+                # Создаём подарочную подписку
+                from database.admin import generate_gift_code
+                gift_code = generate_gift_code()
+                gift_expires = now_utc + timedelta(days=90)
+                await conn.execute(
+                    """INSERT INTO gift_subscriptions
+                       (gift_code, buyer_telegram_id, tariff, period_days, price_kopecks,
+                        purchase_id, status, created_at, expires_at)
+                       VALUES ($1, $2, $3, $4, $5, $6, 'paid', $7, $8)""",
+                    gift_code, telegram_id, tariff_type, period_days, price_kopecks,
+                    purchase_id, _to_db_utc(now_utc), _to_db_utc(gift_expires),
+                )
+
+                logger.info(
+                    f"finalize_purchase: GIFT_CREATED [purchase_id={purchase_id}, user={telegram_id}, "
+                    f"gift_code={gift_code}, tariff={tariff_type}, period={period_days}d]"
+                )
+                return {
+                    "success": True,
+                    "payment_id": payment_id,
+                    "expires_at": None,
+                    "vpn_key": None,
+                    "is_renewal": False,
+                    "is_gift": True,
+                    "gift_code": gift_code,
+                    "gift_tariff": tariff_type,
+                    "gift_period_days": period_days,
+                    "referral_reward": referral_reward_result,
+                }
+
+            # STEP 4.6: ОБРАБОТКА ПОКУПКИ ТРАФИКА (traffic_pack)
+            if is_traffic_pack:
+                logger.info(
+                    f"finalize_purchase: TRAFFIC_PACK [purchase_id={purchase_id}, user={telegram_id}, "
+                    f"tariff={tariff_type}, amount={amount_rubles:.2f} RUB]"
+                )
+                now_utc = datetime.now(timezone.utc)
+                payment_id = await conn.fetchval(
+                    """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
+                       VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                    telegram_id,
+                    tariff_type or "traffic_pack",
+                    round(amount_rubles * 100),
+                    purchase_id,
+                    _to_db_utc(now_utc),
+                )
+                if not payment_id:
+                    raise Exception(f"Failed to create payment record for traffic pack: purchase_id={purchase_id}")
+                # Owner rule 2026-09-14 (N17): cashback for ANY purchase (a GB pack too),
+                # in this billing transaction, once per purchase_id.
+                from database.users import process_referral_reward as _prr
+                referral_reward_result = await _prr(
+                    buyer_id=telegram_id, purchase_id=purchase_id, amount_rubles=amount_rubles, conn=conn,
+                )
+
+                # Extract GB amount from tariff field (e.g., "traffic_5gb" → 5, "bypass_10gb" → 10)
+                _gb = 0
+                if tariff_type and tariff_type.endswith("gb") and ("traffic_" in tariff_type or "bypass_" in tariff_type):
+                    _prefix = "bypass_" if tariff_type.startswith("bypass_") else "traffic_"
+                    try:
+                        _gb = int(tariff_type[len(_prefix):-len("gb")])
+                    except ValueError:
+                        logger.error(
+                            "finalize_purchase: TRAFFIC_PACK_GB_PARSE_FAIL tariff=%s purchase_id=%s",
+                            tariff_type, purchase_id,
+                        )
+                if _gb <= 0:
+                    logger.error(
+                        "finalize_purchase: TRAFFIC_PACK_INVALID_GB gb=%s tariff=%s purchase_id=%s",
+                        _gb, tariff_type, purchase_id,
+                    )
+
+                # Record in traffic_purchases (payment_method column may not exist yet)
+                _payment_method = payment_provider or "card"
+                _has_pm_col = await conn.fetchval(
+                    """SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'traffic_purchases' AND column_name = 'payment_method'
+                    )"""
+                )
+                if _has_pm_col:
+                    await conn.execute(
+                        """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, payment_method, created_at)
+                           VALUES ($1, $2, $3, $4, $5)""",
+                        telegram_id, _gb, round(amount_rubles), _payment_method, _to_db_utc(now_utc),
+                    )
+                else:
+                    await conn.execute(
+                        """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, created_at)
+                           VALUES ($1, $2, $3, $4)""",
+                        telegram_id, _gb, round(amount_rubles), _to_db_utc(now_utc),
+                    )
+
+                if tariff_type and tariff_type.startswith("bypass_"):
+                    # «Только обход»: the bypass-only row exists BEFORE the outbox job
+                    # runs (run_now after commit) — its bypass cache write needs the row.
+                    await ensure_bypass_only_subscription(telegram_id, conn=conn)
+
+                logger.info(
+                    f"finalize_purchase: TRAFFIC_PACK_DONE [purchase_id={purchase_id}, user={telegram_id}, "
+                    f"payment_id={payment_id}, gb={_gb}, method={_payment_method}]"
+                )
+                traffic_ret = {
+                    "success": True,
+                    "payment_id": payment_id,
+                    "expires_at": None,
+                    "vpn_key": None,
+                    "is_renewal": False,
+                    "is_traffic_pack": True,
+                    "traffic_gb": _gb,
+                    "tariff_type": tariff_type,
+                    "referral_reward": referral_reward_result,
+                }
+                if outbox_ent is not None:
+                    # T8: +N GB via the outbox job, premium untouched.
+                    traffic_ret["provisioning_job_id"] = await _enqueue_purchase_job(
+                        conn, purchase_id=purchase_id, telegram_id=telegram_id, ent=outbox_ent,
+                        premium_until=None, source=outbox_ep,
+                        payment_provider=payment_provider, amount_rubles=amount_rubles,
+                    )
+                return traffic_ret
+
+            # STEP 4.7: ОБРАБОТКА ПОКУПКИ ЭФФЕКТА ФЕРМЫ (farm_storm_shield)
+            if is_farm_effect:
+                plot_id = pending_purchase.get("farm_plot_id")
+                logger.info(
+                    f"finalize_purchase: FARM_EFFECT [purchase_id={purchase_id}, user={telegram_id}, "
+                    f"tariff={tariff_type}, plot_id={plot_id}, amount={amount_rubles:.2f} RUB]"
+                )
+                if plot_id is None:
+                    raise ValueError(
+                        f"farm_effect purchase {purchase_id} has no farm_plot_id"
+                    )
+                now_utc = datetime.now(timezone.utc)
+                payment_id = await conn.fetchval(
+                    """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
+                       VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                    telegram_id,
+                    tariff_type or "farm_storm_shield",
+                    round(amount_rubles * 100),
+                    purchase_id,
+                    _to_db_utc(now_utc),
+                )
+                if not payment_id:
+                    raise Exception(
+                        f"Failed to create payment record for farm_effect: purchase_id={purchase_id}"
+                    )
+
+                # Apply shield WITHOUT touching balance — already paid via PSP.
+                # Pass our connection so the row update happens in the same
+                # transaction (no nested advisory lock, no deadlock risk).
+                from database.farm import apply_storm_shield_atomic
+                shield_ok, shield_reason = await apply_storm_shield_atomic(
+                    telegram_id, plot_id, cost_kopecks=0, deduct_balance=False,
+                    conn=conn,
+                )
+                logger.info(
+                    f"finalize_purchase: FARM_EFFECT_SHIELD [purchase_id={purchase_id}, "
+                    f"plot_id={plot_id}, ok={shield_ok}, reason={shield_reason}]"
+                )
+                # Even on shield_ok=False (plot already harvested, already shielded,
+                # status no longer growing) we keep the payment recorded — refund
+                # logic, if needed, can run separately.  PSP webhook must not fail.
+
+                return {
+                    "success": True,
+                    "payment_id": payment_id,
+                    "expires_at": None,
+                    "vpn_key": None,
+                    "is_renewal": False,
+                    "is_farm_effect": True,
+                    "farm_plot_id": plot_id,
+                    "farm_shield_applied": shield_ok,
+                    "farm_shield_reason": shield_reason,
+                    "tariff_type": tariff_type,
+                }
+
+            # STEP 5: ОБРАБОТКА ПОДПИСКИ (subscription only)
+            if tariff_type is None or period_days is None or period_days <= 0:
+                error_msg = f"Invalid subscription purchase: tariff={tariff_type}, period_days={period_days}"
+                logger.error(f"finalize_purchase: {error_msg}")
+                raise ValueError(error_msg)
+            now_utc = datetime.now(timezone.utc)
+            payment_id = await conn.fetchval(
+                """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, cryptobot_payment_id, paid_at)
+                   VALUES ($1, $2, $3, 'pending', $4, $5, $6) RETURNING id""",
+                telegram_id,
+                f"{tariff_type}_{period_days}",
+                round(amount_rubles * 100),
+                purchase_id,
+                str(invoice_id) if invoice_id else None,
+                _to_db_utc(now_utc)
+            )
+            if not payment_id:
+                error_msg = f"Failed to create payment record: purchase_id={purchase_id}, user={telegram_id}"
+                logger.error(f"finalize_purchase: {error_msg}")
+                raise Exception(error_msg)
+            duration = timedelta(days=period_days)
+            if outbox_ent is not None:
+                # T8: DB-only grant + outbox job, all in this transaction.
+                ret_val = await _finalize_subscription_via_outbox(
+                    conn,
+                    purchase_id=purchase_id, telegram_id=telegram_id, payment_id=payment_id,
+                    duration=duration, tariff_type=tariff_type, period_days=period_days,
+                    country=purchase_country, is_combo=bool(is_combo_purchase),
+                    promo_code=promo_code, amount_rubles=amount_rubles,
+                    payment_provider=payment_provider, ent=outbox_ent, source=outbox_ep,
+                    promo_sink=post_commit,
+                )
+                grant_result_for_removal = None
+            else:
                 # When Phase 1 succeeded we have pre_provisioned_uuid → use caller's conn and two-phase.
-                # When Phase 1 failed (pre_provisioned_uuid is None) → grant_access must run add_vless_user
-                # outside any transaction: pass conn=None and _caller_holds_transaction=False to avoid
-                # INVARIANT_VIOLATION; grant_access will acquire its own conn and call add_vless_user outside tx.
+                # A renewal (renewal_in_tx) also runs on the caller's conn: DB-only in this
+                # transaction, the panel sync runs after commit (see M-RENEW-OUTSIDE-TX above).
+                # When Phase 1 failed (new issuance, pre_provisioned_uuid is None) → grant_access
+                # must run add_vless_user outside any transaction: pass conn=None and
+                # _caller_holds_transaction=False to avoid INVARIANT_VIOLATION; grant_access
+                # will acquire its own conn and call add_vless_user outside tx.
+                _grant_in_tx = bool(pre_provisioned_uuid) or renewal_in_tx
                 grant_result_for_removal = grant_result = await grant_access(
                     telegram_id=telegram_id,
                     duration=duration,
                     source="payment",
                     admin_telegram_id=None,
                     admin_grant_days=None,
-                    conn=conn if pre_provisioned_uuid else None,
+                    conn=conn if _grant_in_tx else None,
                     pre_provisioned_uuid=pre_provisioned_uuid,
-                    _caller_holds_transaction=bool(pre_provisioned_uuid),
+                    _caller_holds_transaction=_grant_in_tx,
                     tariff=tariff_type or "basic",
                     country=purchase_country,
+                    tariff_period_days=vpn_period_days(tariff_type, period_days),
                 )
                 if not grant_result:
                     error_msg = f"grant_access returned None: purchase_id={purchase_id}, user={telegram_id}"
@@ -4953,24 +5171,24 @@ async def finalize_purchase(
                     error_msg = f"grant_access returned None expires_at: purchase_id={purchase_id}, user={telegram_id}"
                     logger.error(f"finalize_purchase: {error_msg}")
                     raise Exception(error_msg)
-            
+
                 # Проверяем action для обработки pending activation
                 action = grant_result.get("action")
                 is_renewal = action == "renewal"
-            
+
                 # PENDING ACTIVATION: Если action == 'pending_activation', это ожидаемое поведение
                 # VPN ключ будет создан позже activation_worker'ом
                 if action == "pending_activation":
                     logger.info(
                         f"finalize_purchase: PENDING_ACTIVATION_ACCEPTED [purchase_id={purchase_id}, user={telegram_id}]"
                     )
-                
+
                     # Обновляем payment → approved
                     await conn.execute(
                         "UPDATE payments SET status = 'approved' WHERE id = $1",
                         payment_id
                     )
-                
+
                     ret_val = {
                         "success": True,
                         "payment_id": payment_id,
@@ -4985,7 +5203,7 @@ async def finalize_purchase(
                 else:
                     # Получаем VPN ключ для нормальной активации
                     vpn_key = grant_result.get("vless_url")
-                
+
                     if not vpn_key:
                         # Renewal: get vpn_key from subscription (API is source of truth, no local generation)
                         if is_renewal:
@@ -5011,23 +5229,23 @@ async def finalize_purchase(
                             )
                             logger.error(f"finalize_purchase: {error_msg}")
                             raise Exception(error_msg)
-                
+
                     if not vpn_key:
                         error_msg = f"VPN key is empty: purchase_id={purchase_id}, user={telegram_id}"
                         logger.error(f"finalize_purchase: {error_msg}")
                         raise Exception(error_msg)
-                
+
                     # API is source of truth — vpn_key from API, no local validation
                     # STEP 6: Потребляем промокод ПЕРЕД approve (если consumption упадёт — payment не будет approved)
                     if promo_code:
-                        await _consume_promo_in_transaction(conn, promo_code, telegram_id, purchase_id)
+                        await _consume_promo_for_paid_purchase(conn, promo_code, telegram_id, purchase_id, post_commit)
 
                     # STEP 7: Обновляем payment → approved (ПОСЛЕ promo consumption для атомарности)
                     await conn.execute(
                         "UPDATE payments SET status = 'approved' WHERE id = $1",
                         payment_id
                     )
-                
+
                     # STEP 8: Обрабатываем реферальный кешбэк
                     # Обработка реферального кешбэка внутри той же транзакции
                     # FINANCIAL errors будут проброшены и откатят всю транзакцию
@@ -5039,7 +5257,7 @@ async def finalize_purchase(
                         amount_rubles=amount_rubles,
                         conn=conn
                     )
-                
+
                     if referral_reward_result.get("success"):
                         logger.info(
                             f"finalize_purchase: referral_reward_processed: purchase_id={purchase_id}, "
@@ -5053,20 +5271,20 @@ async def finalize_purchase(
                             f"finalize_purchase: Purchase finalized without referral reward: "
                             f"purchase_id={purchase_id}, user={telegram_id}, reason={reason}"
                         )
-                
+
                     # КРИТИЧНО: Логируем активацию подписки и выдачу ключа для аудита
                     logger.info(
                         f"subscription_activated: purchase_id={purchase_id}, user={telegram_id}, "
                         f"provider={payment_provider}, payment_id={payment_id}, "
                         f"expires_at={expires_at.isoformat()}, is_renewal={is_renewal}"
                     )
-                
+
                     logger.info(
                         f"vpn_key_issued: purchase_id={purchase_id}, user={telegram_id}, "
                         f"provider={payment_provider}, payment_id={payment_id}, "
                         f"vpn_key_length={len(vpn_key)}, is_renewal={is_renewal}"
                     )
-                
+
                     logger.info(
                         f"finalize_purchase: SUCCESS [purchase_id={purchase_id}, user={telegram_id}, provider={payment_provider}, "
                         f"payment_id={payment_id}, expires_at={expires_at.isoformat()}, "
@@ -5087,7 +5305,7 @@ async def finalize_purchase(
                             telegram_id
                         )
                         if sub_row and sub_row.get("subscription_type"):
-                            subscription_type_ret = (sub_row["subscription_type"] or "basic").strip().lower()
+                            subscription_type_ret = (normalize_tier(sub_row["subscription_type"]) or "basic").strip().lower()
 
                     vpn_key_plus_ret = grant_result.get("vpn_key_plus") or grant_result.get("vless_url_plus")
                     ret_val = {
@@ -5106,57 +5324,32 @@ async def finalize_purchase(
                         # 10 GB для basic). confirmation.py: skip top-up → no double-add.
                         "bypass_created_fresh": bool(pre_provisioned_uuid.get("bypass_created_fresh")) if pre_provisioned_uuid else False,
                     }
-        except Exception as tx_err:
-            # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray
-            if uuid_to_cleanup_on_failure:
-                try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                    uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                    logger.critical(
-                        f"ORPHAN_PREVENTED uuid={uuid_preview} reason=phase2_failed "
-                        f"purchase_id={purchase_id} user={telegram_id} error={tx_err}"
-                    )
-                except Exception as remove_err:
-                    uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                    logger.critical(
-                        f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} "
-                        f"purchase_id={purchase_id} user={telegram_id}"
-                    )
-            raise
-        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
-            old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
-            try:
-                await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
-                logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
-            except Exception as e:
-                logger.critical(
-                    "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
-                    extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
-                )
-        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
-            sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
-            try:
-                from app.services import purchase_flow
-                await purchase_flow.sync_renewal_to_remnawave(sync_info)
-            except Exception as e:
-                logger.critical(
-                    "RENEWAL_REMNAWAVE_SYNC_FAILED — webhook will return 5xx for retry",
-                    extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
-                )
-                ret_val["remnawave_sync_failed"] = True
-                ret_val["remnawave_sync_error"] = str(e)[:200]
-        if ret_val is not None:
-            # Set or clear combo flag reliably from pending_purchase data (not FSM)
-            try:
-                await set_combo_flag(telegram_id, is_combo_purchase)
-                logger.info(f"finalize_purchase: COMBO_FLAG_SET user={telegram_id} is_combo={is_combo_purchase}")
-            except Exception as cf_err:
-                logger.warning(f"finalize_purchase: COMBO_FLAG_FAIL user={telegram_id}: {cf_err}")
-            # Clear bypass-only flag — user now has a real subscription
-            try:
-                await set_bypass_only_flag(telegram_id, False)
-            except Exception:
-                pass
-            return ret_val
+    except Exception:
+        raise
+    if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
+        sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
+        try:
+            from app.services import purchase_flow
+            await purchase_flow.sync_renewal_to_remnawave(sync_info)
+        except Exception as e:
+            logger.critical(
+                "RENEWAL_REMNAWAVE_SYNC_FAILED — webhook will return 5xx for retry",
+                extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
+            )
+            ret_val["remnawave_sync_failed"] = True
+            ret_val["remnawave_sync_error"] = str(e)[:200]
+    if ret_val is not None:
+        # Set or clear combo flag reliably from pending_purchase data (not FSM)
+        try:
+            await set_combo_flag(telegram_id, is_combo_purchase)
+            logger.info(f"finalize_purchase: COMBO_FLAG_SET user={telegram_id} is_combo={is_combo_purchase}")
+        except Exception as cf_err:
+            logger.warning(f"finalize_purchase: COMBO_FLAG_FAIL user={telegram_id}: {cf_err}")
+        # Clear bypass-only flag — user now has a real subscription
+        try:
+            await set_bypass_only_flag(telegram_id, False)
+        except Exception:
+            pass
+        return ret_val
 
 

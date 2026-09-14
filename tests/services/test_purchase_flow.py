@@ -235,7 +235,7 @@ async def test_provision_renewal_patches_premium_expireat(monkeypatch):
             is_trial=False,
         )
 
-    renew_mock.assert_awaited_once_with(42, datetime(2030, 6, 1, tzinfo=timezone.utc))
+    renew_mock.assert_awaited_once_with(42, datetime(2030, 6, 1, tzinfo=timezone.utc), tier="basic")
     cpm.assert_not_called()
     assert out["vless_url"] == "https://rmnw/sub/cached_prem"
 
@@ -244,7 +244,14 @@ async def test_provision_renewal_patches_premium_expireat(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_provision_renewal_accumulates_bypass_traffic(monkeypatch):
-    """User already has a bypass entity → add_bypass_traffic, not re-create."""
+    """User already has a bypass entity → provision_subscription leaves the
+    bypass entity untouched (no create, no top-up) and reuses the cached URL.
+
+    Since 86e21cd1 ("provision_subscription НЕ трогает bypass на renewal")
+    the renewal top-up happens exactly once, in confirmation.py; doing it
+    here too caused double-add. bypass_created_fresh=False tells
+    confirmation.py it must add the GB itself.
+    """
     from app.services import purchase_flow, remnawave_premium, remnawave_bypass
 
     _fake_db(monkeypatch,
@@ -258,7 +265,7 @@ async def test_provision_renewal_accumulates_bypass_traffic(monkeypatch):
              })
 
     renew_mock = AsyncMock(return_value=True)
-    add_traffic_mock = AsyncMock(return_value=True)
+    add_traffic_mock = AsyncMock(return_value=True)  # MUST NOT be called
     cbm = AsyncMock()  # MUST NOT be called
     with patch.object(purchase_flow, "config", _cfg()), \
          patch.object(purchase_flow.remnawave_premium, "renew_premium_user", renew_mock), \
@@ -274,11 +281,12 @@ async def test_provision_renewal_accumulates_bypass_traffic(monkeypatch):
             is_trial=False,
         )
 
-    add_traffic_mock.assert_awaited_once()
-    # +10 GB accumulated (default basic 30-day)
-    assert add_traffic_mock.call_args.kwargs["extra_bytes"] == 10 * 1024**3
+    renew_mock.assert_awaited_once_with(42, datetime(2030, 6, 1, tzinfo=timezone.utc), tier="basic")
+    add_traffic_mock.assert_not_called()
     cbm.assert_not_called()
+    assert out["vless_url"] == "https://rmnw/sub/prem"
     assert out["vless_url_plus"] == "https://rmnw/sub/byp_cached"
+    assert out["bypass_created_fresh"] is False
 
 
 # ── Backward compat: forced UUID for un-migrated legacy user ───────────

@@ -10,12 +10,20 @@
      actual   = panel.trafficLimitBytes
      used     = panel.usedTrafficBytes
      shortfall = max(0, expected - actual). Report если > 100 MB.
-  3. apply_fix(result) → PATCH trafficLimitBytes = expected + used
-     (used история сохраняется, remaining = ровно expected).
+  3. apply_fix(result) → свежий GET → PATCH trafficLimitBytes = max(current, expected)
+     (P1-8: лимит bypass пожизненный, NO_RESET — покупки прибавляются к лимиту,
+     поэтому expected = сумма всех выданных ГБ и есть целевой лимит; used к нему
+     НЕ прибавляется, иначе израсходованное начисляется второй раз; лимит не понижается).
+
+used — `userTraffic.usedTrafficBytes` (Remnawave 3.4.3, GET /api/users/{id});
+верхний уровень — только fallback для старых панелей. Раньше читали только
+верхний уровень → used=0 → fix ставил limit=expected и юзер недополучал ровно
+израсходованные ГБ (recon §3 P0-F).
 
 Rate-limit защита: max_concurrent + batch_sleep — не убивает панель.
 """
 from __future__ import annotations
+from app.services.tariffs import normalize_tier
 
 import asyncio
 import logging
@@ -191,7 +199,7 @@ async def fetch_candidates(
     return [
         UserRow(
             telegram_id=int(r["telegram_id"]),
-            subscription_type=str(r["subscription_type"] or "basic"),
+            subscription_type=str(normalize_tier(r["subscription_type"]) or "basic"),
             period_days=int(r["period_days"]) if r["period_days"] is not None else None,
             is_bypass_only=bool(r["is_bypass_only"]),
             remnawave_uuid=(r["remnawave_uuid"] or None),
@@ -239,6 +247,21 @@ async def _fetch_traffic_purchase_details(telegram_id: int) -> list[TrafficPurch
         return []
 
 
+def used_traffic_bytes(entity: dict) -> int:
+    """Used traffic of a panel user: userTraffic.usedTrafficBytes (3.4.3 contract,
+    same as remnawave_api.get_user_traffic), top-level usedTrafficBytes as fallback."""
+    user_traffic = entity.get("userTraffic")
+    value = None
+    if isinstance(user_traffic, dict):
+        value = user_traffic.get("usedTrafficBytes")
+    if value is None:
+        value = entity.get("usedTrafficBytes")
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _snapshot(entity: dict, *, source: str) -> PanelEntitySnapshot:
     return PanelEntitySnapshot(
         source=source,
@@ -246,7 +269,7 @@ def _snapshot(entity: dict, *, source: str) -> PanelEntitySnapshot:
         vless_uuid=entity.get("uuid") or entity.get("vlessUuid") or None,
         subscription_url=entity.get("subscriptionUrl") or None,
         traffic_limit_bytes=int(entity.get("trafficLimitBytes") or 0),
-        used_traffic_bytes=int(entity.get("usedTrafficBytes") or 0),
+        used_traffic_bytes=used_traffic_bytes(entity),
         status=str(entity.get("status") or "?"),
         telegram_id_field=(
             int(entity["telegramId"]) if entity.get("telegramId") is not None else None
@@ -346,7 +369,7 @@ async def audit_one(row: UserRow, *, include_details: bool = False) -> AuditResu
             )
 
     actual = int(entity.get("trafficLimitBytes") or 0)
-    used = int(entity.get("usedTrafficBytes") or 0)
+    used = used_traffic_bytes(entity)
     status = str(entity.get("status") or "?")
     shortfall = max(0, expected - actual)
     is_mismatch = shortfall > SHORTFALL_TOLERANCE_BYTES and expected > 0
@@ -416,9 +439,16 @@ async def run_audit(
 
 
 async def apply_fix(result: AuditResult) -> dict[str, Any]:
-    """Поднять trafficLimitBytes до expected+used для одного юзера.
+    """Поднять trafficLimitBytes до expected для одного юзера (P1-8).
 
-    Возвращает {"ok": bool, "reason"|"before"|"after"|"new_limit": ...}.
+    Лимит bypass пожизненный (NO_RESET), покупки прибавляются к лимиту, поэтому
+    expected (сумма всех выданных ГБ) — это целевой ЛИМИТ, а не остаток:
+    new_limit = max(current, expected), никогда не expected + used (used уже
+    входит в выданные ГБ — прибавка начисляла бы израсходованное второй раз).
+    Текущий лимит берётся из СВЕЖЕГО GET; used только в отчёте. Лимит не
+    понижается: если панель уже >= expected — PATCH не делается.
+
+    Возвращает {"ok": bool, "reason"|"before_bytes"|"after_bytes"|...: ...}.
     """
     if result.kind != "mismatch" or result.shortfall_bytes <= SHORTFALL_TOLERANCE_BYTES:
         return {"ok": False, "reason": "not_a_mismatch"}
@@ -431,7 +461,18 @@ async def apply_fix(result: AuditResult) -> dict[str, Any]:
     if probe is None:
         return {"ok": False, "reason": "no_probe_key"}
 
-    new_limit = result.expected_bytes + result.used_bytes
+    try:
+        entity = await remnawave_api.get_user(probe)
+    except Exception as e:
+        return {"ok": False, "reason": f"exception:{type(e).__name__}:{str(e)[:120]}"}
+    if not isinstance(entity, dict) or not entity:
+        return {"ok": False, "reason": "panel_read_failed"}
+    current = int(entity.get("trafficLimitBytes") or 0)
+    used = used_traffic_bytes(entity)
+    new_limit = max(current, result.expected_bytes)
+    if new_limit <= current:
+        return {"ok": False, "reason": "no_shortfall_now", "before_bytes": current,
+                "used_bytes": used, "expected_bytes": result.expected_bytes}
     try:
         resp = await remnawave_api.update_user(
             probe, trafficLimitBytes=new_limit, status="ACTIVE",
@@ -443,13 +484,13 @@ async def apply_fix(result: AuditResult) -> dict[str, Any]:
 
     logger.info(
         "PANEL_TRAFFIC_AUDIT_FIXED tg=%s: %d → %d (used=%d, expected=%d)",
-        result.tg, result.actual_bytes, new_limit, result.used_bytes, result.expected_bytes,
+        result.tg, current, new_limit, used, result.expected_bytes,
     )
     return {
         "ok": True,
-        "before_bytes": result.actual_bytes,
+        "before_bytes": current,
         "after_bytes": new_limit,
-        "used_bytes": result.used_bytes,
+        "used_bytes": used,
         "expected_bytes": result.expected_bytes,
     }
 
@@ -460,6 +501,7 @@ __all__ = [
     "AuditResult",
     "fetch_candidates",
     "compute_expected_bytes",
+    "used_traffic_bytes",
     "audit_one",
     "run_audit",
     "apply_fix",

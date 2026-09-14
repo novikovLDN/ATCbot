@@ -298,8 +298,8 @@ async def process_stars_username(message: Message, state: FSMContext):
 
     # Lava-кнопка подменена на Wata (stars_pay:lava → stars_pay:wata).
     # Код lava_service не удаляем — только UI-роутинг.
-    import lava_service
-    if lava_service.is_enabled():
+    import wata_service
+    if wata_service.is_enabled():
         buttons.append([InlineKeyboardButton(text="💳 Карта (Lava)", callback_data="stars_pay:wata", style="primary")])
 
     # СБП в shop-магазине оставляем Platega (Wata на магазин не ставим)
@@ -416,54 +416,6 @@ async def callback_stars_pay_card(callback: CallbackQuery, state: FSMContext):
         pass
 
 
-# ─── Payment: Lava (card) ───
-
-@stars_purchase_router.callback_query(F.data == "stars_pay:lava", StateFilter(TelegramStarsState.choose_payment_method))
-async def callback_stars_pay_lava(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    result = await _get_stars_fsm_data(callback, state)
-    if not result:
-        return
-    username, stars, price, language = result
-    telegram_id = callback.from_user.id
-
-    import lava_service
-    if not lava_service.is_enabled():
-        await callback.answer("Оплата временно недоступна", show_alert=True)
-        return
-
-    try:
-        purchase_id, price_kopecks = await _create_stars_purchase(telegram_id, username, stars, price)
-        invoice = await lava_service.create_invoice(
-            amount=float(price),
-            order_id=purchase_id,
-            description=f"Telegram Stars {stars}⭐ → {username}",
-        )
-        if not invoice or not invoice.get("url"):
-            await callback.message.answer("❌ Ошибка создания платежа.", parse_mode="HTML")
-            return
-
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить", url=invoice["url"])],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "common.back"),
-                callback_data="mini_shop",
-                icon_custom_emoji_id=CE["back"],
-                style="primary",
-            )],
-        ])
-        msg = await callback.bot.send_message(telegram_id, i18n_get_text(language, "payment.invoice_timeout"), reply_markup=kb, parse_mode="HTML")
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg.message_id))
-        await state.set_state(TelegramStarsState.processing_payment)
-    except Exception as e:
-        logger.exception("STARS_LAVA_ERROR user=%s error=%s", telegram_id, e)
-        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
-
-
 @stars_purchase_router.callback_query(F.data == "stars_pay:wata", StateFilter(TelegramStarsState.choose_payment_method))
 async def callback_stars_pay_wata(callback: CallbackQuery, state: FSMContext):
     """Stars — Wata (admin-only beta)."""
@@ -531,7 +483,7 @@ async def callback_stars_pay_sbp(callback: CallbackQuery, state: FSMContext):
     try:
         purchase_id, _ = await _create_stars_purchase(telegram_id, username, stars, sbp_price)
 
-        from app.services.payments import platega_service
+        import platega_service
         transaction = await platega_service.create_transaction(
             amount_kopecks=price_kopecks,
             order_id=purchase_id,

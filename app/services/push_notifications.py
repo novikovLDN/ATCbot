@@ -18,7 +18,7 @@ import asyncio
 import base64
 import json
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -220,21 +220,6 @@ async def list_subscriptions() -> list[dict]:
     except Exception as e:
         logger.warning("list_subscriptions failed: %s", e)
         return []
-
-
-async def subscription_count() -> int:
-    from database.core import get_pool
-    pool = await get_pool()
-    if pool is None:
-        return 0
-    try:
-        async with pool.acquire() as conn:
-            n = await conn.fetchval(
-                "SELECT COUNT(*) FROM admin_push_subscriptions",
-            )
-            return int(n or 0)
-    except Exception:
-        return 0
 
 
 async def _touch_last_used(endpoint: str) -> None:

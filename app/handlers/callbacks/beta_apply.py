@@ -21,7 +21,6 @@ import logging
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-import database
 from database import beta_applications as _beta
 
 logger = logging.getLogger(__name__)

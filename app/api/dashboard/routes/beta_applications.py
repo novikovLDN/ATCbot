@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
 from database import beta_applications as _beta
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -23,7 +24,7 @@ async def summary(program: str = Query("vpn_innovator")):
     try:
         total = await _beta.count_applications(program)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"summary_failed: {e}")
+        raise server_error("summary_failed") from e
     return {"program": program, "total": int(total or 0)}
 
 
@@ -41,5 +42,5 @@ async def list_apps(
             offset=page * page_size,
         )
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"list_failed: {e}")
+        raise server_error("list_failed") from e
     return _serialize(rows or [])

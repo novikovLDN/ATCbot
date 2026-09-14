@@ -19,10 +19,8 @@ from dataclasses import dataclass
 import database
 from app.services.subscriptions import service as subscription_service
 from app.services.payments.exceptions import (
-    PaymentServiceError,
     InvalidPaymentPayloadError,
     PaymentAmountMismatchError,
-    PaymentAlreadyProcessedError,
     PaymentFinalizationError,
 )
 
@@ -46,6 +44,10 @@ class PaymentResult:
     is_basic_to_plus_upgrade: bool = False  # True when renewal was basic→plus upgrade
     is_combo: bool = False  # True when purchase is combo tariff
     period_days: int = 30  # Subscription period for traffic calculation
+    # T9: set when finalize_purchase went through the provisioning outbox
+    # (job "purchase:{id}" owns premium + bypass GB; callers must not deliver).
+    provisioning_job_id: Optional[int] = None
+    provisioning_done: Optional[bool] = None  # run_now finished the job before return
 
 
 @dataclass
@@ -450,6 +452,19 @@ async def finalize_balance_topup_payment(
 # Subscription Payment Finalization
 # ====================================================================================
 
+async def _outbox_job_for_replay(payment_provider: str, purchase_id: str) -> Optional[Dict[str, Any]]:
+    """T9: provisioning job of an already-processed purchase, looked up only
+    when the outbox flag is on for the provider's entry point (flag off → None,
+    no DB read). A lookup error under the flag propagates: guessing "legacy"
+    could add GB twice."""
+    from app.services import provisioning_flags
+    from database.subscriptions import provisioning_entrypoint
+    if not provisioning_flags.is_on(provisioning_entrypoint(payment_provider)):
+        return None
+    import database.provisioning_jobs as provisioning_jobs
+    return await provisioning_jobs.get_by_key(f"purchase:{purchase_id}")
+
+
 async def finalize_subscription_payment(
     purchase_id: str,
     telegram_id: int,
@@ -531,7 +546,11 @@ async def finalize_subscription_payment(
                         )
                         if payment_row:
                             payment_id = payment_row["id"]
-                
+
+                # T9: a replay of a purchase finalized via the outbox must not
+                # make the caller deliver GB/premium a second time.
+                replay_job = await _outbox_job_for_replay(payment_provider, purchase_id)
+
                 return PaymentResult(
                     success=True,
                     payment_id=payment_id or 0,
@@ -543,6 +562,8 @@ async def finalize_subscription_payment(
                     subscription_type=(existing_subscription.get("subscription_type") or "basic").strip().lower(),
                     referral_reward=None,
                     is_basic_to_plus_upgrade=False,
+                    provisioning_job_id=replay_job["id"] if replay_job else None,
+                    provisioning_done=(replay_job.get("status") == "done") if replay_job else None,
                 )
         
         # Payment processed but subscription not found or inactive - this is an error
@@ -578,6 +599,8 @@ async def finalize_subscription_payment(
             is_basic_to_plus_upgrade=result.get("is_basic_to_plus_upgrade", False),
             is_combo=result.get("is_combo", False),
             period_days=result.get("period_days", 30) or 30,
+            provisioning_job_id=result.get("provisioning_job_id"),
+            provisioning_done=result.get("provisioning_done"),
         )
         
     except subscription_service.PaymentFinalizationError as e:

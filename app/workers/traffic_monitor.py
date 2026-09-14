@@ -5,7 +5,6 @@ Runs every 5 minutes. Gated by REMNAWAVE_ENABLED and DB_READY.
 """
 import asyncio
 import logging
-from typing import Optional
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -15,6 +14,7 @@ import database
 from app.services import remnawave_api
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
+from app.utils.telegram_safe import safe_send_message
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +98,14 @@ async def _send_traffic_notification(
                 callback_data="buy_traffic",
             )],
         ])
-        await bot.send_message(telegram_id, text, reply_markup=kb, parse_mode="HTML")
-        logger.info("TRAFFIC_NOTIFICATION_SENT: tg=%s flag=%s remaining=%d", telegram_id, flag_key, remaining_bytes)
+        # safe_send_message: 403 marks the user unreachable, a short 429 is
+        # retried once. The caller still sets the flag after the attempt (one
+        # try per threshold — no per-5-min retries to a user who blocked the bot).
+        sent = await safe_send_message(bot, telegram_id, text, reply_markup=kb, parse_mode="HTML")
+        if sent:
+            logger.info("TRAFFIC_NOTIFICATION_SENT: tg=%s flag=%s remaining=%d", telegram_id, flag_key, remaining_bytes)
+        else:
+            logger.warning("TRAFFIC_NOTIFICATION_NOT_DELIVERED: tg=%s flag=%s", telegram_id, flag_key)
     except Exception as e:
         logger.warning("TRAFFIC_NOTIFICATION_FAIL: tg=%s %s: %s", telegram_id, type(e).__name__, e)
 
@@ -122,19 +128,26 @@ async def traffic_monitor_iteration(bot: Bot) -> None:
 async def traffic_monitor_task(bot: Bot) -> None:
     """Main loop — runs every INTERVAL_SECONDS."""
     logger.info("TRAFFIC_MONITOR: starting (interval=%ds)", INTERVAL_SECONDS)
+    from app.core import runtime_health  # dashboard liveness (in-memory)
+    # One iteration walks every user with a panel UUID at 0.2 s per call,
+    # so it can run long: a generous interval keeps "stale" meaningful.
+    runtime_health.register("traffic_monitor", interval_s=INTERVAL_SECONDS + 1800, initial_delay_s=30)
     await asyncio.sleep(30)  # Initial delay
 
     while True:
         try:
             if not database.DB_READY or not config.REMNAWAVE_ENABLED:
+                runtime_health.record("traffic_monitor", "skipped")
                 await asyncio.sleep(INTERVAL_SECONDS)
                 continue
 
             await traffic_monitor_iteration(bot)
+            runtime_health.beat("traffic_monitor")
         except asyncio.CancelledError:
             logger.info("TRAFFIC_MONITOR: cancelled")
             break
         except Exception as e:
             logger.error("TRAFFIC_MONITOR_ERROR: %s: %s", type(e).__name__, e)
+            runtime_health.fail("traffic_monitor", e)
 
         await asyncio.sleep(INTERVAL_SECONDS)

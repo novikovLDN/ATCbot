@@ -6,8 +6,10 @@ Scheduled broadcasts worker — раз в минуту проверяет БД �
 разрешаем сегмент, дёргаем send_broadcast — всё как admin вручную нажал бы
 «Отправить».
 
-Rescheduling для recurring: mark_ran_and_reschedule сам считает следующий
-scheduled_at и деактивирует, если once или вышли за end_at.
+Запуск сначала ЗАХВАТЫВАЕТСЯ (claim_scheduled_run: один UPDATE с условием на
+scheduled_at сдвигает строку на следующий слот или деактивирует 'once'), и
+только потом рассылка отправляется — второй раз тот же слот не уйдёт.
+Итог (id рассылки / ошибка) пишет record_scheduled_result.
 
 Ошибки одного задания не роняют worker — логируем и идём дальше.
 """
@@ -36,11 +38,22 @@ async def _dispatch_one(bot: Bot, sched: Dict[str, Any]) -> None:
     from app.events import bus
 
     sched_id = int(sched["id"])
+    # HOW_IT_WORKS P2: claim the run BEFORE anything is sent. Only the worker
+    # whose guarded UPDATE succeeds sends; a failed / lost claim never sends
+    # (a missed run is better than a double broadcast).
+    try:
+        claimed = await database.claim_scheduled_run(sched_id, sched["scheduled_at"])
+    except Exception as e:
+        logger.exception("SCHED_BROADCAST_CLAIM_FAIL sched=%s err=%s — not sent", sched_id, e)
+        return
+    if not claimed:
+        logger.warning("SCHED_BROADCAST_ALREADY_CLAIMED sched=%s — skipped, no second send", sched_id)
+        return
     try:
         user_ids = await database.get_users_by_segment(sched["segment"])
     except Exception as e:
         logger.exception("SCHED_BROADCAST_SEGMENT_FAIL sched=%s err=%s", sched_id, e)
-        await database.mark_ran_and_reschedule(
+        await database.record_scheduled_result(
             sched_id, last_broadcast_id=None,
             error=f"segment_resolve_failed: {e}"[:200],
         )
@@ -48,7 +61,7 @@ async def _dispatch_one(bot: Bot, sched: Dict[str, Any]) -> None:
     if not user_ids:
         logger.info("SCHED_BROADCAST_EMPTY_AUDIENCE sched=%s segment=%s",
                     sched_id, sched["segment"])
-        await database.mark_ran_and_reschedule(
+        await database.record_scheduled_result(
             sched_id, last_broadcast_id=None,
             error="empty_audience",
         )
@@ -68,7 +81,7 @@ async def _dispatch_one(bot: Bot, sched: Dict[str, Any]) -> None:
         )
     except Exception as e:
         logger.exception("SCHED_BROADCAST_CREATE_FAIL sched=%s err=%s", sched_id, e)
-        await database.mark_ran_and_reschedule(
+        await database.record_scheduled_result(
             sched_id, last_broadcast_id=None,
             error=f"create_broadcast_failed: {e}"[:200],
         )
@@ -131,7 +144,7 @@ async def _dispatch_one(bot: Bot, sched: Dict[str, Any]) -> None:
     })
 
     try:
-        await database.mark_ran_and_reschedule(
+        await database.record_scheduled_result(
             sched_id, last_broadcast_id=broadcast_id, error=None,
         )
     except Exception as e:
@@ -149,6 +162,9 @@ async def run_scheduled_broadcasts_worker(bot: Bot) -> None:
         "SCHEDULED_BROADCASTS_WORKER started (poll=%ss, batch=%s)",
         POLL_INTERVAL_SECONDS, MAX_BATCH_PER_TICK,
     )
+    from app.core import runtime_health  # dashboard liveness (in-memory)
+    # A tick may dispatch a whole broadcast, so allow for a long one.
+    runtime_health.register("scheduled_broadcasts", interval_s=POLL_INTERVAL_SECONDS + 900)
     while True:
         try:
             import database
@@ -161,9 +177,11 @@ async def run_scheduled_broadcasts_worker(bot: Bot) -> None:
                         "SCHEDULED_BROADCASTS_WORKER_ITEM_ERR id=%s: %s",
                         sched.get("id"), e,
                     )
+            runtime_health.beat("scheduled_broadcasts")
         except asyncio.CancelledError:
             logger.info("SCHEDULED_BROADCASTS_WORKER stopped")
             return
         except Exception as e:
             logger.exception("SCHEDULED_BROADCASTS_WORKER_TICK_ERR: %s", e)
+            runtime_health.fail("scheduled_broadcasts", e)
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
