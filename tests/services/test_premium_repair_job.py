@@ -105,6 +105,29 @@ async def test_check_panel_down_fails_without_an_alert(w, monkeypatch):
 
 # ── apply ─────────────────────────────────────────────────────────────
 
+async def test_apply_reports_the_scan_phase_then_the_patch_phase(w, monkeypatch):
+    """Production 2026-09-14: during the panel scan the card showed «0 из 0» and a
+    «Пауза» where «Исправить» was — a second tap paused the run before the first
+    fix. The status now says "scan" first (the card hides «Пауза»), then "patch"."""
+    seen = []
+    real_build = premium_repair.build_plan
+
+    async def build_plan():
+        seen.append((await job.get_status())["apply"]["phase"])
+        return await real_build()
+    monkeypatch.setattr(premium_repair, "build_plan", build_plan)
+    gate = gate_sleep(monkeypatch)
+
+    await job.start_apply(1)
+    await until_patches(w.http, 1)
+    assert seen == ["scan"]
+    assert (await job.get_status())["apply"]["phase"] == "patch"
+    gate.set()
+    await finish()
+    a = (await job.get_status())["apply"]
+    assert (a["state"], a["fixed"], a["phase"]) == ("done", 4, None)
+
+
 async def test_apply_fixes_every_candidate_with_one_alert(w):
     await job.start_check(1)
     await finish()

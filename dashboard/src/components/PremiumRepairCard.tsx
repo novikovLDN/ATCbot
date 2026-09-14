@@ -190,6 +190,9 @@ export function PremiumRepairCard({ className }: { className?: string }) {
   const checkReady = !!c && c.state === "done" && !c.stale && c.summary != null;
   const nothingToFix = checkReady && c.would_fix === 0;
   const showApply = !!a && (active || (finished && !!c?.stale));
+  // The run first re-reads the whole panel (a minute or two): no «0 из 0» and no
+  // «Пауза» then — a second tap used to pause it before the first fix.
+  const scanning = applyState === "running" && a?.phase === "scan";
   const pct = a && a.total > 0 ? Math.round((a.done / a.total) * 100) : a && active ? 0 : null;
 
   const limitNum = limit.trim() === "" ? null : Number(limit);
@@ -241,7 +244,15 @@ export function PremiumRepairCard({ className }: { className?: string }) {
       {/* ── Repair progress ─────────────────────────────────────── */}
       {showApply && a && (
         <div className="mb-4">
-          {pct !== null && (
+          {scanning && (
+            <div className="mb-3 flex items-center gap-3 rounded-row bg-tile-3 px-4 py-3 text-[13px]">
+              <Spinner />
+              <span className="min-w-0">
+                Читаю панель — это займёт 1–2 минуты, затем начнётся исправление. Ничего не нажимайте.
+              </span>
+            </div>
+          )}
+          {pct !== null && !scanning && (
             <div className="mb-3">
               <PillProgress
                 value={pct}
@@ -314,7 +325,7 @@ export function PremiumRepairCard({ className }: { className?: string }) {
             </button>
           </>
         )}
-        {applyState === "running" && (
+        {applyState === "running" && !scanning && (
           <button type="button" className="btn-secondary" onClick={() => pause.mutate()} disabled={busy}>
             {pause.isPending && <Spinner />}
             Пауза
