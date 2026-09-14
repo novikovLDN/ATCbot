@@ -13,6 +13,25 @@ import type { Plugin } from "vite";
 
 const DAY = 86_400_000;
 
+/** Mutable state of the mocked /remnawave-tags job (Settings). */
+const MOCK_TAGS = {
+  state: "idle" as string,
+  running: false,
+  total: 0,
+  done: 0,
+  patched: 0,
+  errors: 0,
+  per_tag: {} as Record<string, number>,
+  last_error: null as string | null,
+  started_at: null as string | null,
+  updated_at: null as string | null,
+  finished_at: null as string | null,
+  started_by: null as number | null,
+  rate_per_sec: 2,
+  _t0: 0,
+  _done0: 0,
+};
+
 /** Deterministic pseudo-random so the charts don't reshuffle on reload. */
 function seeded(seed: number) {
   let s = seed;
@@ -1046,6 +1065,82 @@ export function mockApi(): Plugin {
             ],
             by_apple_nominal: [],
           });
+
+        // ── Remnawave tags (Settings) — a tiny state machine ───────
+        if (path.startsWith("/remnawave-tags/")) {
+          const st = MOCK_TAGS;
+          const tick = () => {
+            if (st.state !== "running") return;
+            const elapsed = (Date.now() - st._t0) / 1000;
+            st.done = Math.min(st.total, st._done0 + Math.floor(elapsed * 2));
+            st.patched = Math.max(0, st.done - st.errors);
+            st.per_tag = { BASIC: Math.floor(st.patched * 0.4), PLUS: Math.floor(st.patched * 0.25), BYPASS: Math.ceil(st.patched * 0.35) };
+            st.updated_at = new Date().toISOString();
+            if (st.done >= st.total) {
+              st.state = "done";
+              st.running = false;
+              st.finished_at = st.updated_at;
+            }
+          };
+          const view = () => {
+            tick();
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { _t0, _done0, ...rest } = st;
+            return rest;
+          };
+          const run = () => {
+            st._t0 = Date.now();
+            st._done0 = st.done;
+            st.state = "running";
+            st.running = true;
+          };
+          if (path === "/remnawave-tags/status") return send(view());
+          if (path === "/remnawave-tags/preview")
+            return send({
+              generated_at: new Date().toISOString(),
+              users: 1840,
+              entities: 3612,
+              differ: 3480,
+              already: 132,
+              missing: 68,
+              tags: [
+                { tag: "TRIAL", total: 212, differ: 212 },
+                { tag: "BASIC", total: 820, differ: 790 },
+                { tag: "PLUS", total: 511, differ: 480 },
+                { tag: "COMBO_BASIC", total: 142, differ: 142 },
+                { tag: "COMBO_PLUS", total: 97, differ: 90 },
+                { tag: "BYPASS", total: 1830, differ: 1766 },
+              ],
+              eta_seconds: 1740,
+            });
+          if (path === "/remnawave-tags/start") {
+            if (st.state === "running") return send({ detail: "already_running" }, 409);
+            Object.assign(st, { total: 3480, done: 0, patched: 0, errors: 3, per_tag: {}, last_error: "tg:4242 BASIC: HTTP 500", started_at: new Date().toISOString(), finished_at: null, started_by: 1 });
+            run();
+            return send({ ok: true, status: view() });
+          }
+          if (path === "/remnawave-tags/pause") {
+            if (st.state !== "running") return send({ detail: "not_running" }, 409);
+            tick();
+            st.state = "paused";
+            st.running = false;
+            return send({ ok: true, status: view() });
+          }
+          if (path === "/remnawave-tags/resume") {
+            if (st.state === "running") return send({ detail: "already_running" }, 409);
+            if (st.state !== "paused" && st.state !== "interrupted") return send({ detail: "not_resumable" }, 409);
+            run();
+            return send({ ok: true, status: view() });
+          }
+          if (path === "/remnawave-tags/stop") {
+            if (!["running", "paused", "interrupted"].includes(st.state)) return send({ detail: "not_running" }, 409);
+            tick();
+            st.state = "stopped";
+            st.running = false;
+            st.finished_at = new Date().toISOString();
+            return send({ ok: true, status: view() });
+          }
+        }
 
         // Anything not modelled yet: empty but valid. Lists stay lists so
         // `.map()` on the client doesn't explode.

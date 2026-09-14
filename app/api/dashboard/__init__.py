@@ -41,6 +41,7 @@ from app.api.dashboard.routes import promo as _promo
 from app.api.dashboard.routes import reconciliation as _reconciliation
 from app.api.dashboard.routes import referrals as _referrals
 from app.api.dashboard.routes import remnawave as _remnawave
+from app.api.dashboard.routes import remnawave_tags as _remnawave_tags
 from app.api.dashboard.routes import settings as _settings
 from app.api.dashboard.routes import stats as _stats
 from app.api.dashboard.routes import traffic_audit as _traffic_audit
@@ -70,6 +71,7 @@ _SUBROUTERS = (
     (_pricing.router, "/pricing", "pricing"),
     (_beta_apps.router, "/beta-applications", "beta-applications"),
     (_remnawave.router, "/remnawave", "remnawave"),
+    (_remnawave_tags.router, "/remnawave-tags", "remnawave-tags"),
     (_metrics.router, "/metrics", "metrics"),
     (_panel.router, "/panel", "panel"),
 )

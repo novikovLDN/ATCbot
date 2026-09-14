@@ -4,8 +4,9 @@
  */
 import { useBranding } from "@/lib/branding";
 import { usePrefs, type Density, type MotionPref, type Theme } from "@/store/prefs";
-import { Bento, PageHeader, Surface } from "@/components/ui/Surface";
+import { Bento, PageHeader, SectionHeader, Surface } from "@/components/ui/Surface";
 import { ListRow, Segmented } from "@/components/ui/controls";
+import { RemnawaveTagsCard } from "@/components/RemnawaveTagsCard";
 import { Settings } from "./Settings";
 
 const THEMES = [
@@ -71,6 +72,13 @@ export function SettingsScreen() {
         </Surface>
       </Bento>
       <Settings />
+      <SectionHeader
+        title="Теги в панели Remnawave"
+        sub="Тег тарифа у каждого пользователя с активной подпиской — фильтр «tag» в панели."
+      />
+      <Bento>
+        <RemnawaveTagsCard className="sm:col-span-6 xl:col-span-12" />
+      </Bento>
     </>
   );
 }
