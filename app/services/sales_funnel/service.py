@@ -197,12 +197,20 @@ async def apply_discount(telegram_id: int, step: Step, anchor: datetime,
             return None
         percent, _deadline = await effective_discount(telegram_id)
         if percent < step.keep_percent:
-            if permanent is not None:
+            if step.chain == "paid":
+                # «The same −15 %» = the period's ONE 72 h window (SCOPE «Срок
+                # скидки −15 %»): shown, or opened if none was offered in this
+                # period yet; ran out → skip. Never a second −15 % window.
+                from database.subscriptions import claim_special_offer
+                if await claim_special_offer(telegram_id, _utc(anchor)) is None:
+                    return None
+            elif permanent is not None:
                 return None
-            await database.create_user_discount(
-                telegram_id=telegram_id, discount_percent=step.keep_percent, expires_at=until,
-                created_by=SYSTEM_CREATOR, keep_max=True,
-            )
+            else:
+                await database.create_user_discount(
+                    telegram_id=telegram_id, discount_percent=step.keep_percent, expires_at=until,
+                    created_by=SYSTEM_CREATOR, keep_max=True,
+                )
     elif step.grant_percent:
         if permanent is None:
             await database.create_user_discount(

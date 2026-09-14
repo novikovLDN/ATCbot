@@ -303,6 +303,23 @@ async def test_chain_paid_end_to_end(e2e, window):
     assert await sent_steps(e2e, u) == [("paid", "6h"), ("paid", "1d"), ("paid", "3d")]
 
 
+async def test_chain_paid_never_opens_a_second_minus15_window(e2e, window):
+    """Paid +6 h / +1 d show the period's ONE −15 % window. When its 72 h ran
+    out, the step is skipped — no personal 15 % (a second window)."""
+    await go_live(e2e)
+    u, _offer_until = await paid_ended(e2e)
+    await travel(e2e, 6 * H + M, u)
+    await e2e.pool.execute("UPDATE users SET special_offer_created_at = special_offer_created_at - interval '72 hours' "
+                           "WHERE telegram_id=$1", u.id)                   # this period's window is over
+    offered_at = await e2e.val("SELECT special_offer_created_at FROM users WHERE telegram_id=$1", u.id)
+    mark = e2e.tg.mark()
+    await run(e2e)
+    assert [s for s in e2e.tg.since(mark, u.id) if s.method == "SendMessage"] == []
+    assert await discount(e2e, u) is None
+    assert await e2e.val("SELECT special_offer_created_at FROM users WHERE telegram_id=$1", u.id) == offered_at
+    assert [(r["step"], r["status"]) for r in await rows(e2e, u)] == [("6h", "skipped")]
+
+
 # ── global rules ─────────────────────────────────────────────────────────
 
 async def test_no_retro_sends_for_events_before_the_cutoff(e2e, window):

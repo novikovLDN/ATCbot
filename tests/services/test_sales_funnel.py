@@ -269,6 +269,38 @@ async def test_special_offer_wins_a_tie_like_checkout(monkeypatch):
     assert "15%" in text and funnel.format_deadline("ru", offer_until) in text
 
 
+async def test_paid_still_valid_step_never_opens_a_second_minus15_window(monkeypatch):
+    """Paid +6 h / +1 d show the period's ONE −15 % window (owner: one window of
+    72 h per period). Its 72 h ran out → skip; a personal 15 % would be a second."""
+    import database.subscriptions as db_subs
+    env = Env(monkeypatch)
+    claims = []
+
+    async def window_over(tg, period_end):
+        claims.append((tg, period_end))
+        return None
+    monkeypatch.setattr(db_subs, "claim_special_offer", window_over)
+    anchor = NOW - D - H
+    assert await _process("paid", "1d", anchor) == "no_discount"
+    assert env.granted == [] and env.sent == []
+    assert claims == [(42, anchor)], "the window of THIS period (it ended at the anchor)"
+
+
+async def test_paid_step_opens_the_periods_only_window_when_none_was_offered(monkeypatch):
+    import database.subscriptions as db_subs
+    env = Env(monkeypatch)
+    until = NOW + 72 * H
+
+    async def opened(tg, period_end):
+        env.special = {"discount_percent": 15, "expires_at": until}
+        return env.special
+    monkeypatch.setattr(db_subs, "claim_special_offer", opened)
+    assert await _process("paid", "6h", NOW - 6 * H - timedelta(minutes=3)) == "sent"
+    assert env.granted == []
+    (_, text, _), = env.sent
+    assert "15%" in text and funnel.format_deadline("ru", until) in text
+
+
 async def test_still_valid_reminder_grants_the_promised_discount_with_the_fixed_deadline(monkeypatch):
     env = Env(monkeypatch)                       # the trial-end −30 % never arrived
     anchor = NOW - D - H
