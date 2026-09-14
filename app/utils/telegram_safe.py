@@ -4,11 +4,17 @@ Centralized safe wrapper for bot.send_message.
 Handles TelegramBadRequest (chat not found), TelegramForbiddenError (blocked),
 and marks unreachable users in DB for background worker filtering.
 """
+import asyncio
 import logging
 import re
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 logger = logging.getLogger(__name__)
+
+# TG-RT-7: a short flood wait (429 with retry_after <= this many seconds) is
+# slept out and the message sent ONCE more — it used to be dropped. Longer
+# waits are still dropped (logged). One retry layer per call-site.
+FLOOD_WAIT_INLINE_MAX_S = 5
 
 _TG_ADS_EMOJI_RE = re.compile(r'!\[(.+?)\]\(tg://emoji\?id=(\d+)\)')
 
@@ -63,6 +69,21 @@ async def safe_send_message(bot, telegram_id: int, text: str, **kwargs):
             await database.mark_user_unreachable(telegram_id)
         except Exception as db_err:
             logger.warning(f"SAFE_SEND: Failed to mark user unreachable: {db_err}")
+        return None
+
+    except TelegramRetryAfter as e:
+        wait = getattr(e, "retry_after", None) or 0
+        if wait <= FLOOD_WAIT_INLINE_MAX_S:
+            logger.warning(f"SAFE_SEND_FLOOD_WAIT user={telegram_id} retry_after={wait} — retrying once")
+            await asyncio.sleep(wait)
+            try:
+                return await bot.send_message(telegram_id, text, **kwargs)
+            except Exception as retry_err:
+                logger.warning(
+                    f"SAFE_SEND_FLOOD_WAIT_RETRY_FAILED user={telegram_id} error={type(retry_err).__name__}"
+                )
+                return None
+        logger.warning(f"SAFE_SEND_FLOOD_WAIT user={telegram_id} retry_after={wait} — dropped")
         return None
 
     except Exception:
