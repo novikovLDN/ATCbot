@@ -521,7 +521,22 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         await callback.answer(error_text, show_alert=True)
         logger.info(f"Insufficient balance for payment: user={telegram_id}, balance={balance_rubles:.2f} RUB, required={final_price_rubles:.2f} RUB")
         return
-    
+
+    # P0 guard on the balance path too (hotfix of b179203f): a Combo flag in FSM
+    # with a price below the Combo price (stale / forged state) is refused
+    # before any debit — otherwise the Basic price buys combo GB + combo flag.
+    if (fsm_data.get("combo_bypass_gb") or 0) > 0:
+        _promo = await get_promo_session(state)
+        try:
+            await subscription_service.ensure_combo_price_not_below(
+                telegram_id, tariff_type, period_days, final_price_kopecks,
+                promo_code=_promo.get("promo_code") if _promo else None,
+            )
+        except subscription_service.InvalidTariffError:
+            await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+            await state.set_state(None)
+            return
+
     # КРИТИЧНО: ИДЕМПОТЕНТНОСТЬ - Проверяем FSM state и предотвращаем повторное списание
     # Если уже в processing_payment - значит оплата уже обрабатывается
     current_state = await state.get_state()
