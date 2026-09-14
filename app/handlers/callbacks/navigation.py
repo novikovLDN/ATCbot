@@ -5,9 +5,18 @@ import asyncio
 import io
 import logging
 import os
+from html import escape as html_escape
+from urllib.parse import quote, urlparse
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    CopyTextButton,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LinkPreviewOptions,
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state
 from aiogram.filters import StateFilter
@@ -19,6 +28,7 @@ from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID as _MAIN_PHOTO_ID
 from app.handlers.common.utils import format_text_with_incident, safe_edit_text
+from app.utils.telegram_safe import safe_send_message
 from app.handlers.common.screens import (
     show_profile,
     _open_help_screen,
@@ -375,6 +385,12 @@ async def callback_setup_step1(callback: CallbackQuery):
             url=_IOS_HAPP_LINKS["global"],
             style="primary",
         )])
+        if platform == "ios":
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.install_karing_btn"),
+                url=_KARING_IOS_URL,
+                style="primary",
+            )])
     elif platform == "android":
         links = _DOWNLOAD_LINKS.get("android", {})
         if "happ" in links:
@@ -397,7 +413,19 @@ async def callback_setup_step1(callback: CallbackQuery):
             url="https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
             style="primary",
         )])
+        # Incy для Windows — portable-сборка на GitHub (релизы desktop-vX).
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.install_incy_btn"),
+            url=_INCY_WINDOWS_URL,
+            style="primary",
+        )])
 
+    # «Другие клиенты» — над кнопкой перехода к установке в одно нажатие.
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.other_clients_btn"),
+        callback_data=f"setup_other:{platform}",
+        style="primary",
+    )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.next_step"),
         callback_data=f"setup_step2:{platform}",
@@ -508,6 +536,13 @@ async def callback_setup_step2(callback: CallbackQuery):
                 url=f"{base_url}/open/incy?url={q}",
                 style="success",
             )])
+        if platform == "ios":
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.btn_add_karing"),
+                url=_open_url(base_url, "karing", agg_url,
+                              i18n_get_text(language, "setup.other_profile_premium")),
+                style="primary",
+            )])
         # V2RayTun — только iOS/Android (десктоп-схема нестабильна).
         if platform in ("ios", "android"):
             buttons.append([InlineKeyboardButton(
@@ -611,6 +646,26 @@ async def callback_setup_step2(callback: CallbackQuery):
                 ))
             buttons.append(row_bypass)
 
+        # Ряд 3 (только iOS): Karing — обычные ссылки подписки через
+        # karing://install-config (см. app/api/deeplink_redirect.py).
+        if platform == "ios":
+            row_karing = []
+            if sub_url:
+                row_karing.append(InlineKeyboardButton(
+                    text=i18n_get_text(language, "setup.karing_vpn_label"),
+                    url=_open_url(base_url, "karing", sub_url,
+                                  i18n_get_text(language, "setup.other_profile_premium")),
+                    style="primary",
+                ))
+            if bypass_url:
+                row_karing.append(InlineKeyboardButton(
+                    text=i18n_get_text(language, "setup.karing_bypass_label"),
+                    url=_open_url(base_url, "karing", bypass_url,
+                                  i18n_get_text(language, "setup.other_profile_bypass")),
+                    style="primary",
+                ))
+            buttons.append(row_karing)
+
     # === Bottom buttons ===
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_done"),
@@ -693,6 +748,82 @@ _IOS_HAPP_LINKS = {
 
 _INCY_IOS_URL = "https://apps.apple.com/ru/app/incy/id6756943388?l=en-GB"
 _INCY_ANDROID_URL = "https://play.google.com/store/apps/details?id=llc.itdev.incy&hl=en_IE"
+# Incy для Windows — только portable-zip в релизах desktop-vX (стабильного
+# «latest»-ассета нет: в том же репо релизы других платформ) → страница релизов.
+_INCY_WINDOWS_URL = "https://github.com/INCY-DEV/incy-platforms/releases"
+
+# «Другие клиенты». Источники ссылок:
+#   Karing   — README https://github.com/KaringX/karing, https://karing.app/en/download
+#              (в Google Play Karing нет — только сайт/GitHub).
+#   v2RayTun — App Store id6476628951, Google Play com.v2raytun.android.
+#   Stash    — App Store id1596063349 (https://stash.ws/ios).
+#   Clash Verge Rev — https://github.com/clash-verge-rev/clash-verge-rev (Win/macOS/Linux).
+_KARING_IOS_URL = "https://apps.apple.com/us/app/karing/id6472431552"
+_KARING_DOWNLOAD_URL = "https://karing.app/download"
+_V2RAYTUN_IOS_URL = "https://apps.apple.com/us/app/v2raytun/id6476628951"
+_V2RAYTUN_ANDROID_URL = "https://play.google.com/store/apps/details?id=com.v2raytun.android"
+_STASH_IOS_URL = "https://apps.apple.com/us/app/stash-rule-based-proxy/id1596063349"
+_CLASH_VERGE_URL = "https://github.com/clash-verge-rev/clash-verge-rev/releases"
+
+# platform → ((client, download_url), ...). client = имя в /open/{client}.
+# Все перечисленные клиенты умеют импорт по URL-схеме → кнопка «в одно нажатие».
+# v2RayTun только на телефонах (десктоп-схема нестабильна), Stash — iOS.
+_OTHER_CLIENTS = {
+    "ios": (("v2raytun", _V2RAYTUN_IOS_URL), ("karing", _KARING_IOS_URL), ("stash", _STASH_IOS_URL)),
+    "android": (("v2raytun", _V2RAYTUN_ANDROID_URL), ("karing", _KARING_DOWNLOAD_URL)),
+    "macos": (("karing", _KARING_DOWNLOAD_URL), ("clash", _CLASH_VERGE_URL)),
+    "windows": (("karing", _KARING_DOWNLOAD_URL), ("clash", _CLASH_VERGE_URL)),
+}
+_OTHER_CLIENT_NAMES = {"v2raytun": "v2RayTun", "karing": "Karing", "stash": "Stash", "clash": "Clash Verge"}
+_OTHER_CLIENT_ABOUT = {
+    "v2raytun": "setup.other_about_v2raytun",
+    "karing": "setup.other_about_karing",
+    "stash": "setup.other_about_stash",
+    "clash": "setup.other_about_clash",
+}
+# Клиенты, которым /open/{client} передаёт имя профиля (&name=).
+_CLIENTS_WITH_PROFILE_NAME = frozenset({"karing"})
+# Bot API: copy_text.text — 1..256 символов.
+_COPY_TEXT_LIMIT = 256
+
+
+def _public_base_url() -> str:
+    if config.PUBLIC_BASE_URL:
+        return config.PUBLIC_BASE_URL
+    parsed = urlparse(config.WEBHOOK_URL)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _open_url(base_url: str, client: str, raw_url: str, name: str | None = None) -> str:
+    """https-ссылка на /open/{client} (Telegram не открывает кастомные схемы)."""
+    link = f"{base_url}/open/{client}?url={quote(raw_url, safe='')}"
+    if name:
+        link += f"&name={quote(name, safe='')}"
+    return link
+
+
+async def _setup_key_urls(telegram_id: int) -> tuple[str | None, str | None]:
+    """(premium_url, bypass_url) — обычные ссылки подписки после host-rewrite.
+
+    Единый источник для экранов «Установить вручную» и «Другие клиенты»:
+    premium — get_user_primary_subscription_url (сущность tg_{id}_premium),
+    только при наличии подписки; bypass — get_user_bypass_url (сущность {id}),
+    независимо от основной подписки (helper сам лечит кэш-промахи и
+    лениво создаёт bypass-сущность).
+    """
+    from app.services.user_subscription_links import (
+        get_user_bypass_url,
+        get_user_primary_subscription_url,
+    )
+
+    premium_url = None
+    bypass_url = None
+    subscription = await database.get_subscription(telegram_id)
+    if subscription:
+        premium_url = await get_user_primary_subscription_url(telegram_id) or None
+    if config.REMNAWAVE_ENABLED:
+        bypass_url = await get_user_bypass_url(telegram_id) or None
+    return premium_url, bypass_url
 
 _DOWNLOAD_LINKS = {
     # 2026-06-08: V2RayTun снят со всех платформ, Hiddify тоже снят.
@@ -714,6 +845,7 @@ _DOWNLOAD_LINKS = {
     },
     "windows": {
         "happ": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
+        "incy": _INCY_WINDOWS_URL,
     },
 }
 
@@ -932,20 +1064,8 @@ async def callback_setup_manual(callback: CallbackQuery):
         await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
         return
 
-    subscription = await database.get_subscription(telegram_id)
-    sub_url = None
-    bypass_url = None
-    if subscription:
-        from app.services.user_subscription_links import get_user_primary_subscription_url
-        sub_url = await get_user_primary_subscription_url(telegram_id)
-
-    # Bypass key: available independently of main subscription.
-    # Goes through the helper so cache misses + missing entities
-    # auto-recover (lazy-provision creates the bypass entity if the
-    # user has an active subscription but no remnawave_uuid yet).
-    if config.REMNAWAVE_ENABLED:
-        from app.services.user_subscription_links import get_user_bypass_url
-        bypass_url = await get_user_bypass_url(telegram_id)
+    # Premium + bypass — тот же источник, что у экрана «Другие клиенты».
+    sub_url, bypass_url = await _setup_key_urls(telegram_id)
 
     # Build keys section (legacy dual-key).
     # — Happ-ключи (sealed crypt4) для всех платформ;
@@ -1039,6 +1159,127 @@ async def callback_setup_manual(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
+def _other_clients_screen(
+    language: str, platform: str, premium_url: str | None, bypass_url: str | None,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Текст + клавиатура экрана «Другие клиенты» (без I/O — удобно тестировать)."""
+    clients = _OTHER_CLIENTS.get(platform, ())
+    parts = [i18n_get_text(language, "setup.other_title")]
+    if clients:
+        lines = [i18n_get_text(language, "setup.other_clients_header")]
+        lines += [
+            i18n_get_text(language, _OTHER_CLIENT_ABOUT[client], url=html_escape(dl_url, quote=True))
+            for client, dl_url in clients
+        ]
+        parts.append("\n".join(lines))
+
+    if premium_url or bypass_url:
+        parts.append(i18n_get_text(language, "setup.other_howto"))
+        keys = []
+        if premium_url:
+            keys.append(i18n_get_text(language, "setup.other_key_premium")
+                        + f"\n<code>{html_escape(premium_url)}</code>")
+        if bypass_url:
+            keys.append(i18n_get_text(language, "setup.other_key_bypass")
+                        + f"\n<code>{html_escape(bypass_url)}</code>")
+        if premium_url and not bypass_url:
+            keys.append(i18n_get_text(language, "setup.other_only_premium_note"))
+        elif bypass_url and not premium_url:
+            keys.append(i18n_get_text(language, "setup.other_only_bypass_note"))
+        parts.append("\n\n".join(keys))
+    else:
+        parts.append(i18n_get_text(language, "setup.other_no_keys"))
+    text = "\n\n".join(parts)
+
+    buttons = []
+    if premium_url or bypass_url:
+        base_url = _public_base_url()
+        for client, _dl_url in clients:
+            name = _OTHER_CLIENT_NAMES[client]
+            with_name = client in _CLIENTS_WITH_PROFILE_NAME
+            row = []
+            if premium_url:
+                row.append(InlineKeyboardButton(
+                    text=i18n_get_text(language, "setup.other_btn_premium", client=name),
+                    url=_open_url(
+                        base_url, client, premium_url,
+                        i18n_get_text(language, "setup.other_profile_premium") if with_name else None,
+                    ),
+                    style="primary",
+                ))
+            if bypass_url:
+                row.append(InlineKeyboardButton(
+                    text=i18n_get_text(language, "setup.other_btn_bypass", client=name),
+                    url=_open_url(
+                        base_url, client, bypass_url,
+                        i18n_get_text(language, "setup.other_profile_bypass") if with_name else None,
+                    ),
+                    style="primary",
+                ))
+            buttons.append(row)
+        copy_row = []
+        if premium_url and len(premium_url) <= _COPY_TEXT_LIMIT:
+            copy_row.append(InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.other_copy_premium"),
+                copy_text=CopyTextButton(text=premium_url),
+            ))
+        if bypass_url and len(bypass_url) <= _COPY_TEXT_LIMIT:
+            copy_row.append(InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.other_copy_bypass"),
+                copy_text=CopyTextButton(text=bypass_url),
+            ))
+        if copy_row:
+            buttons.append(copy_row)
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.btn_need_help"),
+        url="https://t.me/atlas_suppbot",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data=f"setup_step1:{platform}",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
+    )])
+    return text, InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+@router.callback_query(F.data.startswith("setup_other:"))
+async def callback_setup_other(callback: CallbackQuery):
+    """«Другие клиенты»: обычные ключи Premium + Обход для v2RayTun / Karing /
+    Stash / Clash Verge, короткая инструкция и кнопки импорта в одно нажатие."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    platform = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    premium_url, bypass_url = await _setup_key_urls(telegram_id)
+    text, keyboard = _other_clients_screen(language, platform, premium_url, bypass_url)
+    logger.info(
+        "SETUP_OTHER_CLIENTS platform=%s premium=%s bypass=%s",
+        platform, bool(premium_url), bool(bypass_url),
+    )
+
+    # Предыдущий экран — фото с подписью; этот текст длиннее лимита подписи,
+    # поэтому удаляем и шлём обычное сообщение (как setup_step1/step2).
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await safe_send_message(
+        callback.bot,
+        telegram_id,
+        text,
+        reply_markup=keyboard,
+        parse_mode="HTML",
+        link_preview_options=LinkPreviewOptions(is_disabled=True),
+    )
 
 
 @router.callback_query(F.data == "setup_done")
