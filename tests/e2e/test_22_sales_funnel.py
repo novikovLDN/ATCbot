@@ -171,6 +171,22 @@ async def test_chain_start_end_to_end(e2e, window):
     assert await sent_steps(e2e, u) == [("start", "1h"), ("start", "1d"), ("start", "3d"), ("start", "7d")]
 
 
+async def test_a_permanent_admin_discount_survives_the_chain(e2e, window):
+    """A smaller PERMANENT admin discount is never replaced by a funnel one
+    (−10 % forever would become −20 % for 48 h, then 0 %): the step is skipped."""
+    await go_live(e2e)
+    u = new_user()
+    await e2e.start_user(u)
+    assert await database.create_user_discount(u.id, 10, None, 1)          # admin, no expiry
+    await travel(e2e, 3 * D + M, u)                                         # +3 d: −20 % 48 h is due
+    mark = e2e.tg.mark()
+    await run(e2e)
+    assert [s for s in e2e.tg.since(mark, u.id) if s.method == "SendMessage"] == []
+    assert await discount(e2e, u) == (10, None)
+    assert [(r["step"], r["status"]) for r in await rows(e2e, u)] == [("1h", "skipped"), ("1d", "skipped"),
+                                                                     ("3d", "skipped")]
+
+
 async def test_purchase_between_batch_and_send_stops_the_chain(e2e, window):
     await go_live(e2e)
     u = new_user()

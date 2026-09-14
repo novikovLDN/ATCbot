@@ -235,6 +235,30 @@ async def test_keep_max_a_bigger_active_discount_is_what_the_text_shows(monkeypa
     assert env.finished == [(1, "sent", 40, bigger_until)]
 
 
+async def test_a_bigger_permanent_admin_discount_stays_and_nothing_is_granted(monkeypatch):
+    env = Env(monkeypatch, personal={"discount_percent": 30, "expires_at": None})
+    assert await _process() == "sent"
+    assert env.granted == []                     # never touched: no write at all
+    assert env.personal == {"discount_percent": 30, "expires_at": None}
+    (_, text, _), = env.sent
+    assert "30%" in text and "20%" not in text
+
+
+@pytest.mark.parametrize("chain, step, anchor", [
+    ("start", "3d", ANCHOR),                     # grant −20 %
+    ("trial", "1d", NOW - D - H),                # keep −30 %
+])
+async def test_a_smaller_permanent_admin_discount_is_never_overwritten(monkeypatch, chain, step, anchor):
+    """The funnel's keep_max upsert replaced a smaller PERMANENT admin discount
+    with a 48 h one — after it ended the user had 0 % instead of −10 % forever.
+    The step is skipped instead: nothing granted, nothing sent."""
+    env = Env(monkeypatch, personal={"discount_percent": 10, "expires_at": None})
+    assert await _process(chain, step, anchor) == "no_discount"
+    assert env.granted == [] and env.sent == []
+    assert env.personal == {"discount_percent": 10, "expires_at": None}
+    assert env.finished == [(1, "skipped", None, None)]
+
+
 async def test_special_offer_wins_a_tie_like_checkout(monkeypatch):
     offer_until = NOW + 60 * H
     env = Env(monkeypatch, special={"discount_percent": 15, "expires_at": offer_until})

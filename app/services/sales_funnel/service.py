@@ -182,23 +182,35 @@ async def effective_discount(telegram_id: int) -> Tuple[int, Optional[datetime]]
 async def apply_discount(telegram_id: int, step: Step, anchor: datetime,
                          now: datetime) -> Optional[Tuple[int, Optional[datetime]]]:
     """Grant the step's discount (keep_max) and return what the user will get
-    at checkout. None → nothing true to promise: skip the step."""
+    at checkout. None → nothing true to promise: skip the step.
+
+    A PERMANENT personal discount (no expiry, set by an admin) is never
+    overwritten: the keep_max upsert would replace a smaller one with a
+    time-limited one and leave the user at 0 % after it ends. Bigger or equal
+    → it stays and nothing is granted; smaller → the step is skipped."""
     import database
+    personal = await database.get_user_discount(telegram_id)
+    permanent = personal if personal and personal.get("expires_at") is None else None
     if step.keep_percent:
         until = _utc(anchor) + step.keep_until
         if _utc(now) >= until - MIN_REMAINING:
             return None
         percent, _deadline = await effective_discount(telegram_id)
         if percent < step.keep_percent:
+            if permanent is not None:
+                return None
             await database.create_user_discount(
                 telegram_id=telegram_id, discount_percent=step.keep_percent, expires_at=until,
                 created_by=SYSTEM_CREATOR, keep_max=True,
             )
     elif step.grant_percent:
-        await database.create_user_discount(
-            telegram_id=telegram_id, discount_percent=step.grant_percent,
-            expires_at=_utc(now) + step.grant_for, created_by=SYSTEM_CREATOR, keep_max=True,
-        )
+        if permanent is None:
+            await database.create_user_discount(
+                telegram_id=telegram_id, discount_percent=step.grant_percent,
+                expires_at=_utc(now) + step.grant_for, created_by=SYSTEM_CREATOR, keep_max=True,
+            )
+        elif permanent["discount_percent"] < step.grant_percent:
+            return None
     percent, deadline = await effective_discount(telegram_id)
     if percent <= 0:
         return None
