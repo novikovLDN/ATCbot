@@ -31,8 +31,10 @@ Low-level HTTP client for Remnawave Panel API (verified against backend 3.4.3).
   - Троттлера в панели нет; вне dev панель требует X-Forwarded-For и
     X-Forwarded-Proto=https — бот шлёт их сам (_headers).
 """
+import asyncio
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Literal, Union
 
 import httpx
@@ -242,6 +244,123 @@ async def set_user_tag(user_id: int, tag: str) -> Dict[str, Any]:
     return await _request_raw("PATCH", "/api/users", json={"id": int(user_id), "tag": cleaned})
 
 
+# ── Premium far-expireAt guard (defence in depth) ──────────────────────
+#
+# The premium entity (tg_{id}_premium) lives on the PAID date; only the bypass
+# entity (username = str(telegram_id)) has a far-future expireAt (+10 y / 2099).
+# 2026-09-14: bypass helpers resolved "the bypass" through contaminated bypass
+# cache columns (holding the premium id/uuid) and PATCHed ~300 premium entities
+# to +10 years. Every create/update carrying an expireAt more than
+# PREMIUM_MAX_EXPIRE_AHEAD ahead is checked here: a premium target is refused
+# (nothing sent, the caller sees its usual failure), logged
+# REMNAWAVE_PREMIUM_FAR_EXPIRE_BLOCKED and alerted (admin_alerts cooldown).
+
+PREMIUM_MAX_EXPIRE_AHEAD = timedelta(days=5 * 365)
+_bg_tasks: set = set()
+
+
+def _expire_beyond_premium_max(value: Any) -> bool:
+    if value is None:
+        return False
+    try:
+        dt = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt > datetime.now(timezone.utc) + PREMIUM_MAX_EXPIRE_AHEAD
+
+
+def _is_premium_username(username: str, telegram_id: Any = None) -> bool:
+    if not username:
+        return False
+    if username.endswith("_premium"):
+        return True
+    try:
+        from app.services import remnawave_premium  # lazy: it imports this module
+        return telegram_id is not None and username == remnawave_premium.build_premium_username(int(telegram_id))
+    except Exception:
+        return False
+
+
+def _is_bypass_username(username: str, telegram_id: Any = None) -> bool:
+    if username.isdigit():
+        return True
+    try:
+        from app.services import remnawave_bypass  # lazy: it imports this module
+        return telegram_id is not None and username == remnawave_bypass.build_bypass_username(int(telegram_id))
+    except Exception:
+        return False
+
+
+def _alert_premium_far_expire(op: str, user_id: Any, username: str, expire_at: Any) -> None:
+    """One admin alert per block (vpn_api cooldown + digest). Fire-and-forget:
+    the refused write must not wait for Telegram."""
+    async def _send() -> None:
+        try:
+            from app.services import admin_alerts, purchase_flow
+            bot = purchase_flow._alert_bot()
+            if bot is None:
+                logger.error("REMNAWAVE_PREMIUM_FAR_EXPIRE_ALERT_NO_BOT: id=%s", user_id)
+                return
+            await admin_alerts.send_alert(bot, "vpn_api", "\n".join([
+                "Premium far-future expireAt BLOCKED (nothing sent to the panel)",
+                f"entity: id={user_id} username={username or '?'}",
+                f"expireAt: {expire_at} (op: {op})",
+                f"Premium must not get an expireAt more than {PREMIUM_MAX_EXPIRE_AHEAD.days} days ahead.",
+                "Likely a bypass cache pointing at the premium entity. Logs: REMNAWAVE_PREMIUM_FAR_EXPIRE_BLOCKED.",
+            ]))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("REMNAWAVE_PREMIUM_FAR_EXPIRE_ALERT_FAILED: %s: %s", type(e).__name__, e)
+
+    try:
+        task = asyncio.get_running_loop().create_task(_send())
+    except RuntimeError:
+        return
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+async def _premium_far_expire_blocked(
+    expire_at: Any,
+    *,
+    op: str,
+    username: Optional[str] = None,
+    telegram_id: Any = None,
+    user_id: Optional[int] = None,
+    trust_bypass: bool = False,
+) -> bool:
+    """True = refuse: `expire_at` is > now + PREMIUM_MAX_EXPIRE_AHEAD and the
+    target is a premium entity. Known username decides; otherwise (update by
+    id, only in this far-expireAt case) one GET reads it. A bypass username is
+    never premium, even when its id sits in some remnawave_premium_id column;
+    an unknown/legacy username falls back to _is_premium_entity (skipped for a
+    caller that verified the bypass entity, _trust_bypass)."""
+    if not _expire_beyond_premium_max(expire_at):
+        return False
+    uname = str(username or "").strip()
+    premium = _is_premium_username(uname, telegram_id)
+    if not premium and user_id is not None:
+        ent = await _request("GET", f"/api/users/{int(user_id)}", quiet=True)
+        ent = ent if isinstance(ent, dict) else {}
+        uname = str(ent.get("username") or "").strip()
+        if uname:
+            premium = _is_premium_username(uname, ent.get("telegramId"))
+            if not premium and not trust_bypass and not _is_bypass_username(uname, ent.get("telegramId")):
+                premium = await _is_premium_entity(int(user_id))
+        elif not trust_bypass:
+            premium = await _is_premium_entity(int(user_id))
+    if not premium:
+        return False
+    logger.error(
+        "REMNAWAVE_PREMIUM_FAR_EXPIRE_BLOCKED: op=%s id=%s username=%r expireAt=%s — "
+        "premium must not get an expireAt more than %d days ahead; nothing sent",
+        op, user_id, uname or None, expire_at, PREMIUM_MAX_EXPIRE_AHEAD.days,
+    )
+    _alert_premium_far_expire(op, user_id, uname, expire_at)
+    return True
+
+
 # ── User CRUD ──────────────────────────────────────────────────────────
 
 async def create_user(
@@ -309,6 +428,12 @@ async def create_user(
         effective_squad = squad_uuid
     if effective_squad:
         body["activeInternalSquads"] = [effective_squad]
+
+    if await _premium_far_expire_blocked(expire_at, op="create", username=username, telegram_id=telegram_id):
+        if raw_response:
+            return {"ok": False, "status": 0, "body": None, "response": None,
+                    "error": "premium_far_expire_blocked"}
+        return None
 
     path = "/api/users"
     if raw_response:
@@ -669,6 +794,10 @@ async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, 
         # Иначе callers (add_traffic и т.п.) видят truthy dict и ложно
         # логируют SUCCESS, а трафик так и не добавлен.
         return None
+    if "expireAt" in fields and await _premium_far_expire_blocked(
+        fields["expireAt"], op="update", user_id=resolved, trust_bypass=trust_bypass,
+    ):
+        return None
     if "tag" in fields:
         # The bot only ever SETS a tag (never clears it): invalid / None → not sent.
         cleaned = clean_tag(fields.pop("tag"))
@@ -931,26 +1060,35 @@ async def get_bypass_entity_safe(telegram_id: int) -> Optional[Dict[str, Any]]:
         ent = await find_user_by_username(expected_username)
     except Exception:
         ent = None
-    if not isinstance(ent, dict):
+    if not await _looks_like_bypass(ent):
         return None
 
     # 3) Self-heal: backfill correct id + uuid в БД.
+    await _heal_bypass_cache(telegram_id, ent, why="username resolve")
+    return ent
+
+
+async def _heal_bypass_cache(telegram_id: int, ent: Optional[Dict[str, Any]], *, why: str) -> None:
+    """Write `ent`'s id / uuid into subscriptions.remnawave_id / remnawave_uuid
+    (the BYPASS columns) — only when its username is exactly str(telegram_id).
+    Two short UPDATEs after the panel read, no transaction. Never raises."""
+    import database
+    if not isinstance(ent, dict) or str(ent.get("username") or "").strip() != str(telegram_id):
+        return
+    api_id = ent.get("id")
+    api_uuid = ent.get("uuid") or ent.get("vlessUuid")
     try:
-        api_id = ent.get("id")
-        api_uuid = ent.get("uuid") or ent.get("vlessUuid")
         if api_id is not None:
-            try:
-                await database.set_remnawave_id(telegram_id, int(api_id))
-            except (TypeError, ValueError):
-                pass
+            await database.set_remnawave_id(telegram_id, int(api_id))
         if api_uuid:
             await database.set_remnawave_uuid(telegram_id, str(api_uuid))
     except Exception as e:
-        logger.warning(
-            "get_bypass_entity_safe: DB backfill failed tg=%s: %s",
-            telegram_id, e,
-        )
-    return ent
+        logger.warning("REMNAWAVE_BYPASS_CACHE_HEAL_FAILED: tg=%s %s: %s", telegram_id, type(e).__name__, e)
+        return
+    logger.info(
+        "REMNAWAVE_BYPASS_CACHE_HEALED: tg=%s id=%s uuid=%s (%s)",
+        telegram_id, api_id, str(api_uuid or "")[:8], why,
+    )
 
 
 # ── Precise state readers (provisioning CAS, docs/audit/02 §B) ─────────
@@ -969,7 +1107,10 @@ async def get_bypass_entity_safe(telegram_id: int) -> Optional[Dict[str, Any]]:
 # → username resolve (POST /api/users/resolve). A cached-id 404/400 or an
 # entity that fails the ownership check falls through to the username path;
 # an "unavailable" cached-id read does NOT (no guessing while the panel is sick).
-# Read-only: unlike get_bypass_entity_safe these never write the DB cache.
+# get_premium_state never writes the DB cache. get_bypass_state writes it only
+# after a cache mismatch resolved by username (_heal_bypass_cache: the entity's
+# username is exactly str(tg)) — a contaminated remnawave_id / remnawave_uuid
+# (premium id/uuid) must not keep sending the legacy paths to the premium.
 
 StateKind = Literal["present", "absent", "unavailable"]
 
@@ -1077,7 +1218,15 @@ async def get_bypass_state(telegram_id: int) -> "tuple[StateKind, Optional[Dict[
     def _accept(ent: Dict[str, Any]) -> bool:
         return str(ent.get("username") or "").strip() == expected
 
-    return await _entity_state(username=expected, cached_id=cached_id, accept=_accept, what="BYPASS")
+    kind, ent = await _entity_state(username=expected, cached_id=cached_id, accept=_accept, what="BYPASS")
+    if kind == "present" and cached_id is not None and isinstance(ent, dict):
+        try:
+            ent_id: Optional[int] = int(ent.get("id"))
+        except (TypeError, ValueError):
+            ent_id = None
+        if ent_id is not None and ent_id != int(cached_id):
+            await _heal_bypass_cache(telegram_id, ent, why="state reader cache mismatch")
+    return kind, ent
 
 
 async def get_premium_state(telegram_id: int) -> "tuple[StateKind, Optional[Dict[str, Any]]]":

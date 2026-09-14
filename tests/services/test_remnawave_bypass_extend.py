@@ -43,7 +43,10 @@ def wired(monkeypatch):
     update = AsyncMock(return_value={"id": 5})
 
     def _install(entity):
-        monkeypatch.setattr(remnawave_service.remnawave_api, "get_user", AsyncMock(return_value=entity))
+        # the bypass entity is resolved by username (get_bypass_entity_safe),
+        # never through the cached uuid/id — see test_bypass_premium_contamination
+        monkeypatch.setattr(remnawave_service.remnawave_api, "get_bypass_entity_safe",
+                            AsyncMock(return_value=entity))
         monkeypatch.setattr(remnawave_service.remnawave_api, "update_user", update)
         return update
 
@@ -70,7 +73,7 @@ async def test_entity_that_needs_it_is_patched_once(wired, status, expire_in):
     await remnawave_service.extend_remnawave_for_bypass(42)
     update.assert_awaited_once()
     args, kwargs = update.call_args
-    assert args == (PANEL_UUID,) and kwargs["status"] == "ACTIVE"
+    assert args == (5,) and kwargs["status"] == "ACTIVE"   # the entity's own numeric id
     new_expire = datetime.fromisoformat(kwargs["expireAt"].replace("Z", "+00:00"))
     assert new_expire > datetime.now(timezone.utc) + timedelta(days=3600)
 
