@@ -130,6 +130,37 @@ def test_alerts_ordered_by_severity():
     assert "6" in alerts[-1]["detail"]
 
 
+def test_one_offline_node_of_many_is_a_warning():
+    args = dict(_BASE, nodes={"available": True, "offline": 1, "enabled": 6, "total": 8, "disabled": 2})
+    alerts = metrics_routes.build_alerts(**args)
+    assert [(a["key"], a["level"]) for a in alerts] == [("nodes_offline", "warning")]
+    assert "1 из 6" in alerts[0]["title"]
+
+
+def test_half_of_enabled_nodes_offline_is_critical():
+    args = dict(_BASE, nodes={"available": True, "offline": 3, "enabled": 6, "total": 9, "disabled": 3})
+    alerts = metrics_routes.build_alerts(**args)
+    assert alerts[0]["key"] == "nodes_offline" and alerts[0]["level"] == "critical"
+
+
+def test_disabled_nodes_are_not_alerted():
+    args = dict(_BASE, nodes={"available": True, "offline": 0, "enabled": 4, "total": 6, "disabled": 2})
+    assert metrics_routes.build_alerts(**args) == []
+
+
+def test_normalize_nodes_counts_disabled_apart():
+    from app.services import panel_stats
+
+    raw = [
+        {"uuid": "a", "name": "a", "isConnected": True},
+        {"uuid": "b", "name": "b", "isConnected": False},
+        {"uuid": "c", "name": "c", "isDisabled": True, "isConnected": False},
+        {"uuid": "d", "name": "d", "isConnecting": True},
+    ]
+    n = panel_stats.normalize_nodes(raw, None)
+    assert (n["total"], n["enabled"], n["disabled"], n["online"], n["offline"]) == (4, 3, 1, 1, 2)
+
+
 def test_panel_down_is_critical():
     args = dict(_BASE, panel={"available": False})
     alerts = metrics_routes.build_alerts(**args)

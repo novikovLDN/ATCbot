@@ -204,8 +204,16 @@ def build_alerts(*, money: dict, active: dict, errors: dict, queues: dict,
         add("critical", "panel_down", "Панель Remnawave не отвечает",
             "Статистика панели недоступна. Проверьте панель и токен API.", "/panel")
     if nodes and nodes.get("available") and nodes.get("offline"):
-        add("critical", "nodes_offline", f"Ноды офлайн: {nodes['offline']}",
-            "Пользователи этих нод без VPN.", "/panel")
+        # Disabled nodes are excluded upstream (normalize_nodes). One node
+        # down out of many is a warning — clients fail over; half or more
+        # of the enabled fleet down is critical.
+        offline = int(nodes["offline"])
+        enabled = int(nodes.get("enabled") or nodes.get("total") or offline)
+        major = offline * 2 >= enabled
+        add("critical" if major else "warning", "nodes_offline",
+            f"Ноды не в сети: {offline} из {enabled}",
+            "Большая часть нод недоступна: у пользователей нет VPN." if major
+            else "Клиенты переключатся на другие ноды. Проверьте ноду в панели.", "/panel")
     if provisioning.get("available") and provisioning.get("dead"):
         add("critical", "provisioning_dead", f"Выдача не удалась: {provisioning['dead']}",
             "Оплачено, но доступ не выдан. Разберите вручную.", "/health")
@@ -357,6 +365,10 @@ async def _overview(days: int) -> dict[str, Any]:
             "online_now": (panel or {}).get("online_now"),
             "nodes_online": (nodes or {}).get("online"),
             "nodes_total": (nodes or {}).get("total"),
+            # v5: disabled nodes are not problems; offline = offline + connecting.
+            "nodes_enabled": (nodes or {}).get("enabled"),
+            "nodes_offline": (nodes or {}).get("offline"),
+            "nodes_disabled": (nodes or {}).get("disabled"),
         },
         "alerts": build_alerts(
             money={"providers": (pay_h or {}).get("providers_7d") or [],

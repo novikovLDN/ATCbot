@@ -146,10 +146,14 @@ def normalize_nodes(nodes: Optional[list], metrics: Optional[dict]) -> dict[str,
             "tags": n.get("tags") or [],
         })
     out.sort(key=lambda x: ({"offline": 0, "connecting": 1, "online": 2, "disabled": 3}[x["state"]], x["name"] or ""))
+    disabled = sum(1 for x in out if x["state"] == "disabled")
     return {
         "available": True,
         "nodes": out,
         "total": len(out),
+        # Switched off on purpose in the panel: not a problem, not "offline".
+        "disabled": disabled,
+        "enabled": len(out) - disabled,
         "online": sum(1 for x in out if x["state"] == "online"),
         "offline": sum(1 for x in out if x["state"] in ("offline", "connecting")),
         "users_online": sum(x["users_online"] for x in out),
