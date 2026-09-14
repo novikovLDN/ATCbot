@@ -1074,6 +1074,10 @@ SINGLE SOURCE OF TRUTH: grant_access
 # Grant sources that are a PAID period (payment, balance auto-renewal, paid gift
 # activation). A paid grant clears admin_grant_days (N-04).
 _PAID_GRANT_SOURCES = frozenset({"payment", "auto_renew", "gift"})
+# Grants of DAYS (not a paid tariff period): the broadcast «пробный ключ»,
+# admin / promo-link days, game prizes. On an active subscription they only move
+# the end date — the subscription keeps its source and tariff (#3, #4).
+_DAY_GRANT_SOURCES = frozenset({"trial", "admin", "game_strike", "game_dice"})
 
 
 async def grant_access(
@@ -1462,18 +1466,27 @@ async def grant_access(
                 # granted subscription only adds days: it must not turn the row into
                 # source='trial' (reminders skip trial rows) nor flip Plus→Basic.
                 # Trial and bypass-only rows keep the old behaviour.
+                # #3 / #4 (docs/notifications/matrix.md): the same for EVERY day
+                # grant — admin / promo-link days, game prizes. Days only move the
+                # date: a paid subscription stays paid (its reminders, −15 % and
+                # end message), a trial stays a trial (its end moves with it, see
+                # below). A bypass-only row has no premium to keep: the grant's own
+                # source applies, as before.
                 row_source = source
                 _current_source = (subscription.get("source") or "").strip().lower()
+                _is_day_grant = source in _DAY_GRANT_SOURCES and tariff_period_days is None
                 if (
-                    source == "trial"
+                    _is_day_grant
                     and _current_source
-                    and _current_source not in ("trial", "bypass_only")
+                    and _current_source != "bypass_only"
                     and not subscription.get("is_bypass_only")
                 ):
                     row_source = subscription.get("source")
-                    incoming_tariff = current_sub_type
+                    # never a downgrade (Plus stays Plus); an admin's explicit Plus
+                    # grant on a Basic subscription still upgrades it (payment matrix)
+                    incoming_tariff = "plus" if "plus" in (current_sub_type, incoming_tariff) else current_sub_type
                     logger.info(
-                        f"grant_access: TRIAL_GIFT_KEEPS_SOURCE [user={telegram_id}, "
+                        f"grant_access: DAY_GRANT_KEEPS_SOURCE [user={telegram_id}, grant={source}, "
                         f"source={row_source}, tariff={incoming_tariff}]"
                     )
                 # N-04: a paid period ends the admin/promo grant semantics
@@ -1554,7 +1567,24 @@ async def grant_access(
                             f"old_trial_expires_at={old_trial_expires_at.isoformat()}, "
                             f"paid_subscription_expires_at={subscription_end.isoformat()}"
                         )
-                
+                elif row_source == "trial" and _is_day_grant and _current_source == "trial":
+                    # #4: days during a trial extend THE TRIAL — the trial worker
+                    # reads users.trial_expires_at; its reminders go to the new end.
+                    await conn.execute(
+                        "UPDATE users SET trial_expires_at = $1 WHERE telegram_id = $2 "
+                        "AND trial_expires_at IS NOT NULL AND trial_expires_at > $3",
+                        _to_db_utc(subscription_end), telegram_id, _to_db_utc(now),
+                    )
+                    await conn.execute(
+                        "UPDATE subscriptions SET trial_notif_24h_sent = FALSE, trial_notif_3h_sent = FALSE, "
+                        "trial_notif_71h_sent = FALSE WHERE telegram_id = $1",
+                        telegram_id,
+                    )
+                    logger.info(
+                        f"TRIAL_EXTENDED_BY_DAY_GRANT: user_id={telegram_id}, grant={source}, "
+                        f"trial_expires_at={subscription_end.isoformat()}"
+                    )
+
                 # Определяем action_type для истории
                 if source == "payment":
                     history_action_type = "renewal"

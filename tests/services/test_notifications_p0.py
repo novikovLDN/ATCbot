@@ -177,8 +177,66 @@ async def test_n07_trial_gift_keeps_source_of_active_paid_subscription(frozen, c
 async def test_n07_trial_gift_on_trial_or_bypass_only_row_unchanged(frozen, current_source, is_bypass_only):
     row = _row("basic", source=current_source, is_bypass_only=is_bypass_only)
     _result, conn = await _grant(row, source="trial")
-    (sql, args), = _sub_writes(conn)
+    # (a trial row also gets its trial end moved + trial flags reset — #4)
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
     assert args[1] == "trial"
+
+
+# ── #3 / #4: day grants (admin / promo link / game) only move the date ──
+
+@pytest.mark.parametrize("grant", ["admin", "game_strike", "game_dice"])
+@pytest.mark.parametrize("current_source", ["payment", "auto_renew", "gift"])
+async def test_day_grant_on_a_paid_subscription_keeps_it_paid(frozen, grant, current_source):
+    row = _row("plus", source=current_source)
+    kw = {"admin_telegram_id": 1, "admin_grant_days": 7} if grant == "admin" else {}
+    result, conn = await _grant(row, source=grant, tariff="basic", **kw)
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
+    assert args[1] == current_source, "the row stays paid: its reminders, −15 % and end message"
+    assert args[4] == "plus", "a day grant never flips the tariff"
+    assert not _clears_admin_grant_days(sql, args) and "admin_grant_days = case" in sql
+    assert result["action"] == "renewal"
+    assert not [c for c in conn.calls if "update users set trial_expires_at" in c[1]]
+    now = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
+    decision = notification_service.should_send_reminder(
+        {"source": args[1], "admin_grant_days": None, "last_action_type": "admin_grant",
+         "expires_at": now + timedelta(days=7)}, now)
+    assert decision.should_send and decision.reminder_type.value == "reminder_7d"
+
+
+async def test_admin_plus_days_on_basic_upgrade_the_tariff_and_keep_the_source(frozen):
+    row = _row("basic", source="payment")
+    _result, conn = await _grant(row, source="admin", tariff="plus", admin_telegram_id=1, admin_grant_days=7)
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
+    assert (args[1], args[4]) == ("payment", "plus")
+
+
+@pytest.mark.parametrize("grant", ["admin", "game_strike", "game_dice", "trial"])
+async def test_day_grant_during_a_trial_extends_the_trial(frozen, grant):
+    """#4: +days during a trial turned it into source='game_*' / 'admin' — no trial
+    reminders, no «пробный завершён −30 %», paid «продлите» to a trial user instead."""
+    row = _row("basic", source="trial")
+    result, conn = await _grant(row, source=grant)
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
+    assert args[1] == "trial"
+    trial_move = [c for c in conn.calls if c[1].startswith("update users set trial_expires_at")]
+    assert len(trial_move) == 1 and trial_move[0][2][0] == args[0], "trial end = the new end"
+    flags = [c for c in conn.calls if c[1].startswith("update subscriptions set trial_notif_24h_sent = false")]
+    assert flags, "the trial reminders go out again for the new end"
+
+
+async def test_day_grant_on_a_bypass_only_row_is_the_grant(frozen):
+    row = _row("basic", source="bypass_only", is_bypass_only=True)
+    _result, conn = await _grant(row, source="game_dice")
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
+    assert args[1] == "game_dice"
+
+
+async def test_paid_period_during_a_trial_still_ends_the_trial(frozen):
+    row = _row("basic", source="trial")
+    _result, conn = await _grant(row, source="payment", tariff="basic", tariff_period_days=30)
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
+    assert args[1] == "payment"
+    assert not [c for c in conn.calls if c[1].startswith("update subscriptions set trial_notif_24h_sent")]
 
 
 # ═══════════════════════════════════════════════════════════════════════
