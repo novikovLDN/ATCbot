@@ -8,6 +8,7 @@ from .gift import gift_router
 from .bypass_setup import bypass_setup_router
 from .beta_apply import beta_apply_router
 from .broadcast_trial_key import broadcast_trial_key_router
+from .funnel import funnel_router
 from app.handlers.traffic import traffic_router
 from app.handlers.proxy import proxy_router
 
@@ -20,5 +21,6 @@ router.include_router(gift_router)
 router.include_router(bypass_setup_router)
 router.include_router(beta_apply_router)
 router.include_router(broadcast_trial_key_router)
+router.include_router(funnel_router)
 router.include_router(traffic_router)
 router.include_router(proxy_router)

@@ -340,3 +340,59 @@ register_notification(NotificationSpec(
     template_vars=["deadline"],
     default_trigger={"before_expiry_hours": 3, "tolerance_hours": 1},
 ))
+
+
+# ── Воронка продаж (docs/audit/SCOPE.md «Воронка продаж», app/services/sales_funnel) ──
+# Default = RU text from app/i18n/ru.py (English users get the i18n EN text).
+# Category «reminder» (🔔 Напоминания in the dashboard). Timing is fixed by the
+# owner-approved schedule (sales_funnel.service.CHAINS); a step switched off
+# here is skipped, the chain goes on with the next step.
+FUNNEL_NOTIFICATION_SUMMARIES = {
+    "funnel.start_1h": "пробный период (кнопка «Попробовать бесплатно»)",
+    "funnel.start_1d": "пробный: что даёт VPN",
+    "funnel.start_3d": "пробный или −20 % на 48 ч",
+    "funnel.start_7d": "−25 % на первый месяц, 72 ч",
+    "funnel.start_30d": "−30 % на 7 дней",
+    "funnel.trial_1d": "«скидка 30 % ещё действует» (та, что дана в конце пробного)",
+    "funnel.trial_6d": "«скидка 30 % скоро сгорит»",
+    "funnel.trial_14d": "−25 % на 72 ч",
+    "funnel.trial_30d": "−30 % на 7 дней",
+    "funnel.trial_90d": "−40 % на 7 дней",
+    "funnel.paid_6h": "напоминание, та же −15 %",
+    "funnel.paid_1d": "«скидка на продление ещё действует»",
+    "funnel.paid_3d": "−20 % на 72 ч",
+    "funnel.paid_7d": "−25 % на 72 ч",
+    "funnel.paid_30d": "−30 % на 7 дней",
+    "funnel.paid_90d": "−40 % на 7 дней",
+}
+
+
+def _register_funnel() -> None:
+    from app.i18n.ru import LANG as _RU
+
+    chains = {
+        "start": ("/start без пробного и подписки", "после /start"),
+        "trial": ("пробный закончился, не купил", "после конца пробного"),
+        "paid": ("платная закончилась, не продлил", "после окончания подписки"),
+    }
+    for key, summary in FUNNEL_NOTIFICATION_SUMMARIES.items():
+        chain, offset = key.split(".", 1)[1].rsplit("_", 1)
+        label, since = chains[chain]
+        has_discount = "{percent}" in _RU[key]
+        register_notification(NotificationSpec(
+            key=key,
+            title=f"Воронка · {label} · +{offset}",
+            description=(
+                f"Через {offset} {since}: {summary}. Не чаще 1 сообщения воронки в день, "
+                "только 10:00–21:00 МСК; покупка или активация пробного останавливает цепочку."
+                + (" {percent} и {deadline} (МСК) — скидка, которую реально применит оплата; "
+                   "{days_left} — сколько дней осталось." if has_discount else "")
+            ),
+            category="reminder",
+            default_text_ru=_RU[key],
+            template_vars=["percent", "deadline", "days_left"] if has_discount else [],
+            default_trigger={},
+        ))
+
+
+_register_funnel()

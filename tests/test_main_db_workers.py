@@ -26,12 +26,12 @@ MAIN_SRC = Path(main.__file__).read_text(encoding="utf-8")
 WORKER_ENTRYPOINTS = {
     "reminders_task", "run_trial_scheduler", "farm_notifications_task", "traffic_monitor_task",
     "fast_expiry_cleanup_task", "auto_renewal_task", "activation_worker_task",
-    "wata_reconciler_task", "provisioning_worker_task",
+    "wata_reconciler_task", "provisioning_worker_task", "sales_funnel_task",
 }
 EXPECTED = {
     "reminders", "trial_notifications", "farm_notifications", "traffic_monitor",
     "fast_expiry_cleanup", "auto_renewal", "activation_worker", "wata_reconciler",
-    "wata_key_warmup", "provisioning_worker",
+    "wata_key_warmup", "provisioning_worker", "sales_funnel",
 }
 
 
@@ -118,6 +118,8 @@ def fakes(monkeypatch):
     monkeypatch.setattr(wata_service, "warmup_public_key", stub("wata_key_warmup"))
     monkeypatch.setattr(wata_service, "is_enabled", lambda: True)
     monkeypatch.setattr(provisioning_worker, "provisioning_worker_task", stub("provisioning_worker"))
+    from app.workers import sales_funnel
+    monkeypatch.setattr(sales_funnel, "sales_funnel_task", stub("sales_funnel"))
     monkeypatch.setattr(config, "REMNAWAVE_ENABLED", True)
     monkeypatch.setattr(main, "get_feature_flags", lambda: SimpleNamespace(
         background_workers_enabled=True, auto_renewal_enabled=True))

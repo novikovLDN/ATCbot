@@ -36,6 +36,7 @@ import activation_worker
 from app.workers import farm_notifications
 from app.workers import traffic_monitor
 from app.workers import provisioning_worker
+from app.workers import sales_funnel
 
 # ====================================================================================
 # STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
@@ -166,6 +167,9 @@ async def start_db_services(bot, background_tasks: list, started: dict) -> None:
     # Provisioning worker — drains provisioning_jobs (retries, per-user order, alerts).
     # Runs ALWAYS (no feature flag) so enqueued jobs never hang; needs only the DB.
     _start("provisioning_worker", lambda: provisioning_worker.provisioning_worker_task(bot))
+    # Sales funnel (docs/audit/SCOPE.md «Воронка продаж»): three chains of sales
+    # messages from DB state; only events after its first pass (no retro-sends).
+    _start("sales_funnel", lambda: sales_funnel.sales_funnel_task(bot))
 
 
 async def retry_db_init(bot, background_tasks: list, started: dict, *, retry_interval: float = 30) -> None:

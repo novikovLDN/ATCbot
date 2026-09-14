@@ -1466,6 +1466,58 @@ async def get_eligible_no_subscription_broadcast_users() -> list:
         return [{"telegram_id": row["telegram_id"]} for row in rows]
 
 
+# Sales funnel — the OLD base, for ONE dashboard campaign (SCOPE «Воронка
+# продаж»): only events BEFORE the funnel started (app_settings
+# sales_funnel_started_at, written by its first pass) — everything later is
+# handled by the funnel itself (database/funnel.py, same rules). «No active
+# premium» ignores bypass-only rows (+10 years placeholder) and trials.
+_FUNNEL_CUTOFF_TZ = (
+    "COALESCE((SELECT value::timestamptz FROM app_settings WHERE key = 'sales_funnel_started_at'),"
+    " 'infinity'::timestamptz)"
+)
+_FUNNEL_NO_ACTIVE_PREMIUM = """NOT EXISTS (
+        SELECT 1 FROM subscriptions s
+        WHERE s.telegram_id = u.telegram_id
+          AND s.status = 'active'
+          AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+          AND COALESCE(s.is_bypass_only, FALSE) = FALSE
+          AND COALESCE(s.source, '') NOT IN ('bypass_only', 'trial'))"""
+_FUNNEL_OLD_BASE_SEGMENTS = {
+    "funnel_start_no_trial": f"""
+        SELECT u.telegram_id FROM users u
+        WHERE u.trial_used_at IS NULL
+          AND u.created_at < {_FUNNEL_CUTOFF_TZ}
+          AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.telegram_id = u.telegram_id)
+          AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.telegram_id = u.telegram_id
+                          AND p.status IN ('paid', 'approved'))""",
+    "funnel_trial_ended_no_purchase": f"""
+        SELECT u.telegram_id FROM users u
+        WHERE u.trial_used_at IS NOT NULL
+          AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days') <= (NOW() AT TIME ZONE 'UTC')
+          AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                < ({_FUNNEL_CUTOFF_TZ} AT TIME ZONE 'UTC')
+          AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.telegram_id = u.telegram_id
+                          AND p.status IN ('paid', 'approved') AND p.created_at >= u.trial_used_at)
+          AND {_FUNNEL_NO_ACTIVE_PREMIUM}""",
+    "funnel_paid_ended_no_renewal": f"""
+        SELECT u.telegram_id
+        FROM (
+            SELECT telegram_id, MAX(end_date) AS last_end,
+                   BOOL_OR(action_type IN ('purchase', 'renewal', 'auto_renew')) AS was_paid
+            FROM subscription_history
+            WHERE action_type NOT IN ('trial', 'bypass_only')
+            GROUP BY telegram_id
+        ) h
+        JOIN users u ON u.telegram_id = h.telegram_id
+        WHERE h.was_paid
+          AND h.last_end <= NOW()
+          AND h.last_end < {_FUNNEL_CUTOFF_TZ}
+          AND {_FUNNEL_NO_ACTIVE_PREMIUM}
+          AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.telegram_id = u.telegram_id
+                          AND p.status IN ('paid', 'approved') AND p.created_at > h.last_end)""",
+}
+
+
 async def get_users_by_segment(segment: str) -> list:
     """Получатели рассылки по сегменту — БЕЗ недоступных пользователей.
 
@@ -1675,6 +1727,9 @@ async def _segment_user_ids(segment: str) -> list:
                          AND s2.expires_at > (NOW() AT TIME ZONE 'UTC')
                    )"""
             )
+            return [row["telegram_id"] for row in rows]
+        elif segment in _FUNNEL_OLD_BASE_SEGMENTS:
+            rows = await conn.fetch(_FUNNEL_OLD_BASE_SEGMENTS[segment])
             return [row["telegram_id"] for row in rows]
         elif segment in ("paid_expired_30d", "paid_lapsed_any"):
             # Реактивационные сегменты по subscription_history:
@@ -3578,10 +3633,11 @@ async def create_user_discount(telegram_id: int, discount_percent: int, expires_
         discount_percent: Процент скидки (10, 15, 25, и т.д.)
         expires_at: Дата истечения скидки (None для бессрочной)
         created_by: Telegram ID администратора, создавшего скидку
-        keep_max: кнопки, которые жмёт пользователь (−15 %, скидки из рассылок):
-            действующая БОЛЬШАЯ скидка не перезаписывается (HOW_IT_WORKS P2).
-            Истёкшая или меньшая — заменяется. Админ из дашборда — без флага
-            (ставит ровно то, что выбрал).
+        keep_max: кнопки, которые жмёт пользователь (−15 %, скидки из рассылок),
+            и воронка продаж: действующая БОЛЬШАЯ скидка не перезаписывается
+            (HOW_IT_WORKS P2), РАВНАЯ — не продлевается (повторное нажатие не
+            продлевает срок, SCOPE «Воронка продаж»). Истёкшая или меньшая —
+            заменяется. Админ из дашборда — без флага (ставит ровно то, что выбрал).
 
     Returns:
         True если успешно (в т.ч. когда осталась бо́льшая скидка), False в случае ошибки
@@ -3597,7 +3653,7 @@ async def create_user_discount(telegram_id: int, discount_percent: int, expires_
                    ON CONFLICT (telegram_id)
                    DO UPDATE SET discount_percent = $2, expires_at = $3, created_by = $4, created_at = CURRENT_TIMESTAMP
                    WHERE NOT $5
-                      OR user_discounts.discount_percent <= EXCLUDED.discount_percent
+                      OR user_discounts.discount_percent < EXCLUDED.discount_percent
                       OR (user_discounts.expires_at IS NOT NULL AND user_discounts.expires_at <= $6)""",
                 telegram_id, discount_percent, _to_db_utc(expires_at) if expires_at else None, created_by,
                 keep_max, _to_db_utc(datetime.now(timezone.utc)),
