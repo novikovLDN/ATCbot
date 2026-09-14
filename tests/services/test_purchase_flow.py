@@ -145,6 +145,44 @@ async def test_provision_new_basic_creates_both_entities(monkeypatch):
     assert out["subscription_type"] == "basic"
 
 
+# ── Hotfix (c4c4bdf3): an ADOPTED bypass entity is not 'fresh' ─────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovered,fresh", [(True, False), (False, True)])
+async def test_provision_adopted_bypass_is_not_fresh(monkeypatch, recovered, fresh):
+    """An adopted (recovered) bypass entity keeps its OLD trafficLimitBytes.
+    Marking it fresh made confirmation skip the top-up: an expired user with
+    an empty bypass cache paid via webhook and got 0 of 10 GB (combo: 0 of
+    75 GB). Only a real POST-create carries the final limit."""
+    from app.services import purchase_flow, remnawave_premium, remnawave_bypass
+
+    _fake_db(monkeypatch)
+    premium_result = remnawave_premium.PremiumCreateResult(
+        ok=True, panel_uuid="prem-uuid",
+        forced_uuid_accepted=False, subscription_url="https://rmnw/sub/prem",
+        status=201, error=None, recovered=False, short_uuid="prem_s",
+    )
+    bypass_result = remnawave_bypass.BypassCreateResult(
+        ok=True, panel_uuid="byp-uuid",
+        subscription_url="https://rmnw/sub/byp", short_uuid="byp_s",
+        status=200 if recovered else 201, error=None, recovered=recovered,
+    )
+    with patch.object(purchase_flow, "config", _cfg()), \
+         patch.object(purchase_flow.remnawave_premium, "create_premium_user_entity",
+                      AsyncMock(return_value=premium_result)), \
+         patch.object(purchase_flow.remnawave_bypass, "create_bypass_user_entity",
+                      AsyncMock(return_value=bypass_result)):
+        out = await purchase_flow.provision_subscription(
+            42,
+            tariff="basic",
+            subscription_end=datetime(2030, 1, 1, tzinfo=timezone.utc),
+            period_days=30,
+            is_trial=False,
+        )
+    assert out["bypass_created_fresh"] is fresh
+    assert out["vless_url_plus"] == "https://rmnw/sub/byp"
+
+
 # ── Trial flow ────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

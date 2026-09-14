@@ -262,7 +262,11 @@ async def provision_subscription(
                 pass
         else:
             bypass_sub_url = bresult.subscription_url
-            bypass_created_fresh = True
+            # Only a real POST-create carries the final limit. An ADOPTED
+            # entity (recovered: the DB cache was empty, the panel already had
+            # it) keeps its old trafficLimitBytes — confirmation must top it up
+            # or the paid GB are lost (hotfix of c4c4bdf3).
+            bypass_created_fresh = not bresult.recovered
         if bresult.ok:
             try:
                 await database.set_remnawave_bypass_cache(
