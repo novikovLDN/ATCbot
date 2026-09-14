@@ -32,7 +32,6 @@ const BroadcastCreate = page(() => import("@/pages/BroadcastCreate"), "Broadcast
 const Referrals = page(() => import("@/pages/Referrals"), "Referrals");
 const BypassGifts = page(() => import("@/pages/BypassGifts"), "BypassGifts");
 const BetaApplications = page(() => import("@/pages/BetaApplications"), "BetaApplications");
-const BypassAudit = page(() => import("@/pages/BypassAudit"), "BypassAudit");
 const TrafficAudit = page(() => import("@/pages/TrafficAudit"), "TrafficAudit");
 const PromoCodes = page(() => import("@/pages/PromoCodes"), "PromoCodes");
 const Service = page(() => import("@/pages/Service"), "Service");
@@ -137,7 +136,6 @@ function Gate() {
         <Route path="referrals" element={<Referrals />} />
         <Route path="bgift" element={<BypassGifts />} />
         <Route path="beta-applications" element={<BetaApplications />} />
-        <Route path="bypass-audit" element={<BypassAudit />} />
         <Route path="traffic-audit" element={<TrafficAudit />} />
         <Route path="audit" element={<Audit />} />
         <Route path="promo" element={<PromoCodes />} />

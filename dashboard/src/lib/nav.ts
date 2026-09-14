@@ -60,7 +60,6 @@ export const MORE_GROUPS: { title: string; items: NavItem[] }[] = [
     title: "Контроль",
     items: [
       { to: "/audit", label: "Журнал действий" },
-      { to: "/bypass-audit", label: "Bypass-аудит" },
       { to: "/traffic-audit", label: "Аудит трафика" },
       { to: "/service", label: "Сервис" },
     ],

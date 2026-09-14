@@ -298,8 +298,6 @@ from database.admin import (  # noqa: F401
     has_claimed_referral_share_discount,
     record_referral_share_discount_claim,
     get_hourly_timeseries,
-    get_bypass_overwrite_victims,
-    fix_bypass_overwrite_victim,
     get_daily_summary,
     admin_delete_user_complete,
     generate_gift_code,

@@ -17,17 +17,20 @@ past becomes NOW + 1 day (the panel rejects a past expireAt).
   failed user is counted and never aborts the run.
 
 CLI: `python -m scripts.fix_premium_over_issuance` (dry run by default).
+Dashboard: «Ещё» → «Настройки» → «Премиум больше 5 лет» — the same functions
+run as a background job (app/services/premium_repair_job).
 """
 from __future__ import annotations
 
 import asyncio
 import csv
+import io
 import logging
 import re
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import IO, Any, Awaitable, Callable, Dict, List, Optional
 
 from app.core.structured_logger import log_event
 from database import reconciliation as recon
@@ -125,9 +128,19 @@ async def build_plan() -> Dict[str, Any]:
     return {"now": now, "stats": stats, "rows": rows}
 
 
-async def apply_plan(plan: Dict[str, Any], *, limit: Optional[int] = None) -> Dict[str, Any]:
+async def apply_plan(
+    plan: Dict[str, Any],
+    *,
+    limit: Optional[int] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
+    on_row: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+) -> Dict[str, Any]:
     """PATCH every `would_fix` row (paced, at most `limit`). Each user is
-    re-planned from a fresh DB read right before its PATCH. Rows updated in place."""
+    re-planned from a fresh DB read right before its PATCH. Rows updated in place.
+
+    The dashboard job (app/services/premium_repair_job) passes `should_stop`
+    (pause / stop, checked before every PATCH — the rows not reached stay
+    `would_fix`) and `on_row` (progress, awaited after every attempted row)."""
     interval = 1.0 / RATE_PER_SEC
     next_at: Optional[float] = None
     attempted = 0
@@ -135,6 +148,8 @@ async def apply_plan(plan: Dict[str, Any], *, limit: Optional[int] = None) -> Di
     for row in plan["rows"]:
         if row["action"] != "would_fix":
             continue
+        if should_stop is not None and should_stop():
+            break
         if limit is not None and attempted >= limit:
             row.update(action="skip", reason="limit")
             continue
@@ -142,6 +157,8 @@ async def apply_plan(plan: Dict[str, Any], *, limit: Optional[int] = None) -> Di
             wait = next_at - _clock()
             if wait > 0:
                 await _sleep(wait)
+                if should_stop is not None and should_stop():   # pressed while waiting
+                    break
         next_at = _clock() + interval
         attempted += 1
         try:
@@ -160,6 +177,8 @@ async def apply_plan(plan: Dict[str, Any], *, limit: Optional[int] = None) -> Di
                    log_id=res.get("log_id"), db_shortened=bool(res.get("db_shortened")))
         if res["action"] == "error":
             logger.warning("PREMIUM_REPAIR_USER_ERROR panel_id=%s reason=%s", row["panel_id"], res.get("reason"))
+        if on_row is not None:
+            await on_row(row)
     s = summarize(plan)
     log_event(
         logger, component="premium_repair", operation="bulk_apply",
@@ -215,27 +234,64 @@ def _csv_value(v: Any) -> Any:
     return v
 
 
+def json_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """A report row as JSON-safe values (datetimes → ISO UTC, None kept)."""
+    out: Dict[str, Any] = {}
+    for k in CSV_COLUMNS:
+        v = row.get(k)
+        out[k] = v.astimezone(timezone.utc).isoformat() if isinstance(v, datetime) else v
+    return out
+
+
+def write_csv_to(f: IO[str], rows: List[Dict[str, Any]]) -> None:
+    w = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
+    w.writeheader()
+    for r in rows:
+        w.writerow({k: _csv_value(r.get(k)) for k in CSV_COLUMNS})
+
+
+def csv_text(rows: List[Dict[str, Any]]) -> str:
+    buf = io.StringIO(newline="")
+    write_csv_to(buf, rows)
+    return buf.getvalue()
+
+
 def write_csv(rows: List[Dict[str, Any]], path: str) -> None:
     with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
-        w.writeheader()
-        for r in rows:
-            w.writerow({k: _csv_value(r.get(k)) for k in CSV_COLUMNS})
+        write_csv_to(f, rows)
+
+
+_ALERT_HEAD = {
+    "done": "Починка premium expireAt (дашборд) завершена.",
+    "stopped": "Починка premium expireAt (дашборд) остановлена.",
+    "failed": "Починка premium expireAt (дашборд) прервана ошибкой.",
+}
 
 
 def _alert_text(s: Dict[str, Any]) -> str:
+    """CLI summary by default; the dashboard job adds `outcome` (done / stopped /
+    failed), `remaining` and `last_error`."""
     a = s["actions"]
-    return "\n".join([
-        "Починка premium expireAt (скрипт fix_premium_over_issuance) завершена.",
+    outcome = s.get("outcome")
+    lines = [
+        _ALERT_HEAD.get(outcome, "Починка premium expireAt (скрипт fix_premium_over_issuance) завершена."),
         f"кандидатов (premium > 5 лет): {s['candidates']}",
         f"исправлено: {a.get('fixed', 0)}, ошибок: {a.get('error', 0)}, пропущено: {a.get('skip', 0)}",
         f"на +1 день: {s['plus_one_day']}; дата в БД подрезана: {s['db_shortened']}",
-        "Подробности — CSV-отчёт прогона и журнал «Сверка».",
-    ])
+    ]
+    if s.get("remaining"):
+        lines.append(f"не обработано: {s['remaining']}")
+    if s.get("last_error"):
+        lines.append(f"последняя ошибка: {s['last_error']}")
+    lines.append(
+        "Дашборд → «Ещё» → «Настройки» → «Премиум больше 5 лет»; журнал — «Сверка»." if outcome
+        else "Подробности — CSV-отчёт прогона и журнал «Сверка»."
+    )
+    return "\n".join(lines)
 
 
 async def send_summary_alert(summary: Dict[str, Any], bot=None) -> bool:
-    """One admin alert per --apply run. Never raises."""
+    """One admin alert per --apply run / finished dashboard repair. Never raises."""
     try:
         if bot is None:
             from app.services import purchase_flow

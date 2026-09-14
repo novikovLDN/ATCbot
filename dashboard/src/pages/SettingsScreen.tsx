@@ -6,6 +6,7 @@ import { useBranding } from "@/lib/branding";
 import { usePrefs, type Density, type MotionPref, type Theme } from "@/store/prefs";
 import { Bento, PageHeader, SectionHeader, Surface } from "@/components/ui/Surface";
 import { ListRow, Segmented } from "@/components/ui/controls";
+import { PremiumRepairCard } from "@/components/PremiumRepairCard";
 import { RemnawaveTagsCard } from "@/components/RemnawaveTagsCard";
 import { Settings } from "./Settings";
 
@@ -78,6 +79,13 @@ export function SettingsScreen() {
       />
       <Bento>
         <RemnawaveTagsCard className="sm:col-span-6 xl:col-span-12" />
+      </Bento>
+      <SectionHeader
+        title="Премиум больше 5 лет"
+        sub="Premium-сущности со сроком в панели дальше чем на 5 лет — дата по реальным покупкам."
+      />
+      <Bento>
+        <PremiumRepairCard className="sm:col-span-6 xl:col-span-12" />
       </Bento>
     </>
   );

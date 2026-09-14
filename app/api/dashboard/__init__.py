@@ -29,13 +29,13 @@ from app.api.dashboard.routes import beta_applications as _beta_apps
 from app.api.dashboard.routes import bgift as _bgift
 from app.api.dashboard.routes import branding as _branding
 from app.api.dashboard.routes import broadcasts as _broadcasts
-from app.api.dashboard.routes import bypass_audit as _bypass_audit
 from app.api.dashboard.routes import export as _export
 from app.api.dashboard.routes import incident as _incident
 from app.api.dashboard.routes import links as _links
 from app.api.dashboard.routes import metrics as _metrics
 from app.api.dashboard.routes import panel as _panel
 from app.api.dashboard.routes import payments as _payments
+from app.api.dashboard.routes import premium_repair as _premium_repair
 from app.api.dashboard.routes import pricing as _pricing
 from app.api.dashboard.routes import promo as _promo
 from app.api.dashboard.routes import reconciliation as _reconciliation
@@ -63,7 +63,6 @@ _SUBROUTERS = (
     (_payments.router, "/payments", "payments"),
     (_activations.router, "/activations", "activations"),
     (_settings.router, "/settings", "settings"),
-    (_bypass_audit.router, "/bypass-audit", "bypass-audit"),
     (_traffic_audit.router, "/traffic-audit", "traffic-audit"),
     (_reconciliation.router, "/reconciliation", "reconciliation"),
     (_links.router, "/links", "links"),
@@ -72,6 +71,7 @@ _SUBROUTERS = (
     (_beta_apps.router, "/beta-applications", "beta-applications"),
     (_remnawave.router, "/remnawave", "remnawave"),
     (_remnawave_tags.router, "/remnawave-tags", "remnawave-tags"),
+    (_premium_repair.router, "/premium-repair", "premium-repair"),
     (_metrics.router, "/metrics", "metrics"),
     (_panel.router, "/panel", "panel"),
 )
