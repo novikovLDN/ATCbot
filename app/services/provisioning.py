@@ -280,13 +280,6 @@ async def apply(job: Dict[str, Any]) -> None:
                 # GB part retries or is dead (never let activation_worker re-provision).
                 await _complete_activation_if_pending(job, premium, None, best_effort=True)
             raise
-    if int(job.get("bypass_add_bytes") or 0) > 0:
-        # GB delivered: re-arm the traffic notices below the new amount (the
-        # legacy delivery paths do the same in remnawave_service). Best effort.
-        try:
-            await database.reset_traffic_notification_flags(int(job["telegram_id"]))
-        except Exception as e:  # noqa: BLE001
-            logger.warning("PROVISIONING_TRAFFIC_REARM_FAILED: tg=%s %s", job.get("telegram_id"), type(e).__name__)
     if premium is not None:
         await _complete_activation_if_pending(job, premium, bypass_url)
     await _verify_delivery(job)
