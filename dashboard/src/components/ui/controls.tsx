@@ -1,10 +1,11 @@
 /**
- * Small controls of the v3 system: IconButton, Segmented, ListRow,
- * PillProgress, StatusDot, DeltaPill. Everything is a capsule or a circle.
+ * Small controls of the v5 (iOS) system: IconButton, Segmented (a
+ * UISegmentedControl), ListRow (a table cell in an inset group),
+ * PillProgress, StatusDot, DeltaPill.
  */
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ArrowUpRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 export function IconButton({
@@ -37,25 +38,30 @@ export interface SegmentedOption<T extends string | number> {
   label: string;
 }
 
-/** Capsule tabs scoping a whole screen (period, unit…). */
+/** iOS segmented control scoping a screen or a card (period, unit…).
+    `full` stretches it to the container width (phones). */
 export function Segmented<T extends string | number>({
   value,
   options,
   onChange,
   label,
+  full,
+  className,
 }: {
   value: T;
   options: SegmentedOption<T>[];
   onChange: (v: T) => void;
   label: string;
+  full?: boolean;
+  className?: string;
 }) {
   return (
-    <div className="capsule-nav" role="group" aria-label={label}>
+    <div className={cn("capsule-nav", full && "seg-full", className)} role="group" aria-label={label}>
       {options.map((o) => (
         <button
           key={String(o.value)}
           type="button"
-          className="capsule-tab h-8 px-3 text-[12px]"
+          className="capsule-tab"
           aria-pressed={value === o.value}
           onClick={() => onChange(o.value)}
         >
@@ -80,8 +86,9 @@ export function StatusDot({ tone, label }: { tone: Tone; label?: string }) {
 }
 
 /**
- * A stacked capsule row: leading dot or icon, title + meta, a value, and a
- * circular control on the right (↗ when the row links somewhere).
+ * A table cell: leading dot or icon, title + meta, a value on the right,
+ * and a chevron when the row opens something. Inside a card, rows form
+ * one group with hairline separators (index.css).
  */
 export function ListRow({
   leading,
@@ -106,18 +113,13 @@ export function ListRow({
     <>
       {leading && <span className="grid w-5 flex-none place-items-center">{leading}</span>}
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[14px] font-medium">{title}</span>
-        {meta && <span className="t-mute block truncate text-[12px]">{meta}</span>}
+        <span className="block truncate text-[17px] leading-[22px] lg:text-[15px] lg:leading-5">{title}</span>
+        {meta && <span className="t-mute mt-0.5 block truncate text-[13px] leading-[18px]">{meta}</span>}
       </span>
       {value !== undefined && (
-        <span className="tabular flex-none text-right text-[14px] font-semibold">{value}</span>
+        <span className="tabular flex-none text-right text-[17px] leading-[22px] text-body lg:text-[15px] lg:leading-5">{value}</span>
       )}
-      {trailing ??
-        (to || onClick ? (
-          <span className="icon-btn icon-btn-sm bg-tile-1" aria-hidden="true">
-            <ArrowUpRight className="h-3.5 w-3.5" />
-          </span>
-        ) : null)}
+      {trailing ?? (to || onClick ? <ChevronRight className="row-chevron -mr-1 h-[18px] w-[18px]" strokeWidth={2.2} aria-hidden="true" /> : null)}
     </>
   );
   if (to) {
@@ -137,12 +139,11 @@ export function ListRow({
   return <div className={cn("list-row", className)}>{body}</div>;
 }
 
-/** Progress as a pill with the cream knob at the value. */
+/** A thin progress bar. `knob` is accepted for compatibility (v3) and ignored. */
 export function PillProgress({
   value,
   label,
   valueLabel,
-  knob = true,
 }: {
   /** 0–100; null renders an empty track. */
   value: number | null;
@@ -168,20 +169,19 @@ export function PillProgress({
         aria-label={typeof label === "string" ? label : undefined}
       >
         <div className="pill-fill" style={{ width: `${v}%` }} />
-        {knob && value != null && <div className="pill-knob" style={{ left: `${Math.max(v, 4)}%` }} />}
       </div>
     </div>
   );
 }
 
-function fmtDeltaPct(pct: number): string {
+export function fmtDeltaPct(pct: number): string {
   const abs = Math.abs(pct);
   if (abs < 0.1) return "±0%";
-  return `${pct > 0 ? "+" : "−"}${abs.toFixed(abs < 10 ? 1 : 0)}%`;
+  return `${pct > 0 ? "+" : "−"}${abs.toFixed(abs < 10 ? 1 : 0).replace(".", ",")}%`;
 }
 
-/** Change against the previous period. Direction and goodness are
-    separate: churn going up is bad. Arrow + dot, never colour alone. */
+/** Change against the previous period: an arrow and a coloured label.
+    Direction and goodness are separate — churn going up is bad. */
 export function DeltaPill({
   pct,
   period,
@@ -192,15 +192,19 @@ export function DeltaPill({
   higherIsBetter?: boolean;
 }) {
   if (pct == null || !Number.isFinite(pct)) {
-    return period ? <span className="t-mute text-[12px]">нет базы для сравнения</span> : null;
+    return period ? <span className="t-mute text-[13px]">нет базы для сравнения</span> : null;
   }
   const flat = Math.abs(pct) < 0.1;
   const good = flat ? null : pct > 0 === higherIsBetter;
   return (
-    <span className="inline-flex items-center gap-2 text-[12px]">
-      <span className="capsule-label tabular">
-        <StatusDot tone={good === null ? "idle" : good ? "ok" : "err"} />
-        {!flat && <span aria-hidden="true">{pct > 0 ? "↑" : "↓"}</span>}
+    <span className="inline-flex flex-wrap items-baseline gap-x-1.5 text-[13px] leading-[18px]">
+      <span
+        className={cn(
+          "tabular whitespace-nowrap font-semibold",
+          good === null ? "text-mute" : good ? "text-success" : "text-danger",
+        )}
+      >
+        {!flat && <span aria-hidden="true">{pct > 0 ? "↑ " : "↓ "}</span>}
         {fmtDeltaPct(pct)}
       </span>
       {period && <span className="t-mute">{period}</span>}

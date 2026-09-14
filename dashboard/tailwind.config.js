@@ -1,26 +1,31 @@
 /** @type {import('tailwindcss').Config} */
 
-/* Dashboard v3 tokens. Every colour is a CSS custom property holding an
-   "R G B" triplet (index.css), so:
+/* Dashboard v5 tokens (iOS grouped inset). Every colour is a CSS custom
+   property holding an "R G B" triplet (index.css), so:
      - opacity modifiers keep working (bg-accent/15 → rgb(var(--c-accent) / .15));
-     - the theme (dark / light) swaps by redefining the variables;
-     - the brand accent is set at runtime from GET /api/branding.
-   The legacy names (bg, fg, border, accent, success …) are kept so the
-   screens that were not rebuilt inherit the new palette untouched. */
+     - the theme (system / light / dark) swaps by redefining the variables.
+   The legacy names (tile, wall, bg, fg, border, accent, success …) are kept
+   as aliases so every screen inherits the palette untouched. */
 const c = (name) => `rgb(var(--c-${name}) / <alpha-value>)`;
 
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   darkMode: ["class", '[data-theme="dark"]'],
+  // hover: variants only on devices that really hover — no sticky hover
+  // states after a tap on the iPhone.
+  future: { hoverOnlyWhenSupported: true },
   theme: {
     extend: {
       fontFamily: {
-        // Onest: a geometric grotesque drawn with Cyrillic as a first-class
-        // script (the panel is read in Russian), tabular figures built in.
-        sans: ["Onest", "Inter", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"],
-        mono: ["Geist Mono", "JetBrains Mono", "SFMono-Regular", "Menlo", "monospace"],
+        // The system font: SF Pro on Apple devices, as in native apps.
+        sans: ["-apple-system", "BlinkMacSystemFont", "SF Pro Text", "Helvetica Neue", "Segoe UI", "Roboto", "system-ui", "sans-serif"],
+        mono: ["ui-monospace", "SFMono-Regular", "SF Mono", "Menlo", "Consolas", "monospace"],
       },
       colors: {
+        app: c("bg"),
+        card: c("card"),
+        elev: c("elev"),
+        sep: c("sep"),
         wall: c("wall"),
         shell: c("shell"),
         tile: {

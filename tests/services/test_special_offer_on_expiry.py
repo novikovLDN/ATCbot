@@ -171,7 +171,7 @@ async def _one_fast_expiry_pass(fec):
 
 
 @pytest.mark.parametrize("bypass", [True, False], ids=["to_bypass_only", "fully_expired"])
-@pytest.mark.parametrize("source", ["payment", "auto_renew"])
+@pytest.mark.parametrize("source", ["payment", "auto_renew", "gift"])   # #19: a gift was paid for
 async def test_fast_expiry_grants_the_offer_once_for_a_paid_subscription(world, monkeypatch, bypass, source):
     store = world(source=source, bypass=bypass)
     fec = _patch_fast_expiry(monkeypatch, store)
@@ -187,7 +187,7 @@ async def test_fast_expiry_grants_the_offer_once_for_a_paid_subscription(world, 
     assert store.offer_writes == 1
 
 
-@pytest.mark.parametrize("source", ["trial", "admin", "gift"])
+@pytest.mark.parametrize("source", ["trial", "admin", "game_dice"])
 async def test_fast_expiry_grants_no_offer_for_an_unpaid_subscription(world, monkeypatch, source):
     store = world(source=source, bypass=True)
     fec = _patch_fast_expiry(monkeypatch, store)

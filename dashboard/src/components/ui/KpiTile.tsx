@@ -1,7 +1,7 @@
 /**
- * KpiTile — label capsule, a large numeral, the change against the
- * previous period, an optional sparkline. `size="hero"` is for the one
- * figure a screen is about.
+ * KpiTile — a card with one figure: title, a large numeral, the change
+ * against the previous period and an optional sparkline. `size="hero"`
+ * is for the one figure a screen is about.
  */
 import type { ReactNode } from "react";
 import { Sparkline } from "@/components/Sparkline";
@@ -17,7 +17,7 @@ export interface KpiTileProps {
   deltaPeriod?: string;
   higherIsBetter?: boolean;
   trend?: number[];
-  /** Exact definition — shown behind a "?" next to the label. */
+  /** Exact definition — shown behind an ⓘ next to the title. */
   hint?: ReactNode;
   variant?: SurfaceVariant;
   size?: "hero" | "md" | "sm";
@@ -29,9 +29,9 @@ export interface KpiTileProps {
 }
 
 const VALUE_SIZE = {
-  hero: "text-[44px] leading-[48px] md:text-[56px] md:leading-[60px] track-hero",
-  md: "text-[30px] leading-[36px] track-metric",
-  sm: "text-[22px] leading-[28px] track-metric",
+  hero: "text-[34px] leading-[41px] font-bold md:text-[40px] md:leading-[48px] track-hero",
+  md: "text-[28px] leading-[34px] font-bold track-metric",
+  sm: "text-[22px] leading-[28px] font-semibold track-metric",
 };
 
 export function KpiTile({
@@ -43,53 +43,33 @@ export function KpiTile({
   higherIsBetter = true,
   trend,
   hint,
-  variant = "ink",
   size = "md",
   to,
-  notch,
   loading,
   className,
   footer,
 }: KpiTileProps) {
-  const onLight = variant === "accent" || variant === "fog" || variant === "mist";
   return (
-    <Surface
-      variant={variant}
-      to={to}
-      toLabel={label}
-      notch={notch}
-      label={label}
-      hint={hint}
-      className={cn("flex flex-col", className)}
-    >
+    <Surface to={to} toLabel={label} label={label} hint={hint} className={cn("flex flex-col", className)}>
       <div>
         {loading ? (
-          <div className={cn("skeleton", size === "hero" ? "h-14 w-48" : "h-9 w-28")} />
+          <div className={cn("skeleton", size === "hero" ? "h-10 w-44" : "h-8 w-28")} />
         ) : (
-          <div className={cn("tabular font-semibold", VALUE_SIZE[size])}>{value}</div>
+          <div className={cn("tabular", VALUE_SIZE[size])}>{value}</div>
         )}
-        {sub && <div className="t-mute mt-1.5 text-[13px] leading-5">{sub}</div>}
+        {sub && <div className="t-mute mt-1 text-[13px] leading-[18px]">{sub}</div>}
       </div>
       {(delta !== undefined || (trend && trend.length > 1)) && (
-        <div className="mt-auto flex items-end justify-between gap-4 pt-4">
-          {delta !== undefined ? (
-            <DeltaPill pct={delta} period={deltaPeriod} higherIsBetter={higherIsBetter} />
-          ) : (
-            <span />
-          )}
+        <div className="mt-auto flex items-end justify-between gap-4 pt-3">
+          {delta !== undefined ? <DeltaPill pct={delta} period={deltaPeriod} higherIsBetter={higherIsBetter} /> : <span />}
           {trend && trend.length > 1 && (
-            <div className="w-[45%] max-w-[180px] flex-none">
-              <Sparkline
-                data={trend}
-                height={size === "hero" ? 48 : 32}
-                color={onLight ? "currentColor" : "rgb(var(--c-accent))"}
-                showEndDot={false}
-              />
+            <div className="w-[42%] max-w-[180px] flex-none">
+              <Sparkline data={trend} height={size === "hero" ? 40 : 28} color="rgb(var(--c-accent))" showEndDot={false} />
             </div>
           )}
         </div>
       )}
-      {footer && <div className="mt-4">{footer}</div>}
+      {footer && <div className="mt-3">{footer}</div>}
     </Surface>
   );
 }

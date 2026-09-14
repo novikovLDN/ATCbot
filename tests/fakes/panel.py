@@ -40,6 +40,12 @@ Knobs for adoption edge cases:
                            expireAt (real _ensure_premium_entity_state PATCH failed:
                            result is still ok=True, the entity keeps a stale expireAt)
 
+User tag (Remnawave 3.4.3: one `tag` per user, ^[A-Z0-9_]+$, max 16, nullable):
+  entities carry `tag`; creates and PATCHes apply it. An invalid tag, or any tag
+  while `reject_tags` is True, is NOT applied and the rest of the write still
+  happens — exactly what the real client does (remnawave_api._send_tagged resends
+  the request without the tag after a 400 naming it). `tag_rejections` counts them.
+
 Usage:
     panel = FakePanel().install(monkeypatch)
     panel.seed_bypass(tg, 3 * GIB)
@@ -53,6 +59,7 @@ before install().
 from __future__ import annotations
 
 import itertools
+import re
 import uuid as uuid_lib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -64,6 +71,7 @@ from app.services.remnawave_premium import PremiumCreateResult
 GIB = 1024 ** 3
 MODES = ("ok", "down", "crash_after_patch", "conflict", "ignore_patch")
 BYPASS_EXPIRE = datetime(2099, 1, 1, tzinfo=timezone.utc)
+TAG_RE = re.compile(r"^[A-Z0-9_]+$")   # create-user.command.ts:81-94, update-user.command.ts:41-50
 
 
 def _iso(dt: datetime) -> str:
@@ -92,6 +100,8 @@ class FakePanel:
         self.bypass_invisible_reads = 0
         self.premium_invisible_reads = 0
         self.premium_adopt_patch_ok = True
+        self.reject_tags = False
+        self.tag_rejections = 0
         self.mode = mode
 
     # ── mode ────────────────────────────────────────────────────────────
@@ -125,6 +135,7 @@ class FakePanel:
             "hwidDeviceLimit": None,
             "externalSquadUuid": None,
             "description": None,
+            "tag": None,
             "subscriptionUrl": f"https://panel.test/api/sub/{short}",
             "activeInternalSquads": [],
             "userTraffic": {
@@ -139,16 +150,36 @@ class FakePanel:
         out["expireAt"] = _iso(ent["expireAt"])
         return out
 
-    def seed_premium(self, tg: int, expire_at: datetime) -> Dict[str, Any]:
+    def seed_premium(self, tg: int, expire_at: datetime, *, tag: Optional[str] = None) -> Dict[str, Any]:
         ent = self._new_entity(tg, remnawave_premium.build_premium_username(tg, None), limit=0, expire_at=expire_at)
+        ent["tag"] = tag
         self.premium[tg] = ent
         return self._view(ent)
 
-    def seed_bypass(self, tg: int, limit_bytes: int) -> Dict[str, Any]:
+    def seed_bypass(self, tg: int, limit_bytes: int, *, tag: Optional[str] = None) -> Dict[str, Any]:
         ent = self._new_entity(tg, remnawave_bypass.build_bypass_username(tg), limit=limit_bytes,
                                expire_at=BYPASS_EXPIRE)
+        ent["tag"] = tag
         self.bypass[tg] = ent
         return self._view(ent)
+
+    def premium_tag(self, tg: int) -> Optional[str]:
+        ent = self.premium.get(tg)
+        return ent["tag"] if ent else None
+
+    def bypass_tag(self, tg: int) -> Optional[str]:
+        ent = self.bypass.get(tg)
+        return ent["tag"] if ent else None
+
+    def _accept_tag(self, tag: Any) -> Optional[str]:
+        """The tag the panel stores, or None when it answers 400 for it (the real
+        client then resends without the tag, so the rest of the write happens)."""
+        if tag is None:
+            return None
+        if self.reject_tags or not (isinstance(tag, str) and TAG_RE.match(tag) and len(tag) <= 16):
+            self.tag_rejections += 1
+            return None
+        return tag
 
     def premium_expire(self, tg: int) -> Optional[datetime]:
         ent = self.premium.get(tg)
@@ -183,6 +214,11 @@ class FakePanel:
 
     def _apply(self, ent: Dict[str, Any], fields: Dict[str, Any]) -> None:
         for key, value in fields.items():
+            if key == "tag":
+                accepted = self._accept_tag(value)
+                if accepted is not None:
+                    ent["tag"] = accepted
+                continue
             ent[key] = _parse_dt(value) if key == "expireAt" else value
         self.patch_count += 1
 
@@ -196,6 +232,8 @@ class FakePanel:
         existing_username: Optional[str] = None,
         description: str = "",
         tier: Optional[str] = None,
+        tag: Optional[str] = None,
+        tag_on_adopt: bool = True,
     ) -> PremiumCreateResult:
         self.calls.append(("create_premium_user_entity", telegram_id, expire_at))
         if self.mode == "down":
@@ -207,6 +245,8 @@ class FakePanel:
                 fields = {"expireAt": expire_at, "status": "ACTIVE"}
                 if tier:
                     fields["hwidDeviceLimit"] = cap
+                if tag and tag_on_adopt and ent.get("tag") != tag:
+                    fields["tag"] = tag
                 self._apply(ent, fields)
             return PremiumCreateResult(
                 True, ent["vlessUuid"], False, ent["subscriptionUrl"], 200, None,
@@ -215,6 +255,7 @@ class FakePanel:
         username = remnawave_premium.build_premium_username(telegram_id, existing_username)
         ent = self._new_entity(telegram_id, username, limit=0, expire_at=expire_at)
         ent["hwidDeviceLimit"] = cap
+        ent["tag"] = self._accept_tag(tag)
         if requested_uuid:
             ent["vlessUuid"] = requested_uuid
         self.premium[telegram_id] = ent
@@ -224,7 +265,7 @@ class FakePanel:
         )
 
     async def renew_premium_user(self, telegram_id: int, new_expire_at: datetime,
-                                 tier: Optional[str] = None) -> bool:
+                                 tier: Optional[str] = None, tag: Optional[str] = None) -> bool:
         self.calls.append(("renew_premium_user", telegram_id, new_expire_at))
         if self.mode == "down":
             return False
@@ -234,6 +275,8 @@ class FakePanel:
         fields = {"expireAt": new_expire_at, "status": "ACTIVE"}
         if tier:
             fields["hwidDeviceLimit"] = remnawave_premium._device_limit_for(tier)
+        if tag:
+            fields["tag"] = tag
         self._apply(ent, fields)
         return self.mode != "crash_after_patch"
 
@@ -258,6 +301,7 @@ class FakePanel:
             )
         ent = self._new_entity(telegram_id, remnawave_bypass.build_bypass_username(telegram_id),
                                limit=traffic_limit_bytes, expire_at=BYPASS_EXPIRE)
+        ent["tag"] = self._accept_tag(remnawave_bypass.PANEL_TAG_BYPASS)   # the real create sends it
         self.bypass[telegram_id] = ent
         return BypassCreateResult(
             True, ent["vlessUuid"], ent["subscriptionUrl"], ent["shortUuid"], 201, None,

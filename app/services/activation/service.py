@@ -381,7 +381,7 @@ async def _attempt_activation_no_conn_hold(
     subscription_end = database._from_db_utc(subscription_end_raw)
 
     # Phase 2: HTTP call with NO DB connection held.
-    from app.services.tariffs import normalize_tier
+    from app.services.tariffs import normalize_tier, premium_panel_tag_for_subscription
     tariff = (normalize_tier(subscription_row.get("subscription_type")) or "basic").strip().lower()
     if tariff not in config.VALID_SUBSCRIPTION_TYPES:
         tariff = "basic"
@@ -399,6 +399,8 @@ async def _attempt_activation_no_conn_hold(
             subscription_end=subscription_end,
             period_days=_period_days,
             is_trial=(tariff == "trial"),
+            # the pending row's own tariff (a trial row is source='trial' + basic)
+            panel_tag=premium_panel_tag_for_subscription(subscription_row),
         )
         vless_url = vless_result.get("vless_url")
         vless_url_plus = vless_result.get("vless_url_plus")

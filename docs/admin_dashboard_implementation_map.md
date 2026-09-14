@@ -286,6 +286,9 @@ CSV — отдавать через `StreamingResponse` с `media_type="text/csv
 | `GET /api/incident` | `get_incident_settings()` |
 | `POST /api/incident` body `{enabled, text}` | `set_incident_mode(enabled)` + текст в отдельной функции |
 | `POST /api/special-offer` body `{telegram_id, percent, expires_at}` | `set_special_offer(...)` |
+| `GET /api/remnawave-tags/status` | `remnawave_tags.get_status()` — задача тегов Remnawave: state / total / done / patched / errors (app_settings `remnawave_tag_backfill`; `running` без живой задачи = `interrupted`) |
+| `GET /api/remnawave-tags/preview` | `remnawave_tags.preview()` — dry run: сущности пользователей с активной подпиской по целевому тегу (TRIAL…BYPASS), сколько расходится; ничего не пишет |
+| `POST /api/remnawave-tags/start` · `/resume` · `/pause` · `/stop` | `remnawave_tags.start/resume/pause/stop` — одна фоновая задача, tag-only PATCH ≤ 2/с, только расходящиеся; Idempotency-Key, audit_log `remnawave_tags_backfill_*`, по завершении — алерт админу. Экран: «Ещё» → «Настройки» → «Теги в панели Remnawave» |
 
 ---
 

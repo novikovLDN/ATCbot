@@ -45,6 +45,7 @@ class GiftDB:
         self.sub = None
         self.job = False
         self.lock = asyncio.Lock()
+        self.bypass_notice_marked = False
 
 
 class _Conn:
@@ -75,6 +76,9 @@ class _Conn:
                 self.db.user.update(trial_used_at=None, trial_expires_at=None)
                 return "UPDATE 1"
             return "UPDATE 0"
+        if s.startswith("update subscriptions set trial_notif_bypass_activated_sent = true"):
+            self.db.bypass_notice_marked = True
+            return "UPDATE 1"
         raise AssertionError(f"unexpected SQL: {sql}")
 
     async def fetchrow(self, sql, *args):
@@ -231,6 +235,8 @@ async def test_legacy_gift_claims_the_trial_then_grants_3_days(gdb):
     end = gdb.user["trial_expires_at"].replace(tzinfo=UTC)
     assert t0 + timedelta(days=3) <= end <= utcnow() + timedelta(days=3)
     gdb.alerts.assert_not_awaited()
+    # #6: no «🛡 Обход подключён — 500 МБ в подарок» for the gift (its GB are bought)
+    assert gdb.bypass_notice_marked is True
 
 
 async def test_legacy_gift_is_one_time_even_for_concurrent_purchases(gdb):

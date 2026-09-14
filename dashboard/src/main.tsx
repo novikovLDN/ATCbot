@@ -2,6 +2,9 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
+// Applies the stored theme / density / motion to <html> before the first
+// render (the store module runs apply() on import).
+import "./store/prefs";
 import { captureMagicLink } from "./lib/auth";
 
 // Grab ?login=<jwt> BEFORE the first render so the auth-gate sees it.

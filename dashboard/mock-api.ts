@@ -13,6 +13,25 @@ import type { Plugin } from "vite";
 
 const DAY = 86_400_000;
 
+/** Mutable state of the mocked /remnawave-tags job (Settings). */
+const MOCK_TAGS = {
+  state: "idle" as string,
+  running: false,
+  total: 0,
+  done: 0,
+  patched: 0,
+  errors: 0,
+  per_tag: {} as Record<string, number>,
+  last_error: null as string | null,
+  started_at: null as string | null,
+  updated_at: null as string | null,
+  finished_at: null as string | null,
+  started_by: null as number | null,
+  rate_per_sec: 2,
+  _t0: 0,
+  _done0: 0,
+};
+
 /** Deterministic pseudo-random so the charts don't reshuffle on reload. */
 function seeded(seed: number) {
   let s = seed;
@@ -406,9 +425,12 @@ function mockOverview(days: number) {
       silent: ["cryptobot"],
     },
     delivery: { status: "ok", reasons: [], queue_open: 2, dead: 0, activations_pending: 1 },
-    panel: { checked: true, available: true, online_now: 486, nodes_online: 5, nodes_total: 6 },
+    panel: {
+      checked: true, available: true, online_now: 486, nodes_online: 5, nodes_total: 7,
+      nodes_enabled: 6, nodes_offline: 1, nodes_disabled: 1,
+    },
     alerts: [
-      { level: "critical", key: "nodes_offline", title: "Ноды офлайн: 1", detail: "Пользователи этих нод без VPN.", link: "/panel" },
+      { level: "warning", key: "nodes_offline", title: "Ноды не в сети: 1 из 6", detail: "Клиенты переключатся на другие ноды. Проверьте ноду в панели.", link: "/panel" },
       { level: "warning", key: "health_worker_traffic_monitor", title: "Система: деградация", detail: "«Мониторинг трафика» давно не завершал цикл.", link: "/health" },
       { level: "warning", key: "payment_errors", title: "Ошибки платежей за 24 ч: 3", detail: "amount_mismatch ×2, telegram_payment_rejected ×1", link: "/health" },
       { level: "warning", key: "silent_cryptobot", title: "Провайдер молчит", detail: "CryptoBot: последняя оплата 19 ч назад, обычно не дольше 16 ч.", link: "/health" },
@@ -570,12 +592,12 @@ function mockPanelOverview() {
 }
 
 function mockNodes() {
-  const names = ["NL-Amsterdam-1", "DE-Frankfurt-1", "FI-Helsinki-1", "RU-Moscow-bypass", "KZ-Almaty-1", "US-NY-1"];
+  const names = ["NL-Amsterdam-1", "DE-Frankfurt-1", "FI-Helsinki-1", "RU-Moscow-bypass", "KZ-Almaty-1", "US-NY-1", "TR-Istanbul-old"];
   const nodes = names.map((name, i) => ({
     uuid: `node-${i}`,
     name,
     country: name.slice(0, 2),
-    state: i === 4 ? "offline" : "online",
+    state: i === 4 ? "offline" : i === 6 ? "disabled" : "online",
     status_message: i === 4 ? "Connection timeout" : null,
     users_online: i === 4 ? 0 : 60 + i * 23,
     traffic_used_bytes: (3 + i) * 1024 ** 4,
@@ -587,6 +609,8 @@ function mockNodes() {
     available: true,
     nodes: nodes.sort((a, b) => (a.state === "offline" ? -1 : b.state === "offline" ? 1 : 0)),
     total: nodes.length,
+    disabled: 1,
+    enabled: nodes.length - 1,
     online: 5,
     offline: 1,
     users_online: nodes.reduce((s, n) => s + n.users_online, 0),
@@ -633,7 +657,7 @@ function mockHealth() {
     redis: { configured: true, ok: true, latency_ms: 0.9 },
     webhook: {
       ok: true, latency_ms: 88, url_set: true, url_host: "bot.atlassecure.example",
-      pending_update_count: 0, last_error_at: ago(3 * H), last_error_age_s: 10_800,
+      pending_update_count: 0, pending_prev: 0, pending_growing: false, last_error_at: ago(3 * H), last_error_age_s: 10_800,
       last_error_message: "Read timeout expired", max_connections: 40,
     },
     workers: [
@@ -976,6 +1000,49 @@ export function mockApi(): Plugin {
         if (path === "/panel/nodes") return send(mockNodes());
         if (path === "/panel/bandwidth") return send(mockBandwidth(Number(q.get("days")) || 14));
         if (path === "/pricing/tariffs") return send(mockTariffs());
+        // Shape of GET /payments/recent (routes/payments.py → get_recent_payments_feed).
+        if (path === "/payments/recent") {
+          const limit = Number(q.get("limit")) || 20;
+          const kinds = [
+            { purchase_type: "subscription", tariff: "basic", is_combo: false, price_kopecks: 19_900 },
+            { purchase_type: "subscription", tariff: "plus", is_combo: false, price_kopecks: 34_900 },
+            { purchase_type: "traffic_pack", tariff: "traffic_15gb", is_combo: false, price_kopecks: 14_900 },
+            { purchase_type: "subscription", tariff: "plus", is_combo: true, price_kopecks: 49_900 },
+          ];
+          const providers = ["platega", "wata", "cryptobot", "telegram_payment", "telegram_stars"];
+          const statuses = ["paid", "paid", "paid", "pending", "expired"];
+          return send(
+            Array.from({ length: Math.min(limit, 12) }, (_, i) => ({
+              id: 90_000 - i,
+              purchase_id: `pp_${90_000 - i}`,
+              telegram_id: 100_100 + i * 37,
+              username: i % 3 ? `user${i}` : null,
+              status: statuses[i % statuses.length],
+              payment_provider: providers[i % providers.length],
+              created_at: new Date(Date.now() - (i * 7 + 2) * 60_000).toISOString(),
+              ...kinds[i % kinds.length],
+            })),
+          );
+        }
+        // Shape of GET /stats/hourly (app/api/dashboard/routes/stats.py).
+        if (path === "/stats/hourly") {
+          const d = Number(q.get("days")) || 7;
+          return send({
+            days: d,
+            tz: "Europe/Moscow",
+            series: Array.from({ length: 24 }, (_, hour) => {
+              const w = 0.25 + Math.max(0, Math.sin(((hour - 7) / 24) * Math.PI * 2)) + (hour >= 19 && hour <= 23 ? 0.6 : 0);
+              return {
+                hour,
+                revenue_rubles: Math.round(w * 1_900 * d),
+                payments_count: Math.round(w * 4.5 * d),
+                new_users: Math.round(w * 12 * d),
+                new_subscriptions: Math.round(w * 3 * d),
+                new_paid_subscriptions: Math.round(w * 2 * d),
+              };
+            }),
+          });
+        }
         // Shape of GET /payments/breakdown (app/api/dashboard/routes/payments.py).
         if (path === "/payments/breakdown")
           return send({
@@ -998,6 +1065,82 @@ export function mockApi(): Plugin {
             ],
             by_apple_nominal: [],
           });
+
+        // ── Remnawave tags (Settings) — a tiny state machine ───────
+        if (path.startsWith("/remnawave-tags/")) {
+          const st = MOCK_TAGS;
+          const tick = () => {
+            if (st.state !== "running") return;
+            const elapsed = (Date.now() - st._t0) / 1000;
+            st.done = Math.min(st.total, st._done0 + Math.floor(elapsed * 2));
+            st.patched = Math.max(0, st.done - st.errors);
+            st.per_tag = { BASIC: Math.floor(st.patched * 0.4), PLUS: Math.floor(st.patched * 0.25), BYPASS: Math.ceil(st.patched * 0.35) };
+            st.updated_at = new Date().toISOString();
+            if (st.done >= st.total) {
+              st.state = "done";
+              st.running = false;
+              st.finished_at = st.updated_at;
+            }
+          };
+          const view = () => {
+            tick();
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { _t0, _done0, ...rest } = st;
+            return rest;
+          };
+          const run = () => {
+            st._t0 = Date.now();
+            st._done0 = st.done;
+            st.state = "running";
+            st.running = true;
+          };
+          if (path === "/remnawave-tags/status") return send(view());
+          if (path === "/remnawave-tags/preview")
+            return send({
+              generated_at: new Date().toISOString(),
+              users: 1840,
+              entities: 3612,
+              differ: 3480,
+              already: 132,
+              missing: 68,
+              tags: [
+                { tag: "TRIAL", total: 212, differ: 212 },
+                { tag: "BASIC", total: 820, differ: 790 },
+                { tag: "PLUS", total: 511, differ: 480 },
+                { tag: "COMBO_BASIC", total: 142, differ: 142 },
+                { tag: "COMBO_PLUS", total: 97, differ: 90 },
+                { tag: "BYPASS", total: 1830, differ: 1766 },
+              ],
+              eta_seconds: 1740,
+            });
+          if (path === "/remnawave-tags/start") {
+            if (st.state === "running") return send({ detail: "already_running" }, 409);
+            Object.assign(st, { total: 3480, done: 0, patched: 0, errors: 3, per_tag: {}, last_error: "tg:4242 BASIC: HTTP 500", started_at: new Date().toISOString(), finished_at: null, started_by: 1 });
+            run();
+            return send({ ok: true, status: view() });
+          }
+          if (path === "/remnawave-tags/pause") {
+            if (st.state !== "running") return send({ detail: "not_running" }, 409);
+            tick();
+            st.state = "paused";
+            st.running = false;
+            return send({ ok: true, status: view() });
+          }
+          if (path === "/remnawave-tags/resume") {
+            if (st.state === "running") return send({ detail: "already_running" }, 409);
+            if (st.state !== "paused" && st.state !== "interrupted") return send({ detail: "not_resumable" }, 409);
+            run();
+            return send({ ok: true, status: view() });
+          }
+          if (path === "/remnawave-tags/stop") {
+            if (!["running", "paused", "interrupted"].includes(st.state)) return send({ detail: "not_running" }, 409);
+            tick();
+            st.state = "stopped";
+            st.running = false;
+            st.finished_at = new Date().toISOString();
+            return send({ ok: true, status: view() });
+          }
+        }
 
         // Anything not modelled yet: empty but valid. Lists stay lists so
         // `.map()` on the client doesn't explode.

@@ -198,11 +198,13 @@ async def _ensure_premium_entity_state(
     existing: dict,
     expire_at: datetime,
     device_limit: Optional[int] = None,
+    tag: Optional[str] = None,
 ) -> bool:
     """After adopting a premium entity, PATCH expireAt + status (+ Task 6
     externalSquadUuid when configured) so the panel state reflects the
     caller's intent.  Idempotent — re-applying the same value is a no-op
-    for the panel.
+    for the panel. `tag` (the tariff tag) rides in the same PATCH when the
+    entity's tag differs.
 
     Why this exists: `provision_subscription` falls into the adoption
     path either when the DB has no `remnawave_premium_uuid` (legacy /
@@ -229,6 +231,8 @@ async def _ensure_premium_entity_state(
         update_fields["externalSquadUuid"] = target_squad
     if device_limit:
         update_fields["hwidDeviceLimit"] = int(device_limit)   # devices by tariff (owner 2026-09-14)
+    if tag and (existing or {}).get("tag") != tag:
+        update_fields["tag"] = tag
     # PATCH the adopted entity by its numeric panel id. The vlessUuid is
     # resolvable only through the subscriptions cache columns, and those are
     # exactly what is missing when we adopt (docs/audit/07_e2e.md, E2E-ADOPT):
@@ -277,8 +281,14 @@ async def create_premium_user_entity(
     existing_username: Optional[str] = None,
     description: str = DEFAULT_DESCRIPTION_MARKER,
     tier: Optional[str] = None,
+    tag: Optional[str] = None,
+    tag_on_adopt: bool = True,
 ) -> PremiumCreateResult:
     """Create (or recover) the premium Remnawave entity for a single user.
+
+    `tag`: the tariff tag (tariffs.premium_panel_tag) — set on the new entity
+    and, with `tag_on_adopt`, in the adopt-PATCH of an existing one. Day grants
+    pass tag_on_adopt=False: an adopted entity keeps its tag.
 
     Resolution order:
       0. Preflight — `find_user_by_username(username)`.  If the panel already
@@ -324,8 +334,10 @@ async def create_premium_user_entity(
         telegram_id=telegram_id,
         traffic_limit_strategy="NO_RESET",
         external_squad_uuid=external_squad_uuid,
+        tag=tag,
         raw_response=True,
     )
+    adopt_tag = tag if tag_on_adopt else None
 
     force_uuid = bool(requested_uuid) and getattr(
         config, "REMNAWAVE_PREMIUM_FORCE_UUID", True
@@ -349,7 +361,8 @@ async def create_premium_user_entity(
             )
             result = _result_from_existing(existing, http_status=200)
             if not await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at,
-                                                      device_limit=device_limit if tier else None):
+                                                      device_limit=device_limit if tier else None,
+                                                      tag=adopt_tag):
                 return _adopt_patch_failed(result)
             return result
         logger.warning(
@@ -414,7 +427,7 @@ async def create_premium_user_entity(
                 telegram_id, (existing.get("uuid") or "")[:8],
             )
             result = _result_from_existing(existing, http_status=409)
-            if not await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at):
+            if not await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at, tag=adopt_tag):
                 return _adopt_patch_failed(result)
             return result
         # Username held by an entity that is not ours (or the re-lookup
@@ -461,8 +474,12 @@ async def create_premium_user_entity(
 # ── Lifecycle (called by handlers AFTER cutover — wired up in a follow-up) ─
 
 async def renew_premium_user(telegram_id: int, new_expire_at: datetime,
-                             tier: Optional[str] = None) -> bool:
+                             tier: Optional[str] = None, tag: Optional[str] = None) -> bool:
     """Patch expireAt on the premium entity. Returns True on success.
+
+    `tag` (TRIAL / BASIC / PLUS / COMBO_*): the same PATCH sets the tariff tag;
+    None leaves the panel tag untouched (day grants, callers without a tariff).
+    A panel that rejects the tag still gets the expireAt (remnawave_api._send_tagged).
 
     `tier` (basic / plus / combo_* / legacy biz_*): the same PATCH sets the
     tariff's device limit (owner 2026-09-14: Basic 10, Plus 14) — a renewal or
@@ -497,6 +514,8 @@ async def renew_premium_user(telegram_id: int, new_expire_at: datetime,
             update_fields["externalSquadUuid"] = external_squad_uuid
         if tier:
             update_fields["hwidDeviceLimit"] = _device_limit_for(tier)
+        if tag:
+            update_fields["tag"] = tag
 
         MAX_ATTEMPTS = 3
         for attempt in range(1, MAX_ATTEMPTS + 1):

@@ -13,12 +13,15 @@ Backs the admin dashboard's «Сверка» screen. Three responsibilities:
    • admin grants captured in `subscriptions.admin_grant_days`,
    • the delta between actual and expected expiry.
 
-3. `apply_reconciliation_fix(...)` — inside a single transaction:
-   • recompute the expected expiry from paid days + admin_grant_days,
-   • update `subscriptions.expires_at` to that value (never earlier than
-     activated_at + paid duration, never in the past — we clamp to
-     `activated_at + total_days`),
-   • insert a row into `subscription_reconciliation_log` with proof.
+3. Premium repair — ONE rule (`compute_repair_target`) shared by the
+   dashboard fix (`apply_reconciliation_fix`) and the bulk script
+   (`app/services/premium_repair`, `scripts/fix_premium_over_issuance.py`):
+   • target = max(date by approved payments + admin_grant_days, a sane
+     bot-DB date); none / past → NOW + 1 day; never extends the panel,
+   • PATCH `{id, expireAt}` on the premium entity (found by username),
+   • then, in one short transaction: a `subscription_reconciliation_log`
+     row with proof, and a leaked (> 5y, not bypass-only) DB date is
+     shortened to the same value.
 
 Over-issuance events are written by `record_over_issuance()` — called by
 `app.services.subscription_watchdog` after every write to `expires_at`.
@@ -588,140 +591,189 @@ def _simulate_expiry_from_payments(
 
 
 # ──────────────────────────────────────────────────────────────────────
-#  3. Fix — apply reconciliation
+#  3. Premium repair — ONE rule for the dashboard fix and the bulk script
 # ──────────────────────────────────────────────────────────────────────
+#
+# Owner spec 2026-09-14: the premium entity's expireAt is set from the
+# user's real purchases ("bought a year → a year"); a date in the past
+# becomes NOW + 1 day (the panel rejects a past expireAt, 3.4.3 F7).
+#
+#   by_purchases = _simulate_expiry_from_payments(approved subscription
+#                  payments, admin_grant_days)
+#   by_db        = subscriptions.expires_at, ONLY for a sane bot-accounted
+#                  date: status='active', not bypass-only, < NOW + 5y
+#                  (covers balance payments, gifts, game/promo days that
+#                  are not in `payments`)
+#   target       = max(by_purchases, by_db); None or <= NOW → NOW + 1 day
+#   never extend : target >= the panel's current expireAt → no change.
+#
+# The bypass entity (username = str(telegram_id), +10y by design) and the
+# +10y placeholder of a bypass-only DB row are never touched.
 
-async def apply_reconciliation_fix(
-    telegram_id: int,
-    admin_telegram_id: int,
-    *,
-    reason: str = "manual reconciliation via dashboard",
-) -> Dict[str, Any]:
-    """Recompute expires_at from approved payments + admin_grant_days, apply
-    the correction in a single transaction, and log the before/after.
+_FIVE_YEARS = timedelta(days=365 * 5)
+_ONE_DAY = timedelta(days=1)
 
-    Returns a dict describing the outcome — see below.
-    """
+
+def _is_bypass_only_row(db: Dict[str, Any]) -> bool:
+    return bool(db.get("is_bypass_only")) or (db.get("source") or "") == "bypass_only"
+
+
+def _count_payments(rows) -> Dict[str, Any]:
+    """Approved payment rows (id, tariff, effective_at) → the counted
+    subscription payments the simulation runs over, plus proof/summary."""
+    counted: List[Dict[str, Any]] = []
+    proof_ids: List[int] = []
+    total_paid_days = 0
+    for p in rows:
+        period_days = _extract_period_days_from_tariff((p["tariff"] or "").strip())
+        if not period_days:
+            continue
+        proof_ids.append(p["id"])
+        total_paid_days += period_days
+        eff = _from_db_utc(p["effective_at"]) if p["effective_at"] else None
+        if eff:
+            counted.append({"effective_at": eff, "period_days": period_days})
+    counted.sort(key=lambda x: x["effective_at"])
+    return {
+        "counted": counted,
+        "proof_payment_ids": proof_ids,
+        "total_paid_days": total_paid_days,
+        "approved_payments": len(rows),
+        "counted_payments": len(proof_ids),
+        "last_paid_at": counted[-1]["effective_at"] if counted else None,
+    }
+
+
+async def load_repair_inputs(telegram_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    """Bot-DB state the repair rule needs, for many users in one short
+    connection (no HTTP inside). Users without a subscriptions row still get
+    an entry (their payments count; the DB date does not)."""
+    ids = sorted({int(t) for t in telegram_ids})
+    out: Dict[int, Dict[str, Any]] = {}
+    if not ids:
+        return out
     pool = await get_pool()
     if pool is None:
-        return {"success": False, "error": "db_unavailable"}
+        raise RuntimeError("db_unavailable")
+    async with pool.acquire() as conn:
+        sub_rows = await conn.fetch(
+            """SELECT telegram_id, expires_at, status, source, admin_grant_days,
+                      COALESCE(is_bypass_only, FALSE) AS is_bypass_only
+               FROM subscriptions
+               WHERE telegram_id = ANY($1::bigint[])""",
+            ids,
+        )
+        pay_rows = await conn.fetch(
+            """SELECT telegram_id, id, tariff, COALESCE(paid_at, created_at) AS effective_at
+               FROM payments
+               WHERE telegram_id = ANY($1::bigint[])
+                 AND status = 'approved'
+               ORDER BY telegram_id, COALESCE(paid_at, created_at) ASC, id ASC""",
+            ids,
+        )
+    subs = {r["telegram_id"]: r for r in sub_rows}
+    pays: Dict[int, list] = {}
+    for p in pay_rows:
+        pays.setdefault(p["telegram_id"], []).append(p)
+    for tg in ids:
+        s = subs.get(tg)
+        entry = _count_payments(pays.get(tg, []))
+        entry.update({
+            "db_row": s is not None,
+            "db_expires_at": _from_db_utc(s["expires_at"]) if s and s["expires_at"] else None,
+            "db_status": s["status"] if s else None,
+            "db_source": s["source"] if s else None,
+            "db_is_bypass_only": bool(s["is_bypass_only"]) if s else False,
+            "admin_grant_days": int((s["admin_grant_days"] if s else 0) or 0),
+        })
+        out[tg] = entry
+    return out
 
-    now = datetime.now(timezone.utc)
 
-    # Правим ТОЛЬКО Remnawave premium entity (`tg_{telegram_id}_premium`).
-    # Bot-DB `subscriptions.expires_at` НЕ трогаем: это лежит на совести
-    # штатного grant_access / auto_renewal и может быть частью
-    # bypass-only-дизайна. Наша задача — прикрыть реальный VPN-доступ,
-    # который в 100% случаев управляется expireAt в Remnawave.
-    panel_updated = False
-    is_bypass_only = False
+def compute_repair_target(
+    inputs: Dict[str, Any],
+    *,
+    now: datetime,
+    panel_expires_at: Optional[datetime],
+) -> Dict[str, Any]:
+    """The target rule (see the block comment above). Pure."""
+    by_purchases = _simulate_expiry_from_payments(
+        inputs.get("counted") or [], int(inputs.get("admin_grant_days") or 0),
+    )
+    db_exp = inputs.get("db_expires_at")
+    bypass_only = _is_bypass_only_row({
+        "is_bypass_only": inputs.get("db_is_bypass_only"), "source": inputs.get("db_source"),
+    })
+    by_db = None
+    if (db_exp is not None and inputs.get("db_status") == "active"
+            and not bypass_only and db_exp < now + _FIVE_YEARS):
+        by_db = db_exp
 
+    sources = [d for d in (by_purchases, by_db) if d is not None]
+    target = max(sources) if sources else None
+    target_source = None
+    fallback: Optional[str] = None
+    if target is None:
+        fallback = "no_payments"
+    elif target <= now:
+        fallback = "past_date"
+    else:
+        target_source = "purchases" if by_purchases is not None and target == by_purchases else "db"
+    if fallback:
+        target = now + _ONE_DAY
+        target_source = "fallback"
+    return {
+        "by_purchases": by_purchases,
+        "by_db": by_db,
+        "target": target,
+        "target_source": target_source,
+        "fallback": fallback,
+        # A leaked (non bypass-only) DB date is shortened to the same target.
+        "db_leaked": db_exp is not None and not bypass_only and db_exp > now + _FIVE_YEARS,
+        "would_extend": panel_expires_at is not None and target >= panel_expires_at,
+    }
+
+
+def _iso_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def record_premium_repair(
+    telegram_id: int,
+    *,
+    old_expires_at: datetime,
+    new_expires_at: datetime,
+    shorten_db: bool,
+    reason: str,
+    proof_payment_ids: List[int],
+    total_paid_days: int,
+    admin_grant_days: int,
+    admin_telegram_id: Optional[int],
+    now: datetime,
+) -> Dict[str, Any]:
+    """After a successful panel PATCH: one short transaction that logs the
+    change and (only when asked) shortens a leaked DB date to the same value.
+    The UPDATE re-checks every guard, so it can only shorten, never touches a
+    bypass-only row, and never a row that is already sane."""
+    pool = await get_pool()
+    if pool is None:
+        raise RuntimeError("db_unavailable")
+    db_shortened = False
     async with pool.acquire() as conn:
         async with conn.transaction():
-            sub_row = await conn.fetchrow(
-                """SELECT expires_at, activated_at, admin_grant_days,
-                          COALESCE(is_bypass_only, FALSE) AS is_bypass_only
-                   FROM subscriptions
-                   WHERE telegram_id = $1
-                   FOR UPDATE""",
-                telegram_id,
-            )
-            if not sub_row:
-                # Orphan panel entity (no bot-DB row) — we still want to
-                # neutralise the premium entity in Remnawave. Fabricate a
-                # minimal "empty" state so the calculation clamps to NOW+1d.
-                is_bypass_only = False
-                old_expires_at = None
-                activated_at = None
-                admin_grant_days = 0
-                payment_rows = []
-            else:
-                old_expires_at = _from_db_utc(sub_row["expires_at"])
-                activated_at = (
-                    _from_db_utc(sub_row["activated_at"])
-                    if sub_row["activated_at"] else None
-                )
-                admin_grant_days = sub_row["admin_grant_days"] or 0
-                is_bypass_only = bool(sub_row["is_bypass_only"])
-
-            if sub_row:
-                payment_rows = await conn.fetch(
-                    """SELECT id, tariff, COALESCE(paid_at, created_at) AS effective_at
-                       FROM payments
+            if shorten_db:
+                status = await conn.execute(
+                    """UPDATE subscriptions SET expires_at = $2
                        WHERE telegram_id = $1
-                         AND status = 'approved'
-                       ORDER BY COALESCE(paid_at, created_at) ASC""",
-                    telegram_id,
+                         AND NOT COALESCE(is_bypass_only, FALSE)
+                         AND COALESCE(source, '') <> 'bypass_only'
+                         AND expires_at > $3
+                         AND expires_at > $2""",
+                    telegram_id, _to_db_utc(new_expires_at), _to_db_utc(now + _FIVE_YEARS),
                 )
-
-            proof_ids: List[int] = []
-            counted_for_sim: List[Dict[str, Any]] = []
-            total_paid_days = 0
-            for p in payment_rows:
-                period_days = _extract_period_days_from_tariff((p["tariff"] or "").strip())
-                if not period_days:
-                    continue
-                proof_ids.append(p["id"])
-                total_paid_days += period_days
-                eff = _from_db_utc(p["effective_at"]) if p["effective_at"] else None
-                if eff:
-                    counted_for_sim.append({
-                        "effective_at": eff,
-                        "period_days": period_days,
-                    })
-            counted_for_sim.sort(key=lambda x: x["effective_at"])
-
-            # Симулируем стандартный renewal (см. _simulate_expiry_from_payments).
-            # Ровно то, что делает бот в grant_access: платёж без дырки
-            # продлевает окно, с дыркой — стартует новое от paid_at.
-            # admin_grant_days ложится поверх итога.
-            new_expires_at = _simulate_expiry_from_payments(
-                counted_for_sim, int(admin_grant_days or 0),
-            )
-
-            # Clamp: если счёт даёт None (нет ни платежей, ни грантов),
-            # прошлое ИЛИ длиннее текущего expires_at — ставим NOW + 1 день.
-            # Так Remnawave не сбоит от отрицательного expireAt, и стандартный
-            # expiry-cleanup через ~24ч штатно переведёт юзера в expired.
-            fallback_applied: Optional[str] = None
-            min_new = now + timedelta(days=1)
-            if new_expires_at is None:
-                new_expires_at = min_new
-                fallback_applied = "no_payments"
-            elif new_expires_at < now:
-                new_expires_at = min_new
-                fallback_applied = "past_date"
-            elif old_expires_at and new_expires_at > old_expires_at:
-                new_expires_at = min_new
-                fallback_applied = "would_extend"
-
-            days_removed = (
-                (old_expires_at - new_expires_at).days
-                if old_expires_at else 0
-            )
-
-            # bot-DB expires_at здесь НЕ обновляем — это забота штатного
-            # grant_access / auto_renewal. Наш «Исправить» подрезает
-            # только реальный VPN-доступ через panel (см. блок ниже,
-            # после DB-транзакции).
-
-            log_reason = reason
-            if fallback_applied == "past_date":
-                log_reason += (
-                    " [fallback: past-date computed, clamped to NOW+1d]"
-                )
-            elif fallback_applied == "would_extend":
-                log_reason += (
-                    " [fallback: recomputed date longer than current, "
-                    "clamped to NOW+1d]"
-                )
-            elif fallback_applied == "no_payments":
-                log_reason += (
-                    " [fallback: no counted payments and no admin_grant, "
-                    "clamped to NOW+1d]"
-                )
-            log_reason += " [panel-only fix — bot-DB untouched by design]"
-
+                db_shortened = status.endswith(" 1")
+            if db_shortened:
+                reason += " [bot-DB leaked date shortened to the same value]"
             log_id = await conn.fetchval(
                 """INSERT INTO subscription_reconciliation_log (
                        telegram_id, old_expires_at, new_expires_at,
@@ -732,70 +784,166 @@ async def apply_reconciliation_fix(
                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                    RETURNING id""",
                 telegram_id,
-                _to_db_utc(old_expires_at) if old_expires_at else _to_db_utc(now),
+                _to_db_utc(old_expires_at),
                 _to_db_utc(new_expires_at),
-                (old_expires_at - now).days if old_expires_at else 0,
+                (old_expires_at - now).days,
                 (new_expires_at - now).days,
-                days_removed,
-                log_reason,
-                proof_ids,
+                (old_expires_at - new_expires_at).days,
+                reason[:2000],
+                proof_payment_ids,
                 total_paid_days,
-                int(admin_grant_days or 0),
+                admin_grant_days,
                 admin_telegram_id,
             )
+    return {"log_id": log_id, "db_shortened": db_shortened}
 
-    # ── Remnawave panel: PATCH expireAt on the premium entity ────────
-    # Делается ПОСЛЕ commit'а DB-транзакции: если панель упадёт, у нас
-    # хотя бы bot-DB подрезан (и мы это увидим по panel_updated=False
-    # в возвращаемом словаре и на UI). Ретрай встроен в
-    # remnawave_premium.renew_premium_user (3 попытки с backoff).
-    panel_error: Optional[str] = None
+
+def _expected_premium_usernames(telegram_id: int) -> set:
+    names = {f"tg_{telegram_id}_premium"}
     try:
-        from app.services import remnawave_premium
-        panel_updated = await remnawave_premium.renew_premium_user(
-            telegram_id, new_expires_at,
-        )
-        if not panel_updated:
-            panel_error = "renew_premium_user returned False"
+        from app.services.remnawave_premium import build_premium_username
+        names.add(build_premium_username(telegram_id))
+    except Exception:
+        pass
+    return names
+
+
+async def repair_premium_entity(
+    telegram_id: int,
+    *,
+    panel_id: int,
+    panel_username: str,
+    panel_expires_at: datetime,
+    reason: str,
+    admin_telegram_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Repair ONE premium entity: fresh DB read → rule → PATCH {id, expireAt}
+    by the entity's numeric panel id → log + DB shortening. Never raises.
+
+    Returns the rule fields plus `action` (fixed / skip / error) and `reason`.
+    A failed PATCH leaves panel and DB as they were; a DB write that fails
+    after a good PATCH is an error (the panel is already fixed)."""
+    out: Dict[str, Any] = {"action": "error", "reason": None, "log_id": None, "db_shortened": False}
+    if panel_username not in _expected_premium_usernames(telegram_id):
+        out.update(action="skip", reason="not_a_premium_entity")
+        return out
+    now = datetime.now(timezone.utc)
+    try:
+        inputs = (await load_repair_inputs([telegram_id]))[telegram_id]
     except Exception as e:
-        panel_error = f"{type(e).__name__}: {e}"
-        logger.exception(
-            "RECONCILIATION_PANEL_UPDATE_FAIL user=%s: %s", telegram_id, e,
+        out["reason"] = f"db_read_failed: {type(e).__name__}"
+        return out
+    decision = compute_repair_target(inputs, now=now, panel_expires_at=panel_expires_at)
+    out.update(inputs=inputs, **decision)
+    if decision["would_extend"]:
+        out.update(action="skip", reason="would_extend")
+        return out
+    target = decision["target"]
+
+    try:
+        from app.services import remnawave_api
+        result = await remnawave_api.update_user(int(panel_id), expireAt=_iso_z(target))
+    except Exception as e:
+        out["reason"] = f"panel_patch_failed: {type(e).__name__}"
+        return out
+    if result is None:
+        out["reason"] = "panel_patch_rejected"
+        return out
+
+    log_reason = reason
+    if decision["fallback"]:
+        log_reason += f" [fallback: {decision['fallback']}, set to NOW+1d]"
+    log_reason += f" [target from {decision['target_source']}; premium entity only]"
+    try:
+        rec = await record_premium_repair(
+            telegram_id,
+            old_expires_at=panel_expires_at,
+            new_expires_at=target,
+            shorten_db=decision["db_leaked"],
+            reason=log_reason,
+            proof_payment_ids=inputs["proof_payment_ids"],
+            total_paid_days=inputs["total_paid_days"],
+            admin_grant_days=inputs["admin_grant_days"],
+            admin_telegram_id=admin_telegram_id,
+            now=now,
         )
+    except Exception as e:
+        logger.error("PREMIUM_REPAIR_DB_WRITE_FAILED user=%s after panel PATCH: %s",
+                     telegram_id, type(e).__name__)
+        out["reason"] = f"patched_but_db_write_failed: {type(e).__name__}"
+        return out
+    out.update(action="fixed", reason=None, **rec)
+    return out
 
-    logger.info(
-        "RECONCILIATION_FIX_APPLIED user=%s old=%s new=%s removed_days=%s "
-        "total_paid_days=%s admin_grant_days=%s proof_ids=%s log_id=%s "
-        "panel_updated=%s fallback=%s",
-        telegram_id,
-        old_expires_at.isoformat() if old_expires_at else None,
-        new_expires_at.isoformat(),
-        days_removed,
-        total_paid_days,
-        admin_grant_days,
-        proof_ids,
-        log_id,
-        panel_updated,
-        fallback_applied,
-    )
 
-    # Успех фикса = панель обновилась. Если панель упала — success=False:
-    # реальный VPN-доступ у юзера остаётся с 10-летним expireAt, ничего
-    # мы не «поправили». UI покажет ошибку и админ повторит.
-    return {
-        "success": panel_updated,
-        "log_id": log_id,
-        "old_expires_at": old_expires_at.isoformat() if old_expires_at else None,
-        "new_expires_at": new_expires_at.isoformat(),
-        "days_removed": days_removed,
-        "total_paid_days": total_paid_days,
-        "admin_grant_days_kept": int(admin_grant_days or 0),
-        "proof_payment_ids": proof_ids,
-        "fallback_applied": fallback_applied,
-        "panel_updated": panel_updated,
-        "panel_error": panel_error,
-        "is_bypass_only": is_bypass_only,
+async def apply_reconciliation_fix(
+    telegram_id: int,
+    admin_telegram_id: int,
+    *,
+    reason: str = "manual reconciliation via dashboard",
+) -> Dict[str, Any]:
+    """Dashboard «Сверка» → «Исправить» for one user: the same rule as the
+    bulk script (repair_premium_entity). The premium entity is found in the
+    panel by username (a cached DB uuid can be stale / contaminated).
+
+    Never extends: when the rule's date is not earlier than the panel's
+    current expireAt nothing is written (error="would_extend")."""
+    pool = await get_pool()
+    if pool is None:
+        return {"success": False, "error": "db_unavailable"}
+
+    base: Dict[str, Any] = {
+        "success": False, "log_id": None, "old_expires_at": None, "new_expires_at": None,
+        "days_removed": 0, "total_paid_days": 0, "admin_grant_days_kept": 0,
+        "proof_payment_ids": [], "fallback_applied": None, "panel_updated": False,
+        "panel_error": None, "is_bypass_only": False,
     }
+    entity = None
+    try:
+        from app.services import remnawave_api
+        from app.services.remnawave_premium import build_premium_username
+        entity = await remnawave_api.find_user_by_username(build_premium_username(telegram_id))
+    except Exception as e:
+        logger.warning("RECONCILIATION_PANEL_LOOKUP_FAIL user=%s: %s", telegram_id, type(e).__name__)
+    panel_expires_at = _parse_remnawave_dt((entity or {}).get("expireAt"))
+    if not entity or entity.get("id") is None or panel_expires_at is None:
+        base.update(error="panel_entity_unavailable",
+                    panel_error="premium entity not found in the panel (or panel unavailable)")
+        return base
+
+    res = await repair_premium_entity(
+        telegram_id,
+        panel_id=int(entity["id"]),
+        panel_username=(entity.get("username") or "").strip(),
+        panel_expires_at=panel_expires_at,
+        reason=reason,
+        admin_telegram_id=admin_telegram_id,
+    )
+    inputs = res.get("inputs") or {}
+    target = res.get("target")
+    fixed = res["action"] == "fixed"
+    base.update({
+        "success": fixed,
+        "log_id": res.get("log_id"),
+        "old_expires_at": panel_expires_at.isoformat(),
+        "new_expires_at": target.isoformat() if target else None,
+        "days_removed": (panel_expires_at - target).days if target and fixed else 0,
+        "total_paid_days": inputs.get("total_paid_days", 0),
+        "admin_grant_days_kept": inputs.get("admin_grant_days", 0),
+        "proof_payment_ids": inputs.get("proof_payment_ids", []),
+        "fallback_applied": "would_extend" if res.get("reason") == "would_extend" else res.get("fallback"),
+        "panel_updated": fixed or (res.get("reason") or "").startswith("patched_but"),
+        "panel_error": None if fixed else res.get("reason"),
+        "is_bypass_only": bool(inputs.get("db_is_bypass_only")),
+    })
+    if res.get("reason") == "would_extend":
+        base["error"] = "would_extend"
+    logger.info(
+        "RECONCILIATION_FIX user=%s action=%s reason=%s fallback=%s target_source=%s log_id=%s",
+        telegram_id, res["action"], res.get("reason"), res.get("fallback"),
+        res.get("target_source"), res.get("log_id"),
+    )
+    return base
 
 
 # ──────────────────────────────────────────────────────────────────────

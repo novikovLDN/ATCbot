@@ -229,8 +229,17 @@ def overall_status(s: dict[str, Any]) -> dict[str, Any]:
             add("degraded", "webhook_backlog", f"В очереди Telegram {pending} необработанных обновлений.")
         age = wh.get("last_error_age_s")
         if age is not None and age <= WEBHOOK_ERROR_RECENT_S:
-            add("degraded", "webhook_error",
-                f"Telegram не смог доставить обновление {age // 60} мин назад: {wh.get('last_error_message') or 'без текста'}.")
+            text = (f"Telegram не смог доставить обновление {age // 60} мин назад: "
+                    f"{wh.get('last_error_message') or 'без текста'}.")
+            # A delivery error is actionable only while updates pile up:
+            # Telegram retries on its own, and a one-off timeout with an
+            # empty queue has already healed. "Piling up" = the queue grew
+            # since the previous check, or it is already a backlog.
+            growing = bool(wh.get("pending_growing")) and pending > 0
+            if growing or pending >= WEBHOOK_PENDING_WARN:
+                add("degraded", "webhook_error", text)
+            else:
+                add("info", "webhook_error", f"{text} Очередь не растёт — Telegram дошлёт сам.")
     elif wh.get("error") != "bot_not_ready":
         add("degraded", "webhook_check", f"Не удалось спросить Telegram о вебхуке ({wh.get('error')}).")
 
@@ -267,11 +276,29 @@ def overall_status(s: dict[str, Any]) -> dict[str, Any]:
     return {"status": status, "reasons": reasons}
 
 
+# Previous Telegram queue size, in process memory (one bot process).
+_last_webhook_pending: Optional[int] = None
+
+
+def _track_webhook_queue(webhook: dict[str, Any]) -> None:
+    """Annotate the webhook check with the previous queue size and whether
+    it grew since then. The first check after start has no baseline."""
+    global _last_webhook_pending
+    if not webhook.get("ok"):
+        return
+    pending = int(webhook.get("pending_update_count") or 0)
+    prev = _last_webhook_pending
+    webhook["pending_prev"] = prev
+    webhook["pending_growing"] = prev is not None and pending > prev
+    _last_webhook_pending = pending
+
+
 async def collect() -> dict[str, Any]:
     db = await check_db()  # connection released inside before any HTTP call
     remnawave, redis, webhook = await asyncio.gather(
         check_remnawave(), check_redis(), check_webhook(),
     )
+    _track_webhook_queue(webhook)
     workers = runtime_health.snapshot()
     for w in workers:
         w["label"] = WORKER_LABELS.get(w["name"], w["name"])

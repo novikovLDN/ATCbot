@@ -193,6 +193,43 @@ class TestOverallStatus:
         assert o["status"] == "degraded"
         assert {r["key"] for r in o["reasons"]} == {"webhook_backlog", "webhook_error"}
 
+    def test_recent_webhook_error_with_idle_queue_is_info_only(self):
+        # Telegram retries by itself: an error with an empty, non-growing
+        # queue has healed and must not paint the home screen yellow.
+        o = sh.overall_status(self.base(webhook={"ok": True, "url_set": True, "pending_update_count": 0,
+                                                 "pending_growing": False,
+                                                 "last_error_age_s": 60, "last_error_message": "timeout"}))
+        assert o["status"] == "ok"
+        assert [(r["key"], r["level"]) for r in o["reasons"]] == [("webhook_error", "info")]
+
+    def test_recent_webhook_error_with_growing_queue_is_degraded(self):
+        o = sh.overall_status(self.base(webhook={"ok": True, "url_set": True, "pending_update_count": 7,
+                                                 "pending_growing": True,
+                                                 "last_error_age_s": 60, "last_error_message": "timeout"}))
+        assert o["status"] == "degraded"
+        assert o["reasons"][0]["key"] == "webhook_error"
+
+    def test_old_webhook_error_is_ignored(self):
+        o = sh.overall_status(self.base(webhook={"ok": True, "url_set": True, "pending_update_count": 9,
+                                                 "pending_growing": True,
+                                                 "last_error_age_s": 3 * 3600, "last_error_message": "timeout"}))
+        assert o == {"status": "ok", "reasons": []}
+
+    def test_track_webhook_queue_growth(self, monkeypatch):
+        monkeypatch.setattr(sh, "_last_webhook_pending", None)
+        first = {"ok": True, "pending_update_count": 3}
+        sh._track_webhook_queue(first)
+        assert first["pending_growing"] is False and first["pending_prev"] is None
+        grew = {"ok": True, "pending_update_count": 5}
+        sh._track_webhook_queue(grew)
+        assert grew["pending_growing"] is True and grew["pending_prev"] == 3
+        shrank = {"ok": True, "pending_update_count": 1}
+        sh._track_webhook_queue(shrank)
+        assert shrank["pending_growing"] is False
+        failed = {"ok": False, "error": "timeout"}
+        sh._track_webhook_queue(failed)
+        assert "pending_growing" not in failed and sh._last_webhook_pending == 1
+
     def test_webhook_unset_is_down(self):
         o = sh.overall_status(self.base(webhook={"ok": True, "url_set": False, "pending_update_count": 0}))
         assert o["status"] == "down"
@@ -291,3 +328,28 @@ def test_overview_survives_a_failing_section(monkeypatch):
     assert body["payments"]["status"] == "unknown"
     assert body["subscribers"]["pipeline"] is None
     assert body["health"]["status"] == "ok"
+
+
+def test_overview_panel_counts_disabled_nodes_apart(monkeypatch):
+    """v5 overview: disabled nodes are reported apart and are not an alert;
+    one offline node of several is a warning, not critical."""
+    totals = rev.empty_totals()
+    monkeypatch.setattr(rev, "totals", AsyncMock(return_value=totals))
+    monkeypatch.setattr(rev, "payers", AsyncMock(return_value={"payers": 0, "new": 0, "returning": 0}))
+    monkeypatch.setattr(rev, "series", AsyncMock(return_value=[]))
+    monkeypatch.setattr(mx, "new_users", AsyncMock(return_value=0))
+    monkeypatch.setattr(mx, "active_subscriptions", AsyncMock(return_value=mx.summarize_active([])))
+    monkeypatch.setattr(mx, "renewals", AsyncMock(return_value=mx.summarize_renewals({}, 3)))
+    monkeypatch.setattr(mx, "renewal_pipeline", AsyncMock(return_value=None))
+    monkeypatch.setattr(mx, "payments_health", AsyncMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(mx, "delivery_health", AsyncMock(return_value={
+        "queue": {"available": False}, "activations": {"pending": 0}, "errors_24h": {}, "dead_jobs": []}))
+    monkeypatch.setattr(sh, "collect", AsyncMock(return_value={"overall": {"status": "ok", "reasons": []}}))
+    nodes = {"available": True, "nodes": [], "total": 7, "enabled": 6, "disabled": 1, "online": 5, "offline": 1}
+    monkeypatch.setattr(routes, "_panel_quick",
+                        AsyncMock(return_value=({"available": True, "online_now": 10}, nodes)))
+    body = _client().get("/metrics/overview?days=7").json()
+    p = body["panel"]
+    assert (p["nodes_total"], p["nodes_enabled"], p["nodes_disabled"], p["nodes_offline"], p["nodes_online"]) == (7, 6, 1, 1, 5)
+    node_alerts = [a for a in body["alerts"] if a["key"] == "nodes_offline"]
+    assert [a["level"] for a in node_alerts] == ["warning"]

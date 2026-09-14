@@ -53,8 +53,9 @@ export function InstallHint() {
   if (!show) return null;
 
   return (
-    <div className="fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-50 md:hidden animate-slide-up">
-      <div className="card flex items-start gap-3 p-3 pr-2 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.6)]">
+    // Above the tab bar (Shell): overlapping it swallowed taps on the tabs.
+    <div className="fixed inset-x-3 bottom-[calc(var(--tabbar-h)+env(safe-area-inset-bottom)+0.5rem)] z-40 md:hidden animate-slide-up lg:bottom-4">
+      <div className="card flex items-start gap-3 p-3 pr-2 shadow-[0_8px_30px_-6px_rgb(0_0_0/0.25)]">
         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
           <Smartphone className="h-4 w-4" />
         </div>

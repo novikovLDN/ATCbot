@@ -8,10 +8,10 @@
  * Each block reads its own endpoint, so one failing query never blanks the
  * screen. Replaces the old Operations screen. Every "?" reads lib/metricDefs.
  */
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
+import { ChevronDown, RefreshCw } from "lucide-react";
 import {
   PROVIDER_LABEL,
   STAGE_LABEL,
@@ -160,11 +160,13 @@ function WorkerRow({ w }: { w: WorkerState }) {
 }
 
 function SystemSection({ h }: { h: SystemHealth }) {
+  const [showOk, setShowOk] = useState(false);
   const pool = h.db.pool;
   const poolPct = pool && pool.max > 0 ? (pool.in_use / pool.max) * 100 : null;
   const wh = h.webhook;
   const workers = [...h.workers].sort((a, b) => (WORKER_ORDER[a.state] ?? 9) - (WORKER_ORDER[b.state] ?? 9));
-  const workersOk = h.workers.filter((w) => w.state === "ok").length;
+  const problemWorkers = workers.filter((w) => w.state !== "ok");
+  const okWorkers = workers.filter((w) => w.state === "ok");
   const alertsPartial = h.alerts.covered_s < h.alerts.window_s;
   const flagsOff = [
     h.flags.background_workers === false ? "Фоновые воркеры выключены флагом: очереди и напоминания не идут." : null,
@@ -176,27 +178,80 @@ function SystemSection({ h }: { h: SystemHealth }) {
     : h.db.ok
       ? { tone: "ok", text: "Работает" }
       : { tone: "err", text: "Ошибка" };
+  // A recent delivery error matters only while the queue grows (system_health.overall_status).
+  const whRecentError = wh.last_error_age_s != null && wh.last_error_age_s <= 15 * 60;
+  const whTone: Tone = !wh.ok ? "err" : whRecentError && wh.pending_growing ? "warn" : "ok";
+  const rwState: { tone: Tone; text: string; meta?: string } = !h.remnawave.enabled
+    ? { tone: "idle", text: "Выключена", meta: "интеграция с панелью не настроена" }
+    : h.remnawave.ok
+      ? { tone: "ok", text: "Отвечает", meta: `за ${fmtMs(h.remnawave.latency_ms)}` }
+      : { tone: "err", text: "Не отвечает", meta: h.remnawave.error ?? undefined };
+  const rdState: { tone: Tone; text: string; meta?: string } = !h.redis.configured
+    ? { tone: "idle", text: "Не настроен", meta: "бот работает без него" }
+    : h.redis.ok
+      ? { tone: "ok", text: "Отвечает", meta: `за ${fmtMs(h.redis.latency_ms)}` }
+      : { tone: "err", text: "Не отвечает", meta: h.redis.error ?? undefined };
 
   return (
     <Bento>
       <Surface className="sm:col-span-6 xl:col-span-6" label="Общий статус" hint={DEF.system_status}>
         <StateLine tone={statusTone(h.overall.status)} text={statusLabel(h.overall.status)} />
-        <div className="mt-4">
+        <div className="mt-3">
           <ReasonList reasons={h.overall.reasons} empty="Все компоненты в норме" />
         </div>
       </Surface>
 
-      <Surface className="sm:col-span-3 xl:col-span-3" variant="raised" label="База данных" hint={DEF.db_pool}>
-        <StateLine
-          tone={dbState.tone}
-          text={dbState.text}
-          meta={h.db.error ? h.db.error : `SELECT 1 за ${fmtMs(h.db.latency_ms)}`}
-        />
-        <div className="mt-4">
+      <Surface className="sm:col-span-6 xl:col-span-6" label="Компоненты">
+        <ul>
+          <li>
+            <ListRow
+              leading={<StatusDot tone={dbState.tone} />}
+              title={
+                <span className="inline-flex items-center gap-1.5">
+                  База данных <Hint text={DEF.db_pool} label="Как считается: пул БД" />
+                </span>
+              }
+              meta={h.db.error ? h.db.error : `SELECT 1 за ${fmtMs(h.db.latency_ms)}`}
+              value={dbState.text}
+            />
+          </li>
+          <li>
+            <ListRow
+              leading={<StatusDot tone={whTone} />}
+              title={
+                <span className="inline-flex items-center gap-1.5">
+                  Telegram webhook <Hint text={DEF.webhook} label="Как считается: вебхук" />
+                </span>
+              }
+              meta={
+                wh.error
+                  ? wh.error
+                  : wh.url_set === false
+                    ? "URL вебхука не задан"
+                    : [
+                        wh.pending_update_count == null ? null : `очередь ${fmtNum(wh.pending_update_count)}${wh.pending_growing ? ", растёт" : ""}`,
+                        wh.url_host,
+                        wh.latency_ms != null ? `ответ за ${fmtMs(wh.latency_ms)}` : null,
+                        wh.max_connections != null ? `соединений до ${fmtNum(wh.max_connections)}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")
+              }
+              value={wh.ok ? "Доставляет" : "Проблема"}
+            />
+          </li>
+          <li>
+            <ListRow leading={<StatusDot tone={rwState.tone} />} title="Панель Remnawave" meta={rwState.meta} value={rwState.text} />
+          </li>
+          <li>
+            <ListRow leading={<StatusDot tone={rdState.tone} />} title="Redis" meta={rdState.meta} value={rdState.text} />
+          </li>
+        </ul>
+        <div className="mt-3">
           {pool ? (
             <>
-              <PillProgress value={poolPct} label="Пул занят" valueLabel={`${fmtNum(pool.in_use)} / ${fmtNum(pool.max)}`} />
-              <p className="t-mute mt-2 text-[12px] leading-4">
+              <PillProgress value={poolPct} label="Пул соединений занят" valueLabel={`${fmtNum(pool.in_use)} / ${fmtNum(pool.max)}`} />
+              <p className="t-mute mt-1.5 text-[12px] leading-4">
                 Открыто {fmtNum(pool.size)}, простаивает {fmtNum(pool.idle)}, минимум {fmtNum(pool.min)}
               </p>
             </>
@@ -204,52 +259,85 @@ function SystemSection({ h }: { h: SystemHealth }) {
             <p className="t-mute text-[13px]">Пул: нет данных</p>
           )}
         </div>
-      </Surface>
-
-      <Surface className="sm:col-span-3 xl:col-span-3" variant="steel" label="Telegram webhook" hint={DEF.webhook}>
-        <StateLine
-          tone={wh.ok ? "ok" : "err"}
-          text={wh.ok ? "Доставляет" : "Проблема"}
-          meta={
-            wh.error
-              ? wh.error
-              : wh.url_set === false
-                ? "URL вебхука не задан"
-                : [wh.url_host, wh.latency_ms != null ? `ответ за ${fmtMs(wh.latency_ms)}` : null].filter(Boolean).join(", ") || undefined
-          }
-        />
-        <div className="mt-4 flex flex-col gap-1.5">
-          <Fact label="Очередь обновлений" value={wh.pending_update_count == null ? "—" : fmtNum(wh.pending_update_count)} />
-          {wh.max_connections != null && <Fact label="Соединений максимум" value={fmtNum(wh.max_connections)} />}
-        </div>
         <p className="t-mute mt-3 break-words text-[12px] leading-4">
           {wh.last_error_message
-            ? `Последняя ошибка ${wh.last_error_at ? fmtRelative(wh.last_error_at) : wh.last_error_age_s != null ? `${fmtDuration(wh.last_error_age_s)} назад` : ""}: ${wh.last_error_message}`
+            ? `Последняя ошибка вебхука ${wh.last_error_at ? fmtRelative(wh.last_error_at) : wh.last_error_age_s != null ? `${fmtDuration(wh.last_error_age_s)} назад` : ""}: ${wh.last_error_message}${whRecentError && !wh.pending_growing ? ". Очередь не растёт — Telegram дошлёт сам." : ""}`
             : "Ошибок доставки Telegram не сообщает"}
         </p>
       </Surface>
 
-      <Surface className="sm:col-span-3 xl:col-span-3" variant="fog" label="Панель Remnawave">
-        {!h.remnawave.enabled ? (
-          <StateLine tone="idle" text="Выключена" meta="Интеграция с панелью не настроена" />
-        ) : h.remnawave.ok ? (
-          <StateLine tone="ok" text="Отвечает" meta={`за ${fmtMs(h.remnawave.latency_ms)}`} />
+      <Surface
+        className="sm:col-span-6 xl:col-span-12"
+        label="Воркеры"
+        hint={DEF.workers}
+        aside={
+          h.workers.length ? (
+            <span className="t-mute text-[13px]">
+              работают {fmtNum(okWorkers.length)} из {fmtNum(h.workers.length)}
+            </span>
+          ) : undefined
+        }
+      >
+        {flagsOff.length > 0 && (
+          <ul className="mb-3 flex flex-col gap-1.5">
+            {flagsOff.map((t) => (
+              <li key={t} className="flex items-start gap-2.5 text-[13px] leading-5">
+                <span className="mt-1.5 flex-none">
+                  <StatusDot tone="warn" />
+                </span>
+                <span className="min-w-0">{t}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {workers.length === 0 ? (
+          <EmptyState title="Воркеры не отчитывались" hint="Список появится после первого цикла любого фонового воркера." />
         ) : (
-          <StateLine tone="err" text="Не отвечает" meta={h.remnawave.error ?? undefined} />
+          <>
+            {problemWorkers.length > 0 && (
+              <ul className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+                {problemWorkers.map((w) => (
+                  <li key={w.name}>
+                    <WorkerRow w={w} />
+                  </li>
+                ))}
+              </ul>
+            )}
+            {okWorkers.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  className={cn("list-row w-full text-left", problemWorkers.length > 0 && "mt-2")}
+                  aria-expanded={showOk}
+                  onClick={() => setShowOk((v) => !v)}
+                >
+                  <span className="grid w-5 flex-none place-items-center">
+                    <StatusDot tone="ok" />
+                  </span>
+                  <span className="min-w-0 flex-1 text-[17px] leading-[22px] lg:text-[15px]">Работают нормально</span>
+                  <span className="tabular text-[17px] text-body lg:text-[15px]">{fmtNum(okWorkers.length)}</span>
+                  <ChevronDown
+                    className={cn("row-chevron -mr-1 h-[18px] w-[18px] transition-transform", showOk && "rotate-180")}
+                    strokeWidth={2.2}
+                    aria-hidden="true"
+                  />
+                </button>
+                {showOk && (
+                  <ul className="mt-2 grid grid-cols-1 gap-2 xl:grid-cols-2">
+                    {okWorkers.map((w) => (
+                      <li key={w.name}>
+                        <WorkerRow w={w} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </>
         )}
       </Surface>
 
-      <Surface className="sm:col-span-3 xl:col-span-3" variant="mist" label="Redis">
-        {!h.redis.configured ? (
-          <StateLine tone="idle" text="Не настроен" meta="Бот работает без него" />
-        ) : h.redis.ok ? (
-          <StateLine tone="ok" text="Отвечает" meta={`за ${fmtMs(h.redis.latency_ms)}`} />
-        ) : (
-          <StateLine tone="err" text="Не отвечает" meta={h.redis.error ?? undefined} />
-        )}
-      </Surface>
-
-      <Surface className="sm:col-span-3 xl:col-span-3" variant="raised" label="Версия и аптайм">
+      <Surface className="sm:col-span-3 xl:col-span-6" label="Версия и аптайм">
         <div className={BIG}>{fmtDuration(h.uptime.uptime_s)}</div>
         <p className="t-mute text-[13px] leading-5">
           работает{h.uptime.started_at ? ` с ${fmtDate(h.uptime.started_at)}` : ""}
@@ -273,7 +361,7 @@ function SystemSection({ h }: { h: SystemHealth }) {
         </div>
       </Surface>
 
-      <Surface className="sm:col-span-3 xl:col-span-3" variant="steel" label="Алерты админу за 24 ч" hint={DEF.alerts_24h}>
+      <Surface className="sm:col-span-3 xl:col-span-6" label="Алерты админу за 24 ч" hint={DEF.alerts_24h}>
         <div className={BIG}>{fmtNum(h.alerts.total)}</div>
         <p className="t-mute text-[13px] leading-5">
           {alertsPartial ? `с момента запуска ${fmtDuration(h.alerts.covered_s)} назад` : "сообщений отправлено"}
@@ -284,43 +372,6 @@ function SystemSection({ h }: { h: SystemHealth }) {
               <Fact key={k} label={alertCategory(k)} value={fmtNum(n)} />
             ))}
           </div>
-        )}
-      </Surface>
-
-      <Surface
-        className="sm:col-span-6 xl:col-span-12"
-        label="Воркеры"
-        hint={DEF.workers}
-        aside={
-          h.workers.length ? (
-            <span className="t-mute text-[12px]">
-              работают {fmtNum(workersOk)} из {fmtNum(h.workers.length)}
-            </span>
-          ) : undefined
-        }
-      >
-        {flagsOff.length > 0 && (
-          <ul className="mb-3 flex flex-col gap-1.5">
-            {flagsOff.map((t) => (
-              <li key={t} className="flex items-start gap-2.5 text-[13px] leading-5">
-                <span className="mt-1.5 flex-none">
-                  <StatusDot tone="warn" />
-                </span>
-                <span className="min-w-0">{t}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-        {workers.length === 0 ? (
-          <EmptyState title="Воркеры не отчитывались" hint="Список появится после первого цикла любого фонового воркера." />
-        ) : (
-          <ul className="grid grid-cols-1 gap-2 xl:grid-cols-2">
-            {workers.map((w) => (
-              <li key={w.name}>
-                <WorkerRow w={w} />
-              </li>
-            ))}
-          </ul>
         )}
       </Surface>
     </Bento>

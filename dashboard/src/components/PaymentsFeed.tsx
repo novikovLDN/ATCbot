@@ -6,7 +6,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { endpoints } from "@/lib/api";
 import { PRODUCT_LABEL, PROVIDER_LABEL } from "@/lib/metricsApi";
-import { fmtRelative, fmtRub } from "@/lib/format";
+import { fmtKop, fmtRelative, fmtRub } from "@/lib/format";
 import { Surface } from "@/components/ui/Surface";
 import { ListRow, StatusDot, type Tone } from "@/components/ui/controls";
 import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
@@ -27,6 +27,15 @@ function productOf(r: Record<string, unknown>): string {
     return PRODUCT_LABEL[key] ?? tariff;
   }
   return PRODUCT_LABEL[type === "traffic_pack" ? "traffic_pack" : `shop_${type}`] ?? PRODUCT_LABEL[type] ?? type;
+}
+
+/** GET /payments/recent returns pending_purchases.price_kopecks (database/admin.py
+    get_recent_payments_feed). The feed used to read a non-existent
+    `price_rubles` and showed «0 ₽» for every purchase. */
+export function priceOf(r: Record<string, unknown>): string {
+  if (r.price_kopecks != null) return fmtKop(Number(r.price_kopecks));
+  if (r.price_rubles != null) return fmtRub(Number(r.price_rubles));
+  return "—";
 }
 
 export function PaymentsFeed({ className }: { className?: string }) {
@@ -55,7 +64,7 @@ export function PaymentsFeed({ className }: { className?: string }) {
                   leading={<StatusDot tone={st.tone} label={st.label} />}
                   title={`${productOf(r)}, ${who}`}
                   meta={[st.label, provider, r.created_at ? fmtRelative(String(r.created_at)) : null].filter(Boolean).join(", ")}
-                  value={fmtRub(Number(r.price_rubles ?? 0))}
+                  value={priceOf(r)}
                   to={r.telegram_id ? `/users?tg=${String(r.telegram_id)}` : undefined}
                 />
               </li>

@@ -642,6 +642,24 @@ SELECT count(*) FROM subscriptions WHERE activation_status='pending';
 12. **`TRIAL_BYPASS_GB`** — исправлено: `.env.example` теперь задаёт `TRIAL_BYPASS_MB`, код читает её же (`config.py:558`).
 13. **Нет `railway.json`/`railway.toml`:** healthcheck-путь и автодеплой настроены в UI Railway, кодом это не проверить. Владельцу: в UI сервиса убедиться, что healthcheck = `/health`, и включён «Wait for CI» или автодеплой выключен (`docs/ci.md`).
 14. **Сырой ключ `errors.database_unavailable`** (нет ни в `ru`, ни в `en`) показывается в 11 местах игры (`app/handlers/game.py`), только при недоступной БД. Было и на `main`.
+15. **Premium с `expireAt` на 10 лет вперёд (2026-09-14).** У части строк bypass-колонки `subscriptions.remnawave_id` / `remnawave_uuid` указывали на premium-сущность (`tg_{id}_premium`), и старые bypass-хелперы (`remnawave_service.extend_remnawave_for_bypass`, `disable_remnawave_user`, `renew_remnawave_user`) продлевали premium на +10 лет или отключали его. Исправлено: bypass ищется по `username == str(telegram_id)`, кеш перезаписывается сам (лог `REMNAWAVE_BYPASS_CACHE_HEALED`), а `remnawave_api` не отправляет premium `expireAt` дальше 5 лет (лог `REMNAWAVE_PREMIUM_FAR_EXPIRE_BLOCKED` и алерт `vpn_api`). Уже выданные +10 лет код **не откатывает**: это решение владельца.
+    Сколько строк заражено (только чтение):
+    ```sql
+    SELECT count(*) FILTER (WHERE remnawave_id = remnawave_premium_id)       AS id_is_premium,
+           count(*) FILTER (WHERE remnawave_uuid = remnawave_premium_uuid)   AS uuid_is_premium,
+           count(*) FILTER (WHERE remnawave_id = remnawave_premium_id
+                               OR remnawave_uuid = remnawave_premium_uuid)   AS contaminated_rows
+      FROM subscriptions;
+    ```
+    Список для разбора (сравнить с панелью: у premium `expireAt` > сейчас + 5 лет):
+    ```sql
+    SELECT telegram_id, status, is_bypass_only, expires_at,
+           remnawave_id, remnawave_premium_id, remnawave_uuid, remnawave_premium_uuid
+      FROM subscriptions
+     WHERE remnawave_id = remnawave_premium_id OR remnawave_uuid = remnawave_premium_uuid
+     ORDER BY telegram_id;
+    ```
+    Строки лечатся сами при следующем обращении бота к bypass (экран подключения, трафик, продление, истечение). Число должно убывать; `NULL` в колонках под условие не попадает.
 
 ---
 
@@ -659,3 +677,49 @@ SELECT count(*) FROM subscriptions WHERE activation_status='pending';
 | Куда приходят алерты бота | `ADMIN_TELEGRAM_ID` = `<ID>` | — |
 
 **Решение о каждом шаге раздела 4 принимает `<ИМЯ>`.** Фиксировать время включения и значение env в `<журнал/чат>`.
+
+---
+
+## 9. Починка premium `expireAt` > 5 лет (`scripts/fix_premium_over_issuance.py`)
+
+У части premium-сущностей `tg_<id>_premium` в панели `expireAt` стоит примерно на 10 лет вперёд (старые баги:
+повтор покупки только трафика, продление от +10 лет bypass-only строки, legacy-хелперы bypass, патчившие premium).
+Скрипт ставит дату по реальным покупкам. Код: `app/services/premium_repair.py`, правило —
+`database/reconciliation.py::compute_repair_target`. Кнопка «Исправить» в дашборде («Сверка») работает по тому же правилу.
+
+**Правило даты:**
+- по покупкам: одобренные платежи подписки (`basic_*`, `plus_*`, `combo_*`; не трафик, не подарки, не пополнения)
+  прогоняются как продления в боте. Платёж при действующем окне продлевает его, после перерыва открывает новое от
+  даты оплаты, срок считается календарными месяцами. Сверху добавляются `admin_grant_days`. Купил на год — ровно год;
+- по БД: `subscriptions.expires_at`, только если строка `status='active'`, не bypass-only и дата меньше
+  «сейчас + 5 лет». Это покрывает оплату с баланса, подарки и дни из игры и промо, которых нет в `payments`;
+- итог: большая из двух. Если даты нет или она в прошлом, ставится «сейчас + 1 день», потому что прошлую дату
+  панель не примет (400);
+- дата никогда не позже текущей в панели: иначе пользователь пропускается (`would_extend`).
+
+**Запуск на Railway:**
+1. Проверка без изменений: `railway run python -m scripts.fix_premium_over_issuance`. Выводит сводку:
+   сколько сущностей в панели, сколько premium старше 5 лет, откуда взята дата, причины фолбэка, сколько уйдёт
+   на +1 день, сколько дат в БД будет подрезано. Пишет CSV `premium_over_issuance_<UTC>.csv` в текущую
+   папку (путь можно задать через `--out`). `railway run` выполняет команду локально с переменными сервиса, поэтому
+   нужен доступный снаружи `DATABASE_URL`. Если база доступна только по внутреннему адресу (`*.railway.internal`),
+   запускать через `railway ssh` внутри контейнера.
+2. Проверить CSV: колонки `target`, `target_source` (`purchases` / `db` / `fallback`), `fallback`
+   (`no_payments` / `past_date`), `db_leaked`, `action`. Выборочно сверить пару пользователей с «Сверкой» в дашборде.
+3. Применить: `railway run python -m scripts.fix_premium_over_issuance --apply --yes`. Для пробы можно
+   сначала передать `--limit 20`. Без `--yes` скрипт спросит подтверждение, а без терминала откажется (код 3).
+   Не больше 2 PATCH в секунду: 300 пользователей обработаются примерно за 2,5 минуты. CSV перезаписывается
+   с итогами (`fixed` / `error` / `skip`), админу приходит один алерт со сводкой.
+
+**Что меняется:** у premium-сущности только `expireAt`: PATCH `{id, expireAt}` по числовому id из стрима, username
+проверяется. Строка `subscriptions` с утёкшей датой (больше 5 лет, не bypass-only) после успешного PATCH укорачивается
+до той же даты. Каждое изменение пишется в `subscription_reconciliation_log`, в журнал «Сверки»: даты до и после,
+id платежей-доказательств, причина `bulk script fix_premium_over_issuance`. Перед каждым PATCH БД пользователя
+перечитывается, так что продление, оплаченное после проверки, учитывается.
+
+**Что не трогается никогда:** bypass-сущность (`username` = telegram id): её +10 лет и ГБ. Заглушка +10 лет у
+bypass-only строки в БД. Статус, лимит, сквады, тег и устройства premium. Платежи и балансы. Если PATCH не прошёл,
+панель и БД остаются как были: ошибка считается и прогон идёт дальше.
+
+Повторный запуск безопасен: исправленные сущности больше не старше 5 лет и в выборку не попадают.
+Коды выхода: `0` — ок, `1` — есть ошибки по пользователям, `2` — БД или панель недоступны, `3` — не подтверждено.

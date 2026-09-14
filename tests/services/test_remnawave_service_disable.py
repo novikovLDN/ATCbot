@@ -38,7 +38,9 @@ def wired(monkeypatch):
     update = AsyncMock(return_value={"id": 5})
 
     def _install(entity):
-        monkeypatch.setattr(remnawave_service.remnawave_api, "get_user", AsyncMock(return_value=entity))
+        # resolved by username (get_bypass_entity_safe), not the cached uuid
+        monkeypatch.setattr(remnawave_service.remnawave_api, "get_bypass_entity_safe",
+                            AsyncMock(return_value=entity))
         monkeypatch.setattr(remnawave_service.remnawave_api, "update_user", update)
         return update
 
@@ -49,7 +51,7 @@ def wired(monkeypatch):
 async def test_disable_uses_nested_used_traffic_and_disables_exhausted(wired):
     update = wired(_entity(limit=10 * GIB, used=10 * GIB))
     await remnawave_service.disable_remnawave_user(42)
-    update.assert_awaited_once_with(PANEL_UUID, status="DISABLED")
+    update.assert_awaited_once_with(5, status="DISABLED")
 
 
 @pytest.mark.asyncio

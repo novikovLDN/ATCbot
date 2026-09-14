@@ -107,6 +107,35 @@ async def test_insufficient_balance_renews_nothing(e2e):
     assert e2e.admin_texts(mark) == []
 
 
+async def test_insufficient_balance_tells_once_and_a_top_up_renews_in_the_window(e2e):
+    """#5: not enough on the balance → silence, and the attempt burnt the period:
+    a top-up an hour later renewed nothing and the subscription ended."""
+    from app.i18n import get_text
+    u = new_user()
+    await seed_due(e2e, u, "basic", 30, balance_rub=150)
+    before = await flows.snapshot(e2e, u.id)
+    price = renewal_price("basic", 30)
+    mark = e2e.tg.mark()
+
+    await run_once(e2e)
+
+    texts = e2e.user_texts(u.id, mark)
+    head = get_text("ru", "autorenew.insufficient_balance", amount="", balance="", missing="", deadline="")
+    assert len(texts) == 1 and texts[0].split("\n", 1)[0] == head.split("\n", 1)[0], texts
+    assert f"{price - 150:g} ₽" in texts[0] and "МСК" in texts[0]
+    assert (await e2e.sub(u.id))["last_auto_renewal_at"] is None, "the period's attempt is given back"
+
+    m2 = e2e.tg.mark()
+    await run_once(e2e)                                    # still short: told once per period
+    assert e2e.user_texts(u.id, m2) == []
+    assert (await e2e.sub(u.id))["expires_at"] == before.expires_at
+
+    await e2e.pool.execute("UPDATE users SET balance = $2 WHERE telegram_id=$1", u.id, int(500 * 100))
+    await run_once(e2e)                                    # after the top-up, within the window
+    await flows.check_purchase(e2e, u.id, before, "basic", 30)
+    assert await e2e.balance(u.id) == pytest.approx(500 - price)
+
+
 async def test_already_expired_subscription_is_not_auto_renewed(e2e):
     u = new_user()
     await seed_due(e2e, u, "basic", 30, hours_left=-1)

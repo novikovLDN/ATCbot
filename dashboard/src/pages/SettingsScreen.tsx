@@ -4,13 +4,15 @@
  */
 import { useBranding } from "@/lib/branding";
 import { usePrefs, type Density, type MotionPref, type Theme } from "@/store/prefs";
-import { Bento, PageHeader, Surface } from "@/components/ui/Surface";
+import { Bento, PageHeader, SectionHeader, Surface } from "@/components/ui/Surface";
 import { ListRow, Segmented } from "@/components/ui/controls";
+import { RemnawaveTagsCard } from "@/components/RemnawaveTagsCard";
 import { Settings } from "./Settings";
 
 const THEMES = [
-  { value: "dark" as Theme, label: "Тёмные плитки" },
-  { value: "light" as Theme, label: "Светлые плитки" },
+  { value: "system" as Theme, label: "Как в системе" },
+  { value: "light" as Theme, label: "Светлая" },
+  { value: "dark" as Theme, label: "Тёмная" },
 ];
 const DENSITIES = [
   { value: "compact" as Density, label: "Плотно" },
@@ -31,17 +33,17 @@ export function SettingsScreen() {
       <Bento>
         <Surface className="sm:col-span-6 xl:col-span-7" label="Оформление">
           <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-[14px]">Тема</span>
-              <Segmented label="Тема" value={p.theme} options={THEMES} onChange={p.setTheme} />
+            <div className="flex flex-col gap-2">
+              <span className="t-mute text-[13px]">Тема</span>
+              <Segmented label="Тема" value={p.theme} options={THEMES} onChange={p.setTheme} full />
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-[14px]">Плотность таблиц</span>
-              <Segmented label="Плотность таблиц" value={p.density} options={DENSITIES} onChange={p.setDensity} />
+            <div className="flex flex-col gap-2">
+              <span className="t-mute text-[13px]">Плотность таблиц</span>
+              <Segmented label="Плотность таблиц" value={p.density} options={DENSITIES} onChange={p.setDensity} full />
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-[14px]">Анимация</span>
-              <Segmented label="Анимация" value={p.motion} options={MOTIONS} onChange={p.setMotion} />
+            <div className="flex flex-col gap-2">
+              <span className="t-mute text-[13px]">Анимация</span>
+              <Segmented label="Анимация" value={p.motion} options={MOTIONS} onChange={p.setMotion} full />
             </div>
           </div>
         </Surface>
@@ -52,8 +54,8 @@ export function SettingsScreen() {
             </li>
             <li>
               <ListRow
-                title="Акцентный цвет"
-                meta="BRAND_PRIMARY_COLOR"
+                title="Цвет бренда"
+                meta="BRAND_PRIMARY_COLOR · кнопки панели — системный синий"
                 value={brand.primary_color}
                 trailing={<span className="h-8 w-8 flex-none rounded-full" style={{ background: brand.primary_color }} aria-hidden="true" />}
               />
@@ -70,6 +72,13 @@ export function SettingsScreen() {
         </Surface>
       </Bento>
       <Settings />
+      <SectionHeader
+        title="Теги в панели Remnawave"
+        sub="Тег тарифа у каждого пользователя с активной подпиской — фильтр «tag» в панели."
+      />
+      <Bento>
+        <RemnawaveTagsCard className="sm:col-span-6 xl:col-span-12" />
+      </Bento>
     </>
   );
 }

@@ -154,12 +154,50 @@ async def test_notice_without_a_window_has_no_offer(monkeypatch):
     assert [b.callback_data for row in kb.inline_keyboard for b in row] == ["menu_buy_vpn"]
 
 
+def _bypass(monkeypatch, info):
+    from app.services.subscriptions import live_state
+    read = AsyncMock(return_value=info)
+    monkeypatch.setattr(live_state, "read_bypass", read)
+    return read
+
+
 async def test_bypass_notice_keeps_its_buttons_and_gets_the_offer(monkeypatch):
+    from app.services.subscriptions.live_state import BypassInfo
     monkeypatch.setattr(database, "get_special_offer_info", AsyncMock(return_value={"expires_at": OFFER_END}))
+    _bypass(monkeypatch, BypassInfo("present", used=3 * 1024 ** 3, limit=10 * 1024 ** 3, status="ACTIVE"))
     text, kb = await so.expired_notice("ru", TG, has_bypass=True)
-    assert text.startswith(get_text("ru", "traffic.subscription_expired_bypass_active"))
+    assert text.startswith(get_text("ru", "subscription.expired_gb_left", remaining="7 ГБ"))
     assert [b.callback_data for row in kb.inline_keyboard for b in row] == [
         "special_offer_buy", "buy_traffic", "menu_buy_vpn"]
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+@pytest.mark.parametrize("info,key,gb_named", [
+    (("present", 2 * 1024 ** 3, 10 * 1024 ** 3, "ACTIVE"), "subscription.expired_gb_left", "8"),
+    (("present", 10 * 1024 ** 3, 10 * 1024 ** 3, "ACTIVE"), "subscription.expired_gb_spent", None),
+    (("present", 12 * 1024 ** 3, 10 * 1024 ** 3, "LIMITED"), "subscription.expired_gb_spent", None),
+    (("absent", 0, 0, ""), "subscription.expired_gb_spent", None),
+    (("unavailable", 0, 0, ""), "subscription.expired_gb_works", None),
+], ids=["gb_left", "gb_zero", "limited", "no_entity", "panel_down"])
+async def test_ended_premium_notice_follows_the_gb_actually_left(monkeypatch, lang, info, key, gb_named):
+    """#2: «обход работает» only when the panel shows GB left; at 0 GB — VPN off."""
+    from app.services.subscriptions.live_state import BypassInfo
+    state, used, limit, status = info
+    monkeypatch.setattr(database, "get_special_offer_info", AsyncMock(return_value=None))
+    _bypass(monkeypatch, BypassInfo(state, used=used, limit=limit, status=status))
+    text, kb = await so.expired_notice(lang, TG, has_bypass=True)
+    head = get_text(lang, key, remaining="X").split("\n", 1)[0]
+    assert text.startswith(head), text
+    if gb_named:
+        assert f"{gb_named} {get_text(lang, 'common.unit_gb')}" in text
+    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+    if key == "subscription.expired_gb_spent":
+        assert callbacks == ["menu_buy_vpn", "buy_traffic"]
+        assert "продолжает работать" not in text and "keeps working" not in text
+    else:
+        assert callbacks == ["buy_traffic", "menu_buy_vpn"]
+    if lang == "en":
+        assert not (set(text.lower()) & CYRILLIC)
 
 
 # ── expiry paths: after the commit, once ───────────────────────────────
@@ -182,28 +220,80 @@ async def test_fast_expiry_tells_a_paid_user_once(world, monkeypatch, bypass):
     assert store.offer_writes == 1
 
 
-@pytest.mark.parametrize("source", ["admin", "gift"])
-async def test_fast_expiry_unpaid_without_bypass_gets_no_paid_notice(world, monkeypatch, source):
-    store = world(source=source, bypass=False)
+async def test_gifted_subscription_end_is_told_with_the_offer(world, monkeypatch):
+    """#19: a gifted subscription ended in silence and without −15 %."""
+    store = world(source="gift", bypass=False)
     fec = _patch_fast_expiry(monkeypatch, store)
-    notify = AsyncMock()
+    notify = AsyncMock(return_value=True)
     monkeypatch.setattr(so, "notify_expired", notify)
     await _one_fast_expiry_pass(fec)
-    notify.assert_not_awaited()
+    notify.assert_awaited_once()
+    assert notify.await_args.kwargs["has_bypass"] is False
+    assert store.offer_writes == 1
 
 
-@pytest.mark.parametrize("bypass, source, expected", [
-    (True, "payment", True), (False, "payment", False), (False, "admin", None),
+@pytest.mark.parametrize("bypass, source, days, expected", [
+    (True, "payment", None, (True, False)),
+    (False, "payment", None, (False, False)),
+    (False, "gift", None, (False, False)),          # #19
+    (False, "admin", None, (False, False)),         # legacy admin row on a paid period
+    (False, "admin", 7, (False, True)),             # #18: free days ended
+    (True, "admin", 7, (True, False)),              # GB left decide the text
 ])
-async def test_check_and_disable_notifies_after_its_commit(world, monkeypatch, bypass, source, expected):
-    world(source=source, bypass=bypass)
+async def test_check_and_disable_notifies_after_its_commit(world, monkeypatch, bypass, source, days, expected):
+    store = world(source=source, bypass=bypass)
+    store.row["admin_grant_days"] = days
     schedule = MagicMock(return_value=True)
     monkeypatch.setattr(so, "schedule_expired_notice", schedule)
     assert await database.check_and_disable_expired_subscription(TG) is True
-    if expected is None:
-        schedule.assert_not_called()
-    else:
-        schedule.assert_called_once_with(TG, has_bypass=expected)
+    has_bypass, free = expected
+    schedule.assert_called_once_with(TG, has_bypass=has_bypass, free=free)
+
+
+async def test_fast_expiry_tells_free_days_that_they_ended(world, monkeypatch):
+    """#18: admin / promo-link days without a subscription ended in silence."""
+    store = world(source="admin", bypass=False)
+    store.row["admin_grant_days"] = 14
+    fec = _patch_fast_expiry(monkeypatch, store)
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(so, "notify_expired", notify)
+    await _one_fast_expiry_pass(fec)
+    notify.assert_awaited_once()
+    assert notify.await_args.kwargs == {"has_bypass": False, "free": True}
+    assert store.offer_writes == 0, "no −15 % for free days"
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_free_access_ended_text_uses_the_price_table(monkeypatch, lang):
+    import config
+    from app.services import pricing
+    monkeypatch.setattr(database, "get_special_offer_info", AsyncMock(return_value=None))
+    monkeypatch.setattr(pricing, "get_effective_price", AsyncMock(return_value=None))
+    text, kb = await so.expired_notice(lang, TG, has_bypass=False, free=True)
+    price = config.TARIFFS["basic"][30]["price"]
+    assert text == get_text(lang, "subscription.expired_free", price=price)
+    assert f"{price} ₽" in text
+    assert [b.callback_data for row in kb.inline_keyboard for b in row] == ["menu_buy_vpn"]
+
+
+async def test_from_price_follows_the_dashboard_price(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import pricing
+    monkeypatch.setattr(pricing, "get_effective_price", AsyncMock(return_value=SimpleNamespace(effective=149)))
+    assert await so.from_price_rub() == 149
+
+
+async def test_check_and_disable_ends_a_trial_with_the_trial_notice_only(world, monkeypatch):
+    """#1: a trial that ends on the screen-open path gets «пробный завершён», not
+    «основная подписка закончилась −15 %»."""
+    world(source="trial", bypass=True)
+    schedule = MagicMock(return_value=True)
+    trial_notice = MagicMock(return_value=True)
+    monkeypatch.setattr(so, "schedule_expired_notice", schedule)
+    monkeypatch.setattr(so, "schedule_trial_expired_notice", trial_notice)
+    assert await database.check_and_disable_expired_subscription(TG) is True
+    schedule.assert_not_called()
+    trial_notice.assert_called_once_with(TG)
 
 
 def test_grant_skips_a_window_the_reminder_already_opened():

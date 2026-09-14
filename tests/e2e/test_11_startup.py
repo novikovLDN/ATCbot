@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parents[2]
 EXPECTED_WORKERS = {
     "reminders", "trial_notifications", "farm_notifications", "traffic_monitor",
     "fast_expiry_cleanup", "auto_renewal", "activation_worker", "wata_reconciler",
-    "wata_key_warmup", "provisioning_worker",
+    "wata_key_warmup", "provisioning_worker", "sales_funnel",
 }
 
 
@@ -76,6 +76,7 @@ def stub_workers(monkeypatch):
         (main.auto_renewal, "auto_renewal_task", "auto_renewal"),
         (main.activation_worker, "activation_worker_task", "activation_worker"),
         (main.provisioning_worker, "provisioning_worker_task", "provisioning_worker"),
+        (main.sales_funnel, "sales_funnel_task", "sales_funnel"),
     ]
     for mod, attr, name in targets:
         monkeypatch.setattr(mod, attr, stub(name))

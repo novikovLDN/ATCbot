@@ -170,7 +170,7 @@ class FakePanel:
             status=201, error=None, recovered=False, short_uuid="ps", panel_id=9000,
         )
 
-    async def renew_premium_user(self, telegram_id, new_expire_at, tier=None):
+    async def renew_premium_user(self, telegram_id, new_expire_at, tier=None, tag=None):
         self.calls.append(("renew_premium", telegram_id))
         if telegram_id not in self.premium_expire:
             return False

@@ -26,6 +26,7 @@ from typing import Any, Optional
 
 import config
 from app.services import remnawave_api
+from app.services.tariffs import PANEL_TAG_BYPASS
 
 logger = logging.getLogger(__name__)
 
@@ -162,8 +163,11 @@ async def _backfill_telegram_id(user: dict, telegram_id: int) -> None:
         target = user.get("uuid") or user.get("vlessUuid")
     if not target:
         return
+    fields: dict = {"telegramId": int(telegram_id)}
+    if user.get("tag") != PANEL_TAG_BYPASS:
+        fields["tag"] = PANEL_TAG_BYPASS   # rides in the PATCH that happens anyway
     try:
-        await remnawave_api.update_user(target, telegramId=int(telegram_id))
+        await remnawave_api.update_user(target, **fields)
         logger.info(
             "REMNAWAVE_BYPASS_TELEGRAM_ID_BACKFILLED: tg=%s target=%s",
             telegram_id, str(target)[:16],
@@ -248,6 +252,7 @@ async def create_bypass_user_entity(
         description=description,
         telegram_id=telegram_id,
         traffic_limit_strategy="NO_RESET",
+        tag=PANEL_TAG_BYPASS,
         raw_response=True,
     )
 
@@ -336,12 +341,16 @@ async def add_bypass_traffic(telegram_id: int, extra_bytes: int) -> bool:
     # PATCH'им по нему напрямую и обходим premium-guard в update_user (иначе
     # ложный _is_premium_entity гасит начисление → GB не долетают).
     _trusted = entity.get("id") is not None
+    extra: dict = {}
+    if entity.get("tag") != PANEL_TAG_BYPASS:
+        extra["tag"] = PANEL_TAG_BYPASS
     try:
         result = await remnawave_api.update_user(
             target,
             trafficLimitBytes=new_limit,
             status="ACTIVE",
             _trust_bypass=_trusted,
+            **extra,
         )
     except Exception as e:
         logger.error("REMNAWAVE_BYPASS_TOPUP_PATCH_FAIL: tg=%s %s", telegram_id, e)

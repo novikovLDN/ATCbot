@@ -24,6 +24,7 @@ from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.keyboards import get_back_keyboard
 from app.handlers.common.states import BomberState
 from app.handlers.common.utils import safe_edit_text
+from app.utils.date_utils import format_date_msk
 from app.handlers.common.emoji import CE
 
 router = Router()
@@ -295,7 +296,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                     )
                 end_dt = result.get("subscription_end")
                 if end_dt and hasattr(end_dt, "strftime"):
-                    end_str = end_dt.strftime("%d.%m.%Y")
+                    end_str = format_date_msk(end_dt)
                 else:
                     end_str = "—"
                 text = i18n_get_text(language, "games.bowling_strike_success", "🎳 <b>Страйк!</b> Все кегли сбиты!\n\n🎉 Поздравляем! Вы выиграли +7 дней подписки.\n\nДоступ до: {date}").format(date=end_str)
@@ -457,7 +458,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                 )
             end_dt = result.get("subscription_end")
             if end_dt and hasattr(end_dt, "strftime"):
-                end_str = end_dt.strftime("%d.%m.%Y")
+                end_str = format_date_msk(end_dt)
             else:
                 end_str = "—"
             text = i18n_get_text(language, "games.dice_success", "🎲 Выпало: {value}!\n\n🎉 Вам начислено {value} дней подписки!\n\nВаша подписка действует до: {date}").format(value=dice_value, date=end_str)

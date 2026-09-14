@@ -23,8 +23,8 @@
 
 | Функция бота | Метод и путь | Поля запроса | Поля ответа, которые читает бот | Источник 3.4.3 | |
 |---|---|---|---|---|---|
-| `create_user` | `POST /api/users` → 201 | `username`, `shortUuid`, `trafficLimitBytes`, `trafficLimitStrategy=NO_RESET`, `status=ACTIVE`, `expireAt`, `hwidDeviceLimit`, `vlessUuid`, `description`, `telegramId`, `externalSquadUuid`, `activeInternalSquads:[uuid]` (+ лишний `deviceLimit`) | `id`, `vlessUuid`, `shortUuid`, `subscriptionUrl`, `activeInternalSquads` | `commands/users/create-user.command.ts:18-120`, `users.controller.ts:87` | ✅ |
-| `update_user` | `PATCH /api/users` (id в теле) → 200 | `id` + `trafficLimitBytes`, `expireAt`, `status`, `telegramId`, `externalSquadUuid`, `hwidDeviceLimit` (+ лишний `deviceLimit` в `renew_remnawave_user`) | весь `ExtendedUser` (проверяется только `is not None`) | `update-user.command.ts:18-61`, `users.controller.ts:101` | ⚠️ ограничения PATCH, §4 |
+| `create_user` | `POST /api/users` → 201 | `username`, `shortUuid`, `trafficLimitBytes`, `trafficLimitStrategy=NO_RESET`, `status=ACTIVE`, `expireAt`, `hwidDeviceLimit`, `vlessUuid`, `description`, `telegramId`, `externalSquadUuid`, `activeInternalSquads:[uuid]`, `tag` (§3a) (+ лишний `deviceLimit`) | `id`, `vlessUuid`, `shortUuid`, `subscriptionUrl`, `activeInternalSquads` | `commands/users/create-user.command.ts:18-120`, `users.controller.ts:87` | ✅ |
+| `update_user` | `PATCH /api/users` (id в теле) → 200 | `id` + `trafficLimitBytes`, `expireAt`, `status`, `telegramId`, `externalSquadUuid`, `hwidDeviceLimit`, `tag` (§3a) (+ лишний `deviceLimit` в `renew_remnawave_user`) | весь `ExtendedUser` (проверяется только `is not None`) | `update-user.command.ts:18-61`, `users.controller.ts:101` | ⚠️ ограничения PATCH, §4 |
 | `get_user` / `_entity_state` | `GET /api/users/{userId}` (**числовой** id) → 200 / 404 | — | `id`, `username`, `telegramId`, `vlessUuid`, `shortUuid`, `trafficLimitBytes`, `expireAt`, `status`, `subscriptionUrl`, `userTraffic.usedTrafficBytes`, `activeInternalSquads`, `hwidDeviceLimit` | `get-user-by-id.command.ts:19-21` (`numberParamSchema` = `z.coerce.number().positive()`), `users.controller.ts:247` | ✅ |
 | `find_user_by_username`, `find_user_by_short_uuid`, `_entity_state` | `POST /api/users/resolve` → 200 / 404 | ровно одно из `{id \| shortUuid \| username}` | **только** `{id, username, shortUuid}` → бот дочитывает `GET /api/users/{id}` | `resolve-user.command.ts:18-42`, `users.service.ts:817-828` (`USER_NOT_FOUND` 404) | ❌→✅ F1 |
 | `find_user_by_telegram_id`, `_resolve_to_int_id`, `get_all_users` | `GET /api/users/stream?size&cursor&telegramId` | `size` 1..1000 (по умолчанию 250), `cursor` = прошлый `nextCursor`, фильтры: `status`, `trafficLimitStrategy`, `telegramId`, `email`, `tag`, `externalSquadUuid`. **Фильтра `username` нет** | `users[]`, `nextCursor` (**string \| null**), `hasMore` (поля `total` нет) | `get-users-stream.command.ts:18-59`, `users.controller.ts:154` | ⚠️ F10 |
@@ -70,7 +70,32 @@
 
 Ограничения на запись (`create-user.command.ts:19-29`): `username` — `^[a-zA-Z0-9_-]+$`, длина 3..36. Шаблоны бота:
 `{tg_id}` (bypass) и `tg_{tg_id}_premium` (premium), обрезка до 32 символов ✅. `shortUuid` при создании без
-ограничений; бот шлёт `str(uuid4())[:12]` (с дефисом) ✅. `tag` — `^[A-Z0-9_]+$` до 16 символов (бот не шлёт).
+ограничений; бот шлёт `str(uuid4())[:12]` (с дефисом) ✅. `tag` — `^[A-Z0-9_]+$` до 16 символов (бот шлёт с 2026-09-14, §3a).
+
+## 3a. Тег пользователя (`tag`): теги по тарифу (2026-09-14)
+
+Решение владельца: тег premium-сущности = текущий тариф, тег bypass-сущности = `BYPASS`. Сверено по тегу 3.4.3:
+
+| Что | 3.4.3 | Источник |
+|---|---|---|
+| Создание | `tag` в теле `POST /api/users`: `z.optional(z.string().regex(/^[A-Z0-9_]+$/).max(16).nullable())` | `libs/contract/commands/users/create-user.command.ts:81-95`; пишется как есть: `src/modules/users/users.service.ts:89` |
+| Изменение | `tag` в теле `PATCH /api/users`: тот же regex и длина, `nullable` (`null` снимает тег) | `libs/contract/commands/users/update-user.command.ts:41-50`; попадает в сущность через `...rest`: `src/modules/users/users.service.ts:138-163` |
+| Одно значение | у пользователя одна строка или `null`, не массив | `libs/contract/models/users.schema.ts:16` |
+| Фильтр | `GET /api/users/stream?tag=` (точное совпадение) | `libs/contract/commands/users/get-users-stream.command.ts:46`, `src/modules/users/repositories/users.repository.ts:279-280` |
+| Список тегов | `GET /api/users/tags` | `libs/contract/commands/users/tags/get-users-tags.command.ts:7`, `libs/contract/api/controllers/users.ts:41-42` |
+| Неверный тег | 400 от zod с `path: ["tag"]` (глобальный `ZodValidationPipe`, `src/main.ts:138`) | |
+
+Что делает бот:
+
+| Сущность | Тег | Где ставится |
+|---|---|---|
+| premium | `TRIAL` (пробный и подарочные 3 дня за покупку ГБ), `BASIC`, `PLUS` (и легаси biz), `COMBO_BASIC`, `COMBO_PLUS` — `tariffs.premium_panel_tag` / `premium_panel_tag_for_subscription` | outbox: `provisioning._apply_premium` (POST при создании; в PATCH продления, если тег другой; при смене тарифа без переноса даты — один PATCH тега, только если у сущности уже есть **другой** тег). Старый путь: `purchase_flow.provision_subscription` / `_sync_renewal_once` → `remnawave_premium.create_premium_user_entity` / `renew_premium_user` |
+| bypass | `BYPASS` | `remnawave_bypass.create_bypass_user_entity` (POST), PATCH пополнения ГБ (`provisioning._cas_bypass`, `add_bypass_traffic`, старые `remnawave_service.*`), если тег другой |
+
+- Выдачи днями (админ, игра, промо) тег не меняют: у outbox-джобы `grant` тег ставится только новой сущности, старый путь передаёт `keep_panel_tag`. По истечении тег остаётся (статус `EXPIRED` в панели и так виден).
+- Лишних запросов нет: тег едет в POST/PATCH, которые бот делает и так. Продление тем же тарифом отправляет тот же PATCH (outbox без поля `tag`).
+- Тег не может сломать покупку: невалидный тег не отправляется (`remnawave_api.clean_tag`), а 400, где упомянут `tag`, повторяется один раз тем же запросом без тега (`remnawave_api._send_tagged`, лог `REMNAWAVE_TAG_REJECTED`). Срок и ГБ всё равно выдаются.
+- Существующие пользователи получают теги **только бэкфиллом** по кнопке админа. Он одобрен владельцем для пользователей с активной подпиской и меняет только теги. Запуск: дашборд → «Ещё» → «Настройки» → «Теги в панели Remnawave» (проверка без изменений, затем «Проставить теги» → подтверждение; «Пауза», «Продолжить», «Стоп»), либо `python -m scripts.backfill_remnawave_tags` (по умолчанию dry-run; `--apply` — прогон, `--limit N` — ограничение числа PATCH). Код: `app/services/remnawave_tags`. PATCH только тега `{id, tag}`, не больше 2 в секунду, только у сущностей с другим тегом. Тег перечитывается из БД перед каждой пачкой из 20 сущностей. Прогресс хранится в `app_settings` (`remnawave_tag_backfill`). После перезапуска бота задача видна как «прервано», «Продолжить» доделывает остаток (уже верные теги пропускаются). По завершении приходит алерт админу.
 
 ## 4. Поведение, на которое опирается бот
 
@@ -144,3 +169,5 @@ provisioning ретраит, дубля нет.
 - `disable_remnawave_user`: расход из `userTraffic` (F6).
 - `deviceLimit` убран из тела create/renew, докстринги модуля приведены к 3.4.3 (F8, F10).
 - `tests/fakes/panel.py`: форма ответа 3.4.3 (нет `uuid`, есть `userTraffic`), PATCH отклоняет то же, что панель (статусы кроме ACTIVE/DISABLED, прошлый `expireAt`, отрицательный лимит).
+- 2026-09-14: premium с `expireAt` +10 лет. Старые bypass-хелперы `remnawave_service` (extend / disable / renew / ensure_squad / delete) искали bypass через кеш `remnawave_id` / `remnawave_uuid`. У заражённых строк этот кеш указывал на premium. Теперь они работают только с сущностью `username == str(telegram_id)` (`get_bypass_entity_safe`), а кеш перезаписывает `_heal_bypass_cache`, в том числе после `REMNAWAVE_BYPASS_STATE_CACHE_MISMATCH` в `get_bypass_state`. `create_user` / `update_user` не отправляют premium `expireAt` дальше `PREMIUM_MAX_EXPIRE_AHEAD` (5 лет): лог `REMNAWAVE_PREMIUM_FAR_EXPIRE_BLOCKED`, алерт `vpn_api`. SQL для подсчёта заражённых строк: `docs/RUNBOOK.md` §7 п.15.
+- 2026-09-14: теги по тарифу (§3a). `tag` в `create_user` / `update_user`, `clean_tag`, фолбэк без тега, `set_user_tag`; фейки `tests/fakes/panel.py` и `tests/fakes/remnawave_http.py` валидируют `tag` как 3.4.3 (regex, ≤ 16, `null` на PATCH), флаг `reject_tags`, фильтр `stream?tag=`.

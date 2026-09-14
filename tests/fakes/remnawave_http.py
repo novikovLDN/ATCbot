@@ -22,10 +22,17 @@ Contract (docs/providers/remnawave_3.4.3.md, libs/contract):
   POST   /api/hwid/devices/delete[-all] 200
 Anything else → 404.
 
+User tag (create-user.command.ts:81-94, update-user.command.ts:41-50): `tag` on
+POST / PATCH, ^[A-Z0-9_]+$ max 16 chars, nullable on PATCH (null clears); anything
+else → 400 zod error with path ["tag"]. Stored on the user and returned in every
+view (UsersSchema.tag); GET /api/users/stream?tag= filters by it.
+
 Failure injection:
   panel.down = True                    transport error on every request
   panel.fail(method, pred, status, times)  answer `status` to matching requests
   panel.ignore_patches = True          PATCH answers 200 with the entity, applies nothing
+  panel.reject_tags = True             POST / PATCH carrying a non-null tag → 400 naming
+                                       the tag (a panel that does not accept tags)
 """
 from __future__ import annotations
 
@@ -41,6 +48,7 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 
 GIB = 1024 ** 3
+_TAG_RE = re.compile(r"^[A-Z0-9_]+$")
 _NUM_PATH = re.compile(r"^/api/users/(?P<id>[^/]+)$")
 _REVOKE_PATH = re.compile(r"^/api/users/(?P<id>\d+)/actions/revoke$")
 _SQUAD_PATH = re.compile(r"^/api/internal-squads/(?P<sq>[^/]+)/bulk-actions/add-many-users$")
@@ -87,6 +95,7 @@ class FakeRemnawaveHTTP:
         self.requests: List[tuple] = []           # (method, path, json-body)
         self.down = False
         self.ignore_patches = False
+        self.reject_tags = False
         self._rules: List[_FailRule] = []
         self._ids = itertools.count(1)
 
@@ -99,6 +108,7 @@ class FakeRemnawaveHTTP:
         self._rules.clear()
         self.down = False
         self.ignore_patches = False
+        self.reject_tags = False
 
     # ── state helpers ────────────────────────────────────────────────
     def by_username(self, username: str) -> Optional[Dict[str, Any]]:
@@ -122,15 +132,35 @@ class FakeRemnawaveHTTP:
         return ent["trafficLimitBytes"] if ent else None
 
     def seed(self, username: str, *, tg: Optional[int], limit: int, expire_at: datetime,
-             status: str = "ACTIVE") -> Dict[str, Any]:
-        ent = self._new(username=username, tg=tg, limit=limit, expire_at=expire_at, status=status)
+             status: str = "ACTIVE", tag: Optional[str] = None) -> Dict[str, Any]:
+        ent = self._new(username=username, tg=tg, limit=limit, expire_at=expire_at, status=status, tag=tag)
         return ent
 
-    def seed_premium(self, tg: int, expire_at: datetime) -> Dict[str, Any]:
-        return self.seed(f"tg_{tg}_premium", tg=tg, limit=0, expire_at=expire_at)
+    def seed_premium(self, tg: int, expire_at: datetime, *, tag: Optional[str] = None) -> Dict[str, Any]:
+        return self.seed(f"tg_{tg}_premium", tg=tg, limit=0, expire_at=expire_at, tag=tag)
 
-    def seed_bypass(self, tg: int, limit: int) -> Dict[str, Any]:
-        return self.seed(str(tg), tg=tg, limit=limit, expire_at=datetime(2099, 12, 31, 23, 59, 59, tzinfo=timezone.utc))
+    def seed_bypass(self, tg: int, limit: int, *, tag: Optional[str] = None) -> Dict[str, Any]:
+        return self.seed(str(tg), tg=tg, limit=limit,
+                         expire_at=datetime(2099, 12, 31, 23, 59, 59, tzinfo=timezone.utc), tag=tag)
+
+    def tag_patches(self) -> List[tuple]:
+        """PATCH /api/users requests that carried a `tag`."""
+        return [r for r in self.requests if r[0] == "PATCH" and r[1] == "/api/users"
+                and isinstance(r[2], dict) and "tag" in r[2]]
+
+    def _tag_error(self, b: Dict[str, Any], *, nullable: bool) -> Optional[httpx.Response]:
+        """3.4.3 zod validation of `tag` (None = accepted)."""
+        if "tag" not in b:
+            return None
+        tag = b["tag"]
+        if tag is None:
+            return None if nullable else _json(400, {"statusCode": 400, "message": "Validation failed",
+                                                     "errors": [{"path": ["tag"], "message": "Expected string"}]})
+        if self.reject_tags or not (isinstance(tag, str) and _TAG_RE.match(tag) and len(tag) <= 16):
+            return _json(400, {"statusCode": 400, "message": "Validation failed", "errors": [{
+                "validation": "regex", "code": "invalid_string", "path": ["tag"],
+                "message": "Tag can only contain uppercase letters, numbers, underscores"}]})
+        return None
 
     def writes(self) -> List[tuple]:
         return [r for r in self.requests if r[0] in ("POST", "PATCH", "DELETE")
@@ -139,7 +169,8 @@ class FakeRemnawaveHTTP:
     def _new(self, *, username: str, tg: Optional[int], limit: int, expire_at: datetime,
              status: str = "ACTIVE", vless: Optional[str] = None, short: Optional[str] = None,
              squads: Optional[list] = None, device_limit: Optional[int] = None,
-             description: Optional[str] = None, external_squad: Optional[str] = None) -> Dict[str, Any]:
+             description: Optional[str] = None, external_squad: Optional[str] = None,
+             tag: Optional[str] = None) -> Dict[str, Any]:
         uid = next(self._ids)
         short = short or uuid_lib.uuid4().hex[:16]
         ent = {
@@ -154,6 +185,7 @@ class FakeRemnawaveHTTP:
             "expireAt": parse_dt(expire_at),
             "hwidDeviceLimit": device_limit,
             "description": description,
+            "tag": tag,
             "externalSquadUuid": external_squad,
             "activeInternalSquads": [{"uuid": s, "name": "Clients"} for s in (squads or [])],
             "subscriptionUrl": f"{self.BASE}/api/sub/{short}",
@@ -194,8 +226,10 @@ class FakeRemnawaveHTTP:
             return self._resolve(body or {})
         if path == "/api/users/stream" and m == "GET":
             tg = request.url.params.get("telegramId")
+            tag = request.url.params.get("tag")
             users = [self.view(u) for u in self.users.values()
-                     if tg is None or str(u.get("telegramId")) == str(tg)]
+                     if (tg is None or str(u.get("telegramId")) == str(tg))
+                     and (tag is None or u.get("tag") == tag)]
             return _json(200, {"response": {"users": users, "nextCursor": None, "hasMore": False}})
         mm = _SQUAD_PATH.match(path)
         if mm and m == "POST":
@@ -243,12 +277,15 @@ class FakeRemnawaveHTTP:
         limit = int(b.get("trafficLimitBytes") or 0)
         if limit < 0:
             return _json(400, {"message": "trafficLimitBytes must be >= 0"})
+        tag_err = self._tag_error(b, nullable=True)
+        if tag_err is not None:
+            return tag_err
         ent = self._new(
             username=username, tg=b.get("telegramId"), limit=limit,
             expire_at=parse_dt(b["expireAt"]), status=b.get("status") or "ACTIVE",
             vless=b.get("vlessUuid"), short=b.get("shortUuid"), squads=b.get("activeInternalSquads"),
             device_limit=b.get("hwidDeviceLimit"), description=b.get("description"),
-            external_squad=b.get("externalSquadUuid"),
+            external_squad=b.get("externalSquadUuid"), tag=b.get("tag"),
         )
         return _json(201, {"response": self.view(ent)})
 
@@ -268,6 +305,9 @@ class FakeRemnawaveHTTP:
             return _json(400, {"message": "expireAt must be in the future"})
         if fields.get("trafficLimitBytes") is not None and int(fields["trafficLimitBytes"]) < 0:
             return _json(400, {"message": "trafficLimitBytes must be >= 0"})
+        tag_err = self._tag_error(fields, nullable=True)
+        if tag_err is not None:
+            return tag_err
         if self.ignore_patches:
             return _json(200, {"response": self.view(ent)})
         for k, v in fields.items():

@@ -56,12 +56,13 @@ async def apply_fix(
     reason: str = Query("manual reconciliation via dashboard", max_length=500),
     admin: dict = Depends(require_admin),
 ):
-    """Recompute expires_at from approved payments + admin_grant_days,
-    write it back, log before/after with proof payment_ids.
+    """Set the premium entity's expireAt by the shared repair rule
+    (database.reconciliation.compute_repair_target: max of the purchases date
+    and a sane bot-DB date; none / past → NOW + 1 day), log before/after with
+    proof payment_ids.
 
-    Refuses to run if the recomputed value would EXTEND the subscription
-    (we only shorten). Refuses on bypass-only rows (they intentionally sit
-    at NOW + 10y)."""
+    Never extends: a rule date not earlier than the panel's current expireAt
+    → 409 would_extend, nothing written. The bypass entity is never touched."""
     admin_id = int(admin["sub"])
     try:
         result = await database.apply_reconciliation_fix(
@@ -77,6 +78,8 @@ async def apply_fix(
         err = result.get("error")
         if err == "db_unavailable":
             raise HTTPException(503, result)
+        if err == "would_extend":
+            raise HTTPException(409, result)
         # panel_error / любое другое → 502 (upstream не отвечает).
         raise HTTPException(502, result)
     return result

@@ -235,7 +235,7 @@ async def test_provision_renewal_patches_premium_expireat(monkeypatch):
             is_trial=False,
         )
 
-    renew_mock.assert_awaited_once_with(42, datetime(2030, 6, 1, tzinfo=timezone.utc), tier="basic")
+    renew_mock.assert_awaited_once_with(42, datetime(2030, 6, 1, tzinfo=timezone.utc), tier="basic", tag="BASIC")
     cpm.assert_not_called()
     assert out["vless_url"] == "https://rmnw/sub/cached_prem"
 
@@ -281,7 +281,7 @@ async def test_provision_renewal_accumulates_bypass_traffic(monkeypatch):
             is_trial=False,
         )
 
-    renew_mock.assert_awaited_once_with(42, datetime(2030, 6, 1, tzinfo=timezone.utc), tier="basic")
+    renew_mock.assert_awaited_once_with(42, datetime(2030, 6, 1, tzinfo=timezone.utc), tier="basic", tag="BASIC")
     add_traffic_mock.assert_not_called()
     cbm.assert_not_called()
     assert out["vless_url"] == "https://rmnw/sub/prem"

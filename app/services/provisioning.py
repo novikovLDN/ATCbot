@@ -54,7 +54,7 @@ from typing import Any, AsyncIterator, Dict, Optional, Tuple
 import config
 import database
 import database.provisioning_jobs as provisioning_jobs
-from app.services import admin_alerts, remnawave_api, remnawave_bypass, remnawave_premium
+from app.services import admin_alerts, remnawave_api, remnawave_bypass, remnawave_premium, tariffs
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +359,17 @@ def _entity_uuid(ent: Dict[str, Any]) -> Optional[str]:
     return str(v) if v else None
 
 
+def _premium_tag(job: Dict[str, Any]) -> Tuple[Optional[str], bool]:
+    """(tag, retag) for the premium entity of `job` (owner 2026-09-14, tags by
+    tariff). A purchase / renewal / trial / gift carries its tariff tag and sets
+    it (retag=True). A day grant ("grant") keeps the entity's current tag; only
+    a NEW entity gets the grant tier's tag (BASIC / PLUS)."""
+    key = str(job.get("tariff_key") or "")
+    if key == "grant":
+        return tariffs.premium_panel_tag((job.get("context") or {}).get("premium_tier")), False
+    return tariffs.premium_panel_tag(key), True
+
+
 def _invalidate_aggregator(telegram_id: int) -> None:
     try:
         from app.services import sub_aggregator
@@ -413,9 +424,11 @@ async def _apply_premium(job: Dict[str, Any]) -> Tuple[Optional[str], Optional[s
 
     # Devices by tariff (owner 2026-09-14: Basic 10, Plus 14) — the job's tier.
     tier = (job.get("context") or {}).get("premium_tier")
+    tag, retag = _premium_tag(job)
+    patch_tag = tag if retag else None
     state, ent = await _read_state(remnawave_api.get_premium_state, tg, "premium")
     if state == "present":
-        if await _ensure_premium_expire(tg, ent, target, tier=tier):
+        if await _ensure_premium_expire(tg, ent, target, tier=tier, tag=patch_tag):
             job[PERIOD_ENDED_KEY] = target
         await _persist_premium_cache(
             tg, uuid=_entity_uuid(ent), url=ent.get("subscriptionUrl"),
@@ -430,6 +443,8 @@ async def _apply_premium(job: Dict[str, Any]) -> Tuple[Optional[str], Optional[s
             tg, requested_uuid=requested_uuid, expire_at=target,
             description=f"Premium via bot ({job.get('tariff_key')})",
             tier=tier,
+            tag=tag,
+            tag_on_adopt=retag,
         ),
         "premium create",
     )
@@ -449,13 +464,13 @@ async def _apply_premium(job: Dict[str, Any]) -> Tuple[Optional[str], Optional[s
         state, ent = await _read_state(remnawave_api.get_premium_state, tg, "premium")
         if state != "present":
             raise ProvisioningTransient("premium entity not visible after adoption")
-        if await _ensure_premium_expire(tg, ent, target, tier=tier):
+        if await _ensure_premium_expire(tg, ent, target, tier=tier, tag=patch_tag):
             job[PERIOD_ENDED_KEY] = target
     return requested_uuid, res.subscription_url
 
 
 async def _ensure_premium_expire(tg: int, ent: Dict[str, Any], target: datetime,
-                                 tier: Optional[str] = None) -> bool:
+                                 tier: Optional[str] = None, tag: Optional[str] = None) -> bool:
     """PATCH the premium expireAt forward to `target`. True = the paid period
     already ended (target in the past): no PATCH — the panel 3.4.3 rejects a
     past expireAt with 400 and a retry cannot fix that (F7).
@@ -463,7 +478,12 @@ async def _ensure_premium_expire(tg: int, ent: Dict[str, Any], target: datetime,
     `tier`: the same PATCH sets the tariff's device limit (owner 2026-09-14).
     No extra write when the date needs no PATCH (the outbox stays idempotent
     and minimal — a retry never re-PATCHes); such an entity gets its cap with
-    its next extend (every paid renewal / tariff change extends premium)."""
+    its next extend (every paid renewal / tariff change extends premium).
+
+    `tag` (None = keep): rides in the same PATCH when the entity's tag differs.
+    When the date needs no PATCH but the entity carries another tariff's tag
+    (the tariff changed), ONE best-effort tag PATCH is sent (_retag_premium) —
+    a retry of an applied job sees the tag already set and sends nothing."""
     current = _parse_expire(ent.get("expireAt"))
     if current < target and target <= _utcnow():
         logger.warning(
@@ -479,6 +499,11 @@ async def _ensure_premium_expire(tg: int, ent: Dict[str, Any], target: datetime,
                 "PROVISIONING_PREMIUM_DISABLED: tg=%s panel=%s >= target=%s, status DISABLED — not enabled",
                 tg, current.isoformat(), target.isoformat(),
             )
+        elif tag and ent.get("tag") and ent.get("tag") != tag:
+            # The entity carries ANOTHER tariff's tag → the tariff changed. An
+            # untagged (legacy) entity gets its tag with the next PATCH instead:
+            # no extra request per user (the backfill tags the rest).
+            await _retag_premium(tg, ent, tag, tier)
         logger.info(
             "PROVISIONING_PREMIUM_NOOP: tg=%s panel=%s >= target=%s",
             tg, current.isoformat(), target.isoformat(),
@@ -495,6 +520,8 @@ async def _ensure_premium_expire(tg: int, ent: Dict[str, Any], target: datetime,
         fields["externalSquadUuid"] = ext_squad
     if tier:
         fields["hwidDeviceLimit"] = remnawave_premium._device_limit_for(tier)
+    if tag and ent.get("tag") != tag:
+        fields["tag"] = tag
     result = await _panel(remnawave_api.update_user(ref, **fields), "premium PATCH")
     if result is None:
         raise ProvisioningTransient("premium PATCH not applied")
@@ -504,6 +531,29 @@ async def _ensure_premium_expire(tg: int, ent: Dict[str, Any], target: datetime,
         tg, current.isoformat(), target.isoformat(),
     )
     return False
+
+
+async def _retag_premium(tg: int, ent: Dict[str, Any], tag: str, tier: Optional[str]) -> None:
+    """The tariff changed but the premium date needs no PATCH: one tag PATCH
+    (+ the tariff's device cap). Best effort — a failure is logged and the job
+    goes on: a tag never blocks or retries a delivery."""
+    ref: Any = _entity_id(ent)
+    if ref is None:
+        ref = _entity_uuid(ent)
+    if ref is None:
+        return
+    fields: Dict[str, Any] = {"tag": tag}
+    if tier:
+        fields["hwidDeviceLimit"] = remnawave_premium._device_limit_for(tier)
+    try:
+        result = await remnawave_api.update_user(ref, **fields)
+    except Exception as e:  # noqa: BLE001 — best effort
+        logger.warning("PROVISIONING_PREMIUM_RETAG_FAILED: tg=%s tag=%s %s: %s", tg, tag, type(e).__name__, e)
+        return
+    if result is None:
+        logger.warning("PROVISIONING_PREMIUM_RETAG_FAILED: tg=%s tag=%s (PATCH not applied)", tg, tag)
+        return
+    logger.info("PROVISIONING_PREMIUM_RETAGGED: tg=%s %s → %s", tg, ent.get("tag"), tag)
 
 
 async def _persist_premium_cache(
@@ -604,9 +654,11 @@ async def _cas_bypass(tg: int, ent: Dict[str, Any], *, base: int, target: int, j
         raise ProvisioningTransient("bypass entity has no id/uuid")
     # Entity verified as bypass by the state reader → with its own numeric id
     # the premium SAFETY-guard is a false positive (see update_user).
+    tag_field = {} if ent.get("tag") == tariffs.PANEL_TAG_BYPASS else {"tag": tariffs.PANEL_TAG_BYPASS}
     result = await _panel(
         remnawave_api.update_user(
             ref, trafficLimitBytes=target, status="ACTIVE", _trust_bypass=ent_id is not None,
+            **tag_field,
         ),
         "bypass PATCH",
     )

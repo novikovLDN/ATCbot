@@ -177,8 +177,104 @@ async def test_n07_trial_gift_keeps_source_of_active_paid_subscription(frozen, c
 async def test_n07_trial_gift_on_trial_or_bypass_only_row_unchanged(frozen, current_source, is_bypass_only):
     row = _row("basic", source=current_source, is_bypass_only=is_bypass_only)
     _result, conn = await _grant(row, source="trial")
-    (sql, args), = _sub_writes(conn)
+    # (a trial row also gets its trial end moved + trial flags reset — #4)
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
     assert args[1] == "trial"
+
+
+# ── #3 / #4: day grants (admin / promo link / game) only move the date ──
+
+@pytest.mark.parametrize("grant", ["admin", "game_strike", "game_dice"])
+@pytest.mark.parametrize("current_source", ["payment", "auto_renew", "gift"])
+async def test_day_grant_on_a_paid_subscription_keeps_it_paid(frozen, grant, current_source):
+    row = _row("plus", source=current_source)
+    kw = {"admin_telegram_id": 1, "admin_grant_days": 7} if grant == "admin" else {}
+    result, conn = await _grant(row, source=grant, tariff="basic", **kw)
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
+    assert args[1] == current_source, "the row stays paid: its reminders, −15 % and end message"
+    assert args[4] == "plus", "a day grant never flips the tariff"
+    assert not _clears_admin_grant_days(sql, args) and "admin_grant_days = case" in sql
+    assert result["action"] == "renewal"
+    assert not [c for c in conn.calls if "update users set trial_expires_at" in c[1]]
+    now = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
+    decision = notification_service.should_send_reminder(
+        {"source": args[1], "admin_grant_days": None, "last_action_type": "admin_grant",
+         "expires_at": now + timedelta(days=7)}, now)
+    assert decision.should_send and decision.reminder_type.value == "reminder_7d"
+
+
+async def test_admin_plus_days_on_basic_upgrade_the_tariff_and_keep_the_source(frozen):
+    row = _row("basic", source="payment")
+    _result, conn = await _grant(row, source="admin", tariff="plus", admin_telegram_id=1, admin_grant_days=7)
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
+    assert (args[1], args[4]) == ("payment", "plus")
+
+
+@pytest.mark.parametrize("grant", ["admin", "game_strike", "game_dice", "trial"])
+async def test_day_grant_during_a_trial_extends_the_trial(frozen, grant):
+    """#4: +days during a trial turned it into source='game_*' / 'admin' — no trial
+    reminders, no «пробный завершён −30 %», paid «продлите» to a trial user instead."""
+    row = _row("basic", source="trial")
+    result, conn = await _grant(row, source=grant)
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
+    assert args[1] == "trial"
+    trial_move = [c for c in conn.calls if c[1].startswith("update users set trial_expires_at")]
+    assert len(trial_move) == 1 and trial_move[0][2][0] == args[0], "trial end = the new end"
+    flags = [c for c in conn.calls if c[1].startswith("update subscriptions set trial_notif_24h_sent = false")]
+    assert flags, "the trial reminders go out again for the new end"
+
+
+async def test_day_grant_on_a_bypass_only_row_is_the_grant(frozen):
+    row = _row("basic", source="bypass_only", is_bypass_only=True)
+    _result, conn = await _grant(row, source="game_dice")
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
+    assert args[1] == "game_dice"
+
+
+class _TrialUserConn(SubsConn):
+    """The user's trial is still running (users.trial_expires_at in the future)."""
+
+    async def fetchrow(self, sql, *args):
+        if "from users" in _norm(sql):
+            self.calls.append(("fetchrow", _norm(sql), args))
+            return {"trial_expires_at": h.naive(datetime(2099, 1, 1, tzinfo=timezone.utc))}
+        return await super().fetchrow(sql, *args)
+
+
+async def test_a_purchase_during_the_trial_completes_it(frozen):
+    """Owner rule: trial messages stop as soon as the user buys — also the
+    «пробный завершён −30 %» notice (it came when the premium ended within 24 h
+    of the purchase, the trial worker's look-back)."""
+    conn = _TrialUserConn(_row("basic", source="trial"), in_tx=True)
+    await db_subs.grant_access(telegram_id=TG, duration=timedelta(days=30), conn=conn, source="payment",
+                               tariff="basic", tariff_period_days=30,
+                               _caller_holds_transaction=True, defer_panel=True)
+    ends = [c for c in conn.calls if c[1].startswith("update users set trial_expires_at")]
+    assert len(ends) == 1 and "trial_completed_sent = true" in ends[0][1]
+
+
+@pytest.mark.parametrize("source, tariff", [
+    ("payment", "plus"),     # the Basic→Plus upgrade branch
+    ("gift", "basic"),       # a gift activated on top of the trial
+    ("gift", "plus"),
+])
+async def test_plus_purchase_or_gift_during_the_trial_completes_it_like_basic(frozen, source, tariff):
+    """Only a Basic purchase closed the trial: after Plus (the upgrade branch)
+    or a gift the trial reminders and «пробный завершён −30 %» still came."""
+    conn = _TrialUserConn(_row("basic", source="trial"), in_tx=True)
+    await db_subs.grant_access(telegram_id=TG, duration=timedelta(days=30), conn=conn, source=source,
+                               tariff=tariff, tariff_period_days=30,
+                               _caller_holds_transaction=True, defer_panel=True)
+    ends = [c for c in conn.calls if c[1].startswith("update users set trial_expires_at")]
+    assert len(ends) == 1 and "trial_completed_sent = true" in ends[0][1]
+
+
+async def test_paid_period_during_a_trial_still_ends_the_trial(frozen):
+    row = _row("basic", source="trial")
+    _result, conn = await _grant(row, source="payment", tariff="basic", tariff_period_days=30)
+    (sql, args), = [w for w in _sub_writes(conn) if "expires_at = $1" in w[0]]
+    assert args[1] == "payment"
+    assert not [c for c in conn.calls if c[1].startswith("update subscriptions set trial_notif_24h_sent")]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -282,6 +378,7 @@ def _patch_reminders(monkeypatch, language):
     monkeypatch.setattr(reminders, "safe_send_message", sent)
     monkeypatch.setattr(reminders, "resolve_user_language", AsyncMock(return_value=language))
     monkeypatch.setattr(notification_service, "mark_reminder_sent", AsyncMock())
+    monkeypatch.setattr(reminders, "_claim_reminder", AsyncMock(return_value=True))
     monkeypatch.setattr(an, "log_notification_send", AsyncMock())
     monkeypatch.setattr(an, "get_trigger_config", AsyncMock(return_value={}))
     monkeypatch.setattr(database, "_log_audit_event_atomic_standalone", AsyncMock(), raising=False)
@@ -441,6 +538,21 @@ async def test_n05_fast_expiry_delivers_trial_expired_exactly_once(monkeypatch, 
     assert await tn.claim_trial_expired_notice(TG, conn) is False
 
 
+async def test_trial_end_with_bypass_is_one_message_without_the_15_percent(monkeypatch):
+    """#1: the trial row with a bypass entity becomes bypass-only → the user got
+    «пробный завершён −30 %» AND «основная подписка закончилась −15 %»."""
+    from app.services.notifications import special_offer
+    conn = _ExpiryConn(source="trial", bypass=True)
+    fec, sent, _discount = _patch_expiry(monkeypatch, conn)
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(special_offer, "notify_expired", notify)
+
+    await _run_one_expiry_iteration(fec)
+
+    assert _texts(sent) == [i18n.get_text("ru", "trial.expired")]
+    notify.assert_not_awaited()
+
+
 async def test_n05_trial_expired_text_promises_what_is_applied():
     for lang in ("ru", "en"):
         text = i18n.get_text(lang, "trial.expired")
@@ -468,6 +580,75 @@ async def test_n05_existing_bigger_discount_is_not_downgraded(monkeypatch):
 # ═══════════════════════════════════════════════════════════════════════
 # N-06: auto-renewal success shows the amount actually charged
 # ═══════════════════════════════════════════════════════════════════════
+
+async def test_insufficient_balance_gives_the_attempt_back_and_tells_the_user(monkeypatch):
+    """#5: the marker was committed and nothing was said — a top-up an hour later
+    renewed nothing in this period."""
+    import auto_renewal
+    w = h.install(monkeypatch)
+    w.seed_active_subscription(days_left=0)
+    w.sub["expires_at"] = h.naive(h.utcnow() + timedelta(hours=2))
+    w.balance_kopecks = 5000                     # 50 ₽ < the Basic price
+    notices = AsyncMock()
+    monkeypatch.setattr(auto_renewal, "_send_insufficient_balance_notices", notices)
+
+    out = await h.run_auto_renewal(w, monkeypatch, last_payment_tariff="basic_30")
+
+    out["decrease_balance"].assert_not_awaited()
+    markers = [a for kind, s, a in w.conn.calls
+               if kind == "execute" and s.startswith("update subscriptions set last_auto_renewal_at")]
+    assert len(markers) == 2 and markers[-1][0] is None, "the attempt must be given back for a retry"
+    (n,), = [c.args[2] for c in notices.await_args_list if c.args[2]]
+    price = config.TARIFFS["basic"][30]["price"]
+    assert (n["telegram_id"], n["amount_rubles"], n["balance_rubles"]) == (h.TG, float(price), 50.0)
+
+
+async def test_autorenew_phase_b_holds_no_batch_connection(monkeypatch):
+    """#17: the batch connection stayed checked out during phase B — the panel
+    sync (HTTP) and the Telegram messages."""
+    import auto_renewal
+    w = h.install(monkeypatch)
+    w.seed_active_subscription(days_left=0)
+    w.sub["expires_at"] = h.naive(h.utcnow() + timedelta(hours=2))
+    held = {"n": 0, "during_send": []}
+
+    class _Counting:
+        def __init__(self, conn):
+            self.conn = conn
+
+        async def __aenter__(self):
+            held["n"] += 1
+            return self.conn
+
+        async def __aexit__(self, *exc):
+            held["n"] -= 1
+            return False
+
+    real_run = h.run_auto_renewal
+
+    async def run(w, mp, **kw):
+        orig_setattr = mp.setattr
+
+        def setattr_(target, name, value, *a, **k):
+            if target is auto_renewal and name == "acquire_connection":
+                value = lambda pool, _name: _Counting(w.conn)   # noqa: E731
+            if target is auto_renewal and name == "safe_send_message":
+                inner = value
+
+                async def value(*args, **kwargs):
+                    held["during_send"].append(held["n"])
+                    return await inner(*args, **kwargs)
+            return orig_setattr(target, name, value, *a, **k)
+        mp.setattr = setattr_
+        try:
+            return await real_run(w, mp, **kw)
+        finally:
+            mp.setattr = orig_setattr
+
+    out = await run(w, monkeypatch, last_payment_tariff="basic_30")
+    out["decrease_balance"].assert_awaited_once()
+    assert held["during_send"] == [0], held
+
 
 async def test_n06_auto_renewal_message_shows_charged_amount(monkeypatch):
     w = h.install(monkeypatch)

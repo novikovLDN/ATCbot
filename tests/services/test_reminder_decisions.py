@@ -1,0 +1,290 @@
+"""Paid / free-access reminder decisions (docs/notifications/matrix.md #3, #18).
+
+should_send_reminder is pure: these pin which reminder a subscription row gets.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+import config
+import database
+from app import i18n
+from app.services.notifications import service as ns
+
+NOW = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+
+
+def _row(**kw):
+    row = {"telegram_id": 1, "source": "payment", "subscription_type": "basic",
+           "admin_grant_days": None, "last_action_type": "renewal",
+           "reminder_7d_sent": False, "reminder_3d_sent": False, "reminder_1d_sent": False,
+           "reminder_3h_sent": False, "reminder_6h_sent": False, "reminder_24h_sent": False}
+    row.update(kw)
+    return row
+
+
+@pytest.mark.parametrize("left,kind", [
+    (timedelta(days=7), "reminder_7d"), (timedelta(days=3), "reminder_3d"),
+    (timedelta(hours=24), "reminder_1d"), (timedelta(hours=3), "reminder_3h"),
+])
+def test_days_added_on_top_of_a_paid_subscription_keep_every_paid_reminder(left, kind):
+    """#3: the last history row 'admin_grant' (days added by an admin / promo link
+    on top of a paid subscription) made the row a «free grant» with neither 1 nor
+    7 days → not one paid reminder."""
+    d = ns.should_send_reminder(_row(source="admin", last_action_type="admin_grant",
+                                     expires_at=NOW + left), NOW)
+    assert d.should_send and d.reminder_type.value == kind
+
+
+@pytest.mark.parametrize("left", [timedelta(hours=2, minutes=5), timedelta(hours=3), timedelta(hours=3, minutes=55)])
+def test_paid_3h_window_is_wider_than_the_pass_interval(left):
+    """#14: a 1 h window with a pass every 45 min — one missed pass lost the 3 h
+    reminder. Now ±1 h with a pass every 15 min."""
+    import reminders
+    d = ns.should_send_reminder(_row(expires_at=NOW + left), NOW)
+    assert d.should_send and d.reminder_type.value == "reminder_3h"
+    assert reminders.REMINDERS_INTERVAL_SECONDS <= 15 * 60
+    # the window survives at least three passes
+    assert timedelta(hours=2) >= 3 * timedelta(seconds=reminders.REMINDERS_INTERVAL_SECONDS)
+
+
+@pytest.mark.parametrize("days", [3, 7, 14, 30])
+def test_free_days_get_the_24h_reminder_whatever_their_number(days):
+    """#18: only exactly 7 days got a reminder (3 / 14 / 30 — nothing)."""
+    d = ns.should_send_reminder(_row(source="admin", admin_grant_days=days,
+                                     expires_at=NOW + timedelta(hours=24)), NOW)
+    assert d.should_send and d.reminder_type == ns.ReminderType.ADMIN_7DAYS_24H
+    # and no paid reminder at 7 / 3 days for free access
+    for left in (timedelta(days=7), timedelta(days=3), timedelta(hours=3)):
+        assert not ns.should_send_reminder(_row(source="admin", admin_grant_days=days,
+                                                expires_at=NOW + left), NOW).should_send
+
+
+def test_one_free_day_keeps_its_6h_reminder():
+    d = ns.should_send_reminder(_row(source="admin", admin_grant_days=1,
+                                     expires_at=NOW + timedelta(hours=6)), NOW)
+    assert d.should_send and d.reminder_type == ns.ReminderType.ADMIN_1DAY_6H
+
+
+@pytest.fixture
+def paid_pass(monkeypatch):
+    """One paid subscription 7 days before its end; records claim / send / release."""
+    import reminders
+    import database.subscriptions as db_subs
+    from app.services import automated_notifications as an
+    st = {"order": [], "claim": True, "results": [], "blocked": False}
+    end = datetime.now(timezone.utc) + timedelta(days=7) - timedelta(minutes=10)
+
+    async def claim(tg, rtype, expires_at):
+        st["order"].append(("claim", rtype.value, expires_at))
+        return st["claim"]
+
+    async def release(tg, rtype, expires_at):
+        st["order"].append(("release", rtype.value, expires_at))
+
+    async def send(bot, tg, text, **kw):
+        st["order"].append(("send", text[:15]))
+        return st["results"].pop(0) if st["results"] else MagicMock()
+
+    monkeypatch.setattr(reminders, "_claim_reminder", claim)
+    monkeypatch.setattr(reminders, "_release_reminder", release)
+    monkeypatch.setattr(reminders, "safe_send_message", send)
+    monkeypatch.setattr(reminders, "resolve_user_language", AsyncMock(return_value="ru"))
+    monkeypatch.setattr(db_subs, "is_user_blocked", AsyncMock(side_effect=lambda tg: st["blocked"]))
+    monkeypatch.setattr(an, "is_notification_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(an, "get_notification_text", AsyncMock(return_value=None))
+    monkeypatch.setattr(an, "log_notification_send", AsyncMock())
+    monkeypatch.setattr(an, "get_trigger_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(database, "_log_audit_event_atomic_standalone", AsyncMock(), raising=False)
+    monkeypatch.setattr(database, "get_subscriptions_for_reminders",
+                        AsyncMock(return_value=[_row(expires_at=end)]))
+    st["end"] = end
+    return reminders, st
+
+
+async def test_paid_reminder_is_claimed_for_the_period_before_the_send(paid_pass):
+    reminders, st = paid_pass
+    await reminders.send_smart_reminders(MagicMock())
+    assert [o[0] for o in st["order"]] == ["claim", "send"]
+    assert st["order"][0][2] == st["end"], "claimed for the period this pass saw"
+
+
+async def test_renewed_inside_the_pass_no_old_date_reminder(paid_pass):
+    """#16: the claim is bound to the snapshot's expires_at — a renewal since then
+    (new date) leaves nothing to claim, so no reminder with the old date."""
+    reminders, st = paid_pass
+    st["claim"] = False
+    await reminders.send_smart_reminders(MagicMock())
+    assert [o[0] for o in st["order"]] == ["claim"]
+
+
+@pytest.mark.parametrize("blocked,released", [(False, True), (True, False)])
+async def test_failed_send_is_released_unless_blocked(paid_pass, blocked, released):
+    reminders, st = paid_pass
+    st["results"] = [None]
+    st["blocked"] = blocked
+    await reminders.send_smart_reminders(MagicMock())
+    assert ("release" in [o[0] for o in st["order"]]) is released
+
+
+class _NullPool:
+    def acquire(self):
+        class _A:
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, *exc):
+                return False
+        return _A()
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+@pytest.mark.parametrize("balance,expect", [(500.0, "ok"), (150.0, "topup")])
+async def test_autorenew_reminder_says_what_will_happen(paid_pass, monkeypatch, lang, balance, expect):
+    """#8: with auto-renewal on, «продлите заранее» made users pay twice by hand."""
+    import auto_renewal
+    from app.services.notifications.special_offer import format_deadline
+    reminders, st = paid_pass
+    sub = _row(expires_at=st["end"], auto_renew=True)
+    monkeypatch.setattr(database, "get_subscriptions_for_reminders", AsyncMock(return_value=[sub]))
+    monkeypatch.setattr(reminders, "resolve_user_language", AsyncMock(return_value=lang))
+    monkeypatch.setattr(database, "get_pool", AsyncMock(return_value=_NullPool()))
+    monkeypatch.setattr(auto_renewal, "renewal_quote", AsyncMock(return_value={
+        "tariff_type": "basic", "period_days": 30, "base_price": 199, "amount_rubles": 199.0, "outbox_plan": None}))
+    monkeypatch.setattr(database, "get_user_balance", AsyncMock(return_value=balance))
+    texts = []
+
+    async def send(bot, tg, text, **kw):
+        texts.append((text, [b.callback_data for row in kw["reply_markup"].inline_keyboard for b in row]))
+        return MagicMock()
+    monkeypatch.setattr(reminders, "safe_send_message", send)
+
+    await reminders.send_smart_reminders(MagicMock())
+
+    (text, buttons), = texts
+    date = st["end"].astimezone(timezone(timedelta(hours=3))).strftime("%d.%m.%Y")
+    if expect == "ok":
+        assert text == i18n.get_text(lang, "reminder.paid_autorenew_ok", date=date, amount="199", balance="500")
+        assert buttons == ["menu_profile"]
+    else:
+        assert text == i18n.get_text(lang, "reminder.paid_autorenew_topup", date=date, amount="199",
+                                     balance="150", missing="49",
+                                     deadline=format_deadline(lang, st["end"]))
+        assert buttons == ["topup_balance", "menu_buy_vpn"]
+    assert i18n.get_text(lang, "reminder.paid_7d") not in text
+
+
+def _three_hours_autorenew(paid_pass, monkeypatch, balance):
+    import auto_renewal
+    import database.subscriptions as db_subs
+    reminders, st = paid_pass
+    end = datetime.now(timezone.utc) + timedelta(hours=3) - timedelta(minutes=10)
+    monkeypatch.setattr(database, "get_subscriptions_for_reminders",
+                        AsyncMock(return_value=[_row(expires_at=end, auto_renew=True)]))
+    monkeypatch.setattr(database, "get_pool", AsyncMock(return_value=_NullPool()))
+    monkeypatch.setattr(auto_renewal, "renewal_quote", AsyncMock(return_value={
+        "tariff_type": "basic", "period_days": 30, "base_price": 199, "amount_rubles": 199.0, "outbox_plan": None}))
+    monkeypatch.setattr(database, "get_user_balance", AsyncMock(return_value=balance))
+    monkeypatch.setattr(reminders, "_bypass_left_text", AsyncMock(return_value=None))
+    offer = AsyncMock(return_value=None)
+    monkeypatch.setattr(db_subs, "claim_special_offer", offer)
+    return reminders, st, offer
+
+
+async def test_autorenew_short_of_balance_3h_reminder_yields_to_the_insufficient_notice(paid_pass, monkeypatch):
+    """Auto-renewal on, balance short, 3 h left: the 3 h reminder and «не хватает
+    N ₽» (auto_renewal) came back to back. One message — the insufficient-balance
+    one: the 3 h reminder is consumed for the period, never sent."""
+    reminders, st, offer = _three_hours_autorenew(paid_pass, monkeypatch, balance=50.0)
+    await reminders.send_smart_reminders(MagicMock())
+    assert [o[0] for o in st["order"]] == ["claim"]
+    offer.assert_not_awaited()                   # the −15 % window is left to the expiry
+
+
+async def test_autorenew_with_enough_balance_keeps_the_3h_reminder(paid_pass, monkeypatch):
+    reminders, st, _offer = _three_hours_autorenew(paid_pass, monkeypatch, balance=500.0)
+    await reminders.send_smart_reminders(MagicMock())
+    assert [o[0] for o in st["order"]] == ["claim", "send"]
+
+
+async def test_autorenew_off_keeps_the_renew_text(paid_pass, monkeypatch):
+    reminders, st = paid_pass
+    sent = []
+
+    async def send(bot, tg, text, **kw):
+        sent.append(text)
+        return MagicMock()
+    monkeypatch.setattr(reminders, "safe_send_message", send)
+    await reminders.send_smart_reminders(MagicMock())
+    assert sent == [i18n.get_text("ru", "reminder.paid_7d")]
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+@pytest.mark.parametrize("left,offer,key", [
+    (timedelta(hours=24), None, "reminder.paid_1d_gb"),
+    (timedelta(hours=3), {"expires_at": datetime(2026, 9, 17, 11, 30, tzinfo=timezone.utc)}, "reminder.paid_3h_special_gb"),
+    (timedelta(hours=3), None, "reminder.paid_3h_no_offer_gb"),
+])
+@pytest.mark.parametrize("gb_left", [True, False])
+async def test_tomorrow_and_3h_say_the_gb_keep_working(paid_pass, monkeypatch, lang, left, offer, key, gb_left):
+    """#9: every Basic / Plus has bypass GB that outlive the premium — «VPN
+    перестанет работать» was false for them."""
+    import database.subscriptions as db_subs
+    from app.services.notifications.special_offer import format_deadline
+    from app.services.subscriptions import live_state
+    reminders, st = paid_pass
+    end = datetime.now(timezone.utc) + left - timedelta(minutes=10)
+    monkeypatch.setattr(database, "get_subscriptions_for_reminders", AsyncMock(return_value=[_row(expires_at=end)]))
+    monkeypatch.setattr(reminders, "resolve_user_language", AsyncMock(return_value=lang))
+    monkeypatch.setattr(db_subs, "claim_special_offer", AsyncMock(return_value=offer))
+    info = (live_state.BypassInfo("present", used=2 * 1024 ** 3, limit=10 * 1024 ** 3, status="ACTIVE")
+            if gb_left else live_state.BypassInfo("present", used=10 * 1024 ** 3, limit=10 * 1024 ** 3, status="LIMITED"))
+    monkeypatch.setattr(live_state, "read_bypass", AsyncMock(return_value=info))
+    texts = []
+
+    async def send(bot, tg, text, **kw):
+        texts.append(text)
+        return MagicMock()
+    monkeypatch.setattr(reminders, "safe_send_message", send)
+
+    await reminders.send_smart_reminders(MagicMock())
+
+    (text,) = texts
+    params = {"remaining": f"8 {i18n.get_text(lang, 'common.unit_gb')}"}
+    if offer:
+        params["deadline"] = format_deadline(lang, offer["expires_at"])
+    if gb_left:
+        assert text == i18n.get_text(lang, key, **params)
+    else:
+        plain = {"reminder.paid_1d_gb": "reminder.paid_1d", "reminder.paid_3h_special_gb": "reminder.paid_3h_special",
+                 "reminder.paid_3h_no_offer_gb": "reminder.paid_3h_no_offer"}[key]
+        assert text == i18n.get_text(lang, plain, **{k: v for k, v in params.items() if k == "deadline"})
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+async def test_free_access_24h_text_has_the_price_from_the_table(monkeypatch, lang):
+    import reminders
+    from app.services import automated_notifications as an
+    from app.services import pricing
+    sent = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr(reminders, "safe_send_message", sent)
+    monkeypatch.setattr(reminders, "resolve_user_language", AsyncMock(return_value=lang))
+    monkeypatch.setattr(ns, "mark_reminder_sent", AsyncMock())
+    monkeypatch.setattr(an, "log_notification_send", AsyncMock())
+    monkeypatch.setattr(an, "get_trigger_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(pricing, "get_effective_price", AsyncMock(return_value=None))
+    monkeypatch.setattr(database, "_log_audit_event_atomic_standalone", AsyncMock(), raising=False)
+    sub = _row(source="admin", admin_grant_days=14,
+               expires_at=datetime.now(timezone.utc) + timedelta(hours=24) - timedelta(minutes=5))
+    monkeypatch.setattr(database, "get_subscriptions_for_reminders", AsyncMock(return_value=[sub]))
+    monkeypatch.setattr(reminders, "_claim_reminder", AsyncMock(return_value=True), raising=False)
+
+    await reminders.send_smart_reminders(MagicMock())
+
+    text = sent.await_args.args[2]
+    price = config.TARIFFS["basic"][30]["price"]
+    assert text == i18n.get_text(lang, "reminder.admin_7days_24h", price=price)
+    assert "{price}" not in text

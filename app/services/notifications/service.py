@@ -173,11 +173,13 @@ def should_send_reminder(
             reason="Trial subscription — handled by trial_notifications worker"
         )
 
-    # Determine subscription type
+    # Free access (admin / promo-link days without a paid subscription) is marked
+    # by admin_grant_days alone: a paid grant clears it (N-04). The last history
+    # row is NOT a marker — days added on top of a paid subscription log
+    # 'admin_grant' too, and that silenced every paid reminder (#3).
     admin_grant_days = subscription.get("admin_grant_days")
-    last_action_type = subscription.get("last_action_type")
-    is_admin_grant = admin_grant_days is not None or last_action_type == "admin_grant"
-    
+    is_admin_grant = admin_grant_days is not None
+
     # ADMIN-GRANTED ACCESS
     if is_admin_grant:
         if admin_grant_days == 1:
@@ -196,8 +198,9 @@ def should_send_reminder(
                     reminder_type=ReminderType.ADMIN_1DAY_6H
                 )
         
-        elif admin_grant_days == 7:
-            # 7 days - reminder at 24 hours
+        else:
+            # any other grant (3 / 7 / 14 / 30 … days) — reminder at 24 hours
+            # (#18: only exactly 7 days got one)
             if is_within_time_window(time_until_expiry, timedelta(hours=24), timedelta(hours=1)):
                 # Check idempotency
                 if subscription.get("reminder_24h_sent", False):
@@ -244,8 +247,9 @@ def should_send_reminder(
                 )
             return ReminderDecision(should_send=True, reminder_type=ReminderType.REMINDER_1D)
 
-        # Reminder at 3 hours — special 15% discount offer
-        elif is_within_time_window(time_until_expiry, timedelta(hours=3), timedelta(hours=0.5)):
+        # Reminder at 3 hours — special 15% discount offer. ±1 h (like the trial's):
+        # the reminders pass runs every 15 min, a missed pass must not lose it (#14).
+        elif is_within_time_window(time_until_expiry, timedelta(hours=3), timedelta(hours=1)):
             if subscription.get("reminder_3h_sent", False):
                 return ReminderDecision(
                     should_send=False,

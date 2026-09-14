@@ -255,7 +255,8 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                 telegram_id, e,
             )
 
-        expires_str = subscription_end.strftime("%d.%m.%Y")
+        from app.utils.date_utils import format_date_msk
+        expires_str = format_date_msk(subscription_end)
         from html import escape as html_escape
         from app.services.user_subscription_links import get_user_primary_subscription_url
         if grant.job_id is not None and not grant.applied:

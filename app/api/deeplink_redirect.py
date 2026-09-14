@@ -11,15 +11,28 @@ blocks `happ://`), the page also shows the deep link as a monospaced
 block with a Copy button so the user can import it manually.
 
 Usage:
-    GET /open/{client}?url={subscription_url}
+    GET /open/{client}?url={subscription_url}[&name={profile_name}]
 
-Supported clients: happ, incy
+Supported clients: happ, incy, v2raytun, karing, stash, clash (Clash Verge).
+`url` must be an absolute http(s) URL (no whitespace/control chars, ≤2048);
+anything else is rejected with 400 before a deep link is built.
+
+Import schemes (official docs):
+  karing   karing://install-config?url=<enc>&name=<enc>
+           https://karing.app/en/cooperation/scheme
+  stash    stash://install-config?url=<enc>
+           https://stash.wiki/en/faq/url-schema
+  clash    clash://install-config?url=<enc>   (Clash Verge Rev, desktop)
+           https://www.clashverge.dev/guide/url_schemes.html
+  v2raytun v2raytun://import/<subscription_link>
+           https://docs.v2raytun.com/deep-link
 """
 
 import json
 import logging
 from html import escape as html_escape
-from urllib.parse import quote
+from typing import Optional
+from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, Query
 from fastapi.responses import HTMLResponse
@@ -27,6 +40,37 @@ from fastapi.responses import HTMLResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_MAX_URL_LEN = 2048
+_MAX_NAME_LEN = 64
+_DEFAULT_PROFILE_NAME = "Atlas Secure"
+# Never valid unencoded in a URL (RFC 3986) — would break out of the page/scheme.
+_URL_FORBIDDEN_CHARS = frozenset('"<>\\^`{|}')
+
+
+def _is_valid_sub_url(raw_url: str) -> bool:
+    """Only absolute http(s) subscription URLs may be turned into a deep link.
+
+    Rejects javascript:/data:/custom schemes, relative paths, whitespace and
+    control characters (they would change the meaning of the deep link).
+    """
+    if not raw_url or len(raw_url) > _MAX_URL_LEN:
+        return False
+    if any(ord(ch) <= 0x20 or ord(ch) == 0x7F or ch in _URL_FORBIDDEN_CHARS for ch in raw_url):
+        return False
+    try:
+        parts = urlsplit(raw_url)
+        host = parts.hostname
+    except ValueError:
+        return False
+    return parts.scheme in ("https", "http") and bool(host)
+
+
+def _clean_profile_name(name: Optional[str]) -> str:
+    """Profile label for clients that take one (Karing). Printable, ≤64 chars."""
+    cleaned = "".join(ch for ch in (name or "") if ch.isprintable()).strip()
+    return cleaned[:_MAX_NAME_LEN] or _DEFAULT_PROFILE_NAME
+
 
 _SCHEMES = {
     # Happ: server-side seals the URL via happ_crypto → happ://crypt4/<base64>.
@@ -36,19 +80,27 @@ _SCHEMES = {
     #       page so the user understands "не получилось", not a 500.
     # V2RayTun: без шифрования — принимает обычную ссылку подписки
     #       напрямую по схеме v2raytun://import/<url>. iOS + Android.
+    # Karing / Stash / Clash Verge: обычная (не зашифрованная) ссылка
+    #       подписки, url-encoded в параметре `url` схемы install-config.
     "happ": "happ",
     "incy": "incy",
     "v2raytun": "v2raytun",
+    "karing": "karing",
+    "stash": "stash",
+    "clash": "clash",
 }
 
 _CLIENT_NAMES = {
     "happ": "Happ",
     "incy": "Incy",
     "v2raytun": "V2RayTun",
+    "karing": "Karing",
+    "stash": "Stash",
+    "clash": "Clash Verge",
 }
 
 
-async def _build_deep_link(client: str, raw_url: str) -> str | None:
+async def _build_deep_link(client: str, raw_url: str, name: Optional[str] = None) -> str | None:
     """Build the client-specific deep link for a subscription URL.
 
     Happ: pure-Python RSA-4096/PKCS#1v1.5 (happ_crypto), always works.
@@ -81,6 +133,18 @@ async def _build_deep_link(client: str, raw_url: str) -> str | None:
         # на iOS/Android и импортирует подписку.
         safe = quote(raw_url, safe='')
         return f"v2raytun://import/{safe}"
+    if client == "karing":
+        # https://karing.app/en/cooperation/scheme — «Parameters must be urlencoded».
+        return (
+            f"karing://install-config?url={quote(raw_url, safe='')}"
+            f"&name={quote(_clean_profile_name(name), safe='')}"
+        )
+    if client == "stash":
+        # https://stash.wiki/en/faq/url-schema — url must be encoded.
+        return f"stash://install-config?url={quote(raw_url, safe='')}"
+    if client == "clash":
+        # Clash Verge Rev: https://www.clashverge.dev/guide/url_schemes.html
+        return f"clash://install-config?url={quote(raw_url, safe='')}"
     return None
 
 
@@ -234,12 +298,19 @@ def _render_page(client: str, deep_link: str) -> str:
 
 
 @router.get("/open/{client}")
-async def deeplink_redirect(client: str, url: str = Query(...)):
+async def deeplink_redirect(
+    client: str,
+    url: str = Query(...),
+    name: Optional[str] = Query(None),
+):
     """Redirect browser to VPN client deep link."""
     if client not in _SCHEMES:
         return HTMLResponse("<h3>Unknown client</h3>", status_code=400)
+    if not _is_valid_sub_url(url):
+        logger.warning("DEEPLINK_REDIRECT_REJECTED client=%s reason=bad_url", client)
+        return HTMLResponse("<h3>Invalid link</h3>", status_code=400)
 
-    deep_link = await _build_deep_link(client, url)
+    deep_link = await _build_deep_link(client, url, name)
     if not deep_link:
         # Currently only the Incy path can return None — happens when the
         # Node sidecar / @incy/link-encoder package isn't deployed yet.

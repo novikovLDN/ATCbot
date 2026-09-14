@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -62,6 +63,18 @@ async def broadcasts_recent(limit: int = Query(20, gt=0, le=500)):
     return [_serialize(r) for r in rows]
 
 
+# GET /segments counted every segment (full table scans) on every open of the
+# broadcast wizard / the notification editor. Counts are cached server-side for
+# this long (a failed count is not cached, it is retried on the next open).
+SEGMENT_COUNTS_TTL_SECONDS = 60.0
+_clock = time.monotonic
+_segment_counts: dict = {}          # key → (counted at, count)
+
+
+def reset_segment_counts_cache() -> None:
+    _segment_counts.clear()
+
+
 @router.get("/segments")
 async def segments_list():
     """Available segments with current member counts + tooltip descriptions.
@@ -86,6 +99,19 @@ async def segments_list():
         ("no_remnawave", "Без Remnawave",
          "Никогда не было entity в панели Remnawave — ни premium, ни bypass. То есть не завёл ни одного ключа.",
          "Базовые"),
+
+        # ── Воронка: старая база (одна рассылка, SCOPE «Воронка продаж») ─
+        # Только события ДО запуска воронки (app_settings.sales_funnel_started_at):
+        # всё, что позже, воронка ведёт сама — сюда не попадает.
+        ("funnel_start_no_trial", "Нажали /start, без пробного и подписки",
+         "Старая база: нажал /start до запуска воронки, пробный не включал, подписки и оплат не было ни разу. Для разовой рассылки со скидкой (кнопка «Купить со скидкой»).",
+         "Воронка — старая база"),
+        ("funnel_trial_ended_no_purchase", "Пробный закончился без покупки",
+         "Старая база: пробный закончился до запуска воронки, после начала пробного не было ни одной оплаты, сейчас нет активной подписки (ГБ обхода не в счёт).",
+         "Воронка — старая база"),
+        ("funnel_paid_ended_no_renewal", "Платная закончилась без продления",
+         "Старая база: хотя бы раз платил (покупка / продление / автопродление), последний период закончился до запуска воронки, сейчас нет активной подписки (ГБ обхода не в счёт) и после окончания не платил.",
+         "Воронка — старая база"),
 
         # ── Cold-start (новые молчуны) ───────────────────────────────
         ("started_1d_cold", "Cold — старт за 24ч, ничего",
@@ -257,13 +283,19 @@ async def segments_list():
          "Апселл / особые"),
     ]
     out = []
+    now = _clock()
     for key, label, description, group in segments:
-        try:
-            ids = await database.get_users_by_segment(key)
-            count = len(ids)
-        except Exception as e:
-            logger.warning("SEGMENT_COUNT_FAIL key=%s err=%s", key, e)
-            count = -1
+        cached = _segment_counts.get(key)
+        if cached is not None and now - cached[0] < SEGMENT_COUNTS_TTL_SECONDS:
+            count = cached[1]
+        else:
+            try:
+                ids = await database.get_users_by_segment(key)
+                count = len(ids)
+                _segment_counts[key] = (now, count)
+            except Exception as e:
+                logger.warning("SEGMENT_COUNT_FAIL key=%s err=%s", key, e)
+                count = -1
         out.append({
             "key": key,
             "label": label,

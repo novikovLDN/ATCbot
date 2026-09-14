@@ -207,6 +207,7 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
             existing_premium = (sub.get("remnawave_premium_uuid") or "").strip()
             if not existing_premium and not is_bypass_only and getattr(config, "REMNAWAVE_MAIN_SQUAD_UUID", ""):
                 from app.services import remnawave_premium
+                from app.services.tariffs import premium_panel_tag_for_subscription
                 presult = await remnawave_premium.create_premium_user_entity(
                     telegram_id,
                     requested_uuid=samopis_uuid or None,
@@ -214,6 +215,7 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
                     description=("Lazy trial via URL" if is_trial else "Lazy-provisioned via URL"),
                     # devices by tariff (owner 2026-09-14); trial = Basic
                     tier=("basic" if is_trial else (sub.get("subscription_type") or "basic")),
+                    tag=premium_panel_tag_for_subscription(sub),
                 )
                 if presult.ok:
                     try:

@@ -1049,7 +1049,8 @@ async def _apply_promo_reward(
             logger.exception("PROMO_APPLY_SUBSCRIPTION_FAIL: %s", e)
             return False, ""
         end = res.get("subscription_end")
-        end_str = end.strftime("%d.%m.%Y") if end else "—"
+        from app.utils.date_utils import format_date_msk
+        end_str = format_date_msk(end) if end else "—"
         return True, i18n_get_text(
             language, "promo_link.reward_subscription",
             "📦 <b>Подписка</b> · {tariff}\n⏳ <b>{days} дн.</b>\n📅 До: <b>{end}</b>",

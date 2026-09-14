@@ -283,17 +283,30 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     await grant_expiry_special_offer(
                         conn, telegram_id, subscription.get("source"), subscription.get("expires_at"),
                     )
-                    expired_notice = "bypass"
+                    # A trial end is ONE message, «пробный завершён» (#1).
+                    expired_notice = "trial" if subscription.get("source") == "trial" else "bypass"
             else:
                 rows = await _expire_row_fully(conn, telegram_id, subscription, subscription_id, uuid_to_remove, now_db)
-                if rows > 0 and (subscription.get("source") or "") in _PAID_SUBSCRIPTION_SOURCES:
-                    expired_notice = "paid"
+                if rows > 0:
+                    # every ended access is told (#18 free days, #19 gift); a trial
+                    # gets its own one message (#1)
+                    if (subscription.get("source") or "") == "trial":
+                        expired_notice = "trial"
+                    elif subscription.get("admin_grant_days") is not None:
+                        expired_notice = "free"
+                    else:
+                        expired_notice = "paid"
     # Committed: tell the user (08_payments_ux P1 #5 — a paid subscription without
     # bypass used to end in silence). Once per period: the UPDATE above matches once.
     if expired_notice:
         try:
             from app.services.notifications import special_offer
-            special_offer.schedule_expired_notice(telegram_id, has_bypass=expired_notice == "bypass")
+            if expired_notice == "trial":
+                special_offer.schedule_trial_expired_notice(telegram_id)
+            else:
+                special_offer.schedule_expired_notice(
+                    telegram_id, has_bypass=expired_notice == "bypass", free=expired_notice == "free",
+                )
         except Exception as notify_err:  # noqa: BLE001
             logger.warning("EXPIRY_NOTICE_SCHEDULE_FAILED user=%s: %s", telegram_id, type(notify_err).__name__)
     return rows > 0
@@ -612,10 +625,14 @@ async def get_active_paid_subscription(conn, telegram_id: int, now: datetime):
     """Single source of truth: does user have an active paid (non-trial) subscription?
     Paid subscription ALWAYS overrides trial logic. Used by trial_notifications and
     fast_expiry_cleanup to skip trial notifications and trial cleanup when paid exists.
-    Returns: row with expires_at or None. Caller must pass existing conn (same transaction)."""
+    Returns: row with expires_at or None. Caller must pass existing conn (same transaction).
+    A bypass-only row is never paid: its expires_at is a 10-year placeholder
+    (ensure_bypass_only_subscription / the expiry transitions), not a premium end."""
     return await conn.fetchrow("""
         SELECT expires_at FROM subscriptions
-        WHERE telegram_id = $1 AND source != 'trial' AND status = 'active' AND expires_at > $2
+        WHERE telegram_id = $1 AND source NOT IN ('trial', 'bypass_only')
+          AND NOT COALESCE(is_bypass_only, FALSE)
+          AND status = 'active' AND expires_at > $2
         LIMIT 1
     """, telegram_id, _to_db_utc(now))
 
@@ -739,7 +756,9 @@ async def set_special_offer(telegram_id: int) -> bool:
         return False
 
 
-_PAID_SUBSCRIPTION_SOURCES = ("payment", "auto_renew")
+# A gifted subscription was paid for (by the giver): it ends like a bought one —
+# «подписка закончилась» + the −15 % window (#19, docs/notifications/matrix.md).
+_PAID_SUBSCRIPTION_SOURCES = ("payment", "auto_renew", "gift")
 
 # Owner 2026-09-14: ONE −15 % window of 72 h per subscription period, opened by
 # whatever offers it first — the pre-expiry reminder (paid 3 h / trial 3 h) or
@@ -1055,6 +1074,38 @@ SINGLE SOURCE OF TRUTH: grant_access
 # Grant sources that are a PAID period (payment, balance auto-renewal, paid gift
 # activation). A paid grant clears admin_grant_days (N-04).
 _PAID_GRANT_SOURCES = frozenset({"payment", "auto_renew", "gift"})
+# Grants of DAYS (not a paid tariff period): the broadcast «пробный ключ»,
+# admin / promo-link days, game prizes. On an active subscription they only move
+# the end date — the subscription keeps its source and tariff (#3, #4).
+_DAY_GRANT_SOURCES = frozenset({"trial", "admin", "game_strike", "game_dice"})
+
+# A paid purchase during the trial ends the trial NOW — and completes it: after
+# a purchase «пробный завершён −30 %» must never come (owner rule: trial
+# messages stop as soon as the user buys). Without the flag, a premium that
+# ended within 24 h of the purchase (the trial worker's look-back) got it.
+_TRIAL_ENDED_BY_PAYMENT_SQL = (
+    "UPDATE users SET trial_expires_at = $1, trial_completed_sent = TRUE "
+    "WHERE telegram_id = $2 AND trial_expires_at > $1"
+)
+
+
+# Grants that close a running trial: a purchase (Basic, Plus — the upgrade
+# branch too) and an activated gift. Day grants extend the trial instead (#4).
+_TRIAL_ENDING_SOURCES = frozenset({"payment", "gift"})
+
+
+async def _end_trial_on_payment(conn, telegram_id: int, now: datetime, subscription_end: datetime) -> None:
+    """End a running trial NOW and complete it (no trial reminders, no «пробный
+    завершён» after the purchase) — the same step on every grant branch."""
+    user_row = await conn.fetchrow("SELECT trial_expires_at FROM users WHERE telegram_id = $1", telegram_id)
+    old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
+    if old_trial_expires_at and _from_db_utc(old_trial_expires_at) > now:
+        await conn.execute(_TRIAL_ENDED_BY_PAYMENT_SQL, _to_db_utc(now), telegram_id)
+        logger.info(
+            f"TRIAL_OVERRIDDEN_BY_PAID_SUBSCRIPTION: user_id={telegram_id}, "
+            f"old_trial_expires_at={old_trial_expires_at.isoformat()}, "
+            f"paid_subscription_expires_at={subscription_end.isoformat()}"
+        )
 
 
 async def grant_access(
@@ -1277,6 +1328,8 @@ async def grant_access(
                     vpn_key_existing = subscription.get("vpn_key")
                     vpn_key_plus_existing = subscription.get("vpn_key_plus")
                     await _log_subscription_history_atomic(conn, telegram_id, vpn_key_existing or uuid, subscription_start, subscription_end, "renewal")
+                    # Plus bought during a trial closes it like Basic does.
+                    await _end_trial_on_payment(conn, telegram_id, now, subscription_end)
                     logger.info(
                         f"grant_access: BASIC_TO_PLUS_UPGRADE_SUCCESS [user={telegram_id}, uuid={uuid[:8]}..., "
                         f"new_expires={subscription_end.isoformat()}]"
@@ -1443,18 +1496,27 @@ async def grant_access(
                 # granted subscription only adds days: it must not turn the row into
                 # source='trial' (reminders skip trial rows) nor flip Plus→Basic.
                 # Trial and bypass-only rows keep the old behaviour.
+                # #3 / #4 (docs/notifications/matrix.md): the same for EVERY day
+                # grant — admin / promo-link days, game prizes. Days only move the
+                # date: a paid subscription stays paid (its reminders, −15 % and
+                # end message), a trial stays a trial (its end moves with it, see
+                # below). A bypass-only row has no premium to keep: the grant's own
+                # source applies, as before.
                 row_source = source
                 _current_source = (subscription.get("source") or "").strip().lower()
+                _is_day_grant = source in _DAY_GRANT_SOURCES and tariff_period_days is None
                 if (
-                    source == "trial"
+                    _is_day_grant
                     and _current_source
-                    and _current_source not in ("trial", "bypass_only")
+                    and _current_source != "bypass_only"
                     and not subscription.get("is_bypass_only")
                 ):
                     row_source = subscription.get("source")
-                    incoming_tariff = current_sub_type
+                    # never a downgrade (Plus stays Plus); an admin's explicit Plus
+                    # grant on a Basic subscription still upgrades it (payment matrix)
+                    incoming_tariff = "plus" if "plus" in (current_sub_type, incoming_tariff) else current_sub_type
                     logger.info(
-                        f"grant_access: TRIAL_GIFT_KEEPS_SOURCE [user={telegram_id}, "
+                        f"grant_access: DAY_GRANT_KEEPS_SOURCE [user={telegram_id}, grant={source}, "
                         f"source={row_source}, tariff={incoming_tariff}]"
                     )
                 # N-04: a paid period ends the admin/promo grant semantics
@@ -1521,21 +1583,27 @@ async def grant_access(
                     logger.error(f"grant_access: RENEWAL_SAVE_FAILED [user={telegram_id}, error={str(e)}]")
                     raise Exception(f"Failed to renew subscription in database: {e}") from e
                 
-                # WHY: При оплате во время trial явно завершаем trial и логируем — trial_notifications/cleanup не должны трогать paid
-                if source == "payment":
-                    user_row = await conn.fetchrow("SELECT trial_expires_at FROM users WHERE telegram_id = $1", telegram_id)
-                    old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
-                    if old_trial_expires_at and _from_db_utc(old_trial_expires_at) > now:
-                        await conn.execute(
-                            "UPDATE users SET trial_expires_at = $1 WHERE telegram_id = $2 AND trial_expires_at > $1",
-                            _to_db_utc(now), telegram_id
-                        )
-                        logger.info(
-                            f"TRIAL_OVERRIDDEN_BY_PAID_SUBSCRIPTION: user_id={telegram_id}, "
-                            f"old_trial_expires_at={old_trial_expires_at.isoformat()}, "
-                            f"paid_subscription_expires_at={subscription_end.isoformat()}"
-                        )
-                
+                # WHY: При оплате (или подарке) во время trial явно завершаем trial — trial_notifications/cleanup не должны трогать paid
+                if source in _TRIAL_ENDING_SOURCES:
+                    await _end_trial_on_payment(conn, telegram_id, now, subscription_end)
+                elif row_source == "trial" and _is_day_grant and _current_source == "trial":
+                    # #4: days during a trial extend THE TRIAL — the trial worker
+                    # reads users.trial_expires_at; its reminders go to the new end.
+                    await conn.execute(
+                        "UPDATE users SET trial_expires_at = $1 WHERE telegram_id = $2 "
+                        "AND trial_expires_at IS NOT NULL AND trial_expires_at > $3",
+                        _to_db_utc(subscription_end), telegram_id, _to_db_utc(now),
+                    )
+                    await conn.execute(
+                        "UPDATE subscriptions SET trial_notif_24h_sent = FALSE, trial_notif_3h_sent = FALSE, "
+                        "trial_notif_71h_sent = FALSE WHERE telegram_id = $1",
+                        telegram_id,
+                    )
+                    logger.info(
+                        f"TRIAL_EXTENDED_BY_DAY_GRANT: user_id={telegram_id}, grant={source}, "
+                        f"trial_expires_at={subscription_end.isoformat()}"
+                    )
+
                 # Определяем action_type для истории
                 if source == "payment":
                     history_action_type = "renewal"
@@ -1861,12 +1929,18 @@ async def grant_access(
                     from app.services import purchase_flow
                     _is_trial = (source == "trial")
                     _period_days = max(1, int(duration.total_seconds() // 86400))
+                    # Day grants (admin / game / promo) keep the panel tag; the paid
+                    # and trial call stays exactly as before.
+                    _tag_kw = ({"keep_panel_tag": True}
+                               if source not in _PAID_GRANT_SOURCES and source not in ("trial", "balance")
+                               else {})
                     vless_result = await purchase_flow.provision_subscription(
                         telegram_id,
                         tariff=tariff or "basic",
                         subscription_end=subscription_end,
                         period_days=_period_days,
                         is_trial=_is_trial,
+                        **_tag_kw,
                     )
                     vless_url = vless_result.get("vless_url")
                     vless_url_plus = vless_result.get("vless_url_plus")
@@ -2075,20 +2149,9 @@ async def grant_access(
             )
             raise Exception(f"Failed to save subscription to database: {e}") from e
         
-        # WHY: При оплате во время trial явно завершаем trial и логируем — trial_notifications/cleanup не должны трогать paid
-        if source == "payment":
-            user_row = await conn.fetchrow("SELECT trial_expires_at FROM users WHERE telegram_id = $1", telegram_id)
-            old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
-            if old_trial_expires_at and _from_db_utc(old_trial_expires_at) > now:
-                await conn.execute(
-                    "UPDATE users SET trial_expires_at = $1 WHERE telegram_id = $2 AND trial_expires_at > $1",
-                    _to_db_utc(now), telegram_id
-                )
-                logger.info(
-                    f"TRIAL_OVERRIDDEN_BY_PAID_SUBSCRIPTION: user_id={telegram_id}, "
-                    f"old_trial_expires_at={old_trial_expires_at.isoformat()}, "
-                    f"paid_subscription_expires_at={subscription_end.isoformat()}"
-                )
+        # WHY: При оплате (или подарке) во время trial явно завершаем trial — trial_notifications/cleanup не должны трогать paid
+        if source in _TRIAL_ENDING_SOURCES:
+            await _end_trial_on_payment(conn, telegram_id, now, subscription_end)
         
         # Записываем в историю подписок
         await _log_subscription_history_atomic(conn, telegram_id, vless_url, subscription_start, subscription_end, history_action_type)
@@ -2552,6 +2615,62 @@ async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(query, telegram_id)
+
+
+# #16 / #24 (docs/notifications/matrix.md): a reminder is CLAIMED for the period
+# it was chosen for — bound to the expires_at the pass read. A renewal inside
+# the pass moved expires_at (and reset the flags): the claim matches nothing,
+# no reminder with the old date goes out and the new period keeps its own.
+# Claimed before the send: a restart after the send cannot send it twice.
+_PERIOD_REMINDER_FLAGS = ("reminder_7d_sent", "reminder_3d_sent", "reminder_1d_sent",
+                          "reminder_24h_sent", "reminder_3h_sent", "reminder_6h_sent")
+_REMINDER_CLAIM_QUERIES = {
+    flag: (
+        f"UPDATE subscriptions SET {flag} = TRUE, last_reminder_at = (NOW() AT TIME ZONE 'UTC') "
+        f"WHERE telegram_id = $1 AND expires_at = $2 AND status = 'active' "
+        f"AND COALESCE({flag}, FALSE) = FALSE"
+    )
+    for flag in _PERIOD_REMINDER_FLAGS
+}
+_REMINDER_RELEASE_QUERIES = {
+    flag: f"UPDATE subscriptions SET {flag} = FALSE WHERE telegram_id = $1 AND expires_at = $2"
+    for flag in _PERIOD_REMINDER_FLAGS
+}
+
+
+async def claim_reminder_flag(telegram_id: int, flag_name: str, expires_at) -> bool:
+    """True → this pass owns the reminder of the period ending at `expires_at`."""
+    query = _REMINDER_CLAIM_QUERIES.get(flag_name)
+    if query is None or expires_at is None:
+        raise ValueError(f"Invalid reminder claim: flag={flag_name!r} expires_at={expires_at!r}")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(query, telegram_id, _to_db_utc(_ensure_utc(expires_at)))
+    return str(result).endswith(" 1")
+
+
+async def release_reminder_flag(telegram_id: int, flag_name: str, expires_at) -> None:
+    """Undo a claim after a temporary send failure (the next pass retries)."""
+    query = _REMINDER_RELEASE_QUERIES.get(flag_name)
+    if query is None or expires_at is None:
+        return
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(query, telegram_id, _to_db_utc(_ensure_utc(expires_at)))
+
+
+async def is_user_blocked(telegram_id: int) -> bool:
+    """After a failed send: safe_send_message marks a user who blocked the bot /
+    whose chat is gone as unreachable. False on any doubt (→ retry, never lose)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            reachable = await conn.fetchval(
+                "SELECT COALESCE(is_reachable, TRUE) FROM users WHERE telegram_id = $1", telegram_id,
+            )
+        return reachable is False
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def remember_telegram_charge(payment_id: int, charge_id: str) -> None:
@@ -5330,6 +5449,9 @@ async def _finalize_purchase_locked(
         sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
         try:
             from app.services import purchase_flow
+            from app.services.tariffs import premium_panel_tag
+            # The combo flag of this purchase is written after the sync — pass the tag.
+            sync_info = {**sync_info, "panel_tag": premium_panel_tag(tariff_type, is_combo=bool(is_combo_purchase))}
             await purchase_flow.sync_renewal_to_remnawave(sync_info)
         except Exception as e:
             logger.critical(

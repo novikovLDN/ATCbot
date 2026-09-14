@@ -978,7 +978,67 @@ export const endpoints = {
       }>;
     }>(`/remnawave/reset-premium-unlimited?${p.toString()}`);
   },
+
+  // ── Remnawave user tags by tariff (Settings) ──────────────────────
+  remnawaveTagsStatus: () => api.get<RemnawaveTagsStatus>("/remnawave-tags/status"),
+  remnawaveTagsPreview: () => api.get<RemnawaveTagsPreview>("/remnawave-tags/preview"),
+  remnawaveTagsStart: () =>
+    api.post<RemnawaveTagsActionResult>("/remnawave-tags/start", {}, { idempotencyKey: newIdempotencyKey() }),
+  remnawaveTagsPause: () =>
+    api.post<RemnawaveTagsActionResult>("/remnawave-tags/pause", {}, { idempotencyKey: newIdempotencyKey() }),
+  remnawaveTagsResume: () =>
+    api.post<RemnawaveTagsActionResult>("/remnawave-tags/resume", {}, { idempotencyKey: newIdempotencyKey() }),
+  remnawaveTagsStop: () =>
+    api.post<RemnawaveTagsActionResult>("/remnawave-tags/stop", {}, { idempotencyKey: newIdempotencyKey() }),
 };
+
+export type RemnawaveTag = "TRIAL" | "BASIC" | "PLUS" | "COMBO_BASIC" | "COMBO_PLUS" | "BYPASS";
+
+export type RemnawaveTagsState =
+  | "idle"
+  | "running"
+  | "paused"
+  | "interrupted"
+  | "stopped"
+  | "done"
+  | "failed";
+
+export interface RemnawaveTagsStatus {
+  state: RemnawaveTagsState;
+  running: boolean;
+  total: number;
+  done: number;
+  patched: number;
+  errors: number;
+  /** Entities patched per tag. */
+  per_tag: Record<string, number>;
+  last_error: string | null;
+  started_at: string | null;
+  updated_at: string | null;
+  finished_at: string | null;
+  started_by: number | null;
+  rate_per_sec: number;
+}
+
+export interface RemnawaveTagsPreview {
+  generated_at: string;
+  /** Users with an active subscription. */
+  users: number;
+  /** Their entities found in the panel. */
+  entities: number;
+  /** Entities whose tag differs — would be patched. */
+  differ: number;
+  already: number;
+  /** Entity absent in the panel. */
+  missing: number;
+  tags: { tag: RemnawaveTag; total: number; differ: number }[];
+  eta_seconds: number;
+}
+
+export interface RemnawaveTagsActionResult {
+  ok: boolean;
+  status: RemnawaveTagsStatus;
+}
 
 export interface RemnawaveBackfillStatus {
   running: boolean;

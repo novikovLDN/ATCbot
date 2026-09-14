@@ -15,6 +15,7 @@ from typing import Any, Optional
 import config
 import database
 from app.services import remnawave_api
+from app.services.tariffs import PANEL_TAG_BYPASS
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,32 @@ async def _get_user_with_recovery(telegram_id: int, rmn_uuid: str):
 
     user_data = await remnawave_api.get_user(rmn_uuid)
     return user_data
+
+
+async def _verified_bypass_entity(telegram_id: int, rmn_uuid: str, op: str) -> Optional[dict]:
+    """The bypass entity (username == str(telegram_id)) a legacy bypass write may touch.
+
+    The bypass cache columns can hold the PREMIUM entity's id/uuid (backfill
+    contamination); resolving through them PATCHed tg_*_premium (+10 years of
+    premium, or DISABLED). get_bypass_entity_safe checks the username, falls
+    back to the username resolve and re-writes the cache. None → the caller
+    must not touch the panel. A legacy shortUuid is cleared as before.
+    """
+    if not _is_valid_full_uuid(rmn_uuid):
+        return await _get_user_with_recovery(telegram_id, rmn_uuid)
+    ent = await remnawave_api.get_bypass_entity_safe(telegram_id)
+    if (
+        not isinstance(ent, dict)
+        or ent.get("id") is None
+        or str(ent.get("username") or "").strip() != str(telegram_id)
+    ):
+        logger.warning(
+            "REMNAWAVE_BYPASS_NOT_RESOLVED: tg=%s op=%s — no bypass entity with username=str(tg) "
+            "(absent or panel unavailable), panel not touched",
+            telegram_id, op,
+        )
+        return None
+    return ent
 
 
 # ── Create ──────────────────────────────────────────────────────────────
@@ -163,6 +190,8 @@ async def create_remnawave_user(
                     update_fields["trafficLimitBytes"] = int(traffic_limit)
                 if not existing.get("telegramId"):
                     update_fields["telegramId"] = int(telegram_id)
+                if existing.get("tag") != PANEL_TAG_BYPASS:
+                    update_fields["tag"] = PANEL_TAG_BYPASS
                 adopted = await remnawave_api.update_user(
                     int(existing_id) if existing_id is not None else existing_uuid,
                     **update_fields,
@@ -177,6 +206,7 @@ async def create_remnawave_user(
             expire_at=expire_str,
             device_limit=_device_limit_for_tariff(tariff),
             telegram_id=telegram_id,
+            tag=PANEL_TAG_BYPASS,
         )
         if result:
             # 3.x: response не отдаёт `uuid` — только `vlessUuid` + `id`.
@@ -215,13 +245,13 @@ async def ensure_squad(telegram_id: int) -> None:
         if not rmn_uuid:
             return
         # Quick check — if squad already assigned, skip
-        user_data = await remnawave_api.get_user(rmn_uuid)
+        user_data = await _verified_bypass_entity(telegram_id, rmn_uuid, "ensure_squad")
         if user_data:
             squads = user_data.get("activeInternalSquads") or []
             if squads:
                 return  # Already has squad
             # No squad — assign
-            await remnawave_api.assign_user_to_squad(rmn_uuid, config.REMNAWAVE_SQUAD_UUID)
+            await remnawave_api.assign_user_to_squad(int(user_data["id"]), config.REMNAWAVE_SQUAD_UUID)
     except Exception as e:
         logger.error("REMNAWAVE_ENSURE_SQUAD_ERROR: tg=%s %s", telegram_id, e)
 
@@ -253,7 +283,7 @@ async def renew_remnawave_user(
             return
 
         # Get current limit and add tariff traffic
-        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
+        user_data = await _verified_bypass_entity(telegram_id, rmn_uuid, "renew")
         if not user_data:
             # User might have been deleted from Remnawave — recreate
             if not await create_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days):
@@ -261,13 +291,10 @@ async def renew_remnawave_user(
                                                   "bypass entity not readable and re-create failed")
             return
 
-        # Резолвим цель через numeric bypass id из БД — не через
-        # user_data.get("uuid"), чтобы гарантированно попасть в bypass
-        # entity, а не в premium (safety-drop иначе тихо теряет PATCH).
-        bypass_id = await database.get_remnawave_id(telegram_id)
-        api_target: Any = bypass_id if bypass_id is not None else (
-            user_data.get("uuid") or rmn_uuid
-        )
+        # Target = the verified bypass entity's own numeric id (username ==
+        # str(tg)), never the cached remnawave_id: a contaminated cache held
+        # the PREMIUM id → PATCH premium limit + expireAt=+10 years.
+        api_target: Any = int(user_data["id"])
         current_limit = user_data.get("trafficLimitBytes", 0)
         new_limit = current_limit + traffic_add
         # Bypass works by traffic (GB), not by date — keep expireAt far future
@@ -275,6 +302,7 @@ async def renew_remnawave_user(
         far_future = datetime.now(timezone.utc) + timedelta(days=3650)
         expire_str = far_future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        tag_field = {} if user_data.get("tag") == PANEL_TAG_BYPASS else {"tag": PANEL_TAG_BYPASS}
         patched = await remnawave_api.update_user(
             api_target,
             trafficLimitBytes=new_limit,
@@ -282,6 +310,7 @@ async def renew_remnawave_user(
             # 3.x: hwidDeviceLimit (update-user.command.ts:53); deviceLimit
             # в контракте нет и вырезался валидатором панели.
             hwidDeviceLimit=_device_limit_for_tariff(tariff),
+            **tag_field,
         )
         if patched is None:
             # M-RENEW-GB-SILENT (docs/audit/03_payment_matrix.md): update_user
@@ -355,12 +384,32 @@ def renew_remnawave_user_bg(telegram_id: int, tariff: str, subscription_end: dat
 
 # ── Disable (subscription expired) ─────────────────────────────────────
 
+def _parse_expire_at(value) -> Optional[datetime]:
+    """Panel expireAt (ISO, 'Z' suffix) → aware UTC datetime; None if absent/bad."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+# An ACTIVE bypass entity whose expireAt is further away than this needs no PATCH.
+_BYPASS_EXTEND_IF_WITHIN = timedelta(days=365)
+
+
 async def extend_remnawave_for_bypass(telegram_id: int) -> None:
     """Extend Remnawave expiry to far future for bypass-only mode.
 
     When main subscription expires but user has bypass traffic,
     Remnawave user must stay ACTIVE with a far-future expireAt.
     Otherwise Remnawave marks user as expired and bypass stops working.
+
+    Called on every open of the setup screen and on trial / expiry
+    transitions: PATCH only when needed (not ACTIVE, or expireAt within
+    _BYPASS_EXTEND_IF_WITHIN / unknown). An ACTIVE entity with a far-future
+    expireAt is left alone.
     """
     if not config.REMNAWAVE_ENABLED:
         return
@@ -368,15 +417,26 @@ async def extend_remnawave_for_bypass(telegram_id: int) -> None:
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
             return
-        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
+        user_data = await _verified_bypass_entity(telegram_id, rmn_uuid, "extend")
         if not user_data:
             return
-        api_uuid = user_data.get("uuid") or rmn_uuid
+        target = int(user_data["id"])
 
-        from datetime import timedelta
+        expire_at = _parse_expire_at(user_data.get("expireAt"))
+        if (
+            user_data.get("status") == "ACTIVE"
+            and expire_at is not None
+            and expire_at > datetime.now(timezone.utc) + _BYPASS_EXTEND_IF_WITHIN
+        ):
+            logger.debug(
+                "REMNAWAVE_BYPASS_EXTEND_SKIPPED: tg=%s — ACTIVE, expireAt %s",
+                telegram_id, expire_at.date().isoformat(),
+            )
+            return
+
         far_future = (datetime.now(timezone.utc) + timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        await remnawave_api.update_user(api_uuid, expireAt=far_future, status="ACTIVE")
-        logger.info("REMNAWAVE_BYPASS_EXTENDED: tg=%s uuid=%s — expiry set to +10 years", telegram_id, api_uuid[:8])
+        await remnawave_api.update_user(target, expireAt=far_future, status="ACTIVE")
+        logger.info("REMNAWAVE_BYPASS_EXTENDED: tg=%s id=%s — expiry set to +10 years", telegram_id, target)
     except Exception as e:
         logger.error("REMNAWAVE_BYPASS_EXTEND_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
 
@@ -396,10 +456,10 @@ async def disable_remnawave_user(telegram_id: int) -> None:
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
             return
-        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
+        user_data = await _verified_bypass_entity(telegram_id, rmn_uuid, "disable")
         if not user_data:
             return
-        api_uuid = user_data.get("uuid") or rmn_uuid
+        target = int(user_data["id"])
 
         # Check if user still has bypass traffic — don't disable if GB remaining
         traffic_limit = user_data.get("trafficLimitBytes", 0)
@@ -413,13 +473,13 @@ async def disable_remnawave_user(telegram_id: int) -> None:
         if traffic_limit > 0 and traffic_used < traffic_limit:
             # User still has bypass GB — extend instead of disable
             far_future = (datetime.now(timezone.utc) + timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            await remnawave_api.update_user(api_uuid, expireAt=far_future, status="ACTIVE")
-            logger.info("REMNAWAVE_KEPT_ACTIVE: tg=%s uuid=%s — bypass traffic remaining (%d/%d bytes)",
-                        telegram_id, api_uuid[:8], traffic_used, traffic_limit)
+            await remnawave_api.update_user(target, expireAt=far_future, status="ACTIVE")
+            logger.info("REMNAWAVE_KEPT_ACTIVE: tg=%s id=%s — bypass traffic remaining (%d/%d bytes)",
+                        telegram_id, target, traffic_used, traffic_limit)
             return
 
-        await remnawave_api.update_user(api_uuid, status="DISABLED")
-        logger.info("REMNAWAVE_DISABLED: tg=%s uuid=%s", telegram_id, api_uuid[:8])
+        await remnawave_api.update_user(target, status="DISABLED")
+        logger.info("REMNAWAVE_DISABLED: tg=%s id=%s", telegram_id, target)
     except Exception as e:
         logger.error("REMNAWAVE_DISABLE_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
 
@@ -438,11 +498,13 @@ async def delete_remnawave_user(telegram_id: int) -> None:
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
             return
-        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
-        api_uuid = (user_data.get("uuid") if user_data else None) or rmn_uuid
-        await remnawave_api.delete_user(api_uuid)
+        user_data = await _verified_bypass_entity(telegram_id, rmn_uuid, "delete")
+        if not user_data:
+            return
+        target = int(user_data["id"])
+        await remnawave_api.delete_user(target)
         await database.clear_remnawave_uuid(telegram_id)
-        logger.info("REMNAWAVE_DELETED: tg=%s uuid=%s", telegram_id, api_uuid[:8])
+        logger.info("REMNAWAVE_DELETED: tg=%s id=%s", telegram_id, target)
     except Exception as e:
         logger.error("REMNAWAVE_DELETE_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
 
@@ -496,7 +558,8 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
         # ещё не было выдано) — не безлимит. Складываем без условий.
         new_limit = current_limit + int(extra_bytes)
 
-        result = await remnawave_api.update_user(api_target, trafficLimitBytes=new_limit)
+        tag_field = {} if entity.get("tag") == PANEL_TAG_BYPASS else {"tag": PANEL_TAG_BYPASS}
+        result = await remnawave_api.update_user(api_target, trafficLimitBytes=new_limit, **tag_field)
         if result is not None:
             # Re-enable if disabled
             if entity.get("status") != "ACTIVE":

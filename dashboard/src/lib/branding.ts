@@ -26,7 +26,7 @@ export const FALLBACK_BRANDING: Branding = {
   short: "Admin",
   admin_title: "Admin",
   logo_url: null,
-  primary_color: "#F2E8C9",
+  primary_color: "#007AFF",
 };
 
 export function hexToTriplet(hex: string): string | null {
