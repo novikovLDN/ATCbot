@@ -16,6 +16,7 @@ from app import i18n
 from app.services.notifications import service as notification_service
 from app.services.language_service import resolve_user_language
 from app.services import provisioning_flags, tariffs
+from app.utils.date_utils import format_date_msk
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -243,7 +244,7 @@ async def _autorenew_via_outbox(conn, *, telegram_id: int, language, plan: dict,
         "telegram_id": telegram_id,
         "payment_id": payment_id,
         "language": language,
-        "expires_str": expires_at.strftime("%d.%m.%Y"),
+        "expires_str": format_date_msk(expires_at),
         "expires_at": expires_at,
         "duration_days": duration.days,
         "amount_rubles": amount_rubles,
@@ -828,7 +829,7 @@ async def process_auto_renewals(bot: Bot):
                                     )
                                     continue
 
-                                expires_str = expires_at.strftime("%d.%m.%Y")
+                                expires_str = format_date_msk(expires_at)
                                 duration_days = duration.days
                                 # Собираем payload для Phase B (после commit) — без Telegram и без вложенного acquire
                                 xray_sync_info = result.get("renewal_xray_sync_after_commit")

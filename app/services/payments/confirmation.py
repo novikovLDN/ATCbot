@@ -947,7 +947,8 @@ async def _send_confirmation(
             f"payment_id={payment_id}, amount={topup_amount} RUB"
         )
     else:
-        expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
+        from app.utils.date_utils import format_date_msk
+        expires_str = format_date_msk(expires_at) if expires_at else "N/A"
         subscription_type = (result.get("subscription_type") or "basic").strip().lower()
         if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
             subscription_type = "basic"

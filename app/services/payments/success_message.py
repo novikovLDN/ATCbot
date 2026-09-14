@@ -121,7 +121,8 @@ async def build_purchase_success(
     """(text, keyboard) after a paid VPN purchase / renewal / tariff change."""
     tier = _tier(subscription_type)
     tariff = tariff_display(language, tier, bool(is_combo))
-    date = expires_at.strftime("%d.%m.%Y") if expires_at else "—"
+    from app.utils.date_utils import format_date_msk
+    date = format_date_msk(expires_at) if expires_at else "—"
     gb = bypass_gb_added(tier, bool(is_combo), period_days)
     gb_line = _t(language, "purchase.success_gb_line", gb=gb) if gb > 0 else ""
     params = dict(tariff_name=tariff, period=period_display(language, period_days),
