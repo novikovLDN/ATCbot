@@ -196,6 +196,11 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
         user_id = None
 
         if isinstance(event, Message):
+            # Telegram already took the money and never resends these service
+            # messages: a flood-banned / rate-limited user must not lose a paid
+            # purchase (TG-RT-1). Not counted towards the limit.
+            if event.successful_payment or event.refunded_payment:
+                return await handler(event, data)
             user_id = event.from_user.id if event.from_user else None
         elif isinstance(event, CallbackQuery):
             user_id = event.from_user.id if event.from_user else None
