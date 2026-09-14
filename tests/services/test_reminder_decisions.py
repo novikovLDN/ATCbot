@@ -177,6 +177,39 @@ async def test_autorenew_reminder_says_what_will_happen(paid_pass, monkeypatch, 
     assert i18n.get_text(lang, "reminder.paid_7d") not in text
 
 
+def _three_hours_autorenew(paid_pass, monkeypatch, balance):
+    import auto_renewal
+    import database.subscriptions as db_subs
+    reminders, st = paid_pass
+    end = datetime.now(timezone.utc) + timedelta(hours=3) - timedelta(minutes=10)
+    monkeypatch.setattr(database, "get_subscriptions_for_reminders",
+                        AsyncMock(return_value=[_row(expires_at=end, auto_renew=True)]))
+    monkeypatch.setattr(database, "get_pool", AsyncMock(return_value=_NullPool()))
+    monkeypatch.setattr(auto_renewal, "renewal_quote", AsyncMock(return_value={
+        "tariff_type": "basic", "period_days": 30, "base_price": 199, "amount_rubles": 199.0, "outbox_plan": None}))
+    monkeypatch.setattr(database, "get_user_balance", AsyncMock(return_value=balance))
+    monkeypatch.setattr(reminders, "_bypass_left_text", AsyncMock(return_value=None))
+    offer = AsyncMock(return_value=None)
+    monkeypatch.setattr(db_subs, "claim_special_offer", offer)
+    return reminders, st, offer
+
+
+async def test_autorenew_short_of_balance_3h_reminder_yields_to_the_insufficient_notice(paid_pass, monkeypatch):
+    """Auto-renewal on, balance short, 3 h left: the 3 h reminder and «не хватает
+    N ₽» (auto_renewal) came back to back. One message — the insufficient-balance
+    one: the 3 h reminder is consumed for the period, never sent."""
+    reminders, st, offer = _three_hours_autorenew(paid_pass, monkeypatch, balance=50.0)
+    await reminders.send_smart_reminders(MagicMock())
+    assert [o[0] for o in st["order"]] == ["claim"]
+    offer.assert_not_awaited()                   # the −15 % window is left to the expiry
+
+
+async def test_autorenew_with_enough_balance_keeps_the_3h_reminder(paid_pass, monkeypatch):
+    reminders, st, _offer = _three_hours_autorenew(paid_pass, monkeypatch, balance=500.0)
+    await reminders.send_smart_reminders(MagicMock())
+    assert [o[0] for o in st["order"]] == ["claim", "send"]
+
+
 async def test_autorenew_off_keeps_the_renew_text(paid_pass, monkeypatch):
     reminders, st = paid_pass
     sent = []

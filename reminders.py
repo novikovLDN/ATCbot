@@ -156,14 +156,11 @@ def _rub(amount) -> str:
     return f"{float(amount):.2f}".rstrip("0").rstrip(".")
 
 
-async def _autorenew_reminder(subscription: dict, language: str):
-    """#8: auto-renewal is on → not «продлите» (a second, manual payment) but
-    «спишем N ₽» when the balance covers the renewal, else «пополните на N ₽
-    до …». None when the quote cannot be made (the usual text then)."""
+async def _autorenew_amounts(subscription: dict):
+    """(amount, balance) in rubles: what auto-renewal will bill (its own rule,
+    auto_renewal.renewal_quote) and what the user has. None when unknown."""
     import auto_renewal
-    from app.services.notifications.special_offer import MSK, format_deadline
     telegram_id = subscription["telegram_id"]
-    expires_at = subscription.get("expires_at")
     try:
         pool = await database.get_pool()
         async with pool.acquire() as conn:
@@ -172,7 +169,19 @@ async def _autorenew_reminder(subscription: dict, language: str):
     except Exception as e:  # noqa: BLE001
         logger.warning("reminder_autorenew_quote_failed: user=%s %s", telegram_id, type(e).__name__)
         return None
-    amount = float(quote["amount_rubles"])
+    return float(quote["amount_rubles"]), balance
+
+
+async def _autorenew_reminder(subscription: dict, language: str):
+    """#8: auto-renewal is on → not «продлите» (a second, manual payment) but
+    «спишем N ₽» when the balance covers the renewal, else «пополните на N ₽
+    до …». None when the quote cannot be made (the usual text then)."""
+    from app.services.notifications.special_offer import MSK, format_deadline
+    expires_at = subscription.get("expires_at")
+    amounts = await _autorenew_amounts(subscription)
+    if amounts is None:
+        return None
+    amount, balance = amounts
     date = expires_at.astimezone(MSK).strftime("%d.%m.%Y") if expires_at else "—"
     if balance >= amount:
         text = i18n.get_text(language, "reminder.paid_autorenew_ok", date=date,
@@ -353,6 +362,18 @@ async def send_smart_reminders(bot: Bot):
                 # #16 / #24: claim for the period this pass saw. A renewal since
                 # the snapshot (new expires_at, flags reset) → nothing to claim.
                 expires_at = subscription.get("expires_at")
+
+                # Auto-renewal on and the balance short: auto_renewal tells this
+                # user «не хватает N ₽» (its window covers the 3 h one). One
+                # message, not two back to back — the 3 h reminder is consumed
+                # for the period and not sent.
+                if reminder_type == ReminderType.REMINDER_3H and subscription.get("auto_renew"):
+                    amounts = await _autorenew_amounts(subscription)
+                    if amounts is not None and amounts[1] < amounts[0]:
+                        await _claim_reminder(telegram_id, reminder_type, expires_at)
+                        logger.info("reminder_3h_skipped_autorenew_short: user=%s", telegram_id)
+                        continue
+
                 if not await _claim_reminder(telegram_id, reminder_type, expires_at):
                     logger.info("reminder_skipped_not_claimed: user=%s type=%s", telegram_id, reminder_type.value)
                     continue
