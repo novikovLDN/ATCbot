@@ -151,11 +151,57 @@ async def _release_reminder(telegram_id: int, reminder_type: ReminderType, expir
         logger.warning("reminder_release_failed: user=%s type=%s %s", telegram_id, reminder_type.value, type(e).__name__)
 
 
+def _rub(amount) -> str:
+    """199 / 169.15 — rubles without a trailing «.00»."""
+    return f"{float(amount):.2f}".rstrip("0").rstrip(".")
+
+
+async def _autorenew_reminder(subscription: dict, language: str):
+    """#8: auto-renewal is on → not «продлите» (a second, manual payment) but
+    «спишем N ₽» when the balance covers the renewal, else «пополните на N ₽
+    до …». None when the quote cannot be made (the usual text then)."""
+    import auto_renewal
+    from app.services.notifications.special_offer import MSK, format_deadline
+    telegram_id = subscription["telegram_id"]
+    expires_at = subscription.get("expires_at")
+    try:
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            quote = await auto_renewal.renewal_quote(conn, telegram_id, subscription)
+        balance = float(await database.get_user_balance(telegram_id) or 0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("reminder_autorenew_quote_failed: user=%s %s", telegram_id, type(e).__name__)
+        return None
+    amount = float(quote["amount_rubles"])
+    date = expires_at.astimezone(MSK).strftime("%d.%m.%Y") if expires_at else "—"
+    if balance >= amount:
+        text = i18n.get_text(language, "reminder.paid_autorenew_ok", date=date,
+                             amount=_rub(amount), balance=_rub(balance))
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=i18n.get_text(language, "main.profile"), callback_data="menu_profile")],
+        ])
+        return text, keyboard
+    missing = round(amount - balance, 2)
+    text = i18n.get_text(language, "reminder.paid_autorenew_topup", date=date, amount=_rub(amount),
+                         balance=_rub(balance), missing=_rub(missing),
+                         deadline=format_deadline(language, expires_at) if expires_at else "—")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n.get_text(language, "main.btn_topup_balance"), callback_data="topup_balance")],
+        [InlineKeyboardButton(text=i18n.get_text(language, "subscription.renew"), callback_data="menu_buy_vpn")],
+    ])
+    return text, keyboard
+
+
 async def _build_reminder(subscription: dict, reminder_type: ReminderType, language: str,
                           notif_key: str | None, *, enabled: bool):
     """(text, keyboard) of one reminder, in the user's language."""
     from app.services.automated_notifications import get_notification_text
     telegram_id = subscription["telegram_id"]
+    if (reminder_type in (ReminderType.REMINDER_7D, ReminderType.REMINDER_3D, ReminderType.REMINDER_1D)
+            and subscription.get("auto_renew")):
+        built = await _autorenew_reminder(subscription, language)
+        if built is not None:
+            return built
     if reminder_type == ReminderType.ADMIN_1DAY_6H:
         return i18n.get_text(language, "reminder.admin_1day_6h"), get_subscription_keyboard(language)
     if reminder_type == ReminderType.ADMIN_7DAYS_24H:

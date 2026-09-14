@@ -255,6 +255,72 @@ async def _autorenew_via_outbox(conn, *, telegram_id: int, language, plan: dict,
     }
 
 
+async def renewal_quote(conn, telegram_id: int, subscription) -> dict:
+    """What auto-renewal will bill for this subscription: {tariff_type,
+    period_days, base_price, amount_rubles, outbox_plan}. DB reads on `conn`
+    only (no HTTP). One rule for the renewal itself and for the reminders that
+    tell the user «спишем N ₽» / «не хватает N ₽» (#8). Raises TariffConfigError
+    from the outbox plan like before (the caller's per-user error path)."""
+    # The last SUBSCRIPTION payment: the last approved payment of any
+    # kind was a top-up / gift / GB pack / farm shield often enough,
+    # and it parsed as «basic, 30 days» (P1, 2026-09-14).
+    last_payment = await database.get_last_subscription_payment(telegram_id, conn=conn)
+
+    # Парсим тариф из последнего платежа подписки
+    # Формат может быть: "basic_30", "plus_90" или legacy "1", "3", "6", "12"
+    if not last_payment:
+        tariff_type = "basic"
+        period_days = 30
+    else:
+        # Legacy biz_* payments renew as Plus at today's Plus price
+        # (owner 2026-09-14; the old "falls back to basic 199 ₽" is gone).
+        tariff_str = tariffs.normalize_payment_tariff(last_payment.get("tariff", "basic_30"))
+        if "_" in tariff_str:
+            parts = tariff_str.split("_")
+            tariff_type = parts[0] if len(parts) > 0 else "basic"
+            try:
+                period_days = int(parts[1]) if len(parts) > 1 else 30
+            except (ValueError, IndexError):
+                period_days = 30
+        else:
+            tariff_type = "basic"
+            try:
+                months = int(tariff_str)
+                period_days = months * 30
+            except ValueError:
+                period_days = 30
+
+    if tariff_type not in config.TARIFFS or period_days not in config.TARIFFS[tariff_type]:
+        tariff_type = "basic"
+        period_days = 30
+
+    base_price = config.TARIFFS[tariff_type][period_days]["price"]
+
+    # T12: USE_NEW_PROVISIONING on for "autorenew" → bill and provision the
+    # subscription's REAL tariff through the outbox (_outbox_renewal_plan).
+    # The personal discount below applies to its base price unchanged.
+    outbox_plan = None
+    if provisioning_flags.is_on("autorenew"):
+        outbox_plan = _outbox_renewal_plan(subscription, tariff_type, period_days)
+        base_price = outbox_plan["base_price"]
+
+    # Owner rule 2026-09-14: VIP removed; the largest single
+    # discount wins (database.subscriptions.pick_largest_discount).
+    # A renewal takes no promo code, and the special offer is for
+    # an ENDED subscription — this one is active: personal only.
+    from database.subscriptions import pick_largest_discount
+    personal_discount = await database.get_user_discount(telegram_id, conn=conn)
+    _kind, discount_percent = pick_largest_discount([
+        ("personal", personal_discount["discount_percent"] if personal_discount else 0),
+    ])
+    if discount_percent:
+        amount_rubles = round(base_price * (1 - discount_percent / 100), 2)
+    else:
+        amount_rubles = float(base_price)
+    return {"tariff_type": tariff_type, "period_days": period_days, "base_price": base_price,
+            "amount_rubles": amount_rubles, "outbox_plan": outbox_plan}
+
+
 _FAILURE_NOTICE_COOLDOWN_S = 24 * 3600
 _failure_notice_sent_at: dict = {}   # (telegram_id, key) → monotonic time of the last notice
 
@@ -403,63 +469,10 @@ async def process_auto_renewals(bot: Bot):
                             continue
                         
                         # PHASE A: Только DB по conn — без вложенного pool.acquire и без сетевых вызовов
-                        # The last SUBSCRIPTION payment: the last approved payment of any
-                        # kind was a top-up / gift / GB pack / farm shield often enough,
-                        # and it parsed as «basic, 30 days» (P1, 2026-09-14).
-                        last_payment = await database.get_last_subscription_payment(telegram_id, conn=conn)
+                        quote = await renewal_quote(conn, telegram_id, subscription)
+                        tariff_type, period_days = quote["tariff_type"], quote["period_days"]
+                        outbox_plan, amount_rubles = quote["outbox_plan"], quote["amount_rubles"]
 
-                        # Парсим тариф из последнего платежа подписки
-                        # Формат может быть: "basic_30", "plus_90" или legacy "1", "3", "6", "12"
-                        if not last_payment:
-                            tariff_type = "basic"
-                            period_days = 30
-                        else:
-                            # Legacy biz_* payments renew as Plus at today's Plus price
-                            # (owner 2026-09-14; the old "falls back to basic 199 ₽" is gone).
-                            tariff_str = tariffs.normalize_payment_tariff(last_payment.get("tariff", "basic_30"))
-                            if "_" in tariff_str:
-                                parts = tariff_str.split("_")
-                                tariff_type = parts[0] if len(parts) > 0 else "basic"
-                                try:
-                                    period_days = int(parts[1]) if len(parts) > 1 else 30
-                                except (ValueError, IndexError):
-                                    period_days = 30
-                            else:
-                                tariff_type = "basic"
-                                try:
-                                    months = int(tariff_str)
-                                    period_days = months * 30
-                                except ValueError:
-                                    period_days = 30
-                        
-                        if tariff_type not in config.TARIFFS or period_days not in config.TARIFFS[tariff_type]:
-                            tariff_type = "basic"
-                            period_days = 30
-                        
-                        base_price = config.TARIFFS[tariff_type][period_days]["price"]
-
-                        # T12: USE_NEW_PROVISIONING on for "autorenew" → bill and provision the
-                        # subscription's REAL tariff through the outbox (_outbox_renewal_plan).
-                        # The personal discount below applies to its base price unchanged.
-                        outbox_plan = None
-                        if provisioning_flags.is_on("autorenew"):
-                            outbox_plan = _outbox_renewal_plan(subscription, tariff_type, period_days)
-                            base_price = outbox_plan["base_price"]
-
-                        # Owner rule 2026-09-14: VIP removed; the largest single
-                        # discount wins (database.subscriptions.pick_largest_discount).
-                        # A renewal takes no promo code, and the special offer is for
-                        # an ENDED subscription — this one is active: personal only.
-                        from database.subscriptions import pick_largest_discount
-                        personal_discount = await database.get_user_discount(telegram_id, conn=conn)
-                        _kind, discount_percent = pick_largest_discount([
-                            ("personal", personal_discount["discount_percent"] if personal_discount else 0),
-                        ])
-                        if discount_percent:
-                            amount_rubles = round(base_price * (1 - discount_percent / 100), 2)
-                        else:
-                            amount_rubles = float(base_price)
-                        
                         user_balance_kopecks = subscription.get("balance", 0) or 0
                         balance_rubles = user_balance_kopecks / 100.0
                         

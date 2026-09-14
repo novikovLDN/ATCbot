@@ -130,6 +130,65 @@ async def test_failed_send_is_released_unless_blocked(paid_pass, blocked, releas
     assert ("release" in [o[0] for o in st["order"]]) is released
 
 
+class _NullPool:
+    def acquire(self):
+        class _A:
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, *exc):
+                return False
+        return _A()
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+@pytest.mark.parametrize("balance,expect", [(500.0, "ok"), (150.0, "topup")])
+async def test_autorenew_reminder_says_what_will_happen(paid_pass, monkeypatch, lang, balance, expect):
+    """#8: with auto-renewal on, «продлите заранее» made users pay twice by hand."""
+    import auto_renewal
+    from app.services.notifications.special_offer import format_deadline
+    reminders, st = paid_pass
+    sub = _row(expires_at=st["end"], auto_renew=True)
+    monkeypatch.setattr(database, "get_subscriptions_for_reminders", AsyncMock(return_value=[sub]))
+    monkeypatch.setattr(reminders, "resolve_user_language", AsyncMock(return_value=lang))
+    monkeypatch.setattr(database, "get_pool", AsyncMock(return_value=_NullPool()))
+    monkeypatch.setattr(auto_renewal, "renewal_quote", AsyncMock(return_value={
+        "tariff_type": "basic", "period_days": 30, "base_price": 199, "amount_rubles": 199.0, "outbox_plan": None}))
+    monkeypatch.setattr(database, "get_user_balance", AsyncMock(return_value=balance))
+    texts = []
+
+    async def send(bot, tg, text, **kw):
+        texts.append((text, [b.callback_data for row in kw["reply_markup"].inline_keyboard for b in row]))
+        return MagicMock()
+    monkeypatch.setattr(reminders, "safe_send_message", send)
+
+    await reminders.send_smart_reminders(MagicMock())
+
+    (text, buttons), = texts
+    date = st["end"].astimezone(timezone(timedelta(hours=3))).strftime("%d.%m.%Y")
+    if expect == "ok":
+        assert text == i18n.get_text(lang, "reminder.paid_autorenew_ok", date=date, amount="199", balance="500")
+        assert buttons == ["menu_profile"]
+    else:
+        assert text == i18n.get_text(lang, "reminder.paid_autorenew_topup", date=date, amount="199",
+                                     balance="150", missing="49",
+                                     deadline=format_deadline(lang, st["end"]))
+        assert buttons == ["topup_balance", "menu_buy_vpn"]
+    assert i18n.get_text(lang, "reminder.paid_7d") not in text
+
+
+async def test_autorenew_off_keeps_the_renew_text(paid_pass, monkeypatch):
+    reminders, st = paid_pass
+    sent = []
+
+    async def send(bot, tg, text, **kw):
+        sent.append(text)
+        return MagicMock()
+    monkeypatch.setattr(reminders, "safe_send_message", send)
+    await reminders.send_smart_reminders(MagicMock())
+    assert sent == [i18n.get_text("ru", "reminder.paid_7d")]
+
+
 @pytest.mark.parametrize("lang", ["ru", "en"])
 async def test_free_access_24h_text_has_the_price_from_the_table(monkeypatch, lang):
     import reminders

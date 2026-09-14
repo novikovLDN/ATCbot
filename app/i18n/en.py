@@ -524,6 +524,8 @@ LANG = {
     # reminder (paid)
     'reminder.paid_7d': "<tg-emoji emoji-id=\"5454415424319931791\">📅</tg-emoji> Subscription ends in 7 days. Renew in advance — access won't be interrupted.",
     'reminder.paid_7d_btn': "🔁 Renew subscription",
+    'reminder.paid_autorenew_ok': "🔄 <b>Your subscription renews automatically</b>\n\nIt is active until {date}. Auto-renewal is on: before it ends we charge <b>{amount} ₽</b> from your balance — you have {balance} ₽, that is enough.\n\nNothing to do, VPN keeps working.",
+    'reminder.paid_autorenew_topup': "📅 <b>Your subscription is active until {date}</b>\n\nAuto-renewal is on, but your balance is {balance} ₽ and the renewal costs {amount} ₽ — <b>{missing} ₽</b> short.\n\nTop up {missing} ₽ before {deadline} and the subscription renews by itself.",
     'reminder.paid_3d_btn': "🔁 Renew",
     'reminder.paid_1d': "<tg-emoji emoji-id=\"5190806721286657692\">🔴</tg-emoji> Subscription ends tomorrow. Renew now to keep VPN running.",
     'reminder.paid_1d_btn': "🔁 Renew",
