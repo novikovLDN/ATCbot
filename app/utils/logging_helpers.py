@@ -21,7 +21,7 @@ Failure taxonomy:
 import logging
 import json
 import uuid
-from typing import Optional, Dict, Any
+from typing import Optional
 from datetime import datetime, timezone
 from contextvars import ContextVar
 
@@ -295,13 +295,6 @@ def classify_error(exception: Exception) -> str:
     import asyncio
     from app.services.payments.exceptions import PaymentServiceError
     from app.services.activation.exceptions import ActivationServiceError
-    # P0 HOTFIX: VPNServiceError is defined in service.py, not exceptions.py
-    try:
-        from app.services.vpn.service import VPNServiceError
-    except ImportError:
-        # Fallback: define minimal exception class if import fails
-        class VPNServiceError(Exception):
-            pass
     from app.services.subscriptions.exceptions import SubscriptionServiceError
     # TrialServiceError: module app.services.trials.exceptions does not exist; skip to avoid ImportError
     from app.services.admin.exceptions import AdminServiceError
@@ -311,7 +304,6 @@ def classify_error(exception: Exception) -> str:
     if isinstance(exception, (
         PaymentServiceError,
         ActivationServiceError,
-        VPNServiceError,
         SubscriptionServiceError,
         AdminServiceError,
         NotificationServiceError,
@@ -337,54 +329,3 @@ def classify_error(exception: Exception) -> str:
     return "unexpected_error"
 
 
-def log_operation(
-    component: str,
-    operation: str,
-    outcome: str,
-    error_type: Optional[str] = None,
-    duration_ms: Optional[float] = None,
-    **kwargs
-) -> None:
-    """
-    Log a generic operation with structured format.
-    
-    STEP 2 — OBSERVABILITY: Generic structured logging.
-    
-    Args:
-        component: Component name (e.g., "handler", "worker", "service")
-        operation: Operation name (e.g., "payment_finalization")
-        outcome: Outcome ("success" | "degraded" | "failed")
-        error_type: Error type if outcome is "failed" (optional)
-        duration_ms: Duration in milliseconds (optional)
-        **kwargs: Additional context
-    """
-    correlation_id = get_correlation_id()
-    
-    log_data = {
-        "event": "OPERATION",
-        "correlation_id": correlation_id,
-        "component": component,
-        "operation": operation,
-        "outcome": outcome,
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    }
-    
-    if error_type:
-        log_data["error_type"] = error_type
-    
-    if duration_ms is not None:
-        log_data["duration_ms"] = duration_ms
-    
-    if kwargs:
-        log_data.update(kwargs)
-    
-    # Emit as JSON with proper level field matching Python logging level
-    if outcome == "failed":
-        log_data["level"] = "ERROR"
-        logger.error(json.dumps(log_data))
-    elif outcome == "degraded":
-        log_data["level"] = "WARNING"
-        logger.warning(json.dumps(log_data))
-    else:
-        log_data["level"] = "INFO"
-        logger.info(json.dumps(log_data))

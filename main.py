@@ -35,10 +35,7 @@ import trial_notifications
 import activation_worker
 from app.workers import farm_notifications
 from app.workers import traffic_monitor
-# xray_sync worker удалён вместе с samopis-мастером (cutover 2026-08).
-# Единственный источник provisioning — Remnawave 3.x через remnawave_api.
-XRAY_SYNC_AVAILABLE = False
-xray_sync = None
+from app.workers import provisioning_worker
 
 # ====================================================================================
 # STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
@@ -91,6 +88,139 @@ ADVISORY_LOCK_KEY = 987654321
 instance_lock_conn = None
 
 
+async def acquire_instance_lock() -> None:
+    """ADVISORY_LOCK_FIX: single-instance guard via PostgreSQL (1 s max wait).
+
+    PROD: lock not acquired → exit (another instance may be running). Elsewhere:
+    warn and continue without the guard. No-op when the lock is already held.
+    """
+    global instance_lock_conn
+    if instance_lock_conn is not None:
+        return
+    pool = await database.get_pool()
+    if not pool:
+        logger.critical("DB pool missing; cannot acquire advisory lock. Exiting.")
+        sys.exit(1)
+    try:
+        instance_lock_conn = await pool.acquire()
+        await instance_lock_conn.execute("SET lock_timeout = '1000'")
+        await instance_lock_conn.execute("SELECT pg_advisory_lock($1)", ADVISORY_LOCK_KEY)
+        logger.info("Advisory lock acquired")
+    except Exception as e:
+        if config.IS_PROD:
+            logger.critical("Advisory lock not acquired in PROD — another instance may be running: %s", e)
+            sys.exit(1)
+        logger.warning("Advisory lock not acquired (timeout or error), continuing without single-instance guard: %s", e)
+        if instance_lock_conn:
+            await pool.release(instance_lock_conn)
+            instance_lock_conn = None
+
+
+async def start_db_services(bot, background_tasks: list, started: dict) -> None:
+    """Every DB-dependent background worker — the ONE list for the normal start
+    (main) and for the recovery after a DB outage (retry_db_init), so the two
+    cannot diverge (N5, docs/audit/06_bug_hunt.md). The single-instance advisory
+    lock is taken FIRST (PROD + lock held elsewhere → exit before any worker).
+    `started` (name → task) is shared by both paths: a worker starts at most once.
+    """
+    await acquire_instance_lock()
+
+    def _start(name, factory):
+        if name in started:
+            return
+        task = asyncio.create_task(factory())
+        started[name] = task
+        background_tasks.append(task)
+        logger.info("DB worker started: %s", name)
+
+    _start("reminders", lambda: reminders.reminders_task(bot))
+    _start("trial_notifications", lambda: trial_notifications.run_trial_scheduler(bot))
+    _start("farm_notifications", lambda: farm_notifications.farm_notifications_task(bot))
+    if config.REMNAWAVE_ENABLED:
+        _start("traffic_monitor", lambda: traffic_monitor.traffic_monitor_task(bot))
+    else:
+        logger.info("Traffic monitor task skipped (REMNAWAVE_ENABLED=false)")
+    _start("fast_expiry_cleanup", lambda: fast_expiry_cleanup.fast_expiry_cleanup_task(bot))
+    flags = get_feature_flags()
+    if flags.background_workers_enabled and flags.auto_renewal_enabled:
+        _start("auto_renewal", lambda: auto_renewal.auto_renewal_task(bot))
+    else:
+        logger.warning(
+            "Auto-renewal task skipped (feature flag: background_workers=%s, auto_renewal=%s)",
+            flags.background_workers_enabled, flags.auto_renewal_enabled,
+        )
+    _start("activation_worker", lambda: activation_worker.activation_worker_task(bot))
+    # Wata reconciler — защита от потерянных webhook'ов (каждые 5 минут)
+    try:
+        import wata_service as _wata
+        if _wata.is_enabled():
+            from app.workers.wata_reconciler import wata_reconciler_task
+            _start("wata_reconciler", lambda: wata_reconciler_task(bot))
+            # Прогрев публичного ключа webhook-подписи (fail-closed): без ключа
+            # webhook отвечает 500 до первой успешной загрузки. Не блокирует старт.
+            _start("wata_key_warmup", lambda: _wata.warmup_public_key())
+        else:
+            logger.info("Wata reconciler skipped (WATA_ACCESS_TOKEN not configured)")
+    except Exception as e:
+        logger.warning("Wata reconciler failed to start: %s", e)
+    # Provisioning worker — drains provisioning_jobs (retries, per-user order, alerts).
+    # Runs ALWAYS (no feature flag) so enqueued jobs never hang; needs only the DB.
+    _start("provisioning_worker", lambda: provisioning_worker.provisioning_worker_task(bot))
+
+
+async def retry_db_init(bot, background_tasks: list, started: dict, *, retry_interval: float = 30) -> None:
+    """Фоновая задача повторной инициализации БД (DB недоступна при старте).
+
+    - проверяет доступность БД каждые retry_interval секунд;
+    - при успехе (или если БД стала доступна извне) — start_db_services: ТОТ ЖЕ
+      набор воркеров, что при обычном старте, advisory lock первым;
+    - никогда не падает (исключения логируются), не блокирует event loop.
+    """
+    if database.DB_READY:
+        logger.info("Database already ready, retry task not needed")
+        return
+
+    logger.info("Starting DB initialization retry task (will retry every %s seconds)", retry_interval)
+
+    while True:
+        try:
+            await asyncio.sleep(retry_interval)
+
+            if database.DB_READY:
+                logger.info("Database became available, starting DB services")
+                await start_db_services(bot, background_tasks, started)
+                break
+
+            logger.info("🔄 Retrying database initialization...")
+            try:
+                success = await database.init_db()
+                if success:
+                    # init_db() sets DB_READY and recalculates SystemState internally;
+                    # migrations are never re-run once DB_READY=True.
+                    logger.info("✅ DATABASE RECOVERY SUCCESSFUL — RESUMING FULL FUNCTIONALITY")
+                    try:
+                        await admin_notifications.notify_admin_recovered(bot)
+                    except Exception as e:
+                        logger.error(f"Failed to send recovery notification: {e}")
+                    await start_db_services(bot, background_tasks, started)
+                    logger.info("DB retry task completed successfully, stopping retry loop")
+                    break
+                else:
+                    logger.warning("Database initialization retry failed, will retry later")
+            except Exception as e:
+                logger.warning(f"Database initialization retry error: {type(e).__name__}: {e}")
+                logger.debug("Full retry error details:", exc_info=True)
+
+        except asyncio.CancelledError:
+            logger.info("DB retry task cancelled")
+            break
+        except Exception as e:
+            logger.exception(f"Unexpected error in DB retry task: {e}")
+            await asyncio.sleep(retry_interval)
+
+    logger.info("DB retry task finished")
+
+
 async def main():
     # Конфигурация уже проверена в config.py
     # Если переменные окружения не заданы, программа завершится с ошибкой
@@ -107,10 +237,6 @@ async def main():
     from app.core.runtime_context import set_bot_start_time
     set_bot_start_time(datetime.now(timezone.utc))
 
-    # Architecture assertion: Bot must NOT use XRAY_* for link generation
-    if hasattr(config, "XRAY_SERVER_IP"):
-        logger.warning("XRAY_* link constants detected in config. Ensure not used for link generation (API-only).")
-
     # Логируем информацию о конфигурации при старте
     logger.info(f"Starting bot in {config.APP_ENV.upper()} environment")
     logger.info(f"Using BOT_TOKEN from {config.APP_ENV.upper()}_BOT_TOKEN")
@@ -125,6 +251,9 @@ async def main():
 
     # Инициализация бота и диспетчера
     bot = Bot(token=config.BOT_TOKEN)
+    # TG-RT-6: a late answerCallbackQuery ("query is too old") must not abort the handler
+    from app.utils.telegram_request_middleware import install as install_request_middlewares
+    install_request_middlewares(bot)
     if config.REDIS_URL:
         storage = RedisStorage.from_url(config.REDIS_URL)
         logger.info("FSM_STORAGE=redis (configured)")
@@ -218,72 +347,21 @@ async def main():
             logger.error(f"Failed to send degraded mode notification: {e}")
         # Продолжаем запуск бота в деградированном режиме
 
-    # ADVISORY_LOCK_FIX: single-instance guard via PostgreSQL (1s max wait to avoid startup delay).
-    # H4 fix: Use try/finally to ensure connection is released on exception
+    # Single-instance advisory lock + every DB worker: ONE function for this normal
+    # start and for the recovery after a DB outage (retry_db_init), so the two
+    # paths cannot diverge again (N5). The lock is taken BEFORE any worker.
     global instance_lock_conn
     instance_lock_conn = None
-    if database.DB_READY:
-        pool = await database.get_pool()
-        if not pool:
-            logger.critical("DB pool missing; cannot acquire advisory lock. Exiting.")
-            sys.exit(1)
-        try:
-            instance_lock_conn = await pool.acquire()
-            await instance_lock_conn.execute("SET lock_timeout = '1000'")
-            await instance_lock_conn.execute("SELECT pg_advisory_lock($1)", ADVISORY_LOCK_KEY)
-            logger.info("Advisory lock acquired")
-        except Exception as e:
-            if config.IS_PROD:
-                logger.critical("Advisory lock not acquired in PROD — another instance may be running: %s", e)
-                sys.exit(1)
-            logger.warning("Advisory lock not acquired (timeout or error), continuing without single-instance guard: %s", e)
-            if instance_lock_conn:
-                await pool.release(instance_lock_conn)
-                instance_lock_conn = None
-    else:
-        logger.warning("DB not ready; skipping advisory lock (single-instance guard disabled)")
-    
+
     # Centralized list for graceful shutdown
     background_tasks = []
-    
-    # Запуск фоновой задачи для напоминаний (только если БД готова)
-    reminder_task = None
+    # name → task of every DB worker already started (shared with retry_db_init)
+    db_workers_started: dict = {}
+
     if database.DB_READY:
-        reminder_task = asyncio.create_task(reminders.reminders_task(bot))
-        background_tasks.append(reminder_task)
-        logger.info("Reminders task started")
+        await start_db_services(bot, background_tasks, db_workers_started)
     else:
-        logger.warning("Reminders task skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для trial-уведомлений (только если БД готова)
-    trial_notifications_task = None
-    if database.DB_READY:
-        trial_notifications_task = asyncio.create_task(trial_notifications.run_trial_scheduler(bot))
-        background_tasks.append(trial_notifications_task)
-        logger.info("Trial notifications scheduler started")
-    else:
-        logger.warning("Trial notifications scheduler skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для уведомлений о ферме (только если БД готова)
-    farm_notifications_task = None
-    if database.DB_READY:
-        farm_notifications_task = asyncio.create_task(farm_notifications.farm_notifications_task(bot))
-        background_tasks.append(farm_notifications_task)
-        logger.info("Farm notifications task started")
-    else:
-        logger.warning("Farm notifications task skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для мониторинга трафика Remnawave (только если БД готова и Remnawave включен)
-    traffic_monitor_task_instance = None
-    if database.DB_READY and config.REMNAWAVE_ENABLED:
-        traffic_monitor_task_instance = asyncio.create_task(traffic_monitor.traffic_monitor_task(bot))
-        background_tasks.append(traffic_monitor_task_instance)
-        logger.info("Traffic monitor task started")
-    else:
-        if not config.REMNAWAVE_ENABLED:
-            logger.info("Traffic monitor task skipped (REMNAWAVE_ENABLED=false)")
-        else:
-            logger.warning("Traffic monitor task skipped (DB not ready)")
+        logger.warning("DB not ready; advisory lock and DB workers deferred until the DB recovers")
 
     # Запуск фоновой задачи для health-check
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
@@ -325,13 +403,11 @@ async def main():
     except Exception as e:
         logger.warning("scheduled_broadcasts_worker failed to start: %s", e)
 
-    # NB: incy_crypto.selftest() used to be scheduled here for the
-    # crypt1 / Node-sidecar code path. Production `to_incy_link()` is
-    # now pure-Python (`incy://add/<plain_url>` — universal across
-    # Incy versions, including v2.2.1 that doesn't decode crypt1 yet),
-    # so the selftest doesn't tell us anything actionable. The
-    # underlying `_spawn` / `selftest` are still callable for the day
-    # we switch back — re-instate this hook then.
+    # NB: Incy deep-links are NOT pure-Python. `incy_crypto.to_incy_link()`
+    # first tries the crypt1 path (`to_incy_link_crypt1` → `_spawn` →
+    # `node scripts/incy_encode.mjs`, npm `@incy/link-encoder`) and only on
+    # failure falls back to plain `incy://add/<url>`. The Node toolchain in
+    # the Docker image is therefore required for crypt1 links.
     
     # ====================================================================================
     # HTTP Health Check Server
@@ -343,198 +419,16 @@ async def main():
     # No separate health server needed
     
     # ====================================================================================
-    # SAFE STARTUP GUARD: Фоновая задача повторной инициализации БД
+    # SAFE STARTUP GUARD: DB unavailable at start → retry every 30 s. On recovery
+    # retry_db_init calls the same start_db_services (lock first, full worker set).
     # ====================================================================================
-    # Пытается восстановить соединение с БД каждые 30 секунд
-    # ====================================================================================
-    # Переменные для отслеживания восстановленных задач (для db_retry_task)
-    recovered_tasks = {
-        "reminder": None,
-        "fast_cleanup": None,
-        "auto_renewal": None,
-        "activation_worker": None,
-    }
-    
-    async def retry_db_init():
-        """
-        Фоновая задача для автоматической повторной инициализации БД
-        
-        Требования:
-        - Запускается только если DB_READY == False
-        - Проверяет доступность БД каждые 30 секунд
-        - При успешной инициализации:
-          - устанавливает DB_READY = True
-          - логирует восстановление
-          - завершает цикл (break)
-        - Никогда не падает (все исключения обрабатываются)
-        - Не блокирует главный event loop
-        """
-        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, recovered_tasks, background_tasks
-        retry_interval = 30  # секунд
-        
-        # Если БД уже готова, задача не запускается
-        if database.DB_READY:
-            logger.info("Database already ready, retry task not needed")
-            return
-        
-        logger.info("Starting DB initialization retry task (will retry every 30 seconds)")
-        
-        while True:
-            try:
-                # Ждём интервал перед следующей попыткой
-                await asyncio.sleep(retry_interval)
-                
-                # Проверяем, не стала ли БД доступной извне
-                if database.DB_READY:
-                    logger.info("Database became available, stopping retry task")
-                    break
-                
-                # Пытаемся инициализировать БД
-                logger.info("🔄 Retrying database initialization...")
-                try:
-                    success = await database.init_db()
-                    if success:
-                        # PART B.4: init_db() already sets DB_READY = True internally
-                        # PART B.4: if returns True → STOP retry loop
-                        # PART B.4: NEVER re-run migrations once DB_READY=True
-                        # PART A.2: init_db() already recalculates SystemState internally
-                        logger.info("✅ DATABASE RECOVERY SUCCESSFUL — RESUMING FULL FUNCTIONALITY")
-                        
-                        # Уведомляем администратора о восстановлении
-                        try:
-                            await admin_notifications.notify_admin_recovered(bot)
-                        except Exception as e:
-                            logger.error(f"Failed to send recovery notification: {e}")
-                        
-                        # Запускаем задачи, которые были пропущены при старте
-                        if reminder_task is None and recovered_tasks["reminder"] is None:
-                            t = asyncio.create_task(reminders.reminders_task(bot))
-                            recovered_tasks["reminder"] = t
-                            background_tasks.append(t)
-                            logger.info("Reminders task started (recovered)")
-                        
-                        if fast_cleanup_task is None and recovered_tasks["fast_cleanup"] is None:
-                            t = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task(bot))
-                            recovered_tasks["fast_cleanup"] = t
-                            background_tasks.append(t)
-                            logger.info("Fast expiry cleanup task started (recovered)")
-                        
-                        if auto_renewal_task is None and recovered_tasks["auto_renewal"] is None:
-                            _flags_recovery = get_feature_flags()
-                            if _flags_recovery.background_workers_enabled and _flags_recovery.auto_renewal_enabled:
-                                t = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
-                                recovered_tasks["auto_renewal"] = t
-                                background_tasks.append(t)
-                                logger.info("Auto-renewal task started (recovered)")
-                        
-                        if activation_worker_task is None and recovered_tasks["activation_worker"] is None:
-                            t = asyncio.create_task(activation_worker.activation_worker_task(bot))
-                            recovered_tasks["activation_worker"] = t
-                            background_tasks.append(t)
-                            logger.info("Activation worker task started (recovered)")
-                        
-                        # Успешно инициализировали БД - выходим из цикла
-                        logger.info("DB retry task completed successfully, stopping retry loop")
-                        break
-                    else:
-                        # Инициализация не удалась, попробуем снова через интервал
-                        logger.warning("Database initialization retry failed, will retry later")
-                        
-                except Exception as e:
-                    # Ошибка при попытке инициализации - логируем, но продолжаем попытки
-                    logger.warning(f"Database initialization retry error: {type(e).__name__}: {e}")
-                    logger.debug("Full retry error details:", exc_info=True)
-                    # Продолжаем цикл для следующей попытки
-                    
-            except asyncio.CancelledError:
-                # Задача отменена (например, при остановке бота)
-                logger.info("DB retry task cancelled")
-                break
-            except Exception as e:
-                # Неожиданная ошибка в самом цикле - логируем и продолжаем
-                logger.exception(f"Unexpected error in DB retry task: {e}")
-                # Продолжаем работу даже при ошибках
-                await asyncio.sleep(retry_interval)
-        
-        logger.info("DB retry task finished")
-    
-    # ====================================================================================
-    # Запуск фоновой задачи повторной инициализации БД (только если БД не готова)
-    # ====================================================================================
-    db_retry_task_instance = None
     if not database.DB_READY:
-        db_retry_task_instance = asyncio.create_task(retry_db_init())
-        background_tasks.append(db_retry_task_instance)
+        background_tasks.append(asyncio.create_task(
+            retry_db_init(bot, background_tasks, db_workers_started)
+        ))
         logger.info("DB retry task started (will retry every 30 seconds until DB is ready)")
     else:
         logger.info("Database already ready, skipping retry task")
-    
-    # Запуск фоновой задачи для быстрой очистки истёкших подписок (только если БД готова)
-    fast_cleanup_task = None
-    if database.DB_READY:
-        fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task(bot))
-        background_tasks.append(fast_cleanup_task)
-        logger.info("Fast expiry cleanup task started")
-    else:
-        logger.warning("Fast expiry cleanup task skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для автопродления подписок (только если БД готова И kill switch включён)
-    auto_renewal_task = None
-    _flags = get_feature_flags()
-    if database.DB_READY and _flags.background_workers_enabled and _flags.auto_renewal_enabled:
-        auto_renewal_task = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
-        background_tasks.append(auto_renewal_task)
-        logger.info("Auto-renewal task started")
-    else:
-        if not database.DB_READY:
-            logger.warning("Auto-renewal task skipped (DB not ready)")
-        else:
-            logger.warning(
-                "Auto-renewal task skipped (feature flag: background_workers=%s, auto_renewal=%s)",
-                _flags.background_workers_enabled, _flags.auto_renewal_enabled
-            )
-    
-    # Запуск фоновой задачи для активации отложенных подписок (только если БД готова)
-    activation_worker_task = None
-    if database.DB_READY:
-        activation_worker_task = asyncio.create_task(activation_worker.activation_worker_task(bot))
-        background_tasks.append(activation_worker_task)
-        logger.info("Activation worker task started")
-    else:
-        logger.warning("Activation worker task skipped (DB not ready)")
-
-    # Запуск фоновой задачи для синхронизации с сайтом (каждые 5 минут)
-    site_sync_task = None
-    if database.DB_READY:
-        try:
-            from app.workers.site_sync_worker import site_sync_worker_task
-            from app.services.site_sync import is_enabled as _site_sync_enabled
-            if _site_sync_enabled():
-                site_sync_task = asyncio.create_task(site_sync_worker_task(bot))
-                background_tasks.append(site_sync_task)
-                logger.info("Site sync worker started (interval=5min)")
-            else:
-                logger.info("Site sync worker skipped (SITE_API_URL or SITE_BOT_API_KEY not configured)")
-        except Exception as e:
-            logger.warning("Site sync worker failed to start: %s", e)
-
-    # Wata reconciler — защита от потерянных webhook'ов (каждые 5 минут)
-    wata_reconciler_task_instance = None
-    if database.DB_READY:
-        try:
-            import wata_service as _wata
-            if _wata.is_enabled():
-                from app.workers.wata_reconciler import wata_reconciler_task
-                wata_reconciler_task_instance = asyncio.create_task(wata_reconciler_task(bot))
-                background_tasks.append(wata_reconciler_task_instance)
-                logger.info("Wata reconciler task started (interval=5min)")
-            else:
-                logger.info("Wata reconciler skipped (WATA_ACCESS_TOKEN not configured)")
-        except Exception as e:
-            logger.warning("Wata reconciler failed to start: %s", e)
-
-    # xray_sync worker удалён вместе с samopis-мастером — весь sync
-    # теперь встроен в purchase_flow.provision_subscription (Remnawave 3.x).
 
     # Bot initialization complete
     if database.DB_READY:
@@ -565,7 +459,22 @@ async def main():
             BotCommand(command="docs", description="🔐 Политика конфиденциальности"),
             BotCommand(command="language", description="Изменить язык"),
         ])
-        logger.info("Bot commands registered")
+        # Same commands for English-language Telegram clients (default above is RU).
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Main menu"),
+            BotCommand(command="profile", description="My profile"),
+            BotCommand(command="connect", description="Connect"),
+            BotCommand(command="buy", description="Buy access"),
+            BotCommand(command="referral", description="Loyalty program"),
+            BotCommand(command="info", description="About the service"),
+            BotCommand(command="support", description="Support"),
+            BotCommand(command="help", description="Help"),
+            BotCommand(command="instruction", description="Setup guide"),
+            BotCommand(command="hwadd", description="📲 Add a device"),
+            BotCommand(command="docs", description="🔐 Privacy policy"),
+            BotCommand(command="language", description="Change language"),
+        ], language_code="en")
+        logger.info("Bot commands registered (ru default, en)")
     except Exception as e:
         logger.warning(f"Failed to register bot commands: {e}")
     
@@ -587,7 +496,10 @@ async def main():
             await bot.set_webhook(
                 url=config.WEBHOOK_URL,
                 secret_token=config.WEBHOOK_SECRET,
-                drop_pending_updates=True,
+                # Keep the updates queued during a restart / deploy: Telegram delivers
+                # them now. Dropping them lost successful_payment (money taken, nothing
+                # granted, no alert); the handlers are idempotent per purchase / charge.
+                drop_pending_updates=False,
                 allowed_updates=used_updates if used_updates else None,
             )
             logger.info("WEBHOOK_SET_SUCCESS url=%s", config.WEBHOOK_URL)
@@ -671,6 +583,16 @@ async def main():
         except Exception as e:
             logger.warning("webhook_delete_failed error=%s", e)
         
+        # Telegram successful_payment finalizations run as shielded tasks outside
+        # background_tasks and need the DB pool + bot session: give them up to
+        # 20 s before anything is cancelled / closed. (On SIGTERM uvicorn's
+        # shutdown hook already drained them — then this returns at once.)
+        try:
+            from app.api import telegram_webhook as _tg_webhook
+            await _tg_webhook.drain_payment_tasks()
+        except Exception as e:
+            logger.warning("shutdown_payment_drain_failed error=%s", e)
+
         # Cancel and await all background tasks gracefully
         log_event(
             logger,

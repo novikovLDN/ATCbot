@@ -4,13 +4,13 @@ Promo code FSM message handler: PromoCodeInput.waiting_for_promo
 import logging
 import time
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 
 import database
 from app.i18n import get_text as i18n_get_text
-from app.services.language_service import resolve_user_language, DEFAULT_LANGUAGE
+from app.services.language_service import resolve_user_language
 from app.utils.security import (
     validate_telegram_id,
     validate_promo_code,
@@ -24,7 +24,9 @@ payments_router = Router()
 logger = logging.getLogger(__name__)
 
 
-@payments_router.message(PromoCodeInput.waiting_for_promo)
+# ~successful_payment / ~refunded_payment: this router runs before
+# payments_messages — a payment must not be eaten by the promo screen (TG-RT-9).
+@payments_router.message(PromoCodeInput.waiting_for_promo, ~F.successful_payment, ~F.refunded_payment)
 async def process_promo_code(message: Message, state: FSMContext):
     """Обработчик ввода промокода - работает ТОЛЬКО в состоянии waiting_for_promo"""
     # CRITICAL FIX: Дополнительная проверка state для защиты от спама

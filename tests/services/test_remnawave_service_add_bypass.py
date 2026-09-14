@@ -73,12 +73,16 @@ async def test_add_bypass_traffic_recovers_orphaned_panel_entity(monkeypatch):
     get_mock = AsyncMock(return_value=existing_entity)
     update_mock = AsyncMock(return_value=existing_entity)
     create_mock = AsyncMock()
+    # Since 3cac5de7 add_traffic resolves the bypass entity through
+    # get_bypass_entity_safe (username-verified) instead of the DB uuid.
+    safe_mock = AsyncMock(return_value=existing_entity)
 
     fake_api = SimpleNamespace(
         find_user_by_username=find_mock,
         get_user=get_mock,
         update_user=update_mock,
         create_user=create_mock,
+        get_bypass_entity_safe=safe_mock,
     )
 
     with patch.object(remnawave_service, "config", _cfg()), \
@@ -93,10 +97,13 @@ async def test_add_bypass_traffic_recovers_orphaned_panel_entity(monkeypatch):
 
     assert ok is True, "recovery + top-up should succeed"
     find_mock.assert_awaited_once_with(str(tg))
+    safe_mock.assert_awaited_once_with(tg)
     # Must NOT fall through to create — that would produce A019
     create_mock.assert_not_awaited()
     # Panel PATCH should have summed existing 5 GB + purchased 15 GB
     expected_new_limit = 5 * 1024**3 + 15 * 1024**3
+    update_mock.assert_awaited_once()  # status already ACTIVE → no 2nd PATCH
+    assert update_mock.await_args_list[0].args == (PANEL_UUID,)  # no numeric id → uuid
     update_call_kwargs = update_mock.await_args_list[0].kwargs
     assert update_call_kwargs.get("trafficLimitBytes") == expected_new_limit
     # UUID should be cached in DB for next purchase

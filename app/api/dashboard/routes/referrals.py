@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 import database
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -27,7 +28,7 @@ async def referrals_overall():
     try:
         data = await database.get_referral_overall_stats()
     except Exception as e:
-        raise HTTPException(500, f"overall_failed: {e}")
+        raise server_error("overall_failed") from e
     return _serialize(data or {})
 
 
@@ -49,7 +50,7 @@ async def referrals_top(
             offset=offset,
         )
     except Exception as e:
-        raise HTTPException(500, f"top_failed: {e}")
+        raise server_error("top_failed") from e
     return _serialize(rows or [])
 
 
@@ -58,7 +59,7 @@ async def referrer_detail(referrer_id: int = Path(..., gt=0)):
     try:
         data = await database.get_admin_referral_detail(referrer_id)
     except Exception as e:
-        raise HTTPException(500, f"detail_failed: {e}")
+        raise server_error("detail_failed") from e
     if not data:
         raise HTTPException(404, "Referrer not found")
     return _serialize(data)
@@ -73,7 +74,7 @@ async def referrer_history(
         rows = await database.get_referral_rewards_history(partner_id, limit)
         total = await database.get_referral_rewards_history_count(partner_id)
     except Exception as e:
-        raise HTTPException(500, f"history_failed: {e}")
+        raise server_error("history_failed") from e
     return {
         "rows": _serialize(rows or []),
         "total": total,

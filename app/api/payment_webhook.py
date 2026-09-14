@@ -2,21 +2,32 @@
 Payment Webhook API (FastAPI)
 
 Webhook endpoints for payment providers:
-- POST /webhooks/platega — Platega (SBP) payment notifications
-- POST /webhooks/cryptobot — CryptoBot (Crypto Pay) payment notifications
-- POST /webhooks/lava — Lava (Card) payment notifications
+- POST /webhooks/platega, /platega/callback — Platega one-off payments
+- POST /webhooks/platega-subscription, /platega/subscription-callback — Platega recurring
+  (feature disabled: auth-checked, alert-only safety net, always 200)
+- POST /webhooks/cryptobot — CryptoBot (Crypto Pay)
+- POST /webhooks/wata — WATA (H2H)
 
 Security:
 - Signature/auth verification required per provider.
 - Idempotent: duplicate webhooks return 200, no re-activation.
-- Amount tolerance: ±1 RUB.
-- Pending expiry: 30 min (pending_purchases.expires_at).
+
+HTTP codes (docs/audit/02_payment_core_plan.md §D):
+- 5xx ONLY when billing was not committed and a provider retry can help:
+  TransientPaymentError (DB down, WATA key unavailable, Remnawave sync failed,
+  Platega charge in progress), timeout, bot/service not initialised, or an
+  unexpected exception.
+- 200 for every dict result a provider service returns — see _STATUS_HTTP.
+- 400 for a body that is not JSON.
 """
 
 import asyncio
+import importlib
 import logging
+from typing import Any, Awaitable, Callable
+
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.services.payments.confirmation import TransientPaymentError
 
@@ -30,6 +41,42 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _bot = None
+
+
+# Single source of truth: result["status"] → HTTP code, for ALL provider routes.
+# Lists every status produced today by platega_service, wata_service,
+# cryptobot_service and app/services/payments/confirmation.py. Everything a
+# service RETURNS is final for the provider (a retry would not change the
+# outcome), so it is 200; transient failures are RAISED and handled in
+# _run_webhook. An unlisted status is answered 200 with a warning log.
+_STATUS_HTTP: dict[str, int] = {
+    # processed / idempotent
+    "ok": 200,                    # includes Platega chargeback/orphan_charge/noop events
+    "already_processed": 200,
+    "duplicate": 200,             # Platega recurring charge already recorded
+    # rejected, admin alerted — payment NOT credited, retry would not help
+    "amount_mismatch": 200,
+    "provider_mismatch": 200,
+    "rejected": 200,              # Platega VPN callback with bad amount/currency
+    "invalid_amount": 200,        # WATA VPN callback
+    "invalid_currency": 200,      # WATA VPN callback
+    "not_found": 200,             # no pending_purchases row — a retry won't create it
+    "invalid_status": 200,
+    "error": 200,                 # permanent finalization error (PERMANENT alert sent)
+    # auth / payload / no-op
+    # P1-4: a callback that fails auth may be a PAID one with wrong keys on our
+    # side → 500 so the provider retries (Platega: 3 × 5 min, platega_api.md §4)
+    # + payment_errors + forced alert (_alert_rejected_callback).
+    "unauthorized": 500,
+    "invalid": 200,               # paid callback without purchase_id → alerted, retry won't help
+    "ignored": 200,
+    "disabled": 200,
+    "refund_alerted": 200,
+    "declined_notified": 200,
+    # transient — produced by exceptions in _run_webhook; listed for completeness
+    "transient_error": 500,
+    "timeout": 500,
+}
 
 
 async def _log_pe(
@@ -53,60 +100,170 @@ async def _log_pe(
         logger.warning("payment_errors log skipped (%s): %s", stage, e)
 
 
+async def _alert_webhook_failure(provider: str, branch: str, detail: str) -> None:
+    """P1-1: forced admin alert for every non-200 / anomalous _run_webhook
+    outcome, within the shared per-window budget (provisioning alert
+    aggregation, kind "webhook"): a provider retry storm gives up to
+    ALERT_IMMEDIATE_PER_WINDOW alerts, then ONE digest — never a flood, never
+    dropped. Never raises."""
+    try:
+        from app.services import provisioning
+        bot = _bot
+        if bot is None:  # setup_missing: fall back to the Telegram webhook's bot
+            from app.api import telegram_webhook
+            bot = getattr(telegram_webhook, "_bot", None)
+        text = (
+            f"Payment webhook FAILED: provider={provider} branch={branch}\n"
+            f"{detail[:500]}\n"
+            "5xx → the provider retries the webhook; 200 → it does not. If a payment is "
+            "stuck, check payment_errors / the provider dashboard and finalize manually."
+        )
+        await provisioning.report_payment_alert(
+            "webhook", text, reason=f"{provider} {branch}: {detail[:80]}",
+            key=f"{provider}:{branch}", bot=bot,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("webhook failure alert skipped (%s/%s): %s", provider, branch, e)
+
+
 def setup(bot):
     """Store bot instance for webhook handlers."""
     global _bot
     _bot = bot
 
 
-async def _handle_platega_webhook(request: Request):
-    """Handle Platega (SBP) webhook callback."""
+def _json_result(provider: str, result: Any) -> JSONResponse:
+    status = result.get("status") if isinstance(result, dict) else None
+    code = _STATUS_HTTP.get(status)
+    if code is None:
+        logger.warning(
+            "WEBHOOK_UNMAPPED_STATUS provider=%s status=%r — answering 200", provider, status,
+        )
+        code = 200
+    if isinstance(result, dict):
+        # "_…" keys are internal (alert details) — never echoed to the caller.
+        result = {k: v for k, v in result.items() if not str(k).startswith("_")}
+    return JSONResponse(result, status_code=code)
+
+
+# P1-4: dict statuses that are a lost-payment risk → payment_errors stage.
+_ALERT_STATUSES = {"unauthorized": "webhook_unauthorized", "invalid": "webhook_invalid"}
+
+
+async def _alert_rejected_callback(provider: str, result: dict) -> None:
+    """Callback rejected before it could be matched to a purchase: wrong keys /
+    signature (`unauthorized`) or a paid callback without purchase_id
+    (`invalid`). payment_errors + forced alert within the "webhook" budget
+    (flood → one digest). Never raises."""
+    status = result.get("status")
+    detail = str(result.get("_detail") or "no detail")
+    await _log_pe(_ALERT_STATUSES[status], provider, error_code=status, error_message=detail[:500])
+    if status == "unauthorized":
+        note = ("Answered 500 → the provider retries (Platega: 3 times, 5 min apart). If this is not "
+                "a forged request, the provider keys / signature secret in Railway are WRONG: every "
+                "paid callback is rejected until they are fixed.")
+    else:
+        note = ("Paid callback without purchase_id / orderId — answered 200 (a retry carries the same "
+                "body). Find the payment in the provider dashboard and finalize it manually.")
+    await _alert_webhook_failure(provider, status, f"{detail}\n{note}")
+
+
+async def _run_webhook(
+    provider: str, coro_factory: Callable[[], Awaitable[Any]],
+) -> Response:
+    """Shared error handling for every provider route.
+
+    `coro_factory()` returns the provider result (dict → _STATUS_HTTP) or a
+    ready Response (e.g. 400 on invalid JSON). Exceptions keep the historical
+    mapping: ValueError → 200 already_processed; TransientPaymentError /
+    timeout → 500 so the provider retries; anything else → 500.
+    P1-1: every branch except a dict/Response result also alerts the admin
+    (_alert_webhook_failure; budgeted + digest).
+    """
     if _bot is None:
-        logger.critical("Platega webhook received but bot is not initialized — setup() not called")
-        await _log_pe("setup_missing", "platega", error_message="bot not initialized")
+        logger.critical("%s webhook received but bot is not initialized — setup() not called", provider)
+        await _log_pe("setup_missing", provider, error_message="bot not initialized")
+        await _alert_webhook_failure(provider, "setup_missing", "bot not initialized (setup() not called)")
         return JSONResponse({"status": "error"}, status_code=500)
     try:
-        import platega_service
-        if not platega_service.is_enabled():
-            logger.warning("Platega webhook received but service is disabled")
-            return JSONResponse({"status": "disabled"})
+        result = await coro_factory()
+    except ImportError:
+        logger.error("%s webhook: provider service not available", provider)
+        await _log_pe("service_missing", provider)
+        await _alert_webhook_failure(provider, "service_missing", "provider service module not importable")
+        return JSONResponse({"status": "error"}, status_code=500)
+    except ValueError as e:
+        # Idempotency: already-processed payment — 200 so the provider stops retrying.
+        # confirmation handles its own duplicates (PurchaseAlreadyProcessed), so a
+        # ValueError reaching here is anomalous (e.g. a non-numeric WATA/CryptoBot
+        # amount): the answer stays 200 (a retry changes nothing), the admin is told.
+        logger.warning("%s webhook: ValueError (answered 200): %s", provider, e)
+        await _alert_webhook_failure(provider, "value_error", f"{type(e).__name__}: {e} (answered 200)")
+        return JSONResponse({"status": "already_processed"})
+    except TransientPaymentError as e:
+        logger.error("%s webhook transient error (returning 500 for retry): %s", provider, e)
+        await _log_pe("transient", provider, error_message=str(e)[:500])
+        if not getattr(e, "alerted", False):  # confirmation already alerted → one alert per incident
+            await _alert_webhook_failure(provider, "transient", f"TransientPaymentError: {e}")
+        return JSONResponse({"status": "transient_error"}, status_code=500)
+    except asyncio.TimeoutError:
+        logger.error("%s webhook timeout (returning 500 for retry)", provider)
+        await _log_pe("timeout", provider, error_message=f">{_WEBHOOK_TIMEOUT}s")
+        await _alert_webhook_failure(
+            provider, "timeout",
+            f"processing took >{_WEBHOOK_TIMEOUT}s; confirmation keeps running in the background",
+        )
+        return JSONResponse({"status": "timeout"}, status_code=500)
+    except Exception as e:
+        logger.exception("%s webhook error: %s", provider, e)
+        await _log_pe("unhandled_exception", provider,
+                      error_code=type(e).__name__,
+                      error_message=str(e)[:500])
+        await _alert_webhook_failure(provider, "unhandled_exception", f"{type(e).__name__}: {e}")
+        return JSONResponse({"status": "error"}, status_code=500)
+    if isinstance(result, Response):
+        return result
+    if isinstance(result, dict) and result.get("status") in _ALERT_STATUSES:
+        await _alert_rejected_callback(provider, result)
+    return _json_result(provider, result)
 
+
+async def _provider_webhook(
+    request: Request,
+    provider: str,
+    module_name: str,
+    call: Callable[[Any, dict, bytes, Any], Awaitable[Any]],
+) -> Response:
+    """is_enabled → headers/raw body/JSON → `call(service, headers, raw, body)`
+    under _WEBHOOK_TIMEOUT, wrapped by _run_webhook."""
+
+    async def run():
+        service = importlib.import_module(module_name)
+        if not service.is_enabled():
+            logger.warning("%s webhook received but service is disabled", provider)
+            return {"status": "disabled"}
         headers = {k.lower(): v for k, v in request.headers.items()}
+        # Raw body is required for signature checks (CryptoBot HMAC, WATA RSA).
+        raw = await request.body()
         try:
             body = await request.json()
         except Exception as e:
-            logger.error(f"Platega webhook: invalid JSON: {e}")
-            await _log_pe("webhook_invalid_json", "platega", error_message=str(e)[:300])
+            logger.error("%s webhook: invalid JSON: %s", provider, e)
+            await _log_pe("webhook_invalid_json", provider, error_message=str(e)[:300])
             return JSONResponse({"status": "invalid"}, status_code=400)
-
-        result = await asyncio.wait_for(
-            platega_service.process_webhook_data(headers, body, _bot),
-            timeout=_WEBHOOK_TIMEOUT,
+        return await asyncio.wait_for(
+            call(service, headers, raw, body), timeout=_WEBHOOK_TIMEOUT,
         )
-        return JSONResponse(result)
 
-    except ImportError:
-        logger.error("platega_service not available")
-        await _log_pe("service_missing", "platega")
-        return JSONResponse({"status": "error"}, status_code=500)
-    except ValueError as e:
-        # Idempotency: already-processed payment — return 200 so provider stops retrying
-        logger.info(f"Platega webhook: already processed: {e}")
-        return JSONResponse({"status": "already_processed"})
-    except TransientPaymentError as e:
-        logger.error(f"Platega webhook transient error (returning 500 for retry): {e}")
-        await _log_pe("transient", "platega", error_message=str(e)[:500])
-        return JSONResponse({"status": "transient_error"}, status_code=500)
-    except asyncio.TimeoutError:
-        logger.error("Platega webhook timeout (returning 500 for retry)")
-        await _log_pe("timeout", "platega", error_message=f">{_WEBHOOK_TIMEOUT}s")
-        return JSONResponse({"status": "timeout"}, status_code=500)
-    except Exception as e:
-        logger.exception(f"Platega webhook error: {e}")
-        await _log_pe("unhandled_exception", "platega",
-                      error_code=type(e).__name__,
-                      error_message=str(e)[:500])
-        return JSONResponse({"status": "error"}, status_code=500)
+    return await _run_webhook(provider, run)
+
+
+async def _handle_platega_webhook(request: Request):
+    """Handle Platega (SBP/card) one-off payment callback."""
+    return await _provider_webhook(
+        request, "platega", "platega_service",
+        lambda svc, headers, raw, body: svc.process_webhook_data(headers, body, _bot),
+    )
 
 
 @router.post("/webhooks/platega")
@@ -123,71 +280,16 @@ async def platega_callback(request: Request):
 async def _handle_platega_subscription_webhook(request: Request):
     """Handle Platega recurring-subscription (paymentMethod=6) callback.
 
-    ОТДЕЛЬНЫЙ endpoint — не трогаем /webhooks/platega, чтобы не
-    ломать существующий разовый flow (у которого ключи строчные:
-    id/status/paymentDetails.amount). Здесь ключи ЗАГЛАВНЫЕ:
-    Id / SubscriptionId / Amount / Status / NextChargeAt / Payload.
-    Идемпотентность — по Callback.Id (см. platega_service).
+    Рекуррентные подписки отключены. Роут оставлен как страховка для
+    подписок, оставшихся в Platega после беты: X-MerchantId/X-Secret
+    проверяются как раньше, дальше platega_service только логирует,
+    пишет payment_errors и шлёт принудительный алерт админу (200).
+    Доступ по этим callback'ам не выдаётся.
     """
-    if _bot is None:
-        logger.critical(
-            "Platega sub webhook received but bot is not initialized — setup() not called"
-        )
-        await _log_pe(
-            "setup_missing", "platega_subscription", error_message="bot not initialized",
-        )
-        return JSONResponse({"status": "error"}, status_code=500)
-    try:
-        import platega_service
-        if not platega_service.is_enabled():
-            logger.warning("Platega sub webhook received but service is disabled")
-            return JSONResponse({"status": "disabled"})
-
-        headers = {k.lower(): v for k, v in request.headers.items()}
-        try:
-            body = await request.json()
-        except Exception as e:
-            logger.error(f"Platega sub webhook: invalid JSON: {e}")
-            await _log_pe(
-                "webhook_invalid_json", "platega_subscription",
-                error_message=str(e)[:300],
-            )
-            return JSONResponse({"status": "invalid"}, status_code=400)
-
-        result = await asyncio.wait_for(
-            platega_service.process_subscription_webhook_data(headers, body, _bot),
-            timeout=_WEBHOOK_TIMEOUT,
-        )
-        return JSONResponse(result)
-
-    except ImportError:
-        logger.error("platega_service not available")
-        await _log_pe("service_missing", "platega_subscription")
-        return JSONResponse({"status": "error"}, status_code=500)
-    except ValueError as e:
-        # Идемпотентность: уже обработанное списание → 200, чтобы провайдер не ретрайл.
-        logger.info(f"Platega sub webhook: already processed: {e}")
-        return JSONResponse({"status": "already_processed"})
-    except TransientPaymentError as e:
-        logger.error(f"Platega sub webhook transient error (500 for retry): {e}")
-        await _log_pe(
-            "transient", "platega_subscription", error_message=str(e)[:500],
-        )
-        return JSONResponse({"status": "transient_error"}, status_code=500)
-    except asyncio.TimeoutError:
-        logger.error("Platega sub webhook timeout (500 for retry)")
-        await _log_pe(
-            "timeout", "platega_subscription", error_message=f">{_WEBHOOK_TIMEOUT}s",
-        )
-        return JSONResponse({"status": "timeout"}, status_code=500)
-    except Exception as e:
-        logger.exception(f"Platega sub webhook error: {e}")
-        await _log_pe(
-            "unhandled_exception", "platega_subscription",
-            error_code=type(e).__name__,
-            error_message=str(e)[:500],
-        )
-        return JSONResponse({"status": "error"}, status_code=500)
+    return await _provider_webhook(
+        request, "platega_subscription", "platega_service",
+        lambda svc, headers, raw, body: svc.process_subscription_webhook_data(headers, body, _bot),
+    )
 
 
 @router.post("/webhooks/platega-subscription")
@@ -204,112 +306,15 @@ async def platega_subscription_callback(request: Request):
 
 async def _handle_cryptobot_webhook(request: Request):
     """Handle CryptoBot (Crypto Pay) webhook callback."""
-    if _bot is None:
-        logger.critical("CryptoBot webhook received but bot is not initialized — setup() not called")
-        await _log_pe("setup_missing", "cryptobot", error_message="bot not initialized")
-        return JSONResponse({"status": "error"}, status_code=500)
-    try:
-        import cryptobot_service
-        if not cryptobot_service.is_enabled():
-            logger.warning("CryptoBot webhook received but service is disabled")
-            return JSONResponse({"status": "disabled"})
-
-        headers = {k.lower(): v for k, v in request.headers.items()}
-        raw_body = await request.body()
-        try:
-            body = await request.json()
-        except Exception as e:
-            logger.error(f"CryptoBot webhook: invalid JSON: {e}")
-            await _log_pe("webhook_invalid_json", "cryptobot", error_message=str(e)[:300])
-            return JSONResponse({"status": "invalid"}, status_code=400)
-
-        result = await asyncio.wait_for(
-            cryptobot_service.process_webhook_data(headers, raw_body, body, _bot),
-            timeout=_WEBHOOK_TIMEOUT,
-        )
-        return JSONResponse(result)
-
-    except ImportError:
-        logger.error("cryptobot_service not available")
-        await _log_pe("service_missing", "cryptobot")
-        return JSONResponse({"status": "error"}, status_code=500)
-    except ValueError as e:
-        logger.info(f"CryptoBot webhook: already processed: {e}")
-        return JSONResponse({"status": "already_processed"})
-    except TransientPaymentError as e:
-        logger.error(f"CryptoBot webhook transient error (returning 500 for retry): {e}")
-        await _log_pe("transient", "cryptobot", error_message=str(e)[:500])
-        return JSONResponse({"status": "transient_error"}, status_code=500)
-    except asyncio.TimeoutError:
-        logger.error("CryptoBot webhook timeout (returning 500 for retry)")
-        await _log_pe("timeout", "cryptobot", error_message=f">{_WEBHOOK_TIMEOUT}s")
-        return JSONResponse({"status": "timeout"}, status_code=500)
-    except Exception as e:
-        logger.exception(f"CryptoBot webhook error: {e}")
-        await _log_pe("unhandled_exception", "cryptobot",
-                      error_code=type(e).__name__,
-                      error_message=str(e)[:500])
-        return JSONResponse({"status": "error"}, status_code=500)
+    return await _provider_webhook(
+        request, "cryptobot", "cryptobot_service",
+        lambda svc, headers, raw, body: svc.process_webhook_data(headers, raw, body, _bot),
+    )
 
 
 @router.post("/webhooks/cryptobot")
 async def cryptobot_webhook(request: Request):
     return await _handle_cryptobot_webhook(request)
-
-
-async def _handle_lava_webhook(request: Request):
-    """Handle Lava (Card) webhook callback."""
-    if _bot is None:
-        logger.critical("Lava webhook received but bot is not initialized — setup() not called")
-        await _log_pe("setup_missing", "lava", error_message="bot not initialized")
-        return JSONResponse({"status": "error"}, status_code=500)
-    try:
-        import lava_service
-        if not lava_service.is_enabled():
-            logger.warning("Lava webhook received but service is disabled")
-            return JSONResponse({"status": "disabled"})
-
-        headers = {k.lower(): v for k, v in request.headers.items()}
-        try:
-            body = await request.json()
-        except Exception as e:
-            logger.error(f"Lava webhook: invalid JSON: {e}")
-            await _log_pe("webhook_invalid_json", "lava", error_message=str(e)[:300])
-            return JSONResponse({"status": "invalid"}, status_code=400)
-
-        result = await asyncio.wait_for(
-            lava_service.process_webhook_data(headers, body, _bot),
-            timeout=_WEBHOOK_TIMEOUT,
-        )
-        return JSONResponse(result)
-
-    except ImportError:
-        logger.error("lava_service not available")
-        await _log_pe("service_missing", "lava")
-        return JSONResponse({"status": "error"}, status_code=500)
-    except ValueError as e:
-        # Idempotency: already-processed payment — return 200 so provider stops retrying
-        logger.info(f"Lava webhook: already processed: {e}")
-        return JSONResponse({"status": "already_processed"})
-    except TransientPaymentError as e:
-        logger.error(f"Lava webhook transient error (returning 500 for retry): {e}")
-        await _log_pe("transient", "lava", error_message=str(e)[:500])
-        return JSONResponse({"status": "transient_error"}, status_code=500)
-    except asyncio.TimeoutError:
-        logger.error("Lava webhook timeout (returning 500 for retry)")
-        await _log_pe("timeout", "lava", error_message=f">{_WEBHOOK_TIMEOUT}s")
-        return JSONResponse({"status": "timeout"}, status_code=500)
-    except Exception as e:
-        logger.exception(f"Lava webhook error: {e}")
-        await _log_pe("unhandled_exception", "lava",
-                      error_code=type(e).__name__,
-                      error_message=str(e)[:500])
-        return JSONResponse({"status": "error"}, status_code=500)
-
-
-@router.post("/webhooks/lava")
-async def lava_webhook(request: Request):
-    return await _handle_lava_webhook(request)
 
 
 # ── Wata (wata.pro) — H2H REST API ────────────────────────────────
@@ -321,55 +326,12 @@ async def _handle_wata_webhook(request: Request):
       - Raw body ОБЯЗАТЕЛЕН для проверки RSA-SHA512 подписи (X-Signature).
         Если middleware пересобрал JSON — подпись не сойдётся.
       - kind=Payment + transactionStatus=Paid → confirm.
-      - Всё остальное (Pending / Declined / Refund) → ignored.
+      - Declined → уведомление юзеру; Refund → алерт; прочее → ignored.
     """
-    if _bot is None:
-        logger.critical("Wata webhook received but bot is not initialized")
-        await _log_pe("setup_missing", "wata", error_message="bot not initialized")
-        return JSONResponse({"status": "error"}, status_code=500)
-    try:
-        import wata_service
-        if not wata_service.is_enabled():
-            logger.warning("Wata webhook received but service is disabled")
-            return JSONResponse({"status": "disabled"})
-
-        headers = {k.lower(): v for k, v in request.headers.items()}
-        # Raw body для подписи + parsed JSON для логики.
-        raw = await request.body()
-        try:
-            body = await request.json()
-        except Exception as e:
-            logger.error(f"Wata webhook: invalid JSON: {e}")
-            await _log_pe("webhook_invalid_json", "wata", error_message=str(e)[:300])
-            return JSONResponse({"status": "invalid"}, status_code=400)
-
-        result = await asyncio.wait_for(
-            wata_service.process_webhook_data(headers, raw, body, _bot),
-            timeout=_WEBHOOK_TIMEOUT,
-        )
-        return JSONResponse(result)
-
-    except ImportError:
-        logger.error("wata_service not available")
-        await _log_pe("service_missing", "wata")
-        return JSONResponse({"status": "error"}, status_code=500)
-    except ValueError as e:
-        logger.info(f"Wata webhook: already processed: {e}")
-        return JSONResponse({"status": "already_processed"})
-    except TransientPaymentError as e:
-        logger.error(f"Wata webhook transient error: {e}")
-        await _log_pe("transient", "wata", error_message=str(e)[:500])
-        return JSONResponse({"status": "transient_error"}, status_code=500)
-    except asyncio.TimeoutError:
-        logger.error("Wata webhook timeout")
-        await _log_pe("timeout", "wata", error_message=f">{_WEBHOOK_TIMEOUT}s")
-        return JSONResponse({"status": "timeout"}, status_code=500)
-    except Exception as e:
-        logger.exception(f"Wata webhook error: {e}")
-        await _log_pe("unhandled_exception", "wata",
-                      error_code=type(e).__name__,
-                      error_message=str(e)[:500])
-        return JSONResponse({"status": "error"}, status_code=500)
+    return await _provider_webhook(
+        request, "wata", "wata_service",
+        lambda svc, headers, raw, body: svc.process_webhook_data(headers, raw, body, _bot),
+    )
 
 
 @router.post("/webhooks/wata")

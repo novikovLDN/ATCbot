@@ -88,20 +88,6 @@ async def create_bypass_gift_link(
     return None
 
 
-async def get_bypass_gift_link_by_code(code: str) -> Optional[Dict[str, Any]]:
-    if not _core.DB_READY or not code:
-        return None
-    pool = await get_pool()
-    if pool is None:
-        return None
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM bypass_gift_links WHERE code = $1",
-            code,
-        )
-        return _row_to_link(row)
-
-
 async def get_bypass_gift_link_by_id(link_id: int) -> Optional[Dict[str, Any]]:
     if not _core.DB_READY:
         return None

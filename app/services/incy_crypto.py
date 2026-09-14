@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -75,38 +74,6 @@ def is_available() -> bool:
     crypt1 path; once that comes back online we can re-introduce a
     real availability check, e.g. by routing through
     `to_incy_link_crypt1()` and checking the kill-switch flag."""
-    return True
-
-
-async def selftest() -> bool:
-    """One-shot smoke test — encode a known URL and verify the result
-    looks like a valid incy://crypt1/ link. Called from main.py on
-    startup so any deployment-time breakage (no node, missing package,
-    bad cwd) shows up loud in the log immediately, not after the first
-    user taps a broken button.
-
-    Returns True on success, False on any failure (and flips _disabled
-    via the underlying _spawn machinery). Doesn't raise."""
-    if _disabled:
-        return False
-    if not _SCRIPT_PATH.is_file():
-        _mark_disabled(f"sidecar not found at {_SCRIPT_PATH}")
-        return False
-    try:
-        sample = await _spawn("https://selftest.atlassecure.ru/sub/00000000")
-    except Exception:
-        logger.exception("INCY_SELFTEST_CRASH")
-        return False
-    if not sample:
-        # _spawn already set _disabled if the cause was permanent;
-        # transient timeouts/etc fall through here without disabling,
-        # so the next real call gets another chance.
-        logger.warning("INCY_SELFTEST_FAIL: no output (see WARNING above)")
-        return False
-    logger.info(
-        "INCY_SELFTEST_OK: produced link of len=%d (sample=%s…)",
-        len(sample), sample[:40],
-    )
     return True
 
 

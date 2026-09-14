@@ -93,8 +93,11 @@ async def create_remnawave_user(
     subscription_end: datetime,
     traffic_limit_override: Optional[int] = None,
     period_days: int = 30,
-) -> None:
+) -> bool:
     """Create a Remnawave user for the given subscriber.
+
+    Returns True when the bypass entity was created or adopted+updated
+    (callers used to ignore the result; renew_remnawave_user alerts on False).
 
     Args:
         traffic_limit_override: if set, use this instead of tariff-based limit.
@@ -104,11 +107,11 @@ async def create_remnawave_user(
     if not config.REMNAWAVE_ENABLED:
         return
     if tariff == "trial" and not traffic_limit_override:
-        return  # Trial without explicit override gets no bypass
+        return False  # Trial without explicit override gets no bypass
 
     traffic_limit = traffic_limit_override or _traffic_limit_for_tariff(tariff, period_days)
     if traffic_limit <= 0:
-        return
+        return False
 
     try:
         short_uuid = str(uuid_lib.uuid4())[:12]
@@ -160,12 +163,12 @@ async def create_remnawave_user(
                     update_fields["trafficLimitBytes"] = int(traffic_limit)
                 if not existing.get("telegramId"):
                     update_fields["telegramId"] = int(telegram_id)
-                await remnawave_api.update_user(
+                adopted = await remnawave_api.update_user(
                     int(existing_id) if existing_id is not None else existing_uuid,
                     **update_fields,
                 )
                 await database.reset_traffic_notification_flags(telegram_id)
-                return
+                return adopted is not None
 
         result = await remnawave_api.create_user(
             username=str(telegram_id),
@@ -194,14 +197,12 @@ async def create_remnawave_user(
                 "REMNAWAVE_USER_CREATED: tg=%s uuid=%s sub_url=%s tariff=%s limit=%d",
                 telegram_id, rmn_uuid[:8], sub_url, tariff, traffic_limit,
             )
-        else:
-            logger.warning("REMNAWAVE_USER_CREATE_FAILED: tg=%s", telegram_id)
+            return True
+        logger.warning("REMNAWAVE_USER_CREATE_FAILED: tg=%s", telegram_id)
+        return False
     except Exception as e:
         logger.error("REMNAWAVE_CREATE_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
-
-
-def create_remnawave_user_bg(telegram_id: int, tariff: str, subscription_end: datetime, period_days: int = 30) -> None:
-    _fire_and_forget(create_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days))
+        return False
 
 
 async def ensure_squad(telegram_id: int) -> None:
@@ -247,14 +248,17 @@ async def renew_remnawave_user(
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
             # User has no Remnawave account yet — create one
-            await create_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days)
+            if not await create_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days):
+                await _alert_bypass_not_delivered(telegram_id, traffic_add, tariff, "bypass create failed")
             return
 
         # Get current limit and add tariff traffic
         user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
         if not user_data:
             # User might have been deleted from Remnawave — recreate
-            await create_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days)
+            if not await create_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days):
+                await _alert_bypass_not_delivered(telegram_id, traffic_add, tariff,
+                                                  "bypass entity not readable and re-create failed")
             return
 
         # Резолвим цель через numeric bypass id из БД — не через
@@ -271,14 +275,24 @@ async def renew_remnawave_user(
         far_future = datetime.now(timezone.utc) + timedelta(days=3650)
         expire_str = far_future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        await remnawave_api.update_user(
+        patched = await remnawave_api.update_user(
             api_target,
             trafficLimitBytes=new_limit,
             expireAt=expire_str,
-            # 3.x: hwidDeviceLimit — новое имя. Шлём оба для совместимости.
+            # 3.x: hwidDeviceLimit (update-user.command.ts:53); deviceLimit
+            # в контракте нет и вырезался валидатором панели.
             hwidDeviceLimit=_device_limit_for_tariff(tariff),
-            deviceLimit=_device_limit_for_tariff(tariff),
         )
+        if patched is None:
+            # M-RENEW-GB-SILENT (docs/audit/03_payment_matrix.md): update_user
+            # returns None on failure; before, the result was ignored and the
+            # renewal was logged as REMNAWAVE_RENEWED with the GB never added.
+            logger.error(
+                "REMNAWAVE_RENEW_NOT_APPLIED: tg=%s target=%s +%d bytes",
+                telegram_id, str(api_target)[:16], traffic_add,
+            )
+            await _alert_bypass_not_delivered(telegram_id, traffic_add, tariff, "bypass PATCH not applied")
+            return
         # Re-enable if disabled
         if user_data.get("status") != "ACTIVE":
             await remnawave_api.update_user(api_target, status="ACTIVE")
@@ -294,6 +308,45 @@ async def renew_remnawave_user(
         )
     except Exception as e:
         logger.error("REMNAWAVE_RENEW_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
+        await _alert_bypass_not_delivered(telegram_id, traffic_add, tariff, f"{type(e).__name__}: {e}")
+
+
+async def _alert_bypass_not_delivered(telegram_id: int, add_bytes: int, tariff: str, reason: str) -> None:
+    """Legacy bypass top-up (renew_remnawave_user) did not land: payment_errors row
+    + admin alert (force within the purchase_flow budget). Never raises, no secrets."""
+    try:
+        await database.log_payment_error(
+            stage="bypass_topup",
+            telegram_id=telegram_id,
+            error_code="bypass_not_delivered",
+            error_message=str(reason)[:500],
+            raw_payload={"add_bytes": int(add_bytes), "tariff": tariff},
+        )
+    except Exception as e:
+        logger.warning("BYPASS_NOT_DELIVERED_LOG_FAILED: tg=%s %s", telegram_id, e)
+    try:
+        from app.services import admin_alerts, purchase_flow
+        bot = purchase_flow._alert_bot()
+        if bot is None:
+            logger.error("BYPASS_NOT_DELIVERED_ALERT_NO_BOT: tg=%s", telegram_id)
+            return
+        sent = await admin_alerts.send_alert(
+            bot, "payment",
+            "\n".join([
+                "Bypass GB NOT delivered (legacy renewal / grant top-up)",
+                f"user: tg:{telegram_id}",
+                f"GB to add: +{add_bytes / 1024 ** 3:g} ({tariff})",
+                f"error: {str(reason)[:300]}",
+                "Action: add the GB manually (dashboard → Traffic Audit / user card).",
+            ]),
+            force=purchase_flow._take_forced_alert_slot(),
+        )
+        if sent:
+            # P2-25: the delayed legacy check must not alert this bypass problem again.
+            from app.services.payments import verify_delivery
+            verify_delivery.note_alerted(telegram_id, "bypass")
+    except Exception as e:
+        logger.warning("BYPASS_NOT_DELIVERED_ALERT_FAILED: tg=%s %s", telegram_id, e)
 
 
 def renew_remnawave_user_bg(telegram_id: int, tariff: str, subscription_end: datetime, period_days: int = 30) -> None:
@@ -350,7 +403,13 @@ async def disable_remnawave_user(telegram_id: int) -> None:
 
         # Check if user still has bypass traffic — don't disable if GB remaining
         traffic_limit = user_data.get("trafficLimitBytes", 0)
-        traffic_used = user_data.get("usedTrafficBytes", 0)
+        # 3.4.3: used bytes live in userTraffic.usedTrafficBytes
+        # (models/extended-users.schema.ts); there is no top-level field, so
+        # this read 0 and a bypass with its GB used up was never disabled.
+        user_traffic = user_data.get("userTraffic") or {}
+        traffic_used = int(
+            user_traffic.get("usedTrafficBytes", user_data.get("usedTrafficBytes", 0)) or 0
+        )
         if traffic_limit > 0 and traffic_used < traffic_limit:
             # User still has bypass GB — extend instead of disable
             far_future = (datetime.now(timezone.utc) + timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -530,28 +589,3 @@ async def add_bypass_traffic(
 
 # ── Tariff change (Basic → Plus) ───────────────────────────────────────
 
-async def update_tariff(telegram_id: int, new_tariff: str, period_days: int = 30) -> None:
-    """Update device limit and traffic limit for tariff change."""
-    if not config.REMNAWAVE_ENABLED:
-        return
-    try:
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if not rmn_uuid:
-            return
-        new_limit = _traffic_limit_for_tariff(new_tariff, period_days)
-        new_devices = _device_limit_for_tariff(new_tariff)
-        if new_limit <= 0:
-            return
-        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
-        if not user_data:
-            return
-        api_uuid = user_data.get("uuid") or rmn_uuid
-        await remnawave_api.update_user(
-            api_uuid,
-            trafficLimitBytes=new_limit,
-            hwidDeviceLimit=new_devices,
-            deviceLimit=new_devices,
-        )
-        logger.info("REMNAWAVE_TARIFF_UPDATED: tg=%s tariff=%s", telegram_id, new_tariff)
-    except Exception as e:
-        logger.error("REMNAWAVE_TARIFF_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)

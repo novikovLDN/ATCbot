@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 import database
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
 from app.events import bus
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -16,7 +17,7 @@ async def incident_get():
     try:
         return await database.get_incident_settings()
     except Exception as e:
-        raise HTTPException(500, f"incident_get_failed: {e}")
+        raise server_error("incident_get_failed") from e
 
 
 class IncidentSet(BaseModel):
@@ -29,7 +30,7 @@ async def incident_set(body: IncidentSet, admin: dict = Depends(require_admin)):
     try:
         await database.set_incident_mode(body.is_active, body.incident_text)
     except Exception as e:
-        raise HTTPException(500, f"incident_set_failed: {e}")
+        raise server_error("incident_set_failed") from e
     bus.publish({
         "type": "incident:updated",
         "is_active": body.is_active,

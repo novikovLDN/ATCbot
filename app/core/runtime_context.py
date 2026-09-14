@@ -3,7 +3,7 @@ Application runtime context.
 Holds process-level metadata such as start time.
 Must not import handlers or routers.
 """
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 _bot_start_time: Optional[datetime] = None

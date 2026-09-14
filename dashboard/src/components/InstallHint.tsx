@@ -13,7 +13,7 @@ import { Share, X, Smartphone } from "lucide-react";
  * Hides automatically when already running as an installed PWA
  * (display-mode: standalone) or if the user previously closed it.
  */
-const KEY = "atlas.admin.installhint.dismissed";
+const KEY = "admin.installhint.dismissed";
 
 function isIosSafari(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -53,7 +53,7 @@ export function InstallHint() {
   if (!show) return null;
 
   return (
-    <div className="fixed inset-x-3 bottom-[88px] z-50 md:hidden animate-slide-up">
+    <div className="fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-50 md:hidden animate-slide-up">
       <div className="card flex items-start gap-3 p-3 pr-2 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.6)]">
         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
           <Smartphone className="h-4 w-4" />
@@ -78,7 +78,7 @@ export function InstallHint() {
             }
             setShow(false);
           }}
-          className="rounded-md p-1 text-fg-muted hover:bg-bg-elevated hover:text-fg"
+          className="tap-target rounded-md p-1 text-fg-muted hover:bg-bg-elevated hover:text-fg"
           aria-label="Закрыть"
         >
           <X className="h-3.5 w-3.5" />

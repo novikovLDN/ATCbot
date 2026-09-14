@@ -5,7 +5,7 @@ import logging
 import re
 import unicodedata
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
@@ -36,7 +36,10 @@ def _sanitize_text(text: str) -> str:
     return "".join(cleaned).strip()
 
 
-@payments_router.message(TopUpStates.waiting_for_amount)
+# ~successful_payment / ~refunded_payment: this router runs before
+# payments_messages — a payment for an invoice sent earlier must not be eaten
+# by the "enter the amount" screen (TG-RT-9, docs/audit/11_telegram_runtime.md).
+@payments_router.message(TopUpStates.waiting_for_amount, ~F.successful_payment, ~F.refunded_payment)
 async def process_topup_amount(message: Message, state: FSMContext):
     """Обработка введенной суммы пополнения - показываем экран выбора способа оплаты"""
     # SAFE STARTUP GUARD: Проверка готовности БД
@@ -96,36 +99,9 @@ async def process_topup_amount(message: Message, state: FSMContext):
     # Показываем экран выбора способа оплаты
     text = i18n_get_text(language, "main.topup_select_payment_method", amount=amount)
 
-    buttons = [
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.pay_with_card"),
-            callback_data=f"topup_card:{amount}",
-            icon_custom_emoji_id=CE["buy"],
-            style="success",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.stars"),
-            callback_data=f"topup_stars:{amount}",
-            style="primary",
-        )],
-    ]
-    # Lava-кнопка подменена на Wata: та же надпись, но callback уходит
-    # в топап-Wata. Код lava_service не удаляем — оставляем гейт видимости.
-    import lava_service
-    if lava_service.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.lava"),
-            callback_data=f"topup_wata:{amount}",
-            style="primary",
-        )])
-    # СБП — обратно через Platega (revert Wata-миграции).
-    import platega_service
-    if platega_service.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.sbp"),
-            callback_data=f"topup_sbp:{amount}",
-            style="primary",
-        )])
+    # The same method list as the preset amounts (08 #14).
+    from app.handlers.common.payment_labels import topup_method_rows
+    buttons = topup_method_rows(language, amount)
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="topup_balance",

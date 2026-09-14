@@ -16,12 +16,14 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
+from app.api.dashboard.idempotency import IdempotentRoute
 from app.events import bus
 from app.services import panel_traffic_audit as pta
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_admin)], route_class=IdempotentRoute)
 
 
 def _serialize_result(r: pta.AuditResult) -> dict[str, Any]:
@@ -73,7 +75,7 @@ async def list_audit(
         # Логируем полный traceback чтобы диагностировать (в бразуере видна
         # только detail). Message в detail — уже сжатая инфо для UI.
         logger.exception("traffic_audit list failed: limit=%s user=%s", limit, user)
-        raise HTTPException(500, f"audit_failed: {type(e).__name__}: {e}")
+        raise server_error("audit_failed") from e
 
     summary = _summarize(results)
     return {
@@ -114,7 +116,7 @@ async def resync_one(
     try:
         entity = await remnawave_api.find_user_by_username(str(telegram_id))
     except Exception as e:
-        raise HTTPException(500, f"find_by_username_failed: {e}")
+        raise server_error("find_by_username_failed") from e
     if not entity or not isinstance(entity, dict):
         raise HTTPException(404, "no_entity_by_username_in_panel")
 
@@ -144,7 +146,7 @@ async def resync_one(
                 str(new_short) if new_short else None,
             )
     except Exception as e:
-        raise HTTPException(500, f"db_update_failed: {e}")
+        raise server_error("db_update_failed") from e
 
     logger.info(
         "TRAFFIC_AUDIT_RESYNC tg=%s admin=%s → id=%s uuid=%s",
@@ -163,7 +165,8 @@ async def resync_one(
         "new_uuid": new_uuid,
         "new_sub_url": new_sub_url,
         "panel_limit_bytes": int(entity.get("trafficLimitBytes") or 0),
-        "panel_used_bytes": int(entity.get("usedTrafficBytes") or 0),
+        # userTraffic.usedTrafficBytes (Remnawave 3.4.3), top level as fallback.
+        "panel_used_bytes": pta.used_traffic_bytes(entity),
     }
 
 
@@ -176,14 +179,14 @@ async def fix_one(
     try:
         rows = await pta.fetch_candidates(only_tg=telegram_id, limit=1)
     except Exception as e:
-        raise HTTPException(500, f"fetch_failed: {e}")
+        raise server_error("fetch_failed") from e
     if not rows:
         raise HTTPException(404, "user_not_found_in_db")
 
     try:
         result = await pta.audit_one(rows[0])
     except Exception as e:
-        raise HTTPException(500, f"audit_failed: {e}")
+        raise server_error("audit_failed") from e
     if result.kind != "mismatch":
         return {
             "ok": False,
@@ -194,7 +197,7 @@ async def fix_one(
     try:
         outcome = await pta.apply_fix(result)
     except Exception as e:
-        raise HTTPException(500, f"fix_failed: {e}")
+        raise server_error("fix_failed") from e
 
     if not outcome.get("ok"):
         raise HTTPException(400, f"fix_declined: {outcome.get('reason')}")
@@ -229,7 +232,7 @@ async def fix_all(
             batch_sleep=0.15,
         )
     except Exception as e:
-        raise HTTPException(500, f"audit_failed: {e}")
+        raise server_error("audit_failed") from e
 
     mismatches = [r for r in results if r.kind == "mismatch"]
     if limit is not None:

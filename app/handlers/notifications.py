@@ -12,7 +12,6 @@ from typing import Optional
 from urllib.parse import quote
 import logging
 import config
-import database
 from app.utils.referral_link import build_referral_link
 
 logger = logging.getLogger(__name__)

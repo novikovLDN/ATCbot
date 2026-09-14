@@ -6,10 +6,9 @@ Global rate limiting middleware.
 Uses Redis when available (survives restarts, works across instances).
 Falls back to in-memory when Redis is unavailable.
 """
-import asyncio
 import time
 import logging
-from typing import Callable, Dict, Any, Awaitable, Optional
+from typing import Callable, Dict, Any, Awaitable
 from collections import defaultdict
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery
@@ -196,6 +195,11 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
         user_id = None
 
         if isinstance(event, Message):
+            # Telegram already took the money and never resends these service
+            # messages: a flood-banned / rate-limited user must not lose a paid
+            # purchase (docs/audit/11_telegram_runtime.md, TG-RT-1). Not counted.
+            if event.successful_payment or event.refunded_payment:
+                return await handler(event, data)
             user_id = event.from_user.id if event.from_user else None
         elif isinstance(event, CallbackQuery):
             user_id = event.from_user.id if event.from_user else None

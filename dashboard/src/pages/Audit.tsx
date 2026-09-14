@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   RefreshCcw,
-  ScrollText,
   UserPlus,
   Crown,
   ShieldOff,
@@ -14,7 +13,8 @@ import {
 import { endpoints } from "@/lib/api";
 import { fmtDate, fmtRelative, truncate } from "@/lib/format";
 import { Spinner } from "@/components/Spinner";
-import { EmptyState } from "@/components/EmptyState";
+import { PageHeader, Surface } from "@/components/ui/Surface";
+import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
 import { useEventStream } from "@/lib/ws";
 import { useState } from "react";
 
@@ -53,89 +53,82 @@ export function Audit() {
   });
 
   return (
-    <div className="space-y-6">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Журнал
-          </div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg md:text-3xl">
-            Аудит
-          </h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={limit}
-            onChange={(e) => setLimit(Number(e.target.value))}
-            className="input w-auto"
-          >
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-            <option value={250}>250</option>
-            <option value={500}>500</option>
-          </select>
-          <button
-            type="button"
-            onClick={() => q.refetch()}
-            className="btn-secondary"
-          >
-            <RefreshCcw className="h-3.5 w-3.5" /> Обновить
-          </button>
-        </div>
-      </header>
+    <div>
+      <PageHeader
+        title="Аудит"
+        sub="Журнал действий"
+        actions={
+          <>
+            <select
+              value={limit}
+              onChange={(e) => setLimit(Number(e.target.value))}
+              className="input w-auto"
+              aria-label="Сколько записей показать"
+            >
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={250}>250</option>
+              <option value={500}>500</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => q.refetch()}
+              className="btn-secondary"
+            >
+              <RefreshCcw className="h-3.5 w-3.5" /> Обновить
+            </button>
+          </>
+        }
+      />
 
-      <div className="card p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Последние действия
-          </div>
-          {q.isFetching && <Spinner />}
-        </div>
-
+      <Surface label="Последние действия" aside={q.isFetching ? <Spinner /> : undefined}>
         {q.isLoading ? (
-          <div className="flex items-center gap-2 text-sm text-fg-muted">
-            <Spinner /> Загружаю...
+          <div className="flex flex-col gap-2" role="status" aria-label="Загрузка">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-[68px] w-full rounded-row" />
+            ))}
           </div>
+        ) : q.isError && !q.data ? (
+          <ErrorState error={q.error} onRetry={() => q.refetch()} className="bg-tile-3" />
         ) : !q.data || q.data.length === 0 ? (
           <EmptyState
-            icon={ScrollText}
             title="Журнал пуст"
-            description="Действия появятся здесь по мере поступления."
+            hint="Действия появятся здесь по мере поступления."
           />
         ) : (
-          <ul className="divide-y divide-border/60">
+          <ul className="flex flex-col gap-2">
             {q.data.map((e) => {
               const Icon = ICONS[String(e.action ?? "")] ?? AlertCircle;
               return (
                 <li
                   key={String(e.id ?? Math.random())}
-                  className="flex items-start gap-3 py-3 text-sm"
+                  className="flex items-start gap-3 rounded-row bg-tile-3 p-3 text-[14px]"
                 >
-                  <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
-                    <Icon className="h-3.5 w-3.5" />
-                  </div>
+                  <span className="t-body grid h-8 w-8 flex-none place-items-center rounded-full bg-tile-1">
+                    <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                  </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 truncate">
-                      <span className="font-medium text-fg">
+                      <span className="font-medium">
                         {actionLabel(String(e.action ?? ""))}
                       </span>
                       {typeof e.user_telegram_id === "number" && (
-                        <span className="badge-muted">
+                        <span className="badge-muted tabular bg-tile-1">
                           tg:{e.user_telegram_id}
                         </span>
                       )}
                     </div>
                     {typeof e.details === "string" && e.details && (
-                      <div className="mt-0.5 truncate text-xs text-fg-muted">
+                      <div className="t-body mt-0.5 truncate text-[13px]">
                         {truncate(e.details, 200)}
                       </div>
                     )}
-                    <div className="mt-1 flex items-center gap-2 text-[11px] text-fg-subtle">
+                    <div className="t-mute mt-1 flex flex-wrap items-center gap-x-2 text-[12px]">
                       {typeof e.admin_telegram_id === "number" && (
-                        <span>by admin:{e.admin_telegram_id}</span>
+                        <span className="tabular">by admin:{e.admin_telegram_id}</span>
                       )}
                       {e.created_at && (
-                        <span>
+                        <span className="tabular">
                           · {fmtDate(String(e.created_at))} ·{" "}
                           {fmtRelative(String(e.created_at))}
                         </span>
@@ -147,7 +140,7 @@ export function Audit() {
             })}
           </ul>
         )}
-      </div>
+      </Surface>
     </div>
   );
 }

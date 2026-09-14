@@ -1,8 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -15,6 +13,11 @@ import {
 import { endpoints, ApiError } from "@/lib/api";
 import { fmtNum, fmtRub } from "@/lib/format";
 import { toast } from "@/store/toast";
+import { cn } from "@/lib/cn";
+import { Bento, PageHeader, Surface } from "@/components/ui/Surface";
+import { KpiTile } from "@/components/ui/KpiTile";
+import { Segmented, StatusDot, type Tone } from "@/components/ui/controls";
+import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
 
 // Bypass-audit — таблица пострадавших от бага «premium на 10 лет».
 // Backend (см. database/admin.py:get_bypass_overwrite_victims) ловит
@@ -52,6 +55,8 @@ const daysDiff = (iso: string | null | undefined): number | null => {
   if (isNaN(d.getTime())) return null;
   return Math.round((d.getTime() - Date.now()) / 86_400_000);
 };
+
+const INLINE_CODE = "font-mono text-[12px] on-shell";
 
 export function BypassAudit() {
   const qc = useQueryClient();
@@ -98,221 +103,171 @@ export function BypassAudit() {
   }, [q.data, filter]);
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-fg-subtle">
-            Maintenance
-          </div>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-fg md:text-4xl">
-            Bypass Audit
-          </h1>
-          <p className="mt-2 max-w-2xl text-sm text-fg-muted">
-            Юзеры, которым старый flow покупки трафика выдал «premium на 10 лет»
-            поверх их реальной подписки. По каждому собрана полная история —
-            платежи, продления, пакеты ГБ — и предложен корректный{" "}
-            <code className="rounded bg-bg-subtle px-1 py-0.5 font-mono text-xs">
-              expires_at
-            </code>{" "}
-            на основе{" "}
-            <code className="rounded bg-bg-subtle px-1 py-0.5 font-mono text-xs">
-              MAX(subscription_history.end_date)
-            </code>
-            .
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => q.refetch()}
-          disabled={q.isFetching}
-          className="btn-secondary text-xs"
-        >
-          {q.isFetching ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" />
-          )}
-          Перепроверить
-        </button>
-      </header>
+    <>
+      <PageHeader
+        title="Bypass Audit"
+        sub={
+          <>
+            Юзеры, которым старый flow покупки трафика выдал «premium на 10 лет» поверх их реальной подписки. По
+            каждому собрана полная история — платежи, продления, пакеты ГБ — и предложен корректный{" "}
+            <code className={INLINE_CODE}>expires_at</code> на основе{" "}
+            <code className={INLINE_CODE}>MAX(subscription_history.end_date)</code>.
+          </>
+        }
+        actions={
+          <button type="button" onClick={() => q.refetch()} disabled={q.isFetching} className="btn-secondary">
+            {q.isFetching ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            Перепроверить
+          </button>
+        }
+      />
 
-      {/* Summary */}
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <SummaryCard
+      <Bento>
+        {/* Summary */}
+        <KpiTile
+          className="sm:col-span-3 xl:col-span-3"
+          size="sm"
           label="Пострадавших"
-          value={fmtNum(total)}
-          icon={AlertTriangle}
-          tone="warning"
           loading={q.isLoading}
+          value={
+            <span className="inline-flex items-center gap-2.5">
+              <StatusDot tone="warn" />
+              {fmtNum(total)}
+            </span>
+          }
         />
-        <SummaryCard
+        <KpiTile
+          className="sm:col-span-3 xl:col-span-3"
+          size="sm"
+          variant="accent"
           label="Можно восстановить"
+          loading={q.isLoading}
           value={fmtNum(canFix)}
-          icon={Wrench}
-          tone="accent"
-          loading={q.isLoading}
         />
-        <SummaryCard
+        <KpiTile
+          className="sm:col-span-3 xl:col-span-3"
+          size="sm"
+          variant="raised"
           label="Без истории платежей"
+          loading={q.isLoading}
           value={fmtNum(Math.max(0, total - canFix))}
-          icon={Database}
-          tone="muted"
-          loading={q.isLoading}
         />
-        <SummaryCard
+        <KpiTile
+          className="sm:col-span-3 xl:col-span-3"
+          size="sm"
+          variant="steel"
           label="ГБ куплено пострадавшими"
-          value={`${fmtNum(totalGb)} ГБ`}
-          icon={Receipt}
-          tone="info"
           loading={q.isLoading}
+          value={`${fmtNum(totalGb)} ГБ`}
         />
-      </section>
 
-      {/* Action bar */}
-      <section className="card flex flex-wrap items-center justify-between gap-3 p-4">
-        <div className="flex items-center gap-2">
-          <Filter value={filter} onChange={setFilter} canFix={canFix} noFix={Math.max(0, total - canFix)} total={total} />
-        </div>
-        <div className="flex items-center gap-2">
-          {!confirmAll ? (
-            <button
-              type="button"
-              onClick={() => setConfirmAll(true)}
-              disabled={canFix === 0 || fixAll.isPending}
-              className="btn-primary"
-            >
-              <Wrench className="h-3.5 w-3.5" />
-              Восстановить всех ({fmtNum(canFix)})
-            </button>
-          ) : (
-            <>
-              <span className="text-xs text-fg-muted">
-                Точно? UPDATE на {fmtNum(canFix)} строк.
-              </span>
-              <button
-                type="button"
-                onClick={() => setConfirmAll(false)}
-                className="btn-secondary text-xs"
-                disabled={fixAll.isPending}
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  fixAll.mutate(undefined, {
-                    onSettled: () => setConfirmAll(false),
-                  });
-                }}
-                disabled={fixAll.isPending}
-                className="btn-danger text-xs"
-              >
-                {fixAll.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
+        {/* Action bar + list */}
+        <Surface className="sm:col-span-6 xl:col-span-12" label="Пострадавшие">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="scrollbar-none -mx-1 max-w-full overflow-x-auto px-1">
+              <Filter
+                value={filter}
+                onChange={setFilter}
+                canFix={canFix}
+                noFix={Math.max(0, total - canFix)}
+                total={total}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {!confirmAll ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirmAll(true)}
+                  disabled={canFix === 0 || fixAll.isPending}
+                  className="btn-primary"
+                >
                   <Wrench className="h-3.5 w-3.5" />
-                )}
-                Да, применить
-              </button>
-            </>
-          )}
-        </div>
-      </section>
-
-      {/* List */}
-      {q.isLoading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="skeleton h-32" />
-          ))}
-        </div>
-      ) : q.isError ? (
-        <div className="card border-danger/30 bg-danger/5 p-4 text-sm text-danger">
-          Не удалось загрузить список. Попробуй обновить.
-        </div>
-      ) : victims.length === 0 ? (
-        <div className="card grid place-items-center gap-2 p-12 text-center">
-          <CheckCircle2 className="h-10 w-10 text-success" />
-          <div className="text-base font-medium text-fg">
-            {total === 0 ? "Пострадавших нет — всё чисто." : "Под выбранный фильтр никто не попал."}
+                  Восстановить всех (<span className="tabular">{fmtNum(canFix)}</span>)
+                </button>
+              ) : (
+                <>
+                  <span className="t-body text-[13px]">Точно? UPDATE на {fmtNum(canFix)} строк.</span>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmAll(false)}
+                    className="btn-secondary"
+                    disabled={fixAll.isPending}
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fixAll.mutate(undefined, {
+                        onSettled: () => setConfirmAll(false),
+                      });
+                    }}
+                    disabled={fixAll.isPending}
+                    className="btn-danger"
+                  >
+                    {fixAll.isPending ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Wrench className="h-3.5 w-3.5" />
+                    )}
+                    Да, применить
+                  </button>
+                </>
+              )}
+            </div>
           </div>
-          {total > 0 && filter !== "all" && (
-            <button
-              type="button"
-              onClick={() => setFilter("all")}
-              className="text-xs text-accent underline"
-            >
-              Показать всех ({total})
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {victims.map((v) => (
-            <VictimRow
-              key={v.telegram_id}
-              v={v}
-              expanded={expanded.has(v.telegram_id)}
-              onToggle={() =>
-                setExpanded((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(v.telegram_id)) next.delete(v.telegram_id);
-                  else next.add(v.telegram_id);
-                  return next;
-                })
+
+          {q.isLoading ? (
+            <div className="flex flex-col gap-2" role="status" aria-label="Загрузка">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-24 rounded-row" />
+              ))}
+            </div>
+          ) : q.isError ? (
+            <ErrorState className="rounded-row bg-tile-3 p-4" error={q.error} onRetry={() => q.refetch()} />
+          ) : victims.length === 0 ? (
+            <EmptyState
+              title={total === 0 ? "Пострадавших нет — всё чисто." : "Под выбранный фильтр никто не попал."}
+              action={
+                total > 0 && filter !== "all" ? (
+                  <button type="button" onClick={() => setFilter("all")} className="btn-secondary mt-1">
+                    Показать всех ({total})
+                  </button>
+                ) : undefined
               }
-              onFix={() => fixOne.mutate(v.telegram_id)}
-              fixing={fixOne.isPending && fixOne.variables === v.telegram_id}
             />
-          ))}
-        </div>
-      )}
-    </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {victims.map((v) => (
+                <VictimRow
+                  key={v.telegram_id}
+                  v={v}
+                  expanded={expanded.has(v.telegram_id)}
+                  onToggle={() =>
+                    setExpanded((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(v.telegram_id)) next.delete(v.telegram_id);
+                      else next.add(v.telegram_id);
+                      return next;
+                    })
+                  }
+                  onFix={() => fixOne.mutate(v.telegram_id)}
+                  fixing={fixOne.isPending && fixOne.variables === v.telegram_id}
+                />
+              ))}
+            </div>
+          )}
+        </Surface>
+      </Bento>
+    </>
   );
 }
 
 // ─ Components ────────────────────────────────────────────────────────
-
-function SummaryCard({
-  label,
-  value,
-  icon: Icon,
-  tone,
-  loading,
-}: {
-  label: string;
-  value: string;
-  icon: typeof AlertTriangle;
-  tone: "warning" | "accent" | "muted" | "info";
-  loading?: boolean;
-}) {
-  const toneClass =
-    tone === "warning"
-      ? "text-warning bg-warning/10 ring-warning/30"
-      : tone === "accent"
-      ? "text-accent bg-accent/10 ring-accent/25"
-      : tone === "info"
-      ? "text-tagpurple bg-tagpurple/10 ring-tagpurple/25"
-      : "text-fg-muted bg-bg-subtle ring-border";
-  return (
-    <div className="card p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-            {label}
-          </div>
-          <div className="mt-1 text-2xl font-semibold tabular-nums text-fg md:text-3xl">
-            {loading ? "…" : value}
-          </div>
-        </div>
-        <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ring-1 ${toneClass}`}>
-          <Icon className="h-4 w-4" />
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function Filter({
   value,
@@ -333,23 +288,12 @@ function Filter({
     { key: "all", label: "Все", count: total },
   ];
   return (
-    <div className="inline-flex rounded-full border border-border bg-bg-elevated p-0.5 text-xs font-medium">
-      {opts.map((o) => (
-        <button
-          key={o.key}
-          type="button"
-          onClick={() => onChange(o.key)}
-          className={
-            "rounded-full px-3 py-1.5 transition-colors " +
-            (value === o.key
-              ? "bg-accent font-semibold text-bg shadow-glow-sm"
-              : "text-fg-muted hover:text-fg")
-          }
-        >
-          {o.label} · <span className="tabular-nums">{fmtNum(o.count)}</span>
-        </button>
-      ))}
-    </div>
+    <Segmented
+      label="Фильтр"
+      value={value}
+      onChange={onChange}
+      options={opts.map((o) => ({ value: o.key, label: `${o.label} · ${fmtNum(o.count)}` }))}
+    />
   );
 }
 
@@ -375,38 +319,35 @@ function VictimRow({
   const totalPaidRub = v.payments.reduce((a, p) => a + (p.amount_rubles || 0), 0);
 
   return (
-    <article className="card overflow-hidden p-0">
+    <article className="overflow-hidden rounded-row bg-tile-3">
       {/* Top summary row */}
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-bg-subtle"
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-tile-4"
       >
         {expanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-fg-subtle" />
+          <ChevronDown className="t-mute h-4 w-4 shrink-0" aria-hidden="true" />
         ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-fg-subtle" />
+          <ChevronRight className="t-mute h-4 w-4 shrink-0" aria-hidden="true" />
         )}
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-subtle text-xs font-semibold tabular-nums text-fg-muted ring-1 ring-border">
+        <div className="t-mute tabular grid h-9 w-9 shrink-0 place-items-center rounded-full bg-tile-1 text-[12px] font-semibold">
           {String(v.telegram_id).slice(-3)}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate font-medium text-fg">
+            <span className="truncate text-[14px] font-medium">
               {v.username ? `@${v.username}` : `tg:${v.telegram_id}`}
             </span>
-            <span className="text-[11px] tabular-nums text-fg-subtle">
-              tg:{v.telegram_id}
-            </span>
-            {v.current_is_combo && (
-              <span className="badge bg-tagpurple/20 text-tagpurple ring-1 ring-tagpurple/25">combo</span>
-            )}
+            <span className="t-mute tabular text-[12px]">tg:{v.telegram_id}</span>
+            {v.current_is_combo && <span className="badge-special">combo</span>}
           </div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-fg-muted">
+          <div className="t-mute tabular mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px]">
             <span>
               {fmtNum(v.payments_count)} платежей · {fmtRub(totalPaidRub)}
             </span>
-            <span>·</span>
+            <span aria-hidden="true">·</span>
             <span>
               {fmtNum(v.traffic_purchases.length)} паков ГБ · {fmtNum(v.traffic_total_gb)} ГБ
             </span>
@@ -415,40 +356,9 @@ function VictimRow({
 
         {/* Before / After capsule */}
         <div className="hidden shrink-0 items-center gap-2 sm:flex">
-          <div className="rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1 text-right">
-            <div className="text-[9px] font-medium uppercase tracking-wider text-warning">
-              Сейчас
-            </div>
-            <div className="text-xs font-semibold tabular-nums text-warning">
-              {currDays != null ? `+${currDays.toLocaleString("ru-RU")} дн` : "—"}
-            </div>
-          </div>
-          <ChevronRight className="h-3 w-3 shrink-0 text-fg-subtle" />
-          <div
-            className={
-              "rounded-lg px-2.5 py-1 text-right border " +
-              (grace
-                ? "border-accent/30 bg-accent/10"
-                : "border-success/30 bg-success/10")
-            }
-          >
-            <div
-              className={
-                "text-[9px] font-medium uppercase tracking-wider " +
-                (grace ? "text-accent" : "text-success")
-              }
-            >
-              {grace ? "Grace +1д" : "Будет"}
-            </div>
-            <div
-              className={
-                "text-xs font-semibold tabular-nums " +
-                (grace ? "text-accent" : "text-success")
-              }
-            >
-              {propDays != null ? `+${propDays.toLocaleString("ru-RU")} дн` : "—"}
-            </div>
-          </div>
+          <DaysChip tone="warn" label="Сейчас" days={currDays} />
+          <ChevronRight className="t-mute h-3 w-3 shrink-0" aria-hidden="true" />
+          <DaysChip tone={grace ? "accent" : "ok"} label={grace ? "Grace +1д" : "Будет"} days={propDays} />
         </div>
 
         {v.can_fix ? (
@@ -459,7 +369,7 @@ function VictimRow({
               onFix();
             }}
             disabled={fixing}
-            className="btn-primary shrink-0 text-xs"
+            className="btn-primary shrink-0"
           >
             {fixing ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -469,24 +379,22 @@ function VictimRow({
             Восстановить
           </button>
         ) : (
-          <span className="badge bg-bg-elevated text-fg-muted ring-1 ring-border">
-            нет истории
-          </span>
+          <span className="badge shrink-0 bg-tile-1 text-mute">нет истории</span>
         )}
       </button>
 
       {/* Expanded details */}
       {expanded && (
-        <div className="border-t border-border bg-bg-subtle/30 p-4">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <DetailBlock title="Текущее состояние" tone="warning">
+        <div className="flex flex-col gap-3 px-3 pb-3">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            <DetailBlock title="Текущее состояние" tone="warn">
               <KV label="expires_at" value={fmtDateTime(v.current_expires_at)} />
               <KV label="через дней" value={currDays != null ? currDays.toLocaleString("ru-RU") : "—"} />
               <KV label="is_bypass_only" value={v.current_is_bypass_only ? "TRUE" : "FALSE"} />
               <KV label="type" value={v.current_subscription_type ?? "—"} />
               <KV label="source" value={v.current_source ?? "—"} />
             </DetailBlock>
-            <DetailBlock title="Будет применено" tone={grace ? "info" : "success"}>
+            <DetailBlock title="Будет применено" tone={grace ? "accent" : "ok"}>
               <KV label="expires_at" value={fmtDateTime(v.proposed_expires_at)} />
               <KV
                 label="через"
@@ -511,33 +419,27 @@ function VictimRow({
           {/* Payments table */}
           <SubBlock title={`Платежи · ${v.payments.length}`} icon={Receipt}>
             {v.payments.length === 0 ? (
-              <div className="text-xs text-fg-subtle">Нет одобренных платежей.</div>
+              <p className="t-mute text-[13px]">Нет одобренных платежей.</p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
+              <div className="-mx-2 overflow-x-auto px-2">
+                <table className="dtable min-w-[560px]">
                   <thead>
-                    <tr className="text-fg-subtle">
-                      <Th>Когда</Th>
-                      <Th>Тариф</Th>
-                      <Th align="right">Сумма</Th>
-                      <Th>Purchase ID</Th>
+                    <tr>
+                      <th>Когда</th>
+                      <th>Тариф</th>
+                      <th className="num">Сумма</th>
+                      <th>Purchase ID</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-border/40">
+                  <tbody>
                     {v.payments.map((p) => (
                       <tr key={p.id}>
-                        <Td>{fmtDateTime(p.paid_at ?? p.created_at)}</Td>
-                        <Td>
-                          <span className="font-mono">{p.tariff}</span>
-                        </Td>
-                        <Td align="right">
-                          <span className="font-semibold tabular-nums">{fmtRub(p.amount_rubles)}</span>
-                        </Td>
-                        <Td>
-                          <span className="font-mono text-[10px] text-fg-subtle">
-                            {p.purchase_id ? p.purchase_id.slice(0, 16) : "—"}
-                          </span>
-                        </Td>
+                        <td className="tabular">{fmtDateTime(p.paid_at ?? p.created_at)}</td>
+                        <td className="font-mono">{p.tariff}</td>
+                        <td className="num font-semibold">{fmtRub(p.amount_rubles)}</td>
+                        <td className="t-mute font-mono text-[12px]">
+                          {p.purchase_id ? p.purchase_id.slice(0, 16) : "—"}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -549,38 +451,29 @@ function VictimRow({
           {/* Subscription history */}
           <SubBlock title={`История подписок · ${v.history.length}`} icon={Clock}>
             {v.history.length === 0 ? (
-              <div className="text-xs text-fg-subtle">История пуста.</div>
+              <p className="t-mute text-[13px]">История пуста.</p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
+              <div className="-mx-2 overflow-x-auto px-2">
+                <table className="dtable min-w-[560px]">
                   <thead>
-                    <tr className="text-fg-subtle">
-                      <Th>Когда</Th>
-                      <Th>Action</Th>
-                      <Th>Start</Th>
-                      <Th>End</Th>
+                    <tr>
+                      <th>Когда</th>
+                      <th>Action</th>
+                      <th>Start</th>
+                      <th>End</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-border/40">
+                  <tbody>
                     {v.history.map((h) => {
                       const isPaid = ["purchase", "renewal", "auto_renew"].includes(h.action_type);
                       return (
                         <tr key={h.id}>
-                          <Td>{fmtDateTime(h.created_at)}</Td>
-                          <Td>
-                            <span
-                              className={
-                                "badge text-[10px] " +
-                                (isPaid
-                                  ? "bg-success/15 text-success ring-1 ring-success/25"
-                                  : "bg-bg-elevated text-fg-muted ring-1 ring-border")
-                              }
-                            >
-                              {h.action_type}
-                            </span>
-                          </Td>
-                          <Td>{fmtDate(h.start_date)}</Td>
-                          <Td>{fmtDate(h.end_date)}</Td>
+                          <td className="tabular">{fmtDateTime(h.created_at)}</td>
+                          <td>
+                            <span className={isPaid ? "badge-success" : "badge-muted"}>{h.action_type}</span>
+                          </td>
+                          <td className="tabular">{fmtDate(h.start_date)}</td>
+                          <td className="tabular">{fmtDate(h.end_date)}</td>
                         </tr>
                       );
                     })}
@@ -593,15 +486,13 @@ function VictimRow({
           {/* Traffic purchases */}
           <SubBlock title={`Пакеты ГБ · ${v.traffic_purchases.length}`} icon={Database}>
             {v.traffic_purchases.length === 0 ? (
-              <div className="text-xs text-fg-subtle">Пакеты не покупал.</div>
+              <p className="t-mute text-[13px]">Пакеты не покупал.</p>
             ) : (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                 {v.traffic_purchases.map((t) => (
-                  <div key={t.id} className="rounded-lg border border-border bg-bg-card p-3">
-                    <div className="text-xs font-semibold tabular-nums text-fg">
-                      {fmtNum(t.gb_amount)} ГБ
-                    </div>
-                    <div className="mt-0.5 text-[10px] text-fg-muted tabular-nums">
+                  <div key={t.id} className="rounded-row bg-tile-3 p-3">
+                    <div className="tabular text-[14px] font-semibold">{fmtNum(t.gb_amount)} ГБ</div>
+                    <div className="t-mute tabular mt-0.5 text-[12px]">
                       {fmtRub(t.price_rub)} · {fmtDate(t.created_at)}
                     </div>
                   </div>
@@ -615,38 +506,45 @@ function VictimRow({
   );
 }
 
+function DaysChip({ tone, label, days }: { tone: Tone; label: string; days: number | null }) {
+  return (
+    <div className="rounded-row bg-tile-1 px-3 py-1.5 text-right">
+      <div className="t-mute flex items-center justify-end gap-1.5 text-[12px]">
+        <StatusDot tone={tone} />
+        {label}
+      </div>
+      <div className="tabular text-[13px] font-semibold">
+        {days != null ? `+${days.toLocaleString("ru-RU")} дн` : "—"}
+      </div>
+    </div>
+  );
+}
+
 function DetailBlock({
   title,
   tone,
   children,
 }: {
   title: string;
-  tone: "warning" | "success" | "muted" | "info";
-  children: React.ReactNode;
+  tone: Tone;
+  children: ReactNode;
 }) {
-  const ringClass =
-    tone === "warning"
-      ? "border-warning/30 bg-warning/10"
-      : tone === "success"
-      ? "border-success/30 bg-success/8"
-      : tone === "info"
-      ? "border-accent/30 bg-accent/8"
-      : "border-border bg-bg-subtle/50";
   return (
-    <div className={`rounded-xl border ${ringClass} p-3`}>
-      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+    <div className="rounded-row bg-tile-1 p-3">
+      <div className="flex items-center gap-2 text-[13px] font-semibold">
+        <StatusDot tone={tone} />
         {title}
       </div>
-      <dl className="mt-2 space-y-1.5">{children}</dl>
+      <dl className="mt-2 flex flex-col gap-1.5">{children}</dl>
     </div>
   );
 }
 
 function KV({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 text-xs">
-      <dt className="text-fg-muted">{label}</dt>
-      <dd className="truncate font-mono text-fg">{value}</dd>
+    <div className="flex items-center justify-between gap-3 text-[13px]">
+      <dt className="t-mute">{label}</dt>
+      <dd className="tabular truncate font-mono text-[12px]">{value}</dd>
     </div>
   );
 }
@@ -658,52 +556,15 @@ function SubBlock({
 }: {
   title: string;
   icon: typeof Receipt;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <div className="mt-4 rounded-xl border border-border bg-bg-card p-3">
-      <div className="mb-2 flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-        <Icon className="h-3.5 w-3.5" />
+    <div className={cn("rounded-row bg-tile-1 p-4")}>
+      <h3 className="mb-3 flex items-center gap-2 text-[15px] font-semibold">
+        <Icon className="t-mute h-4 w-4" aria-hidden="true" />
         {title}
-      </div>
+      </h3>
       {children}
     </div>
-  );
-}
-
-function Th({
-  children,
-  align = "left",
-}: {
-  children: React.ReactNode;
-  align?: "left" | "right";
-}) {
-  return (
-    <th
-      className={
-        "px-2 py-1.5 text-[10px] font-medium uppercase tracking-wider " +
-        (align === "right" ? "text-right" : "text-left")
-      }
-    >
-      {children}
-    </th>
-  );
-}
-
-function Td({
-  children,
-  align = "left",
-}: {
-  children: React.ReactNode;
-  align?: "left" | "right";
-}) {
-  return (
-    <td
-      className={
-        "px-2 py-2 text-xs text-fg " + (align === "right" ? "text-right" : "text-left")
-      }
-    >
-      {children}
-    </td>
   );
 }

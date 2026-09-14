@@ -1,21 +1,14 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  Database,
-  Gauge,
-  Loader2,
-  RefreshCw,
-  Search,
-  Wrench,
-  XCircle,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, RefreshCw, Search, Wrench } from "lucide-react";
 import { endpoints, ApiError, type PanelEntitySnapshot } from "@/lib/api";
 import { fmtNum } from "@/lib/format";
 import { toast } from "@/store/toast";
+import { cn } from "@/lib/cn";
+import { Bento, PageHeader, Surface } from "@/components/ui/Surface";
+import { KpiTile } from "@/components/ui/KpiTile";
+import { Segmented, StatusDot, type Tone } from "@/components/ui/controls";
+import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
 
 // Traffic Audit — сравнение DB (subscription base + Σ traffic_purchases)
 // vs Remnawave panel (trafficLimitBytes). Ловим mismatches: юзер оплатил
@@ -38,15 +31,17 @@ const KIND_LABEL = {
 } as const;
 
 const KIND_STYLE = {
-  match: "text-success bg-success/10 ring-success/25",
-  mismatch: "text-warning bg-warning/10 ring-warning/25",
-  desync: "text-danger bg-danger/10 ring-danger/25 font-semibold",
-  no_entity: "text-fg-muted bg-bg-elevated ring-border",
-  panel_error: "text-danger bg-danger/10 ring-danger/25",
+  match: "badge-success",
+  mismatch: "badge-warning",
+  desync: "badge-danger font-semibold",
+  no_entity: "badge bg-tile-1 text-mute",
+  panel_error: "badge-danger",
 } as const;
 
 type Kind = keyof typeof KIND_LABEL;
 type Row = Awaited<ReturnType<typeof endpoints.trafficAuditList>>["results"][number];
+
+const INLINE_CODE = "font-mono text-[12px] on-shell";
 
 export function TrafficAudit() {
   const qc = useQueryClient();
@@ -146,388 +141,310 @@ export function TrafficAudit() {
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-fg-subtle">
-            Maintenance
-          </div>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-fg md:text-4xl">
-            Traffic Audit — DB ↔ Панель
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm text-fg-muted">
-            Сравнение оплаченного трафика (
-            <code className="rounded bg-bg-subtle px-1 py-0.5 font-mono text-xs">
-              subscription_base + Σ traffic_purchases
-            </code>
-            ) с фактическим лимитом в панели Remnawave (
-            <code className="rounded bg-bg-subtle px-1 py-0.5 font-mono text-xs">
-              trafficLimitBytes
-            </code>
-            ). Показывает где у юзера в БД, например, 85 ГБ, а в панели — 0.
-            Fix поднимает лимит до{" "}
-            <code className="rounded bg-bg-subtle px-1 py-0.5 font-mono text-xs">
-              expected + used
-            </code>
-            {" "}(usedTrafficBytes сохраняется, remaining = ровно expected).
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-2 text-xs text-fg-muted">
-            <span>Скан:</span>
-            <select
-              value={limit}
-              onChange={(e) => setLimit(Number(e.target.value))}
+    <>
+      <PageHeader
+        title="Traffic Audit — DB ↔ Панель"
+        sub={
+          <>
+            Сравнение оплаченного трафика (<code className={INLINE_CODE}>subscription_base + Σ traffic_purchases</code>)
+            с фактическим лимитом в панели Remnawave (<code className={INLINE_CODE}>trafficLimitBytes</code>).
+            Показывает где у юзера в БД, например, 85 ГБ, а в панели — 0. Fix поднимает лимит до{" "}
+            <code className={INLINE_CODE}>expected + used</code> (usedTrafficBytes сохраняется, remaining = ровно
+            expected).
+          </>
+        }
+        actions={
+          <>
+            <label className="on-shell-mute flex items-center gap-2 text-[13px]">
+              <span>Скан:</span>
+              <select
+                value={limit}
+                onChange={(e) => setLimit(Number(e.target.value))}
+                disabled={q.isFetching}
+                className="input tabular w-auto"
+              >
+                <option value={50}>50</option>
+                <option value={200}>200</option>
+                <option value={500}>500</option>
+                <option value={1000}>1000</option>
+                <option value={5000}>5000</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                setScanKey((k) => k + 1);
+                q.refetch();
+              }}
               disabled={q.isFetching}
-              className="rounded-md border border-border bg-bg-elevated px-2 py-1 text-xs text-fg"
+              className="btn-secondary"
             >
-              <option value={50}>50</option>
-              <option value={200}>200</option>
-              <option value={500}>500</option>
-              <option value={1000}>1000</option>
-              <option value={5000}>5000</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            onClick={() => {
-              setScanKey((k) => k + 1);
-              q.refetch();
-            }}
-            disabled={q.isFetching}
-            className="btn-secondary text-xs"
-          >
-            {q.isFetching ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-            Прогнать аудит
-          </button>
-        </div>
-      </header>
+              {q.isFetching ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              Прогнать аудит
+            </button>
+          </>
+        }
+      />
 
-      {/* Emergency: reset all premium entities to unlimited */}
-      <section className="card border-danger/30 bg-danger/5 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-danger">
-              🚨 Сбросить ВСЕ premium → безлимит
+      <Bento>
+        {/* Summary */}
+        <SummaryTile label="Проверено" value={fmtNum(summary?.total ?? 0)} loading={q.isLoading} />
+        <SummaryTile label="Совпадают" value={fmtNum(summary?.match ?? 0)} tone="ok" loading={q.isLoading} variant="raised" />
+        <SummaryTile label="Рассинхрон" value={fmtNum(summary?.desync ?? 0)} tone="err" loading={q.isLoading} variant="steel" />
+        <SummaryTile label="Расхождения" value={fmtNum(summary?.mismatch ?? 0)} tone="warn" loading={q.isLoading} variant="raised" />
+        <SummaryTile label="Нет в панели" value={fmtNum(summary?.no_entity ?? 0)} tone="idle" loading={q.isLoading} variant="raised" />
+        <SummaryTile label="Недодача, ГБ" value={fmtGb(summary?.shortfall_total_gb ?? 0)} tone="warn" loading={q.isLoading} variant="fog" />
+
+        {/* Emergency: reset all premium entities to unlimited */}
+        <Surface className="sm:col-span-6 xl:col-span-12" variant="raised">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0 max-w-[72ch]">
+              <h2 className="flex items-center gap-2 text-[15px] font-semibold">
+                <StatusDot tone="err" />
+                Сбросить ВСЕ premium → безлимит
+              </h2>
+              <p className="t-mute mt-1 text-[13px] leading-5">
+                По ТЗ premium — без лимита ГБ. Если бот случайно PATCH-нул trafficLimitBytes на premium (баг), они
+                уходят в LIMITED. Кнопка ставит trafficLimitBytes=0 + status=ACTIVE для всех premium entities разом.
+              </p>
             </div>
-            <p className="mt-0.5 text-xs text-fg-muted">
-              По ТЗ premium — без лимита ГБ. Если бот случайно PATCH-нул
-              trafficLimitBytes на premium (баг), они уходят в LIMITED.
-              Кнопка ставит trafficLimitBytes=0 + status=ACTIVE для всех
-              premium entities разом.
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {!confirmResetPrem ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => resetPremiumUnlim.mutate(true)}
+                    disabled={resetPremiumUnlim.isPending}
+                    className="btn-secondary"
+                  >
+                    {resetPremiumUnlim.isPending ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : null}
+                    Dry-run
+                  </button>
+                  <button type="button" onClick={() => setConfirmResetPrem(true)} className="btn-danger">
+                    Применить ко всем
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="t-body text-[13px]">Точно PATCH всех premium → limit=0?</span>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmResetPrem(false)}
+                    className="btn-secondary"
+                    disabled={resetPremiumUnlim.isPending}
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetPremiumUnlim.mutate(false, {
+                        onSettled: () => setConfirmResetPrem(false),
+                      });
+                    }}
+                    disabled={resetPremiumUnlim.isPending}
+                    className="btn-danger"
+                  >
+                    {resetPremiumUnlim.isPending ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : null}
+                    Да, применить
+                  </button>
+                </>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            {!confirmResetPrem ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => resetPremiumUnlim.mutate(true)}
-                  disabled={resetPremiumUnlim.isPending}
-                  className="btn-secondary text-xs"
-                >
-                  {resetPremiumUnlim.isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : null}
-                  Dry-run
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmResetPrem(true)}
-                  className="btn-danger text-xs"
-                >
-                  🚨 Применить ко всем
-                </button>
-              </>
-            ) : (
-              <>
-                <span className="text-xs text-fg-muted">
-                  Точно PATCH всех premium → limit=0?
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setConfirmResetPrem(false)}
-                  className="btn-secondary text-xs"
-                  disabled={resetPremiumUnlim.isPending}
-                >
-                  Отмена
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    resetPremiumUnlim.mutate(false, {
-                      onSettled: () => setConfirmResetPrem(false),
-                    });
-                  }}
-                  disabled={resetPremiumUnlim.isPending}
-                  className="btn-danger text-xs"
-                >
-                  {resetPremiumUnlim.isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : null}
-                  Да, применить
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      </section>
+        </Surface>
 
-      {/* Summary */}
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <SummaryCard
-          label="Проверено"
-          value={fmtNum(summary?.total ?? 0)}
-          icon={Database}
-          tone="muted"
-          loading={q.isLoading}
-        />
-        <SummaryCard
-          label="Совпадают"
-          value={fmtNum(summary?.match ?? 0)}
-          icon={CheckCircle2}
-          tone="success"
-          loading={q.isLoading}
-        />
-        <SummaryCard
-          label="🔴 Рассинхрон"
-          value={fmtNum(summary?.desync ?? 0)}
-          icon={XCircle}
-          tone="danger"
-          loading={q.isLoading}
-        />
-        <SummaryCard
-          label="Расхождения"
-          value={fmtNum(summary?.mismatch ?? 0)}
-          icon={AlertTriangle}
-          tone="warning"
-          loading={q.isLoading}
-        />
-        <SummaryCard
-          label="Нет в панели"
-          value={fmtNum(summary?.no_entity ?? 0)}
-          icon={XCircle}
-          tone="muted"
-          loading={q.isLoading}
-        />
-        <SummaryCard
-          label="Недодача, ГБ"
-          value={fmtGb(summary?.shortfall_total_gb ?? 0)}
-          icon={Gauge}
-          tone="warning"
-          loading={q.isLoading}
-        />
-      </section>
-
-      {/* One-user query */}
-      <section className="card p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="text-xs font-medium text-fg-muted">
-            Разовая проверка по telegram_id:
-          </div>
-          <input
-            type="text"
-            inputMode="numeric"
-            placeholder="8343902286"
-            value={userFilter}
-            onChange={(e) => setUserFilter(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && scanOne()}
-            className="w-52 rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-sm text-fg placeholder:text-fg-subtle focus:border-accent focus:outline-none"
-          />
-          <button
-            type="button"
-            onClick={scanOne}
-            disabled={oneUser.isPending}
-            className="btn-secondary text-xs"
-          >
-            {oneUser.isPending ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Search className="h-3.5 w-3.5" />
-            )}
-            Проверить одного
-          </button>
-        </div>
-        {oneUser.data && oneUser.data.results.length > 0 && (
-          <div className="mt-3 space-y-2">
-            {oneUser.data.results.map((r) => (
-              <ResultRow
-                key={`one-${r.tg}`}
-                r={r}
-                expanded={true}
-                onToggle={() => {}}
-                onFix={() => fixOne.mutate(r.tg)}
-                fixing={fixOne.isPending && fixOne.variables === r.tg}
-                onResync={() => resyncOne.mutate(r.tg)}
-                resyncing={resyncOne.isPending && resyncOne.variables === r.tg}
-              />
-            ))}
-          </div>
-        )}
-        {oneUser.data && oneUser.data.results.length === 0 && (
-          <div className="mt-3 text-xs text-fg-subtle">
-            Юзер не найден в БД (или нет bypass entity).
-          </div>
-        )}
-      </section>
-
-      {/* Filter + fix-all */}
-      <section className="card flex flex-wrap items-center justify-between gap-3 p-4">
-        <Filter value={kindFilter} onChange={setKindFilter} summary={summary} />
-        <div className="flex items-center gap-2">
-          {!confirmAll ? (
-            <button
-              type="button"
-              onClick={() => setConfirmAll(true)}
-              disabled={(summary?.mismatch ?? 0) === 0 || fixAll.isPending}
-              className="btn-primary"
-            >
-              <Wrench className="h-3.5 w-3.5" />
-              Починить все ({fmtNum(summary?.mismatch ?? 0)})
-            </button>
-          ) : (
-            <>
-              <span className="text-xs text-fg-muted">
-                PATCH на {fmtNum(summary?.mismatch ?? 0)} юзеров в панели?
-              </span>
-              <button
-                type="button"
-                onClick={() => setConfirmAll(false)}
-                className="btn-secondary text-xs"
-                disabled={fixAll.isPending}
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  fixAll.mutate(undefined, {
-                    onSettled: () => setConfirmAll(false),
-                  });
-                }}
-                disabled={fixAll.isPending}
-                className="btn-danger text-xs"
-              >
-                {fixAll.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Wrench className="h-3.5 w-3.5" />
-                )}
-                Да, применить
-              </button>
-            </>
-          )}
-        </div>
-      </section>
-
-      {/* Table */}
-      {q.isLoading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="skeleton h-24" />
-          ))}
-        </div>
-      ) : q.isError ? (
-        <div className="card border-danger/30 bg-danger/5 p-4 text-sm text-danger">
-          <div className="font-medium">Не удалось прогнать audit.</div>
-          <div className="mt-1 whitespace-pre-wrap font-mono text-xs">
-            {(q.error as ApiError | undefined)?.detail ??
-              (q.error as Error | undefined)?.message ??
-              "неизвестная ошибка"}
-          </div>
-          <div className="mt-2 text-xs text-fg-muted">
-            Попробуй уменьшить лимит скана до 50 и повторить.
-          </div>
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="card grid place-items-center gap-2 p-12 text-center">
-          <CheckCircle2 className="h-10 w-10 text-success" />
-          <div className="text-base font-medium text-fg">
-            {(summary?.mismatch ?? 0) === 0 && kindFilter === "mismatch"
-              ? "Расхождений нет — все юзеры совпадают."
-              : "Под фильтр никто не попал."}
-          </div>
-          {kindFilter !== "all" && (
-            <button
-              type="button"
-              onClick={() => setKindFilter("all")}
-              className="text-xs text-accent underline"
-            >
-              Показать всех ({summary?.total ?? 0})
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {filtered.map((r) => (
-            <ResultRow
-              key={r.tg}
-              r={r}
-              expanded={expanded.has(r.tg)}
-              onToggle={() =>
-                setExpanded((prev) => {
-                  const n = new Set(prev);
-                  if (n.has(r.tg)) n.delete(r.tg);
-                  else n.add(r.tg);
-                  return n;
-                })
-              }
-              onFix={() => fixOne.mutate(r.tg)}
-              fixing={fixOne.isPending && fixOne.variables === r.tg}
-              onResync={() => resyncOne.mutate(r.tg)}
-              resyncing={resyncOne.isPending && resyncOne.variables === r.tg}
+        {/* One-user query */}
+        <Surface className="sm:col-span-6 xl:col-span-12" label="Разовая проверка по telegram_id">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              inputMode="numeric"
+              placeholder="8343902286"
+              aria-label="telegram_id"
+              value={userFilter}
+              onChange={(e) => setUserFilter(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && scanOne()}
+              className="input tabular w-full sm:w-56"
             />
-          ))}
-        </div>
-      )}
-    </div>
+            <button type="button" onClick={scanOne} disabled={oneUser.isPending} className="btn-secondary">
+              {oneUser.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Search className="h-3.5 w-3.5" />
+              )}
+              Проверить одного
+            </button>
+          </div>
+          {oneUser.data && oneUser.data.results.length > 0 && (
+            <div className="mt-4 flex flex-col gap-2">
+              {oneUser.data.results.map((r) => (
+                <ResultRow
+                  key={`one-${r.tg}`}
+                  r={r}
+                  expanded={true}
+                  onToggle={() => {}}
+                  onFix={() => fixOne.mutate(r.tg)}
+                  fixing={fixOne.isPending && fixOne.variables === r.tg}
+                  onResync={() => resyncOne.mutate(r.tg)}
+                  resyncing={resyncOne.isPending && resyncOne.variables === r.tg}
+                />
+              ))}
+            </div>
+          )}
+          {oneUser.data && oneUser.data.results.length === 0 && (
+            <p className="t-mute mt-3 text-[13px]">Юзер не найден в БД (или нет bypass entity).</p>
+          )}
+        </Surface>
+
+        {/* Filter + fix-all + list */}
+        <Surface className="sm:col-span-6 xl:col-span-12" label="Результаты">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="scrollbar-none -mx-1 max-w-full overflow-x-auto px-1">
+              <Filter value={kindFilter} onChange={setKindFilter} summary={summary} />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {!confirmAll ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirmAll(true)}
+                  disabled={(summary?.mismatch ?? 0) === 0 || fixAll.isPending}
+                  className="btn-primary"
+                >
+                  <Wrench className="h-3.5 w-3.5" />
+                  Починить все (<span className="tabular">{fmtNum(summary?.mismatch ?? 0)}</span>)
+                </button>
+              ) : (
+                <>
+                  <span className="t-body text-[13px]">
+                    PATCH на {fmtNum(summary?.mismatch ?? 0)} юзеров в панели?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmAll(false)}
+                    className="btn-secondary"
+                    disabled={fixAll.isPending}
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fixAll.mutate(undefined, {
+                        onSettled: () => setConfirmAll(false),
+                      });
+                    }}
+                    disabled={fixAll.isPending}
+                    className="btn-danger"
+                  >
+                    {fixAll.isPending ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Wrench className="h-3.5 w-3.5" />
+                    )}
+                    Да, применить
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {q.isLoading ? (
+            <div className="flex flex-col gap-2" role="status" aria-label="Загрузка">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-24 rounded-row" />
+              ))}
+            </div>
+          ) : q.isError ? (
+            <div className="flex flex-col gap-2">
+              <ErrorState className="rounded-row bg-tile-3 p-4" error={q.error} onRetry={() => q.refetch()} />
+              <p className="t-mute px-1 text-[13px]">Попробуй уменьшить лимит скана до 50 и повторить.</p>
+            </div>
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              title={
+                (summary?.mismatch ?? 0) === 0 && kindFilter === "mismatch"
+                  ? "Расхождений нет — все юзеры совпадают."
+                  : "Под фильтр никто не попал."
+              }
+              action={
+                kindFilter !== "all" ? (
+                  <button type="button" onClick={() => setKindFilter("all")} className="btn-secondary mt-1">
+                    Показать всех ({summary?.total ?? 0})
+                  </button>
+                ) : undefined
+              }
+            />
+          ) : (
+            <div className="flex flex-col gap-2">
+              {filtered.map((r) => (
+                <ResultRow
+                  key={r.tg}
+                  r={r}
+                  expanded={expanded.has(r.tg)}
+                  onToggle={() =>
+                    setExpanded((prev) => {
+                      const n = new Set(prev);
+                      if (n.has(r.tg)) n.delete(r.tg);
+                      else n.add(r.tg);
+                      return n;
+                    })
+                  }
+                  onFix={() => fixOne.mutate(r.tg)}
+                  fixing={fixOne.isPending && fixOne.variables === r.tg}
+                  onResync={() => resyncOne.mutate(r.tg)}
+                  resyncing={resyncOne.isPending && resyncOne.variables === r.tg}
+                />
+              ))}
+            </div>
+          )}
+        </Surface>
+      </Bento>
+    </>
   );
 }
 
 // ─ Components ────────────────────────────────────────────────────────
 
-function SummaryCard({
+function SummaryTile({
   label,
   value,
-  icon: Icon,
   tone,
   loading,
+  variant,
 }: {
   label: string;
   value: string;
-  icon: typeof AlertTriangle;
-  tone: "warning" | "success" | "muted" | "danger";
+  tone?: Tone;
   loading?: boolean;
+  variant?: "ink" | "raised" | "steel" | "fog";
 }) {
-  const toneClass =
-    tone === "warning"
-      ? "text-warning bg-warning/10 ring-warning/30"
-      : tone === "success"
-      ? "text-success bg-success/10 ring-success/25"
-      : tone === "danger"
-      ? "text-danger bg-danger/10 ring-danger/25"
-      : "text-fg-muted bg-bg-subtle ring-border";
   return (
-    <div className="card p-4">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-            {label}
-          </div>
-          <div className="mt-1 truncate text-xl font-semibold tabular-nums text-fg md:text-2xl">
-            {loading ? "…" : value}
-          </div>
-        </div>
-        <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ring-1 ${toneClass}`}>
-          <Icon className="h-4 w-4" />
-        </div>
-      </div>
-    </div>
+    <KpiTile
+      className="sm:col-span-2 xl:col-span-2"
+      size="sm"
+      variant={variant}
+      label={label}
+      loading={loading}
+      value={
+        tone ? (
+          <span className="inline-flex items-center gap-2.5">
+            <StatusDot tone={tone} />
+            <span className="truncate">{value}</span>
+          </span>
+        ) : (
+          value
+        )
+      }
+    />
   );
 }
 
@@ -548,7 +465,7 @@ function Filter({
   };
 }) {
   const opts: Array<{ key: Kind | "all"; label: string; count: number }> = [
-    { key: "desync", label: "🔴 Рассинхрон", count: summary?.desync ?? 0 },
+    { key: "desync", label: "Рассинхрон", count: summary?.desync ?? 0 },
     { key: "mismatch", label: "Расхождения", count: summary?.mismatch ?? 0 },
     { key: "panel_error", label: "Ошибки API", count: summary?.panel_error ?? 0 },
     { key: "no_entity", label: "Нет в панели", count: summary?.no_entity ?? 0 },
@@ -556,23 +473,12 @@ function Filter({
     { key: "all", label: "Все", count: summary?.total ?? 0 },
   ];
   return (
-    <div className="inline-flex flex-wrap rounded-full border border-border bg-bg-elevated p-0.5 text-xs font-medium">
-      {opts.map((o) => (
-        <button
-          key={o.key}
-          type="button"
-          onClick={() => onChange(o.key)}
-          className={
-            "rounded-full px-3 py-1.5 transition-colors " +
-            (value === o.key
-              ? "bg-accent font-semibold text-bg shadow-glow-sm"
-              : "text-fg-muted hover:text-fg")
-          }
-        >
-          {o.label} · <span className="tabular-nums">{fmtNum(o.count)}</span>
-        </button>
-      ))}
-    </div>
+    <Segmented
+      label="Фильтр по статусу"
+      value={value}
+      onChange={onChange}
+      options={opts.map((o) => ({ value: o.key, label: `${o.label} · ${fmtNum(o.count)}` }))}
+    />
   );
 }
 
@@ -600,60 +506,48 @@ function ResultRow({
     : `${r.subscription_type}${r.period_days ? ` · ${r.period_days}d` : ""}`;
 
   return (
-    <article className="card overflow-hidden p-0">
+    <article className="overflow-hidden rounded-row bg-tile-3">
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-bg-subtle"
+        aria-expanded={expanded}
+        className="flex w-full flex-wrap items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-tile-4 sm:flex-nowrap"
       >
         {expanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-fg-subtle" />
+          <ChevronDown className="t-mute h-4 w-4 shrink-0" aria-hidden="true" />
         ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-fg-subtle" />
+          <ChevronRight className="t-mute h-4 w-4 shrink-0" aria-hidden="true" />
         )}
-        <span
-          className={`badge shrink-0 ring-1 ${KIND_STYLE[r.kind]}`}
-          title={r.kind}
-        >
+        <span className={cn("shrink-0", KIND_STYLE[r.kind])} title={r.kind}>
           {KIND_LABEL[r.kind]}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-sm tabular-nums text-fg">
-              tg:{r.tg}
-            </span>
-            <span className="badge bg-bg-elevated text-fg-muted ring-1 ring-border">
-              {tariffBadge}
-            </span>
+            <span className="tabular font-mono text-[14px]">tg:{r.tg}</span>
+            <span className="badge bg-tile-1 text-mute">{tariffBadge}</span>
             {r.traffic_purchases_gb > 0 && (
-              <span className="badge bg-tagpurple/15 text-tagpurple ring-1 ring-tagpurple/25">
-                +{fmtNum(r.traffic_purchases_gb)} ГБ пакетов
-              </span>
+              <span className="badge-special">+{fmtNum(r.traffic_purchases_gb)} ГБ пакетов</span>
             )}
             {r.panel_status && r.panel_status !== "—" && (
-              <span className="badge bg-bg-elevated text-fg-subtle ring-1 ring-border text-[10px]">
-                {r.panel_status}
-              </span>
+              <span className="badge bg-tile-1 text-mute">{r.panel_status}</span>
             )}
           </div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-fg-muted">
+          <div className="t-mute tabular mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px]">
             <span>
-              <b>DB:</b> {fmtGb(r.expected_gb)}
+              <span className="t-body font-medium">DB:</span> {fmtGb(r.expected_gb)}
             </span>
-            <span>·</span>
+            <span aria-hidden="true">·</span>
             <span>
-              <b>Панель:</b> {fmtGb(r.actual_gb)}
+              <span className="t-body font-medium">Панель:</span> {fmtGb(r.actual_gb)}
             </span>
-            <span>·</span>
+            <span aria-hidden="true">·</span>
             <span>
-              <b>Used:</b> {fmtGb(r.used_gb)}
+              <span className="t-body font-medium">Used:</span> {fmtGb(r.used_gb)}
             </span>
             {r.shortfall_gb > 0 && (
               <>
-                <span>·</span>
-                <span className="font-semibold text-warning">
-                  Δ {fmtGb(r.shortfall_gb)}
-                </span>
+                <span aria-hidden="true">·</span>
+                <span className="font-semibold text-warning">Δ {fmtGb(r.shortfall_gb)}</span>
               </>
             )}
           </div>
@@ -666,7 +560,7 @@ function ResultRow({
               onResync();
             }}
             disabled={resyncing}
-            className="btn-danger shrink-0 text-xs"
+            className="btn-danger shrink-0"
             title="Обновить remnawave_uuid/id в БД → указать на правильную entity"
           >
             {resyncing ? (
@@ -685,7 +579,7 @@ function ResultRow({
               onFix();
             }}
             disabled={fixing}
-            className="btn-primary shrink-0 text-xs"
+            className="btn-primary shrink-0"
           >
             {fixing ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -698,44 +592,44 @@ function ResultRow({
       </button>
 
       {expanded && (
-        <div className="border-t border-border bg-bg-subtle/30 p-4">
+        <div className="flex flex-col gap-3 px-3 pb-3">
           {/* DESYNC-баннер + сравнение entity ─────────────────────────────── */}
           {r.kind === "desync" && (
-            <div className="mb-4 rounded-xl border border-danger/30 bg-danger/8 p-3">
-              <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-danger">
-                🔴 РАССИНХРОН: бот показывает юзеру не ту entity
-              </div>
-              <p className="text-xs text-fg-muted">
-                Бот резолвит одну entity через сохранённый в БД uuid/id, а под
-                этим username в панели лежит другая entity с реальным трафиком.
-                Юзер получает ссылку на "пустую" entity и видит "трафика нет",
-                хотя купленный лимит есть — просто на другой entity.
+            <div className="rounded-row bg-tile-1 p-4">
+              <h3 className="flex items-center gap-2 text-[15px] font-semibold">
+                <StatusDot tone="err" />
+                РАССИНХРОН: бот показывает юзеру не ту entity
+              </h3>
+              <p className="t-body mt-2 text-[13px] leading-5">
+                Бот резолвит одну entity через сохранённый в БД uuid/id, а под этим username в панели лежит другая
+                entity с реальным трафиком. Юзер получает ссылку на "пустую" entity и видит "трафика нет", хотя
+                купленный лимит есть — просто на другой entity.
               </p>
-              <p className="mt-2 text-[11px] font-mono text-fg-subtle">{r.note}</p>
-              <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <p className="t-mute mt-2 break-all font-mono text-[12px]">{r.note}</p>
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
                 <EntitySnapCard
                   title="Что бот сейчас показывает (по uuid из БД)"
                   snap={r.panel_by_our_ref}
-                  tone="warning"
+                  tone="warn"
                 />
                 <EntitySnapCard
                   title="Что реально лежит в панели (по username)"
                   snap={r.panel_by_username}
-                  tone="success"
+                  tone="ok"
                 />
               </div>
-              <div className="mt-3 flex items-center gap-2 text-xs text-fg-muted">
-                <span>Кнопка «Пересинк» перепишет</span>
-                <code className="rounded bg-bg-subtle px-1 font-mono text-[10px]">
+              <p className="t-mute mt-3 text-[13px] leading-5">
+                Кнопка «Пересинк» перепишет{" "}
+                <code className="rounded-full bg-tile-3 px-2 py-0.5 font-mono text-[12px]">
                   subscriptions.remnawave_{"{uuid,id,bypass_sub_url}"}
-                </code>
-                <span>→ указать на entity по username.</span>
-              </div>
+                </code>{" "}
+                → указать на entity по username.
+              </p>
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <DetailCard title="В нашей БД" tone="muted">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+            <DetailCard title="В нашей БД">
               <KV label="subscription" value={tariffBadge} />
               <KV
                 label="traffic packs"
@@ -743,29 +637,17 @@ function ResultRow({
               />
               <KV label="ожидаемый лимит" value={fmtGb(r.expected_gb)} />
             </DetailCard>
-            <DetailCard title="В панели Remnawave" tone={r.kind === "mismatch" ? "warning" : "muted"}>
+            <DetailCard title="В панели Remnawave" tone={r.kind === "mismatch" ? "warn" : undefined}>
               <KV label="trafficLimitBytes" value={fmtGb(r.actual_gb)} />
               <KV label="usedTrafficBytes" value={fmtGb(r.used_gb)} />
               <KV label="status" value={r.panel_status} />
             </DetailCard>
-            <DetailCard
-              title={canFix ? "Что применит fix" : "Разница"}
-              tone={canFix ? "success" : "muted"}
-            >
+            <DetailCard title={canFix ? "Что применит fix" : "Разница"} tone={canFix ? "ok" : undefined}>
               {canFix ? (
                 <>
-                  <KV
-                    label="new_limit"
-                    value={fmtGb((r.expected_gb ?? 0) + (r.used_gb ?? 0))}
-                  />
-                  <KV
-                    label="формула"
-                    value="expected + used"
-                  />
-                  <KV
-                    label="Δ добавит"
-                    value={`+${fmtGb(r.shortfall_gb)}`}
-                  />
+                  <KV label="new_limit" value={fmtGb((r.expected_gb ?? 0) + (r.used_gb ?? 0))} />
+                  <KV label="формула" value="expected + used" />
+                  <KV label="Δ добавит" value={`+${fmtGb(r.shortfall_gb)}`} />
                 </>
               ) : (
                 <>
@@ -782,35 +664,26 @@ function ResultRow({
               откуда взялась сумма Σ traffic_purchases: реальные строки
               из БД (id / GB / RUB / метод / дата). */}
           {r.traffic_purchases && r.traffic_purchases.length > 0 && (
-            <div className="mt-4 rounded-xl border border-border bg-bg-card p-3">
-              <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-                История покупок трафика · {r.traffic_purchases.length} шт.
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
+            <div className="rounded-row bg-tile-1 p-4">
+              <h3 className="mb-3 text-[15px] font-semibold">
+                История покупок трафика{" "}
+                <span className="t-mute tabular text-[13px] font-normal">· {r.traffic_purchases.length} шт.</span>
+              </h3>
+              <div className="-mx-2 overflow-x-auto px-2">
+                <table className="dtable min-w-[520px]">
                   <thead>
-                    <tr className="text-fg-subtle">
-                      <th className="px-2 py-1.5 text-left text-[10px] font-medium uppercase tracking-wider">
-                        Когда
-                      </th>
-                      <th className="px-2 py-1.5 text-right text-[10px] font-medium uppercase tracking-wider">
-                        ГБ
-                      </th>
-                      <th className="px-2 py-1.5 text-right text-[10px] font-medium uppercase tracking-wider">
-                        ₽
-                      </th>
-                      <th className="px-2 py-1.5 text-left text-[10px] font-medium uppercase tracking-wider">
-                        Метод
-                      </th>
-                      <th className="px-2 py-1.5 text-right text-[10px] font-medium uppercase tracking-wider">
-                        id
-                      </th>
+                    <tr>
+                      <th>Когда</th>
+                      <th className="num">ГБ</th>
+                      <th className="num">₽</th>
+                      <th>Метод</th>
+                      <th className="num">id</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-border/40">
+                  <tbody>
                     {r.traffic_purchases.map((tp) => (
                       <tr key={tp.id}>
-                        <td className="px-2 py-2 text-xs text-fg">
+                        <td className="tabular">
                           {tp.created_at
                             ? new Date(tp.created_at).toLocaleString("ru-RU", {
                                 day: "2-digit",
@@ -821,27 +694,15 @@ function ResultRow({
                               })
                             : "—"}
                         </td>
-                        <td className="px-2 py-2 text-right font-semibold tabular-nums text-fg">
-                          {fmtNum(tp.gb_amount)}
-                        </td>
-                        <td className="px-2 py-2 text-right tabular-nums text-fg-muted">
-                          {fmtNum(tp.price_rub)}
-                        </td>
-                        <td className="px-2 py-2 text-xs text-fg-muted">
-                          {tp.payment_method ?? "—"}
-                        </td>
-                        <td className="px-2 py-2 text-right font-mono text-[10px] text-fg-subtle tabular-nums">
-                          {tp.id}
-                        </td>
+                        <td className="num font-semibold">{fmtNum(tp.gb_amount)}</td>
+                        <td className="num t-body">{fmtNum(tp.price_rub)}</td>
+                        <td className="t-body">{tp.payment_method ?? "—"}</td>
+                        <td className="num t-mute font-mono text-[12px]">{tp.id}</td>
                       </tr>
                     ))}
-                    <tr className="border-t-2 border-border">
-                      <td className="px-2 py-2 text-[11px] font-semibold uppercase text-fg-subtle">
-                        Σ
-                      </td>
-                      <td className="px-2 py-2 text-right text-sm font-bold tabular-nums text-fg">
-                        {fmtNum(r.traffic_purchases_gb)}
-                      </td>
+                    <tr>
+                      <td className="t-mute font-semibold">Σ</td>
+                      <td className="num font-semibold">{fmtNum(r.traffic_purchases_gb)}</td>
                       <td colSpan={3} />
                     </tr>
                   </tbody>
@@ -855,36 +716,37 @@ function ResultRow({
   );
 }
 
+function BlockTitle({ tone, children }: { tone?: Tone; children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 text-[13px] font-semibold">
+      {tone && <StatusDot tone={tone} />}
+      {children}
+    </div>
+  );
+}
+
 function DetailCard({
   title,
   tone,
   children,
 }: {
   title: string;
-  tone: "warning" | "success" | "muted";
-  children: React.ReactNode;
+  tone?: Tone;
+  children: ReactNode;
 }) {
-  const cls =
-    tone === "warning"
-      ? "border-warning/30 bg-warning/8"
-      : tone === "success"
-      ? "border-success/30 bg-success/8"
-      : "border-border bg-bg-subtle/50";
   return (
-    <div className={`rounded-xl border ${cls} p-3`}>
-      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-        {title}
-      </div>
-      <dl className="mt-2 space-y-1.5">{children}</dl>
+    <div className="rounded-row bg-tile-1 p-3">
+      <BlockTitle tone={tone}>{title}</BlockTitle>
+      <dl className="mt-2 flex flex-col gap-1.5">{children}</dl>
     </div>
   );
 }
 
 function KV({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 text-xs">
-      <dt className="text-fg-muted">{label}</dt>
-      <dd className="truncate font-mono text-fg">{value}</dd>
+    <div className="flex items-center justify-between gap-3 text-[13px]">
+      <dt className="t-mute">{label}</dt>
+      <dd className="tabular truncate font-mono text-[12px]">{value}</dd>
     </div>
   );
 }
@@ -896,30 +758,22 @@ function EntitySnapCard({
 }: {
   title: string;
   snap: PanelEntitySnapshot | null;
-  tone: "warning" | "success";
+  tone: Tone;
 }) {
-  const cls =
-    tone === "success"
-      ? "border-success/30 bg-success/8"
-      : "border-warning/30 bg-warning/8";
   if (!snap) {
     return (
-      <div className={`rounded-xl border ${cls} p-3`}>
-        <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-          {title}
-        </div>
-        <div className="mt-2 text-xs italic text-fg-subtle">не найдена</div>
+      <div className="rounded-row bg-tile-3 p-3">
+        <BlockTitle tone={tone}>{title}</BlockTitle>
+        <div className="t-mute mt-2 text-[13px] italic">не найдена</div>
       </div>
     );
   }
   const limitGb = snap.traffic_limit_bytes / 1024 ** 3;
   const usedGb = snap.used_traffic_bytes / 1024 ** 3;
   return (
-    <div className={`rounded-xl border ${cls} p-3`}>
-      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-        {title}
-      </div>
-      <dl className="mt-2 space-y-1.5">
+    <div className="rounded-row bg-tile-3 p-3">
+      <BlockTitle tone={tone}>{title}</BlockTitle>
+      <dl className="mt-2 flex flex-col gap-1.5">
         <KV label="id" value={String(snap.panel_id ?? "—")} />
         <KV
           label="vlessUuid"
@@ -941,7 +795,7 @@ function EntitySnapCard({
         />
       </dl>
       {snap.subscription_url && (
-        <div className="mt-2 truncate text-[10px] font-mono text-fg-subtle" title={snap.subscription_url}>
+        <div className="t-mute mt-2 truncate font-mono text-[12px]" title={snap.subscription_url}>
           {snap.subscription_url}
         </div>
       )}

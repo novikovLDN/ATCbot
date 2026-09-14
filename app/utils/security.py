@@ -31,16 +31,13 @@ MAX_USERNAME_LENGTH = 100  # Username length limit
 ALLOWED_CALLBACK_PATTERNS = [
     r"^menu_(main|profile|buy_vpn|instruction|referral|about|support)$",
     r"^lang_(ru|en|uz|tj)$",
-    r"^tariff:(basic|plus|biz_\w+)$",
-    r"^biz_country:(nl|ru|uk|fr|us)$",
-    r"^period:(basic|plus|biz_\w+):\d+$",
+    r"^tariff:(basic|plus)$",
+    r"^period:(basic|plus):\d+$",
     r"^payment_method:(balance|card)$",
     r"^toggle_auto_renew:(on|off)$",
     r"^topup_balance$",
     r"^activate_trial$",
     r"^enter_promo$",
-    r"^biz_(main|profile|ecosystem|control_panel|renew_config|copy_login|copy_password)$",
-    r"^admin_.*$",  # Admin actions (validated separately)
 ]
 
 
@@ -70,31 +67,6 @@ def validate_telegram_id(telegram_id: Any) -> Tuple[bool, Optional[str]]:
     # Reasonable upper bound (Telegram user IDs are typically < 2^63)
     if telegram_id > 2**63:
         return False, "Telegram ID exceeds maximum value"
-    
-    return True, None
-
-
-def validate_message_text(text: Optional[str]) -> Tuple[bool, Optional[str]]:
-    """
-    Validate Telegram message text.
-    
-    STEP 4 — PART A: INPUT TRUST BOUNDARIES
-    Length and format validation.
-    
-    Args:
-        text: Message text to validate
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
-    if text is None:
-        return True, None  # None is valid (e.g., photo messages)
-    
-    if not isinstance(text, str):
-        return False, "Message text must be a string"
-    
-    if len(text) > MAX_MESSAGE_LENGTH:
-        return False, f"Message text exceeds maximum length ({MAX_MESSAGE_LENGTH})"
     
     return True, None
 
@@ -307,30 +279,6 @@ def owns_resource(telegram_id: int, resource_telegram_id: int) -> bool:
     return telegram_id == resource_telegram_id
 
 
-def require_ownership(telegram_id: int, resource_telegram_id: int) -> Tuple[bool, Optional[str]]:
-    """
-    Require resource ownership.
-    
-    STEP 4 — PART B: AUTHORIZATION GUARDS
-    Explicit guard that fails closed.
-    
-    Args:
-        telegram_id: User's Telegram ID
-        resource_telegram_id: Resource owner's Telegram ID
-        
-    Returns:
-        Tuple of (is_authorized, error_message)
-    """
-    if not owns_resource(telegram_id, resource_telegram_id):
-        logger.warning(
-            f"[SECURITY_WARNING] Unauthorized resource access attempt: "
-            f"telegram_id={telegram_id}, resource_telegram_id={resource_telegram_id}"
-        )
-        return False, "Access denied"
-    
-    return True, None
-
-
 # ====================================================================================
 # STEP 4 — PART E: SECRET & CONFIG SAFETY
 # ====================================================================================
@@ -428,63 +376,3 @@ def log_security_warning(
         log_data["details"] = sanitize_for_logging(details)
     
     logger.warning(f"[SECURITY_WARNING] {event}", extra=log_data)
-
-
-def log_security_error(
-    event: str,
-    telegram_id: Optional[int] = None,
-    correlation_id: Optional[str] = None,
-    details: Optional[Dict[str, Any]] = None
-):
-    """
-    Log security error.
-    
-    STEP 4 — PART F: SECURITY LOGGING POLICY
-    Logs security-related errors (critical failures, attacks, etc.)
-    
-    Args:
-        event: Security event description
-        telegram_id: Telegram ID (if applicable)
-        correlation_id: Correlation ID for tracing
-        details: Additional details (will be sanitized)
-    """
-    log_data = {
-        "event": event,
-        "telegram_id": telegram_id,
-        "correlation_id": correlation_id,
-    }
-    
-    if details:
-        log_data["details"] = sanitize_for_logging(details)
-    
-    logger.error(f"[SECURITY_ERROR] {event}", extra=log_data)
-
-
-def log_audit_event(
-    event: str,
-    telegram_id: Optional[int] = None,
-    correlation_id: Optional[str] = None,
-    details: Optional[Dict[str, Any]] = None
-):
-    """
-    Log audit event.
-    
-    STEP 4 — PART F: SECURITY LOGGING POLICY
-    Logs audit events (admin actions, payment finalization, etc.)
-    
-    Args:
-        event: Audit event description
-        telegram_id: Telegram ID (if applicable)
-        correlation_id: Correlation ID for tracing
-        details: Additional details (will be sanitized)
-    """
-    log_data = {
-        "event": event,
-        "telegram_id": telegram_id,
-        "correlation_id": correlation_id,
-    }
-    
-    if details:
-        log_data["details"] = sanitize_for_logging(details)
-    
-    logger.info(f"[AUDIT_EVENT] {event}", extra=log_data)

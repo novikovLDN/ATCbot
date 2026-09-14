@@ -26,7 +26,6 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-import config
 import database
 
 logger = logging.getLogger(__name__)

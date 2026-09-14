@@ -205,30 +205,30 @@ async def test_create_bypass_recovers_on_post_409_race():
 
 @pytest.mark.asyncio
 async def test_add_bypass_traffic_accumulates(monkeypatch):
-    import sys
-    from types import SimpleNamespace
-
-    fake_db = SimpleNamespace(
-        get_remnawave_bypass_cache=AsyncMock(return_value={"remnawave_uuid": PANEL_UUID}),
-        get_remnawave_uuid=AsyncMock(return_value=PANEL_UUID),
-    )
-    monkeypatch.setitem(sys.modules, "database", fake_db)
-
-    get_user_mock = AsyncMock(return_value={"trafficLimitBytes": 5 * 1024**3})
+    # Since 3cac5de7 the entity is resolved via
+    # remnawave_api.get_bypass_entity_safe (username == str(tg) self-heal),
+    # and PATCH targets its numeric id with _trust_bypass=True.
+    entity = {"id": 382, "username": "42", "trafficLimitBytes": 5 * 1024**3}
+    safe_mock = AsyncMock(return_value=entity)
     update_mock = AsyncMock(return_value={"ok": True})
 
     with patch.object(remnawave_bypass, "config", _cfg()), \
-         patch.object(remnawave_bypass.remnawave_api, "get_user", get_user_mock), \
-         patch.object(remnawave_bypass.remnawave_api, "update_user", update_mock):
+         patch.object(remnawave_bypass.remnawave_api, "get_bypass_entity_safe", safe_mock), \
+         patch.object(remnawave_bypass.remnawave_api, "update_user", update_mock), \
+         patch("app.services.sub_aggregator.invalidate_bg") as inval:
         result = await remnawave_bypass.add_bypass_traffic(42, extra_bytes=10 * 1024**3)
 
     assert result is True
+    safe_mock.assert_awaited_once_with(42)
     update_mock.assert_awaited_once()
+    assert update_mock.call_args.args == (382,)
     # New limit = 5 GB + 10 GB = 15 GB
     new_limit = update_mock.call_args.kwargs["trafficLimitBytes"]
     assert new_limit == 15 * 1024**3
     # status forced ACTIVE so disabled-due-to-zero-traffic users come back
     assert update_mock.call_args.kwargs["status"] == "ACTIVE"
+    assert update_mock.call_args.kwargs["_trust_bypass"] is True
+    inval.assert_called_once_with(42)
 
 
 @pytest.mark.asyncio
@@ -245,3 +245,28 @@ async def test_add_bypass_traffic_returns_false_when_no_existing_entity(monkeypa
     with patch.object(remnawave_bypass, "config", _cfg()):
         result = await remnawave_bypass.add_bypass_traffic(42, extra_bytes=10 * 1024**3)
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_create_bypass_recovers_on_post_400_a019():
+    """Remnawave 3.4.3 answers a taken username with 400 errorCode A019."""
+    first_post = {
+        "ok": False, "status": 400,
+        "body": {"message": "User username already exists", "errorCode": "A019"},
+        "response": None,
+    }
+    recovered = {
+        "id": 77, "vlessUuid": PANEL_UUID, "username": "42", "telegramId": 42,
+        "subscriptionUrl": "u", "shortUuid": "s", "trafficLimitBytes": 0,
+    }
+    find = AsyncMock(side_effect=[None, recovered])
+    create = AsyncMock(return_value=first_post)
+    p_cfg, p_find, p_create, _, _ = _patch(_cfg(), find=find, create=create)
+    with p_cfg, p_find, p_create:
+        result = await remnawave_bypass.create_bypass_user_entity(
+            42, traffic_limit_bytes=10 * 1024**3,
+        )
+    assert result.ok is True
+    assert result.recovered is True
+    assert result.panel_id == 77
+    create.assert_called_once()

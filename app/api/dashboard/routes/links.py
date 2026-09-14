@@ -19,10 +19,12 @@ from pydantic import BaseModel, Field, field_validator
 import config
 import database
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
+from app.api.dashboard.idempotency import IdempotentRoute
 from app.events import bus
 
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_admin)], route_class=IdempotentRoute)
 
 
 # Максимальное количество активных ссылок каждого типа.
@@ -80,7 +82,7 @@ async def stats_links_list():
     try:
         links = await database.list_stats_links(include_inactive=True)
     except Exception as e:
-        raise HTTPException(500, f"list_failed: {e}")
+        raise server_error("list_failed") from e
     out: List[Dict[str, Any]] = []
     for link in links:
         try:
@@ -102,7 +104,7 @@ async def stats_link_create(
     try:
         existing = await database.list_stats_links(include_inactive=False)
     except Exception as e:
-        raise HTTPException(500, f"list_failed: {e}")
+        raise server_error("list_failed") from e
     if len(existing) >= MAX_ACTIVE_STATS_LINKS:
         raise HTTPException(
             409,
@@ -115,7 +117,7 @@ async def stats_link_create(
             created_by=int(admin["sub"]),
         )
     except Exception as e:
-        raise HTTPException(500, f"create_failed: {e}")
+        raise server_error("create_failed") from e
     bus.publish({
         "type": "stats_link:created",
         "link_id": link["id"],
@@ -132,7 +134,7 @@ async def stats_link_detail(link_id: int = Path(..., gt=0)):
     try:
         summary = await database.get_stats_link_summary(link_id)
     except Exception as e:
-        raise HTTPException(500, f"detail_failed: {e}")
+        raise server_error("detail_failed") from e
     if not summary:
         raise HTTPException(404, "Not found")
     out = _serialize(summary)
@@ -148,7 +150,7 @@ async def stats_link_deactivate(
     try:
         ok = await database.set_stats_link_active(link_id, active=False)
     except Exception as e:
-        raise HTTPException(500, f"deactivate_failed: {e}")
+        raise server_error("deactivate_failed") from e
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "stats_link:deactivated", "link_id": link_id, "by": admin.get("sub")})
@@ -163,7 +165,7 @@ async def stats_link_reactivate(
     try:
         ok = await database.set_stats_link_active(link_id, active=True)
     except Exception as e:
-        raise HTTPException(500, f"reactivate_failed: {e}")
+        raise server_error("reactivate_failed") from e
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "stats_link:reactivated", "link_id": link_id, "by": admin.get("sub")})
@@ -178,7 +180,7 @@ async def stats_link_delete(
     try:
         ok = await database.delete_stats_link(link_id)
     except Exception as e:
-        raise HTTPException(500, f"delete_failed: {e}")
+        raise server_error("delete_failed") from e
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "stats_link:deleted", "link_id": link_id, "by": admin.get("sub")})
@@ -242,7 +244,7 @@ async def promo_links_list():
     try:
         links = await database.list_promo_links(include_inactive=True)
     except Exception as e:
-        raise HTTPException(500, f"list_failed: {e}")
+        raise server_error("list_failed") from e
     out: List[Dict[str, Any]] = []
     for link in links:
         row = _serialize(link)
@@ -260,7 +262,7 @@ async def promo_link_create(
     try:
         existing = await database.list_promo_links(include_inactive=False)
     except Exception as e:
-        raise HTTPException(500, f"list_failed: {e}")
+        raise server_error("list_failed") from e
     if len(existing) >= MAX_ACTIVE_PROMO_LINKS:
         raise HTTPException(
             409,
@@ -285,7 +287,7 @@ async def promo_link_create(
     except ValueError as ve:
         raise HTTPException(400, str(ve))
     except Exception as e:
-        raise HTTPException(500, f"create_failed: {e}")
+        raise server_error("create_failed") from e
     bus.publish({
         "type": "promo_link:created",
         "link_id": link["id"],
@@ -304,7 +306,7 @@ async def promo_link_detail(link_id: int = Path(..., gt=0)):
     try:
         summary = await database.get_promo_link_summary(link_id)
     except Exception as e:
-        raise HTTPException(500, f"detail_failed: {e}")
+        raise server_error("detail_failed") from e
     if not summary:
         raise HTTPException(404, "Not found")
     out = _serialize(summary)
@@ -320,7 +322,7 @@ async def promo_link_deactivate(
     try:
         ok = await database.set_promo_link_active(link_id, active=False)
     except Exception as e:
-        raise HTTPException(500, f"deactivate_failed: {e}")
+        raise server_error("deactivate_failed") from e
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "promo_link:deactivated", "link_id": link_id, "by": admin.get("sub")})
@@ -335,7 +337,7 @@ async def promo_link_reactivate(
     try:
         ok = await database.set_promo_link_active(link_id, active=True)
     except Exception as e:
-        raise HTTPException(500, f"reactivate_failed: {e}")
+        raise server_error("reactivate_failed") from e
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "promo_link:reactivated", "link_id": link_id, "by": admin.get("sub")})
@@ -350,7 +352,7 @@ async def promo_link_delete(
     try:
         ok = await database.delete_promo_link(link_id)
     except Exception as e:
-        raise HTTPException(500, f"delete_failed: {e}")
+        raise server_error("delete_failed") from e
     if not ok:
         raise HTTPException(404, "Not found")
     bus.publish({"type": "promo_link:deleted", "link_id": link_id, "by": admin.get("sub")})

@@ -414,10 +414,20 @@ async def test_aggregate_stale_served_when_upstream_dies(monkeypatch):
 async def test_invalidate_endpoint_clears_both_caches():
     m._cache_set("tok12345", b"x", {})
     m._pair_set("tok12345", {"y": 1})
-    with patch.object(m.config, "SUB_AGGREGATOR_INTERNAL_SECRET", ""):
-        resp = await m.invalidate_cache(FakeRequest(), token="tok12345")
+    req = FakeRequest()
+    req.headers = {"x-internal-secret": "right"}
+    with patch.object(m.config, "SUB_AGGREGATOR_INTERNAL_SECRET", "right"):
+        resp = await m.invalidate_cache(req, token="tok12345")
     assert resp.status_code == 200
     assert "tok12345" not in m._cache and "tok12345" not in m._pair_cache
+
+async def test_invalidate_endpoint_closed_without_secret():
+    """No SUB_AGGREGATOR_INTERNAL_SECRET configured -> fail-closed (was: open to anyone)."""
+    m._cache_set("tok12345", b"x", {})
+    with patch.object(m.config, "SUB_AGGREGATOR_INTERNAL_SECRET", ""):
+        resp = await m.invalidate_cache(FakeRequest(), token="tok12345")
+    assert resp.status_code == 403
+    assert "tok12345" in m._cache
 
 async def test_invalidate_endpoint_secret_enforced():
     req = FakeRequest()

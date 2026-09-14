@@ -1,5 +1,7 @@
 import { useLocation, Outlet } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { RouteErrorBoundary } from "./RouteErrorBoundary";
+import { LoadingTiles } from "./ui/states";
 
 /**
  * Плавный fade+slide-in контента при смене роута. На каждый новый
@@ -21,7 +23,13 @@ export function RouteTransition() {
 
   return (
     <div key={key} className="route-in">
-      <Outlet />
+      <RouteErrorBoundary>
+        {/* Screens are lazy chunks (App.tsx): the first visit to a screen
+            loads its code, then it is cached by the browser / service worker. */}
+        <Suspense fallback={<LoadingTiles count={4} />}>
+          <Outlet />
+        </Suspense>
+      </RouteErrorBoundary>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 // Token storage. Simple localStorage wrapper — we never need refresh
 // tokens because the admin can re-issue via /admin in the bot any time.
 
-const KEY = "atlas.admin.token";
+const KEY = "admin.bootstrap-token";
 
 export const auth = {
   get(): string | null {

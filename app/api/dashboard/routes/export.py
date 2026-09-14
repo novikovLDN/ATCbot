@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 
 import database
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -66,7 +67,7 @@ async def export_users():
     try:
         rows = await database.get_all_users_for_export()
     except Exception as e:
-        raise HTTPException(500, f"export_users_failed: {e}")
+        raise server_error("export_users_failed") from e
     name = f"users_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
     return StreamingResponse(
         _csv_stream(rows),
@@ -81,7 +82,7 @@ async def export_subscriptions():
     try:
         rows = await database.get_active_subscriptions_for_export()
     except Exception as e:
-        raise HTTPException(500, f"export_subscriptions_failed: {e}")
+        raise server_error("export_subscriptions_failed") from e
     name = f"subscriptions_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
     return StreamingResponse(
         _csv_stream(rows),

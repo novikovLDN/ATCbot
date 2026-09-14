@@ -5,6 +5,7 @@ import {
   Megaphone,
   RefreshCcw,
   ChevronRight,
+  Check,
   CheckCircle2,
   AlertCircle,
   Clock,
@@ -24,8 +25,14 @@ import { ApiError, endpoints } from "@/lib/api";
 import { useEventStream, type BusEvent } from "@/lib/ws";
 import { toast } from "@/store/toast";
 import { fmtDate, fmtNum, fmtRub, truncate } from "@/lib/format";
+import { cn } from "@/lib/cn";
 import { Spinner } from "@/components/Spinner";
-import { EmptyState } from "@/components/EmptyState";
+import { PageHeader, Surface } from "@/components/ui/Surface";
+import { IconButton, PillProgress, StatusDot } from "@/components/ui/controls";
+import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
+
+/** A small chip that stays visible on a `bg-tile-3` row. */
+const CHIP = "badge bg-tile-1 t-mute";
 
 interface BroadcastRow extends Record<string, unknown> {
   id?: number;
@@ -45,12 +52,13 @@ interface BroadcastRow extends Record<string, unknown> {
 }
 
 // 7 семантических цветов. Совпадают с backend _VALID_TAG_COLORS.
-// Значения — Tailwind bg/text классы (в light-theme дашборде).
+// Значения — классы на токенах v3 (работают в обеих темах). «Жёлтый»
+// в палитре v3 — это фирменный кремовый accent.
 const TAG_COLOR_CLASSES: Record<string, string> = {
-  gray: "bg-fg/8 text-fg-muted",
+  gray: "bg-ink/10 text-body",
   red: "bg-danger/15 text-danger",
   orange: "bg-warning/15 text-warning",
-  yellow: "bg-[#F59E0B]/15 text-[#B45309]",
+  yellow: "bg-accent/15 text-accent",
   green: "bg-success/15 text-success",
   blue: "bg-info/15 text-info",
   purple: "bg-special/15 text-special",
@@ -63,7 +71,7 @@ const TAG_COLOR_LABELS: Array<{ key: string; label: string }> = [
   { key: "yellow", label: "Жёлтый · тест" },
   { key: "green", label: "Зелёный · новое" },
   { key: "blue", label: "Синий · инфо" },
-  { key: "purple", label: "Фиолетовый · VIP" },
+  { key: "purple", label: "Фиолетовый · особое" },
 ];
 
 function TagEditor({
@@ -102,7 +110,7 @@ function TagEditor({
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="text-[11px] text-fg-subtle underline decoration-dotted underline-offset-4 hover:text-fg-muted"
+          className="t-mute tap-target text-[12px] underline decoration-dotted underline-offset-4 hover:text-ink"
         >
           {currentTag ? "изменить тег" : "+ добавить тег"}
         </button>
@@ -110,7 +118,7 @@ function TagEditor({
     );
   }
   return (
-    <div className="mt-2 rounded-lg border border-border bg-bg-subtle/40 p-2.5">
+    <div className="mt-3 rounded-row bg-tile-2 p-3">
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="text"
@@ -118,16 +126,18 @@ function TagEditor({
           onChange={(e) => setTag(e.target.value)}
           maxLength={40}
           placeholder="летняя акция"
-          className="input flex-1 py-1 text-xs"
+          className="input min-w-0 flex-1"
+          aria-label="Тег рассылки"
           autoFocus
         />
         <button
           type="button"
           onClick={() => save.mutate()}
           disabled={save.isPending}
-          className="btn-primary py-1 text-xs"
+          className="btn-primary"
+          aria-label="Сохранить тег"
         >
-          {save.isPending ? <Spinner /> : <CheckCircle2 className="h-3 w-3" />}
+          {save.isPending ? <Spinner /> : <CheckCircle2 className="h-3.5 w-3.5" />}
         </button>
         <button
           type="button"
@@ -136,30 +146,34 @@ function TagEditor({
             setTag(currentTag);
             setColor(currentColor || "gray");
           }}
-          className="btn-ghost py-1 text-xs"
+          className="btn-ghost"
+          aria-label="Отменить изменение тега"
         >
-          <X className="h-3 w-3" />
+          <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {TAG_COLOR_LABELS.map((c) => (
-          <button
-            type="button"
-            key={c.key}
-            onClick={() => setColor(c.key)}
-            title={c.label}
-            className={
-              color === c.key
-                ? `rounded-md px-2 py-0.5 text-[10px] font-semibold ring-2 ring-accent/60 ${TAG_COLOR_CLASSES[c.key]}`
-                : `rounded-md px-2 py-0.5 text-[10px] font-medium opacity-60 hover:opacity-100 ${TAG_COLOR_CLASSES[c.key]}`
-            }
-          >
-            ●
-          </button>
-        ))}
-        <span className="ml-1 self-center text-[10px] text-fg-subtle">
-          цвет метки
-        </span>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {TAG_COLOR_LABELS.map((c) => {
+          const active = color === c.key;
+          return (
+            <button
+              type="button"
+              key={c.key}
+              onClick={() => setColor(c.key)}
+              title={c.label}
+              aria-label={c.label}
+              aria-pressed={active}
+              className={cn(
+                "tap-target grid h-7 w-7 place-items-center rounded-full text-[12px] font-semibold transition-opacity",
+                TAG_COLOR_CLASSES[c.key],
+                active ? "opacity-100" : "opacity-60 hover:opacity-100",
+              )}
+            >
+              {active ? <Check className="h-3.5 w-3.5" strokeWidth={2.5} /> : "●"}
+            </button>
+          );
+        })}
+        <span className="t-mute ml-1 text-[12px]">цвет метки</span>
       </div>
     </div>
   );
@@ -168,9 +182,7 @@ function TagEditor({
 function TagChip({ tag, color }: { tag: string; color?: string | null }) {
   const cls = TAG_COLOR_CLASSES[color || "gray"] ?? TAG_COLOR_CLASSES.gray;
   return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${cls}`}
-    >
+    <span className={`badge font-semibold ${cls}`}>
       <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />
       {tag}
     </span>
@@ -301,73 +313,72 @@ export function Broadcasts() {
   }, [selected]);
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Маркетинг
-          </div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg md:text-3xl">
-            Рассылки
-          </h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() =>
-              setViewMode((m) => (m === "compact" ? "expanded" : "compact"))
-            }
-            className="btn-secondary"
-            title={
-              viewMode === "compact"
-                ? "Переключить на расширенный вид (текст + сегмент + получатели)"
-                : "Переключить на компактный вид (только заголовки)"
-            }
-          >
-            {viewMode === "compact" ? (
-              <Rows3 className="h-3.5 w-3.5" />
-            ) : (
-              <LayoutList className="h-3.5 w-3.5" />
-            )}
-            <span className="hidden sm:inline">
-              {viewMode === "compact" ? "Расширенно" : "Компактно"}
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => list.refetch()}
-            className="btn-secondary"
-          >
-            <RefreshCcw className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Обновить</span>
-          </button>
-          <Link to="/broadcasts/new" className="btn-primary">
-            <Plus className="h-3.5 w-3.5" /> Создать
-          </Link>
-        </div>
-      </header>
+    <>
+      <PageHeader
+        title="Рассылки"
+        sub="Маркетинг"
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() =>
+                setViewMode((m) => (m === "compact" ? "expanded" : "compact"))
+              }
+              className="btn-secondary"
+              aria-label={viewMode === "compact" ? "Расширенно" : "Компактно"}
+              title={
+                viewMode === "compact"
+                  ? "Переключить на расширенный вид (текст + сегмент + получатели)"
+                  : "Переключить на компактный вид (только заголовки)"
+              }
+            >
+              {viewMode === "compact" ? (
+                <Rows3 className="h-3.5 w-3.5" />
+              ) : (
+                <LayoutList className="h-3.5 w-3.5" />
+              )}
+              <span className="hidden sm:inline">
+                {viewMode === "compact" ? "Расширенно" : "Компактно"}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => list.refetch()}
+              className="btn-secondary"
+              aria-label="Обновить"
+            >
+              <RefreshCcw className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Обновить</span>
+            </button>
+            <Link to="/broadcasts/new" className="btn-primary">
+              <Plus className="h-3.5 w-3.5" /> Создать
+            </Link>
+          </>
+        }
+      />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_400px]">
-        <div className="card p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Последние 500
-            </div>
-            {list.isFetching && <Spinner />}
-          </div>
-
+      {/* Two columns from lg (1024px) — the same breakpoint the
+          scroll-into-view effect above and the «К списку» button use. */}
+      <div className="grid grid-cols-1 gap-[var(--gap)] lg:grid-cols-[minmax(0,1fr)_400px]">
+        <Surface
+          label="Последние 500"
+          aside={list.isFetching ? <Spinner /> : undefined}
+        >
           {list.isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-fg-muted">
-              <Spinner /> Загружаю...
+            <div className="flex flex-col gap-2" role="status" aria-label="Загрузка">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-[68px] w-full rounded-row" />
+              ))}
             </div>
+          ) : list.isError && !list.data ? (
+            <ErrorState error={list.error} onRetry={() => list.refetch()} />
           ) : !list.data || list.data.length === 0 ? (
             <EmptyState
-              icon={Megaphone}
               title="Пока пусто"
-              description="Когда отправите первую рассылку, она появится здесь."
+              hint="Когда отправите первую рассылку, она появится здесь."
             />
           ) : (
-            <ul className={viewMode === "expanded" ? "space-y-3" : "divide-y divide-border/60"}>
+            <ul className="flex flex-col gap-2">
               {list.data.map((b) => {
                 const id = Number(b.id ?? 0);
                 const prog = sending[id];
@@ -385,9 +396,9 @@ export function Broadcasts() {
               })}
             </ul>
           )}
-        </div>
+        </Surface>
 
-        <div ref={detailRef} className="space-y-4">
+        <div ref={detailRef} className="flex min-w-0 flex-col gap-[var(--gap)]">
           {selected !== null ? (
             <BroadcastDetail
               id={selected}
@@ -395,18 +406,17 @@ export function Broadcasts() {
               onBack={() => setSelected(null)}
             />
           ) : (
-            <div className="card hidden p-6 lg:block">
+            <Surface className="hidden lg:block" variant="raised">
               <EmptyState
-                icon={Megaphone}
                 title="Выбери рассылку"
-                description="Кликни по строке слева, чтобы посмотреть деталь и статистику отправки."
+                hint="Кликни по строке слева, чтобы посмотреть деталь и статистику отправки."
               />
-            </div>
+            </Surface>
           )}
           <ScheduledBroadcastsSection />
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -417,29 +427,47 @@ function SendProgressBar({ prog }: { prog: SendProgress }) {
       : prog.status === "done"
       ? 100
       : 0;
-  const bar =
-    prog.status === "failed"
-      ? "h-full bg-danger transition-all"
-      : prog.status === "done"
-      ? "h-full bg-success transition-all"
-      : "h-full bg-accent transition-all";
   return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between text-[10px] text-fg-muted">
-        <span className="font-mono">
+    <PillProgress
+      value={pct}
+      knob={prog.status === "running"}
+      label={
+        <span className="tabular text-[12px]">
           {prog.processed}/{prog.total} · {pct}%
         </span>
-        <span className="font-mono">
+      }
+      valueLabel={
+        <span className="text-[12px]">
           ✓ {prog.sent}
           {prog.failed > 0 && (
             <span className="ml-1 text-danger">· ✗ {prog.failed}</span>
           )}
         </span>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-elevated">
-        <div className={bar} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
+      }
+    />
+  );
+}
+
+/** Live send status as a badge — the same look in the row and the detail. */
+function SendStatusBadge({ status }: { status: SendProgress["status"] }) {
+  if (status === "running") {
+    return (
+      <span className="badge-accent">
+        <Send className="h-3 w-3 animate-pulse" /> отправляется
+      </span>
+    );
+  }
+  if (status === "done") {
+    return (
+      <span className="badge-success">
+        <CheckCircle2 className="h-3 w-3" /> готово
+      </span>
+    );
+  }
+  return (
+    <span className="badge-danger">
+      <AlertCircle className="h-3 w-3" /> сбой
+    </span>
   );
 }
 
@@ -469,50 +497,50 @@ function BroadcastListRow({
   const done = progress?.status === "done";
   const failed = progress?.status === "failed";
 
+  // Selection is told by shade (row one step lighter) and the icon
+  // disc turning cream — no outline.
+  const iconDisc = (
+    <span
+      className={cn(
+        "grid h-9 w-9 shrink-0 place-items-center rounded-full transition-colors",
+        selected ? "bg-accent text-onaccent" : "bg-tile-1 t-mute",
+      )}
+      aria-hidden="true"
+    >
+      <Megaphone className="h-3.5 w-3.5" />
+    </span>
+  );
+
   if (mode === "expanded") {
     // Расширенная карточка. Клик по всей карточке (кроме кнопки) → select.
     return (
       <li>
         <div
-          className={
-            selected
-              ? "rounded-xl border border-accent/40 bg-accent/[0.06] p-3 transition"
-              : "rounded-xl border border-border bg-bg-card p-3 transition hover:border-fg-subtle"
-          }
+          className={cn(
+            "rounded-row p-3 transition-colors",
+            selected ? "bg-tile-4" : "bg-tile-3 hover:bg-tile-4",
+          )}
         >
           <div className="flex items-start gap-3">
             <button
               type="button"
               onClick={onSelect}
+              aria-pressed={selected}
               className="flex min-w-0 flex-1 items-start gap-3 text-left"
             >
-              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
-                <Megaphone className="h-3.5 w-3.5" />
-              </div>
+              {iconDisc}
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold text-fg">
+                  <span className="text-[14px] font-semibold">
                     {truncate(String(row.title ?? "Без названия"), 80)}
                   </span>
                   {row.tag && <TagChip tag={String(row.tag)} color={row.tag_color as string | undefined} />}
-                  {row.is_ab_test && <span className="badge-muted">A/B</span>}
-                  {running && (
-                    <span className="badge-accent">
-                      <Send className="h-3 w-3 animate-pulse" /> отправляется
-                    </span>
-                  )}
-                  {done && (
-                    <span className="badge-success">
-                      <CheckCircle2 className="h-3 w-3" /> готово
-                    </span>
-                  )}
-                  {failed && (
-                    <span className="badge-danger">
-                      <AlertCircle className="h-3 w-3" /> сбой
-                    </span>
+                  {row.is_ab_test && <span className={CHIP}>A/B</span>}
+                  {(running || done || failed) && progress && (
+                    <SendStatusBadge status={progress.status} />
                   )}
                 </div>
-                <div className="mt-0.5 text-[11px] text-fg-subtle">
+                <div className="t-mute mt-0.5 text-[12px]">
                   #{id}
                   {row.created_at && ` · ${fmtDate(String(row.created_at))}`}
                   {row.broadcast_type && ` · ${String(row.broadcast_type)}`}
@@ -526,6 +554,7 @@ function BroadcastListRow({
                 navigate(`/broadcasts/new?clone=${id}`);
               }}
               className="btn-ghost shrink-0"
+              aria-label="Снова"
               title="Клонировать текст+фото+кнопки в новую рассылку"
             >
               <Copy className="h-3.5 w-3.5" />
@@ -535,7 +564,7 @@ function BroadcastListRow({
 
           {/* Полный текст сообщения */}
           {typeof row.message === "string" && row.message && (
-            <div className="mt-2.5 rounded-lg border border-border/60 bg-bg-subtle/40 p-3 text-[13px] leading-relaxed text-fg">
+            <div className="mt-3 rounded-[12px] bg-tile-2 p-3 text-[13px] leading-relaxed">
               <div
                 className="whitespace-pre-wrap"
                 dangerouslySetInnerHTML={{
@@ -546,31 +575,31 @@ function BroadcastListRow({
           )}
 
           {/* Правая колонка: сегмент + получатели + прогресс */}
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-fg-muted">
+          <div className="t-mute mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
             {row.segment && (
               <span className="inline-flex items-center gap-1">
                 <UsersIcon className="h-3 w-3" /> сегмент:{" "}
-                <b className="text-fg">{String(row.segment)}</b>
+                <b className="font-semibold text-ink">{String(row.segment)}</b>
               </span>
             )}
             {typeof row.total_recipients === "number" && (
               <span className="inline-flex items-center gap-1">
-                · получателей: <b className="text-fg tabular-nums">{fmtNum(row.total_recipients)}</b>
+                · получателей: <b className="tabular font-semibold text-ink">{fmtNum(row.total_recipients)}</b>
               </span>
             )}
             {typeof row.sent_count === "number" && (
-              <span className="inline-flex items-center gap-1 text-success">
-                · ✓ {fmtNum(row.sent_count)}
+              <span className="tabular inline-flex items-center gap-1.5">
+                · <StatusDot tone="ok" /> ✓ {fmtNum(row.sent_count)}
               </span>
             )}
             {typeof row.failed_count === "number" && row.failed_count > 0 && (
-              <span className="inline-flex items-center gap-1 text-danger">
-                · ✕ {fmtNum(row.failed_count)}
+              <span className="tabular inline-flex items-center gap-1.5 text-danger">
+                · <StatusDot tone="err" /> ✕ {fmtNum(row.failed_count)}
               </span>
             )}
           </div>
           {progress && progress.total > 0 && (
-            <div className="mt-2">
+            <div className="mt-3">
               <SendProgressBar prog={progress} />
             </div>
           )}
@@ -585,57 +614,43 @@ function BroadcastListRow({
       <button
         type="button"
         onClick={onSelect}
-        className={
-          selected
-            ? "flex w-full items-start gap-3 rounded-lg bg-accent/10 px-2 py-3 text-left text-fg shadow-[inset_0_0_0_1px_rgba(14,165,233,0.25)] transition"
-            : "flex w-full items-start gap-3 rounded-lg px-2 py-3 text-left transition hover:bg-accent/[0.04]"
-        }
+        aria-pressed={selected}
+        className={cn(
+          "flex w-full items-start gap-3 rounded-row p-3 text-left transition-colors",
+          selected ? "bg-tile-4" : "bg-tile-3 hover:bg-tile-4",
+        )}
       >
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
-          <Megaphone className="h-3.5 w-3.5" />
-        </div>
+        {iconDisc}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium text-fg">
+            <span className="text-[14px] font-medium">
               {truncate(String(row.title ?? "Без названия"), 60)}
             </span>
             {row.tag && <TagChip tag={String(row.tag)} color={row.tag_color as string | undefined} />}
-            {row.is_ab_test && <span className="badge-muted">A/B</span>}
+            {row.is_ab_test && <span className={CHIP}>A/B</span>}
             {row.broadcast_type && (
-              <span className="badge-muted">{String(row.broadcast_type)}</span>
+              <span className={CHIP}>{String(row.broadcast_type)}</span>
             )}
-            {running && (
-              <span className="badge-accent">
-                <Send className="h-3 w-3 animate-pulse" /> отправляется
-              </span>
-            )}
-            {done && (
-              <span className="badge-success">
-                <CheckCircle2 className="h-3 w-3" /> готово
-              </span>
-            )}
-            {failed && (
-              <span className="badge-danger">
-                <AlertCircle className="h-3 w-3" /> сбой
-              </span>
+            {(running || done || failed) && progress && (
+              <SendStatusBadge status={progress.status} />
             )}
           </div>
           {typeof row.message === "string" && (
-            <div className="mt-1 truncate text-xs text-fg-muted">
+            <div className="t-body mt-1 truncate text-[13px]">
               {truncate(String(row.message), 100)}
             </div>
           )}
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-fg-subtle">
+          <div className="t-mute mt-1 flex flex-wrap items-center gap-2 text-[12px]">
             {row.created_at && <span>{fmtDate(String(row.created_at))}</span>}
             {row.segment && <span>· сегмент {String(row.segment)}</span>}
           </div>
           {progress && progress.total > 0 && (
-            <div className="mt-2">
+            <div className="mt-3">
               <SendProgressBar prog={progress} />
             </div>
           )}
         </div>
-        <ChevronRight className="h-4 w-4 shrink-0 text-fg-subtle" />
+        <ChevronRight className="t-mute mt-2.5 h-4 w-4 shrink-0" />
       </button>
     </li>
   );
@@ -691,70 +706,49 @@ function BroadcastDetail({
 
   if (det.isLoading) {
     return (
-      <div className="card flex items-center gap-3 p-6 text-sm text-fg-muted">
-        <Spinner /> Загружаю...
-      </div>
+      <Surface label={`Рассылка #${id}`} aria-label="Загрузка рассылки">
+        <Skeleton className="h-6 w-2/3" />
+        <Skeleton className="mt-4 h-11 w-full rounded-full" />
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <Skeleton className="h-[72px] rounded-row" />
+          <Skeleton className="h-[72px] rounded-row" />
+          <Skeleton className="h-[72px] rounded-row" />
+        </div>
+        <Skeleton className="mt-4 h-32 w-full rounded-row" />
+      </Surface>
     );
   }
   if (det.isError || !det.data) {
-    return (
-      <EmptyState
-        icon={AlertCircle}
-        title="Не удалось загрузить"
-        description="Попробуй обновить страницу."
-      />
-    );
+    return <ErrorState error={det.error} onRetry={() => det.refetch()} />;
   }
 
   const b = det.data as BroadcastRow;
   const s = (stats.data ?? {}) as BroadcastRow;
 
   return (
-    <div className="card p-5 animate-fade-in">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          {onBack && (
-            <button
-              type="button"
-              onClick={onBack}
-              className="btn-ghost lg:hidden"
-              aria-label="Назад к списку"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" /> К списку
-            </button>
-          )}
-          <div className="text-xs uppercase tracking-wider text-fg-subtle">
-            Рассылка #{id}
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+    <Surface
+      className="animate-fade-in"
+      label={`Рассылка #${id}`}
+      aside={
+        onBack ? (
           <button
             type="button"
-            onClick={() => navigate(`/broadcasts/new?clone=${id}`)}
-            className="btn-secondary"
-            title="Открыть визард с текстом, фото и кнопками этой рассылки — только сегмент выбираешь заново"
+            onClick={onBack}
+            className="btn-ghost lg:hidden"
+            aria-label="Назад к списку"
           >
-            <Copy className="h-3.5 w-3.5" /> Отправить снова
+            <ArrowLeft className="h-3.5 w-3.5" /> К списку
           </button>
-          <button
-            type="button"
-            onClick={() => setShowSchedule(true)}
-            className="btn-secondary"
-            title="Запланировать эту рассылку на конкретную дату+время (МСК) или сделать повторяющейся"
-          >
-            <CalendarIcon className="h-3.5 w-3.5" /> Запланировать
-          </button>
-          <DeleteFromUsersControl broadcastId={id} />
-        </div>
-      </div>
-
+        ) : undefined
+      }
+    >
       {showSchedule && (
         <ScheduleBroadcastModal
           broadcastId={id}
           onClose={() => setShowSchedule(false)}
         />
       )}
-      <h3 className="flex flex-wrap items-center gap-2 text-lg font-semibold text-fg">
+      <h3 className="flex flex-wrap items-center gap-2 text-[15px] font-semibold leading-6">
         {truncate(String(b.title ?? "Без названия"), 80)}
         {b.tag && <TagChip tag={String(b.tag)} color={b.tag_color as string | undefined} />}
       </h3>
@@ -764,50 +758,51 @@ function BroadcastDetail({
         currentColor={(b.tag_color as string) || "gray"}
       />
 
-      {progress && (
-        <div
-          className={
-            progress.status === "running"
-              ? "mt-3 rounded-xl border border-accent/30 bg-accent/10 p-3"
-              : progress.status === "done"
-              ? "mt-3 rounded-xl border border-success/30 bg-success/10 p-3"
-              : "mt-3 rounded-xl border border-danger/30 bg-danger/10 p-3"
-          }
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => navigate(`/broadcasts/new?clone=${id}`)}
+          className="btn-secondary"
+          title="Открыть визард с текстом, фото и кнопками этой рассылки — только сегмент выбираешь заново"
         >
-          <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
-            <span
-              className={
-                progress.status === "running"
-                  ? "inline-flex items-center gap-1.5 font-semibold text-accent"
-                  : progress.status === "done"
-                  ? "inline-flex items-center gap-1.5 font-semibold text-success"
-                  : "inline-flex items-center gap-1.5 font-semibold text-danger"
-              }
-            >
-              {progress.status === "running" && (
-                <>
-                  <Send className="h-3.5 w-3.5 animate-pulse" /> Отправляю...
-                </>
-              )}
-              {progress.status === "done" && (
-                <>
-                  <CheckCircle2 className="h-3.5 w-3.5" /> Готово
-                </>
-              )}
-              {progress.status === "failed" && (
-                <>
-                  <AlertCircle className="h-3.5 w-3.5" />
-                  Сбой отправки
-                </>
-              )}
-            </span>
-            <span className="font-mono text-[11px] text-fg-muted">
+          <Copy className="h-3.5 w-3.5" /> Отправить снова
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowSchedule(true)}
+          className="btn-secondary"
+          title="Запланировать эту рассылку на конкретную дату+время (МСК) или сделать повторяющейся"
+        >
+          <CalendarIcon className="h-3.5 w-3.5" /> Запланировать
+        </button>
+        <DeleteFromUsersControl broadcastId={id} />
+      </div>
+
+      {progress && (
+        <div className="mt-4 rounded-row bg-tile-3 p-3">
+          <div className="mb-2.5 flex items-center justify-between gap-2">
+            {progress.status === "running" && (
+              <span className="badge-accent">
+                <Send className="h-3.5 w-3.5 animate-pulse" /> Отправляю...
+              </span>
+            )}
+            {progress.status === "done" && (
+              <span className="badge-success">
+                <CheckCircle2 className="h-3.5 w-3.5" /> Готово
+              </span>
+            )}
+            {progress.status === "failed" && (
+              <span className="badge-danger">
+                <AlertCircle className="h-3.5 w-3.5" /> Сбой отправки
+              </span>
+            )}
+            <span className="t-mute tabular text-[12px]">
               {progress.processed}/{progress.total}
             </span>
           </div>
           <SendProgressBar prog={progress} />
           {progress.status === "failed" && progress.error && (
-            <div className="mt-2 break-all text-[11px] text-danger">
+            <div className="mt-2 break-all text-[12px] text-danger">
               {progress.error}
             </div>
           )}
@@ -834,7 +829,7 @@ function BroadcastDetail({
         />
       </div>
 
-      <div className="mt-4 space-y-1.5 text-sm">
+      <div className="mt-4 flex flex-col gap-1.5">
         <Row label="Тип" value={String(b.broadcast_type ?? "—")} />
         <Row label="Сегмент" value={String(b.segment ?? "—")} />
         <Row label="A/B" value={b.is_ab_test ? "да" : "нет"} />
@@ -851,17 +846,17 @@ function BroadcastDetail({
       />
 
       {typeof b.message === "string" && b.message && (
-        <div className="mt-4 rounded-xl border border-border bg-bg-subtle/60 p-3">
-          <div className="mb-1 flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
-            <Clock className="h-3 w-3" /> Текст
-          </div>
+        <div className="mt-5">
+          <h4 className="mb-2 flex items-center gap-1.5 text-[15px] font-semibold">
+            <Clock className="t-mute h-3.5 w-3.5" /> Текст
+          </h4>
           <div
-            className="whitespace-pre-wrap text-sm leading-relaxed text-fg"
+            className="whitespace-pre-wrap rounded-row bg-tile-3 p-4 text-[14px] leading-relaxed"
             dangerouslySetInnerHTML={{ __html: sanitize(String(b.message)) }}
           />
         </div>
       )}
-    </div>
+    </Surface>
   );
 }
 
@@ -890,11 +885,9 @@ function BroadcastAnalyticsPanel({
 }) {
   if (loading) {
     return (
-      <div className="mt-4 rounded-xl border border-border bg-bg-subtle/40 p-4">
-        <div className="text-[11px] uppercase tracking-wider text-fg-subtle">
-          Аналитика
-        </div>
-        <div className="mt-1.5 text-sm text-fg-muted">Считаю конверсию…</div>
+      <div className="mt-5">
+        <h4 className="text-[15px] font-semibold">Аналитика</h4>
+        <p className="t-mute mt-1 text-[13px]">Считаю конверсию…</p>
       </div>
     );
   }
@@ -904,25 +897,18 @@ function BroadcastAnalyticsPanel({
   const convRate = data.conversion_rate_7d;
   const blockedPct = data.blocked_estimate;
   return (
-    <div className="mt-4 rounded-xl border border-border bg-gradient-to-br from-accent/5 to-white p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
-          🎯 Конверсия и доход
-        </div>
-        <div className="text-[11px] text-fg-subtle">
-          7д CR:{" "}
-          <span
-            className={
-              convRate >= 0.05
-                ? "font-semibold text-success"
-                : convRate >= 0.01
-                ? "font-semibold text-warning"
-                : "font-semibold text-fg-muted"
-            }
-          >
+    <div className="mt-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-[15px] font-semibold">Конверсия и доход</h4>
+        <span className="t-mute inline-flex items-center gap-1.5 text-[12px]">
+          7д CR:
+          <StatusDot
+            tone={convRate >= 0.05 ? "ok" : convRate >= 0.01 ? "warn" : "idle"}
+          />
+          <span className="tabular font-semibold text-ink">
             {(convRate * 100).toFixed(2)}%
           </span>
-        </div>
+        </span>
       </div>
 
       <div className="grid grid-cols-3 gap-2">
@@ -944,7 +930,7 @@ function BroadcastAnalyticsPanel({
         />
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-fg-muted sm:grid-cols-4">
+      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px]">
         <MiniStat label="Доставлено" value={fmtNum(data.delivered)} />
         <MiniStat label="Ошибок" value={fmtNum(data.failed)} tone="danger" />
         <MiniStat
@@ -969,21 +955,20 @@ function ConvTile({
   revenueKop: number;
   highlight?: boolean;
 }) {
+  // The 7-day window is the one key figure of the panel → cream.
+  const sub = highlight ? "opacity-70" : "t-mute";
   return (
     <div
-      className={
-        highlight
-          ? "rounded-xl border border-accent/30 bg-accent/10 p-3"
-          : "rounded-xl border border-border bg-bg-card p-3"
-      }
+      className={cn(
+        "min-w-0 rounded-row p-3",
+        highlight ? "bg-accent text-onaccent" : "bg-tile-3",
+      )}
     >
-      <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
-        Купили за {window}
-      </div>
-      <div className="mt-0.5 text-xl font-semibold tabular-nums text-fg">
+      <div className={cn("truncate text-[12px]", sub)}>Купили за {window}</div>
+      <div className="tabular track-metric mt-0.5 truncate text-[22px] font-semibold leading-7">
         {fmtNum(count)}
       </div>
-      <div className="mt-0.5 text-[11px] tabular-nums text-fg-muted">
+      <div className={cn("tabular mt-0.5 truncate text-[12px]", sub)}>
         {fmtRub(revenueKop / 100)}
       </div>
     </div>
@@ -1000,13 +985,13 @@ function MiniStat({
   tone?: "danger";
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-1">
-      <span className="truncate text-fg-subtle">{label}</span>
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="t-mute truncate">{label}</span>
       <span
         className={
           tone === "danger"
-            ? "font-semibold tabular-nums text-danger"
-            : "font-semibold tabular-nums text-fg"
+            ? "tabular font-semibold text-danger"
+            : "tabular font-semibold text-ink"
         }
       >
         {value}
@@ -1026,23 +1011,26 @@ function Tile({
   value: string;
   tone?: "success" | "danger";
 }) {
-  const text =
-    tone === "success" ? "text-success" : tone === "danger" ? "text-danger" : "text-fg";
+  const icon =
+    tone === "success" ? "text-success" : tone === "danger" ? "text-danger" : "";
   return (
-    <div className="rounded-xl border border-border bg-bg-subtle/60 p-3">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
-        <Icon className="h-3 w-3" /> {label}
+    <div className="min-w-0 rounded-row bg-tile-3 p-3">
+      <div className="t-mute flex items-center gap-1.5 text-[12px]">
+        <Icon className={cn("h-3 w-3 shrink-0", icon)} />
+        <span className="truncate">{label}</span>
       </div>
-      <div className={`mt-1 truncate text-lg font-semibold ${text}`}>{value}</div>
+      <div className="tabular track-metric mt-1 truncate text-[22px] font-semibold leading-7">
+        {value}
+      </div>
     </div>
   );
 }
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between text-sm">
-      <span className="text-fg-muted">{label}</span>
-      <span className="font-medium text-fg">{value}</span>
+    <div className="flex items-center justify-between gap-3 text-[14px]">
+      <span className="t-mute">{label}</span>
+      <span className="text-right font-medium">{value}</span>
     </div>
   );
 }
@@ -1181,20 +1169,21 @@ function DeleteFromUsersControl({ broadcastId }: { broadcastId: number }) {
         : progress.status === "cancelled"
         ? "Остановлено"
         : "Удаляю...";
-    const barClass =
+    const tone =
       progress.status === "failed"
-        ? "h-full bg-danger transition-all"
+        ? "err"
         : progress.status === "done"
-        ? "h-full bg-success transition-all"
+        ? "ok"
         : progress.status === "cancelled"
-        ? "h-full bg-warning transition-all"
-        : "h-full bg-accent transition-all";
+        ? "warn"
+        : "accent";
     return (
-      <div className="flex min-w-[220px] flex-col items-stretch gap-1.5 text-right">
-        <div className="flex items-center justify-end gap-2 text-[11px] text-fg-muted">
-          <span>
+      <div className="flex w-full min-w-0 flex-col gap-2 rounded-row bg-tile-3 p-3">
+        <div className="flex items-center justify-between gap-2 text-[12px]">
+          <span className="inline-flex items-center gap-1.5">
+            <StatusDot tone={tone} />
             {statusLabel}{" "}
-            <span className="font-mono">
+            <span className="tabular t-mute">
               {done}/{total}
             </span>
             {(progress.failed ?? 0) > 0 && (
@@ -1206,15 +1195,13 @@ function DeleteFromUsersControl({ broadcastId }: { broadcastId: number }) {
               type="button"
               onClick={() => cancel.mutate()}
               disabled={cancel.isPending}
-              className="rounded-md border border-warning/40 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning hover:bg-warning/20 disabled:opacity-50"
+              className="btn-secondary bg-tile-1 px-3 py-1 text-[12px] text-warning"
             >
               {cancel.isPending ? "..." : "Стоп"}
             </button>
           )}
         </div>
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-elevated">
-          <div className={barClass} style={{ width: `${pct}%` }} />
-        </div>
+        <PillProgress value={pct} knob={progress.status === "running"} />
       </div>
     );
   }
@@ -1233,8 +1220,8 @@ function DeleteFromUsersControl({ broadcastId }: { broadcastId: number }) {
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-danger">Точно удалить?</span>
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-[13px] text-danger">Точно удалить?</span>
       <button
         type="button"
         onClick={() => setConfirming(false)}
@@ -1374,34 +1361,37 @@ function ScheduleBroadcastModal({
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
-      <div className="card w-full max-w-md p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CalendarIcon className="h-4 w-4 text-fg-muted" />
-            <h3 className="text-base font-semibold">
+      <div
+        className="tile w-full max-w-md p-5"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Запланировать рассылку #${broadcastId}`}
+      >
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <CalendarIcon className="t-mute h-4 w-4 shrink-0" />
+            <h3 className="text-[18px] font-semibold leading-6">
               Запланировать рассылку #{broadcastId}
             </h3>
           </div>
-          <button type="button" onClick={onClose} className="btn-ghost">
+          <IconButton label="Закрыть" onClick={onClose} className="bg-tile-3">
             <X className="h-4 w-4" />
-          </button>
+          </IconButton>
         </div>
 
-        <div className="mb-3 rounded-lg border border-info/20 bg-info/[0.06] p-3 text-xs text-fg-muted">
-          <b className="text-info">Как работает:</b>
-          <ul className="ml-3 mt-1 list-disc space-y-0.5">
+        <div className="t-body mb-4 rounded-row bg-tile-3 p-4 text-[13px] leading-5">
+          <b className="font-semibold text-ink">Как работает:</b>
+          <ul className="ml-4 mt-1 list-disc space-y-0.5">
             <li>Клон исходной рассылки: тот же текст, фото, кнопки, скидка</li>
             <li>Сегмент вычисляется в момент отправки (не сейчас)</li>
-            <li>Время — <b>Europe/Moscow (UTC+3)</b></li>
+            <li>Время — <b className="font-semibold text-ink">Europe/Moscow (UTC+3)</b></li>
             <li>Максимум +4 недели вперёд от текущего момента</li>
             <li>Для повторяющихся можно указать дату окончания</li>
           </ul>
         </div>
 
-        <label className="mb-3 block">
-          <div className="mb-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
-            Дата и время (МСК)
-          </div>
+        <label className="mb-4 block">
+          <div className="t-mute mb-1.5 text-[13px]">Дата и время (МСК)</div>
           <input
             type="datetime-local"
             value={scheduledAt}
@@ -1410,24 +1400,21 @@ function ScheduleBroadcastModal({
             onChange={(e) => setScheduledAt(e.target.value)}
             className="input"
           />
-          <div className="mt-1 text-[11px] text-fg-subtle">
+          <div className="t-mute mt-1 text-[12px]">
             Мин. +1 мин, макс. +28 дней · {currentWeekdayLabel}
           </div>
         </label>
 
-        <div className="mb-3">
-          <div className="mb-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
-            Повторение
-          </div>
-          <div className="space-y-1">
+        <div className="mb-4">
+          <div className="t-mute mb-1.5 text-[13px]">Повторение</div>
+          <div className="flex flex-col gap-1.5">
             {(["once", "daily", "weekdays", "weekly"] as const).map((r) => (
               <label
                 key={r}
-                className={
-                  recurrence === r
-                    ? "flex cursor-pointer items-center gap-3 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-sm"
-                    : "flex cursor-pointer items-center gap-3 rounded-xl border border-border bg-bg-card px-3 py-2 text-sm hover:border-fg-subtle"
-                }
+                className={cn(
+                  "flex min-h-[44px] cursor-pointer items-center gap-3 rounded-row px-3 py-2 text-[14px] transition-colors",
+                  recurrence === r ? "bg-tile-4 text-ink" : "t-body bg-tile-3 hover:bg-tile-4",
+                )}
               >
                 <input
                   type="radio"
@@ -1437,7 +1424,7 @@ function ScheduleBroadcastModal({
                   onChange={() => setRecurrence(r)}
                   className="accent-accent"
                 />
-                <Repeat className="h-3 w-3 text-fg-muted" />
+                <Repeat className="t-mute h-3 w-3" />
                 {RECURRENCE_LABELS[r]}
               </label>
             ))}
@@ -1445,11 +1432,9 @@ function ScheduleBroadcastModal({
         </div>
 
         {recurrence === "weekly" && (
-          <div className="mb-3 rounded-xl border border-border bg-bg-subtle/40 p-3">
-            <div className="mb-2 text-[11px] uppercase tracking-wider text-fg-subtle">
-              День недели повтора
-            </div>
-            <div className="flex flex-wrap gap-1.5">
+          <div className="mb-4 rounded-row bg-tile-3 p-3">
+            <div className="t-mute mb-2 text-[13px]">День недели повтора</div>
+            <div className="capsule-nav flex-wrap" role="group" aria-label="День недели повтора">
               {WEEKDAYS_MON_FIRST.map((w) => (
                 <button
                   type="button"
@@ -1457,32 +1442,28 @@ function ScheduleBroadcastModal({
                   onClick={() =>
                     setScheduledAt((cur) => _snapToWeekday(cur, w.js))
                   }
-                  className={
-                    currentWeekday === w.js
-                      ? "rounded-lg border border-accent/40 bg-accent/10 px-2.5 py-1 text-xs font-semibold text-accent"
-                      : "rounded-lg border border-border bg-bg-card px-2.5 py-1 text-xs font-medium text-fg-muted hover:border-fg-subtle hover:text-fg"
-                  }
+                  aria-pressed={currentWeekday === w.js}
+                  className="capsule-tab h-8 px-3 text-[12px]"
                   title={`Сдвинуть на ближайшую ${w.long.toLowerCase()}у`}
                 >
                   {w.short}
                 </button>
               ))}
             </div>
-            <div className="mt-1.5 text-[11px] text-fg-subtle">
+            <div className="t-mute mt-2 text-[12px] leading-4">
               Клик по дню — сдвигает первую отправку на ближайший этот
               день недели (время сохраняется). Дальше каждые 7 дней.
             </div>
           </div>
         )}
 
-        <div className="mb-3">
-          <div className="mb-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
-            Сегмент получателей
-          </div>
+        <div className="mb-4">
+          <div className="t-mute mb-1.5 text-[13px]">Сегмент получателей</div>
           <select
             value={segmentOverride ?? ""}
             onChange={(e) => setSegmentOverride(e.target.value || null)}
             className="input"
+            aria-label="Сегмент получателей"
             disabled={segments.isLoading}
           >
             <option value="">
@@ -1497,15 +1478,15 @@ function ScheduleBroadcastModal({
               </option>
             ))}
           </select>
-          <div className="mt-1 text-[11px] text-fg-subtle">
+          <div className="t-mute mt-1 text-[12px] leading-4">
             Аудитория пересчитывается в момент отправки — показанное число
             «на сейчас» для ориентира.
           </div>
         </div>
 
         {recurrence !== "once" && (
-          <div className="mb-3 rounded-xl border border-border bg-bg-subtle/40 p-3">
-            <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <div className="mb-4 rounded-row bg-tile-2 p-3">
+            <label className="flex min-h-[44px] cursor-pointer items-center gap-2 text-[14px]">
               <input
                 type="checkbox"
                 checked={endEnabled}
@@ -1520,15 +1501,16 @@ function ScheduleBroadcastModal({
                   type="datetime-local"
                   value={endAt}
                   onChange={(e) => setEndAt(e.target.value)}
-                  className="input mt-2"
+                  className="input mt-1"
+                  aria-label="Дата окончания повторений (МСК)"
                 />
-                <div className="mt-1 text-[11px] text-fg-subtle">
+                <div className="t-mute mt-1 text-[12px]">
                   После этого момента повторения прекратятся (МСК)
                 </div>
               </>
             )}
             {!endEnabled && (
-              <div className="mt-1 text-[11px] text-fg-subtle">
+              <div className="t-mute text-[12px]">
                 Без ограничения — будет повторяться пока не отменишь вручную
               </div>
             )}
@@ -1610,16 +1592,12 @@ export function ScheduledBroadcastsSection() {
   };
 
   return (
-    <div className="card p-5">
-      <div className="mb-3 flex items-center justify-between">
+    <Surface
+      variant="raised"
+      label="Запланированные (МСК)"
+      aside={
         <div className="flex items-center gap-2">
-          <CalendarIcon className="h-4 w-4 text-fg-muted" />
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Запланированные (МСК)
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1 text-[11px] text-fg-muted">
+          <label className="t-mute tap-target inline-flex cursor-pointer items-center gap-1.5 text-[12px]">
             <input
               type="checkbox"
               checked={showInactive}
@@ -1628,73 +1606,70 @@ export function ScheduledBroadcastsSection() {
             />
             история
           </label>
-          <button
-            type="button"
-            onClick={() => list.refetch()}
-            className="btn-ghost"
-          >
-            <RefreshCcw className="h-3 w-3" />
-          </button>
+          <IconButton small label="Обновить" onClick={() => list.refetch()} className="bg-tile-3">
+            <RefreshCcw className="h-3.5 w-3.5" />
+          </IconButton>
         </div>
-      </div>
-
+      }
+    >
       {list.isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-fg-muted">
-          <Spinner /> Загружаю...
+        <div className="flex flex-col gap-2" role="status" aria-label="Загрузка">
+          <Skeleton className="h-[60px] w-full rounded-row" />
+          <Skeleton className="h-[60px] w-full rounded-row" />
         </div>
+      ) : list.isError && !list.data ? (
+        <ErrorState error={list.error} onRetry={() => list.refetch()} />
       ) : !list.data || list.data.length === 0 ? (
-        <div className="rounded-lg border border-border/60 bg-bg-subtle/40 px-3 py-6 text-center text-sm text-fg-muted">
-          Пока ничего не запланировано.
-          <br />
-          <span className="text-[11px] text-fg-subtle">
-            Нажми «⏰ Запланировать» на любой рассылке слева.
-          </span>
-        </div>
+        <EmptyState
+          title="Пока ничего не запланировано."
+          hint="Нажми «⏰ Запланировать» на любой рассылке слева."
+        />
       ) : (
-        <ul className="divide-y divide-border/60">
+        <ul className="flex flex-col gap-2">
           {list.data.map((row) => {
             const r = row as Record<string, unknown>;
             const id = Number(r.id ?? 0);
             const isActive = Boolean(r.is_active);
             const runCount = Number(r.run_count ?? 0);
             return (
-              <li key={id} className="flex items-start gap-3 py-2.5">
-                <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
+              <li key={id} className="list-row items-start py-3">
+                <span
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-tile-1 t-mute"
+                  aria-hidden="true"
+                >
                   {r.recurrence === "once" ? (
                     <CalendarIcon className="h-3.5 w-3.5" />
                   ) : (
                     <Repeat className="h-3.5 w-3.5" />
                   )}
-                </div>
+                </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-sm font-medium text-fg">
+                    <span className="text-[14px] font-medium">
                       {truncate(String(r.title ?? "—"), 60)}
                     </span>
-                    {!isActive && (
-                      <span className="badge-muted text-[10px]">
-                        неактивна
-                      </span>
-                    )}
+                    {!isActive && <span className={CHIP}>неактивна</span>}
                     {r.recurrence !== "once" && (
-                      <span className="badge-accent text-[10px]">
+                      <span className="badge-accent">
                         {RECURRENCE_LABELS[String(r.recurrence)] ?? String(r.recurrence)}
                       </span>
                     )}
                   </div>
-                  <div className="mt-0.5 text-[11px] text-fg-subtle">
-                    <b>{_fmtMsk(String(r.scheduled_at ?? ""))} МСК</b>
+                  <div className="t-mute mt-0.5 text-[12px]">
+                    <b className="tabular font-semibold text-ink">
+                      {_fmtMsk(String(r.scheduled_at ?? ""))} МСК
+                    </b>
                     {Boolean(r.segment) && (() => {
                       const key = String(r.segment);
                       const s = segmentMap.get(key);
                       return (
                         <>
                           {" · "}
-                          <span className="text-fg-muted">
+                          <span className="t-body">
                             {s?.label ?? key}
                           </span>
                           {s ? (
-                            <span className="ml-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent tabular-nums">
+                            <span className="tabular ml-1 rounded-full bg-tile-1 px-1.5 py-0.5 font-semibold text-ink">
                               {fmtNum(s.count)}
                             </span>
                           ) : null}
@@ -1711,24 +1686,24 @@ export function ScheduledBroadcastsSection() {
                   </div>
                 </div>
                 {isActive && (
-                  <button
-                    type="button"
+                  <IconButton
+                    small
+                    label="Отменить"
                     onClick={() => {
                       if (confirm("Отменить это запланированное задание?"))
                         cancel.mutate(id);
                     }}
-                    className="btn-ghost shrink-0 text-danger hover:text-danger"
-                    title="Отменить"
+                    className="bg-tile-1 text-danger"
                     disabled={cancel.isPending}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  </IconButton>
                 )}
               </li>
             );
           })}
         </ul>
       )}
-    </div>
+    </Surface>
   );
 }

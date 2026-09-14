@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { mockApi } from "./mock-api";
 import { fileURLToPath, URL } from "node:url";
 
 // In production the React build is mounted by FastAPI at /dashboard/
@@ -13,7 +14,7 @@ import { fileURLToPath, URL } from "node:url";
 // "src") and works on Node 18+.
 export default defineConfig({
   base: "/dashboard/",
-  plugins: [react()],
+  plugins: [react(), mockApi()],
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },

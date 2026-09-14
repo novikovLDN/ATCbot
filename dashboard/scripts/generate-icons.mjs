@@ -27,7 +27,7 @@ const sources = [
 for (const { svg, out, size } of sources) {
   const buf = readFileSync(resolve(pub, svg));
   await sharp(buf)
-    .resize(size, size, { fit: "contain", background: "#070A14" })
+    .resize(size, size, { fit: "contain", background: "#1E1E1E" })
     .png({ compressionLevel: 9 })
     .toFile(resolve(pub, out));
   console.log(`✓ ${out}  (${size}×${size})`);

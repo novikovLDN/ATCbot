@@ -2,7 +2,7 @@
 Handlers module - modularized handlers for Telegram bot.
 
 Root aggregation: callbacks, user, payments, admin, game.
-Catch-all for unknown messages — last.
+Catch-all for unknown messages and callbacks — last.
 """
 from aiogram import Router
 
@@ -21,4 +21,5 @@ router.include_router(payments_router)
 router.include_router(admin_router)
 router.include_router(game_router)
 # ПОСЛЕДНИМ — catch-all для неизвестных сообщений (только default_state)
+# и для неизвестных callback'ов (кнопки старых сообщений → «кнопка устарела»)
 router.include_router(unknown_message_router)

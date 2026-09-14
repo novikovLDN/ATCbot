@@ -156,12 +156,18 @@ async def process_webhook_data(headers: dict, raw_body: bytes, body: dict, bot: 
 
     # Verify signature
     signature = headers.get("crypto-pay-api-signature", "")
+    _p = body.get("payload") if isinstance(body, dict) else None
+    _inv = _p.get("invoice_id") if isinstance(_p, dict) else None
     if not signature:
         logger.warning("CryptoBot webhook: missing signature header")
-        return {"status": "unauthorized"}
+        # P1-4: payment_webhook answers 500 + payment_errors + forced alert
+        return {"status": "unauthorized",
+                "_detail": f"CryptoBot: missing crypto-pay-api-signature header; invoice_id={_inv}"}
     if not verify_webhook_signature(raw_body, signature):
         logger.warning("CryptoBot webhook: signature verification failed")
-        return {"status": "unauthorized"}
+        why = ("CRYPTOBOT_API_TOKEN not configured" if not CRYPTOBOT_API_TOKEN
+               else "HMAC signature mismatch (check CRYPTOBOT_API_TOKEN)")
+        return {"status": "unauthorized", "_detail": f"CryptoBot: {why}; invoice_id={_inv} (body not verified)"}
 
     update_type = body.get("update_type")
     if update_type != "invoice_paid":
@@ -190,7 +196,8 @@ async def process_webhook_data(headers: dict, raw_body: bytes, body: dict, bot: 
 
     if not purchase_id:
         logger.error(f"CryptoBot webhook: could not extract purchase_id, payload={invoice_payload_raw}")
-        return {"status": "invalid"}
+        return {"status": "invalid",
+                "_detail": f"CryptoBot paid invoice without purchase_id in payload; invoice_id={invoice_id}"}
 
     lookup = await lookup_pending_purchase("cryptobot", purchase_id)
     if lookup["status"] != "ok":

@@ -3,7 +3,6 @@ InlineKeyboardMarkup and ReplyKeyboardMarkup builders. Shared across all handler
 """
 import logging
 import re
-from datetime import datetime
 from typing import Optional
 
 import config
@@ -34,16 +33,6 @@ MINI_APP_URL = config.env("MINI_APP_URL", default="https://atlas-miniapp-product
 # handler can import CE without pulling in keyboards.py (which depends on
 # database). Re-exported here for backwards compatibility.
 from app.handlers.common.emoji import CE  # noqa: E402,F401
-
-
-def get_connect_button(language: str = "ru"):
-    """Одна кнопка WebApp «Подключиться» (Mini App)."""
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.btn_connect", "🚀 Подключиться"),
-            web_app=WebAppInfo(url=MINI_APP_URL),
-        )
-    ]])
 
 
 def get_connect_keyboard(language: str = "ru"):
@@ -84,8 +73,6 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     2. Активная подписка → "🚀 Подключиться" (WebApp)
     3. Подписка истекла + спецпредложение → "🔥 -15% | ⏳ Xд Yч"
     """
-    # Проверяем бизнес-подписку для специального меню
-    is_biz_user = False
     is_bypass_only = False
     subscription = None
     has_active_sub = False
@@ -93,14 +80,9 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         try:
             subscription = await database.get_subscription(telegram_id)
             has_active_sub = subscription is not None
-            sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
-            is_biz_user = config.is_biz_tariff(sub_type)
             is_bypass_only = bool(subscription and subscription.get("is_bypass_only"))
         except Exception as e:
             logger.warning(f"Error checking subscription for main menu: {e}")
-
-    if is_biz_user:
-        return _get_biz_main_menu_keyboard(language)
 
     # У пользователя есть Remnawave bypass entity (остаток ГБ) — тогда
     # даже без активной подписки показываем экран «Моя подписка», чтобы
@@ -120,6 +102,21 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         # === Активная подписка ===
         # Row 1: Продлить VPN (🔄) / Купить VPN (🛒 — для bypass-only)
         if is_bypass_only:
+            # N7: a paid premium that ended leaves the row active + bypass-only —
+            # the −15 % offer button belongs here too (it was only in the no-sub branch).
+            try:
+                special_offer = await database.get_special_offer_info(telegram_id) if telegram_id else None
+            except Exception as e:
+                special_offer = None
+                logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
+            if special_offer:
+                buttons.append([InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.btn_renew_discount_15", "Продлить со скидкой 15% | ⏳ {remaining}",
+                                       remaining=special_offer["remaining_text"]),
+                    callback_data="special_offer_buy",
+                    icon_custom_emoji_id=CE["renew"],
+                    style="success",
+                )])
             buy_text = i18n_get_text(language, "main.btn_buy_vpn", "Купить VPN")
             buy_icon = CE["buy"]
         else:
@@ -250,90 +247,6 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _get_biz_main_menu_keyboard(language: str) -> InlineKeyboardMarkup:
-    """Клавиатура главного меню для бизнес-пользователей."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_my_business"),
-            callback_data="biz_profile",
-            style="primary",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_control_panel"),
-            callback_data="biz_control_panel",
-            style="primary",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_ecosystem"),
-            callback_data="biz_ecosystem",
-            style="primary",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_personal_manager"),
-            url="https://t.me/atlas_suppbot"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.settings", "main.settings"),
-            callback_data="menu_settings",
-            style="primary",
-        )],
-    ])
-
-
-def get_biz_profile_keyboard(language: str) -> InlineKeyboardMarkup:
-    """Клавиатура профиля для бизнес-подписки."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_renew_config"),
-            callback_data="menu_buy_vpn",
-            icon_custom_emoji_id=CE["renew"],
-            style="success",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_topup"),
-            callback_data="topup_balance",
-            icon_custom_emoji_id=CE["wallet"],
-            style="success",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_connect"),
-            web_app=WebAppInfo(url=MINI_APP_URL)
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
-            icon_custom_emoji_id=CE["back"],
-            style="primary",
-        )],
-    ])
-
-
-def get_biz_control_panel_keyboard(language: str) -> InlineKeyboardMarkup:
-    """Клавиатура панели управления для бизнес-подписки."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_copy_login"),
-            callback_data="biz_copy_login",
-            style="primary",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_copy_password"),
-            callback_data="biz_copy_password",
-            style="primary",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_personal_manager"),
-            url="https://t.me/atlas_suppbot"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
-            icon_custom_emoji_id=CE["back"],
-            style="primary",
-        )],
-    ])
-
-
 def get_back_keyboard(language: str):
     """Кнопка Назад"""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -441,43 +354,6 @@ def get_profile_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vip: bool = False, has_subscription: bool = True):
-    """Клавиатура профиля с кнопкой копирования ключа и историей (старая версия, для совместимости)"""
-    return get_profile_keyboard(language, has_subscription)
-
-
-def get_profile_keyboard_old(language: str):
-    """Клавиатура с кнопками профиля и инструкции (после активации) - старая версия, переименована"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "main.profile"),
-                callback_data="menu_profile",
-                style="primary",
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "main.instruction"),
-                callback_data="connect_instruction",
-                style="primary",
-            ),
-        ],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "profile.copy_key"),
-            callback_data="copy_key",
-            style="primary",
-        )]
-    ])
-
-
-def get_vpn_key_keyboard(
-    language: str,
-    subscription_type: str = "basic",
-    vpn_key: Optional[str] = None,
-):
-    """Клавиатура после активации/оплаты: Подключиться (WebApp) + Профиль."""
-    return get_connect_keyboard()
-
-
 def get_payment_success_keyboard(
     language: str,
     subscription_type: str = "basic",
@@ -496,35 +372,6 @@ def get_payment_success_keyboard(
         )],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str = None, purchase_id: str = None):
-    """Клавиатура выбора тарифа с учетом скидок
-
-    DEPRECATED: Кнопки тарифов создаются в callback_tariff_type с использованием calculate_final_price.
-    """
-    buttons = []
-
-    for tariff_key in config.TARIFFS.keys():
-        base_text = i18n_get_text(language, "buy.tariff_button_" + str(tariff_key), f"tariff_button_{tariff_key}")
-        buttons.append([InlineKeyboardButton(text=base_text, callback_data=f"tariff_type:{tariff_key}", style="primary")])
-
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "buy.enter_promo"),
-        callback_data="enter_promo",
-        icon_custom_emoji_id=CE["promo"],
-        style="success",
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
-        callback_data="menu_main",
-        icon_custom_emoji_id=CE["back"],
-        style="primary",
-    )])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
 
 
 def get_about_keyboard(language: str):
@@ -546,25 +393,6 @@ def get_about_keyboard(language: str):
             style="primary",
         )],
     ])
-
-
-def get_service_status_keyboard(language: str):
-    """Клавиатура экрана 'Статус сервиса'"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
-            icon_custom_emoji_id=CE["back"],
-            style="primary",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.support", "support"),
-            url="https://t.me/atlas_suppbot"
-        )],
-    ])
-
-
-
 
 
 def get_instruction_keyboard(
@@ -590,33 +418,6 @@ def get_instruction_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_admin_dashboard_keyboard(language: str = "ru"):
-    """Клавиатура главного экрана админ-дашборда"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.dashboard"), callback_data="admin:dashboard")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.stats"), callback_data="admin:stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.analytics"), callback_data="admin:analytics")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.metrics"), callback_data="admin:metrics")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.keys"), callback_data="admin:keys")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.user"), callback_data="admin:user")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.balance_management"), callback_data="admin:balance_management")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.broadcast"), callback_data="admin:broadcast")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.promo_stats"), callback_data="admin_promo_stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_stats"), callback_data="admin:referral_stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.create_promocode"), callback_data="admin:create_promocode")],
-    ])
-
-
-def get_admin_back_keyboard(language: str = "ru"):
-    """Клавиатура 'Назад' для админ-панели"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
-    ])
-
-
 def get_reissue_notification_keyboard(language: str = "ru"):
     """Клавиатура для уведомления о перевыпуске VPN-ключа"""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -638,121 +439,5 @@ def _get_promo_error_keyboard(language: str) -> InlineKeyboardMarkup:
             )
         ]
     ])
-
-
-def get_broadcast_test_type_keyboard(language: str = "ru"):
-    """Клавиатура выбора типа тестирования"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._normal"), callback_data="broadcast_test_type:normal")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._ab_test"), callback_data="broadcast_test_type:ab")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
-    ])
-
-
-def get_broadcast_type_keyboard(language: str = "ru"):
-    """Клавиатура выбора типа уведомления"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_info"), callback_data="broadcast_type:info")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_maintenance"), callback_data="broadcast_type:maintenance")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_security"), callback_data="broadcast_type:security")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_promo"), callback_data="broadcast_type:promo")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
-    ])
-
-
-def get_broadcast_segment_keyboard(language: str = "ru"):
-    """Клавиатура выбора сегмента получателей"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_all"), callback_data="broadcast_segment:all_users")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_active"), callback_data="broadcast_segment:active_subscriptions")],
-        [InlineKeyboardButton(text="🚫 Без подписки", callback_data="broadcast_segment:no_subscription")],
-        [InlineKeyboardButton(text="🆕 Никогда не подключались", callback_data="broadcast_segment:no_remnawave")],
-        [InlineKeyboardButton(text="📅 Истёк 1 день назад", callback_data="broadcast_segment:expired_1d")],
-        [InlineKeyboardButton(text="📅 Истёк 2 дня назад", callback_data="broadcast_segment:expired_2d")],
-        [InlineKeyboardButton(text="📅 Истёк 3 дня назад", callback_data="broadcast_segment:expired_3d")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
-    ])
-
-
-def get_broadcast_confirm_keyboard(language: str = "ru"):
-    """Клавиатура подтверждения отправки уведомления"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._confirm_send"), callback_data="broadcast:confirm_send")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
-    ])
-
-
-def get_ab_test_list_keyboard(ab_tests: list, language: str = "ru") -> InlineKeyboardMarkup:
-    """Клавиатура списка A/B тестов"""
-    buttons = []
-    for test in ab_tests[:20]:
-        test_id = test["id"]
-        title = test["title"][:30] + "..." if len(test["title"]) > 30 else test["title"]
-        created_at = test["created_at"]
-        if isinstance(created_at, str):
-            created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-        date_str = created_at.strftime("%d.%m.%Y")
-        button_text = f"#{test_id} {title} ({date_str})"
-        buttons.append([InlineKeyboardButton(text=button_text, callback_data=f"broadcast:ab_stat:{test_id}")])
-
-    buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:broadcast")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def get_admin_export_keyboard(language: str = "ru"):
-    """Клавиатура выбора типа экспорта"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export_users"), callback_data="admin:export:users")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export_subscriptions"), callback_data="admin:export:subscriptions")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
-    ])
-
-
-def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int = None, has_discount: bool = False, is_vip: bool = False, language: str = "ru"):
-    """Клавиатура для раздела пользователя"""
-    buttons = []
-    if has_active_subscription:
-        callback_data = f"admin:user_reissue:{user_id}" if user_id else "admin:user_reissue"
-        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.reissue_key"), callback_data=callback_data)])
-    if user_id:
-        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.subscription_history"), callback_data=f"admin:user_history:{user_id}")])
-        buttons.append([
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_access"), callback_data=f"admin:grant:{user_id}"),
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_access"), callback_data=f"admin:revoke:user:{user_id}")
-        ])
-        if has_discount:
-            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.delete_discount"), callback_data=f"admin:discount_delete:{user_id}")])
-        else:
-            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.create_discount"), callback_data=f"admin:discount_create:{user_id}")])
-        if is_vip:
-            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_vip"), callback_data=f"admin:vip_revoke:{user_id}")])
-        else:
-            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_vip"), callback_data=f"admin:vip_grant:{user_id}")])
-        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data=f"admin:credit_balance:{user_id}")])
-    buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def get_admin_user_keyboard_processing(user_id: int, has_discount: bool = False, is_vip: bool = False, language: str = "ru"):
-    """Клавиатура во время перевыпуска ключа: кнопка «Перевыпуск» заменена на disabled состояние"""
-    buttons = []
-    buttons.append([InlineKeyboardButton(text="⏳ Перевыпуск...", callback_data="noop")])
-    if user_id:
-        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.subscription_history"), callback_data=f"admin:user_history:{user_id}")])
-        buttons.append([
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_access"), callback_data=f"admin:grant:{user_id}"),
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_access"), callback_data=f"admin:revoke:user:{user_id}")
-        ])
-        if has_discount:
-            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.delete_discount"), callback_data=f"admin:discount_delete:{user_id}")])
-        else:
-            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.create_discount"), callback_data=f"admin:discount_create:{user_id}")])
-        if is_vip:
-            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_vip"), callback_data=f"admin:vip_revoke:{user_id}")])
-        else:
-            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_vip"), callback_data=f"admin:vip_grant:{user_id}")])
-        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data=f"admin:credit_balance:{user_id}")])
-    buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

@@ -145,10 +145,10 @@ async def clear_credentials() -> bool:
 
 async def _redis():
     try:
-        from app.utils.redis_client import get_client, is_configured
+        from app.utils.redis_client import get_redis, is_configured
         if not is_configured():
             return None
-        return await get_client()
+        return await get_redis()
     except Exception:
         return None
 

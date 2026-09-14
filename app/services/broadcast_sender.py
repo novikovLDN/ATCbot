@@ -5,10 +5,8 @@ Extracted as a standalone async function so both the in-bot admin
 wizard and the web dashboard can dispatch a broadcast without
 duplicating the batched / semaphored / retried delivery code.
 
-The bot wizard in app/handlers/admin/broadcast.py still has its own
-inline closure (untouched) — we leave it alone to avoid risk;
-the dashboard path uses this function exclusively. Long-term they
-should converge.
+The in-bot admin broadcast wizard was removed (2026-09-14); the web
+dashboard (and scheduled broadcasts) are the only callers.
 
 Publishes bus events so dashboard subscribers see live progress:
   - broadcast:progress {broadcast_id, processed, total, sent, failed}
@@ -21,21 +19,120 @@ import asyncio
 import html as _html
 import logging
 import random
+import time
 from typing import Optional
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import InlineKeyboardMarkup
 
 import database
 from app.events import bus
-from app.handlers.admin.broadcast import (
-    BROADCAST_CONCURRENCY,
-    BROADCAST_BATCH_SIZE,
-    BROADCAST_BATCH_PAUSE,
-    _safe_send_with_buttons,
-)
+from app.utils.telegram_safe import convert_tg_emoji, safe_send_message
 
 logger = logging.getLogger(__name__)
+
+# Production broadcast: controlled concurrency, rate limiting, event-loop safe
+BROADCAST_CONCURRENCY = 15          # Safe under Telegram 30 msg/sec
+BROADCAST_BATCH_SIZE = 200          # Soft batch limit
+BROADCAST_BATCH_PAUSE = 2           # Seconds between batches
+BROADCAST_RETRY_LIMIT = 3           # Retry per user
+
+# TG-RT-10 (docs/audit/11_telegram_runtime.md): Telegram allows ~30 messages
+# per second across all chats. Concurrency alone does not bound the RATE (a
+# fast Bot API lets every slot send again at once). Every send, retries
+# included, takes the next free slot of 1 / BROADCAST_MAX_PER_SEC seconds.
+BROADCAST_MAX_PER_SEC = 25
+_clock = time.monotonic             # tests patch it
+
+
+class _Pacer:
+    def __init__(self, per_second: float) -> None:
+        self._interval = 1.0 / per_second
+        self._next_at = 0.0
+        self._lock = asyncio.Lock()
+
+    async def wait(self) -> None:
+        async with self._lock:
+            now = _clock()
+            if self._next_at > now:
+                await asyncio.sleep(self._next_at - now)
+                now = self._next_at
+            self._next_at = now + self._interval
+
+
+async def _safe_send_with_buttons(
+    bot: Bot,
+    user_id: int,
+    text: str,
+    semaphore: asyncio.Semaphore,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    photo_file_id: str | None = None,
+    animation_file_id: str | None = None,
+    caption: str | None = None,
+    pacer: "_Pacer | None" = None,
+) -> int | None:
+    """Send message with optional inline buttons.
+
+    Приоритет media:
+      1) animation_file_id (GIF/MP4) → send_animation
+      2) photo_file_id → send_photo
+      3) plain text → send_message
+
+    Returns message_id on success, None on failure.
+
+    HOW_IT_WORKS P2: text goes through safe_send_message (a blocked / deleted
+    chat is marked users.is_reachable = FALSE, no retry); media sends apply the
+    same rule. Flood waits are still slept out and retried.
+    """
+    async with semaphore:
+        for attempt in range(BROADCAST_RETRY_LIMIT):
+            if pacer is not None:
+                await pacer.wait()
+            try:
+                if animation_file_id:
+                    result = await bot.send_animation(
+                        user_id,
+                        animation=animation_file_id,
+                        caption=convert_tg_emoji(caption or text),
+                        reply_markup=reply_markup,
+                        parse_mode="HTML",
+                    )
+                elif photo_file_id:
+                    result = await bot.send_photo(
+                        user_id,
+                        photo=photo_file_id,
+                        caption=convert_tg_emoji(caption or text),
+                        reply_markup=reply_markup,
+                        parse_mode="HTML",
+                    )
+                else:
+                    msg = await safe_send_message(
+                        bot, user_id, text, reply_markup=reply_markup, parse_mode="HTML",
+                        raise_retry_after=True,
+                    )
+                    return msg.message_id if msg else None
+                return result.message_id
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(e.retry_after + 1)
+            except TelegramForbiddenError:
+                await _mark_unreachable(user_id)
+                return None
+            except TelegramBadRequest as e:
+                if "chat not found" in str(e).lower():
+                    await _mark_unreachable(user_id)
+                    return None
+                await asyncio.sleep(1)
+            except Exception:
+                await asyncio.sleep(1)
+        return None
+
+
+async def _mark_unreachable(user_id: int) -> None:
+    try:
+        await database.mark_user_unreachable(user_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("BROADCAST_MARK_UNREACHABLE_FAILED user=%s: %s", user_id, e)
 
 
 async def send_broadcast(
@@ -63,6 +160,7 @@ async def send_broadcast(
 
     total = len(user_ids)
     semaphore = asyncio.Semaphore(BROADCAST_CONCURRENCY)
+    pacer = _Pacer(BROADCAST_MAX_PER_SEC)
     sent_count = 0
     failed_count = 0
     processed = 0
@@ -96,6 +194,7 @@ async def send_broadcast(
             photo_file_id=p_fid,
             animation_file_id=a_fid,
             caption=cap,
+            pacer=pacer,
         )
         return (uid, variant, msg_id)
 

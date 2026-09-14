@@ -12,18 +12,12 @@ All functions are pure business logic:
 """
 
 import logging
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from enum import Enum
 
 import database
-from app.services.notifications.exceptions import (
-    NotificationServiceError,
-    NotificationAlreadySentError,
-    InvalidReminderTypeError,
-    ReminderNotApplicableError,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -351,11 +345,13 @@ async def mark_reminder_sent(
         await database.mark_reminder_flag_sent(telegram_id, flag_name)
     else:
         # Use pre-built query (no f-string SQL interpolation)
-        query = database._REMINDER_FLAG_UPDATE_QUERIES.get(flag_name)
+        # not re-exported by the database package
+        from database.subscriptions import _ALLOWED_REMINDER_FLAGS, _REMINDER_FLAG_UPDATE_QUERIES
+        query = _REMINDER_FLAG_UPDATE_QUERIES.get(flag_name)
         if query is None:
             raise ValueError(
                 f"Invalid flag_name '{flag_name}'. "
-                f"Allowed: {sorted(database._ALLOWED_REMINDER_FLAGS)}"
+                f"Allowed: {sorted(_ALLOWED_REMINDER_FLAGS)}"
             )
         await conn.execute(query, telegram_id)
 

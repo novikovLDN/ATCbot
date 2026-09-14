@@ -31,7 +31,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S"]  # disable security checks in tests
-"validate_language_content.py" = ["S"]  # validation script
+# S105 false positive: UI prompt text "Введите пароль от Spotify" (shop file is frozen)
+"app/handlers/payments/spotify_purchase.py" = ["S105"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

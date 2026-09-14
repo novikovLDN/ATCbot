@@ -20,13 +20,14 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Optional
 
 from aiogram.types import (
     BufferedInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
+from app.branding import get_brand
 from fastapi import (
     APIRouter,
     Depends,
@@ -40,11 +41,13 @@ from pydantic import BaseModel, Field, field_validator
 
 import database
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
+from app.api.dashboard.idempotency import IdempotentRoute
 from app.events import bus
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_admin)], route_class=IdempotentRoute)
 
 
 # ── READ ──────────────────────────────────────────────────────────────
@@ -55,7 +58,7 @@ async def broadcasts_recent(limit: int = Query(20, gt=0, le=500)):
     try:
         rows = await database.get_recent_broadcasts(limit)
     except Exception as e:
-        raise HTTPException(500, f"broadcasts_failed: {e}")
+        raise server_error("broadcasts_failed") from e
     return [_serialize(r) for r in rows]
 
 
@@ -232,10 +235,7 @@ async def segments_list():
          "за год и ушёл».",
          "Истёкшие (любые)"),
 
-        # ── Апселл / VIP / балансовый ────────────────────────────────
-        ("vip_active", "VIP-пользователи",
-         "users.is_vip = TRUE. Для эксклюзивных приглашений, ранних доступов, фидбека.",
-         "Апселл / особые"),
+        # ── Апселл / балансовый ──────────────────────────────────────
         ("basic_active", "Активные Basic",
          "Сейчас активна подписка Basic. Целевая для upsell на Plus / Combo.",
          "Апселл / особые"),
@@ -274,6 +274,58 @@ async def segments_list():
     return out
 
 
+# Declared before /{broadcast_id}: otherwise GET /scheduled matches the
+# int path param first and answers 422.
+@router.get("/scheduled")
+async def broadcast_schedule_list(
+    active_only: bool = Query(True),
+    limit: int = Query(200, gt=0, le=500),
+):
+    """Список запланированных задач. active_only=true — только активные,
+    active_only=false — вся история (в т.ч. cancelled/completed)."""
+    try:
+        rows = await database.list_scheduled_broadcasts(
+            active_only=active_only, limit=limit,
+        )
+    except Exception as e:
+        raise server_error("scheduled_list_failed") from e
+    return [_serialize(r) for r in rows]
+
+
+@router.get("/scheduled/{sched_id}")
+async def broadcast_schedule_get(sched_id: int = Path(..., gt=0)):
+    try:
+        row = await database.get_scheduled_broadcast(sched_id)
+    except Exception as e:
+        raise server_error("scheduled_get_failed") from e
+    if not row:
+        raise HTTPException(404, "scheduled broadcast not found")
+    return _serialize(row)
+
+
+@router.delete("/scheduled/{sched_id}")
+async def broadcast_schedule_cancel(
+    sched_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+):
+    """Отменить запланированное задание. Уже отработавшие запуски
+    остаются в истории broadcasts."""
+    try:
+        ok = await database.cancel_scheduled_broadcast(
+            sched_id, cancelled_by=int(admin["sub"]),
+        )
+    except Exception as e:
+        raise server_error("scheduled_cancel_failed") from e
+    if not ok:
+        raise HTTPException(404, "not found or already inactive")
+    bus.publish({
+        "type": "broadcast:scheduled_cancelled",
+        "sched_id": sched_id,
+        "by": admin.get("sub"),
+    })
+    return {"ok": True}
+
+
 @router.get("/{broadcast_id}")
 async def broadcast_detail(broadcast_id: int = Path(..., gt=0)):
     """Full broadcast row + discount/gift_reveal — используется UI-ом
@@ -281,7 +333,7 @@ async def broadcast_detail(broadcast_id: int = Path(..., gt=0)):
     try:
         row = await database.get_broadcast(broadcast_id)
     except Exception as e:
-        raise HTTPException(500, f"broadcast_detail_failed: {e}")
+        raise server_error("broadcast_detail_failed") from e
     if not row:
         raise HTTPException(404, "Broadcast not found")
     out = _serialize(row)
@@ -310,7 +362,7 @@ async def broadcast_stats(broadcast_id: int = Path(..., gt=0)):
     try:
         stats = await database.get_broadcast_stats(broadcast_id)
     except Exception as e:
-        raise HTTPException(500, f"broadcast_stats_failed: {e}")
+        raise server_error("broadcast_stats_failed") from e
     return _serialize(stats or {})
 
 
@@ -344,7 +396,7 @@ async def broadcast_patch_tag(
             body.tag_color,
         )
     except Exception as e:
-        raise HTTPException(500, f"tag_patch_failed: {e}")
+        raise server_error("tag_patch_failed") from e
     if not ok:
         raise HTTPException(404, "broadcast not found or migration 071 pending")
     return {"ok": True, "id": broadcast_id, "tag": body.tag,
@@ -362,7 +414,7 @@ async def broadcast_analytics(broadcast_id: int = Path(..., gt=0)):
     try:
         data = await database.get_broadcast_analytics(broadcast_id)
     except Exception as e:
-        raise HTTPException(500, f"broadcast_analytics_failed: {e}")
+        raise server_error("broadcast_analytics_failed") from e
     return _serialize(data or {})
 
 
@@ -397,7 +449,7 @@ async def upload_photo(
             caption="🖼 Загружено для рассылки",
         )
     except Exception as e:
-        raise HTTPException(500, f"upload_to_telegram_failed: {e}")
+        raise server_error("upload_to_telegram_failed") from e
 
     if not msg.photo:
         raise HTTPException(500, "telegram_returned_no_photo")
@@ -444,7 +496,7 @@ async def upload_animation(
             caption="🎬 GIF загружен для рассылки",
         )
     except Exception as e:
-        raise HTTPException(500, f"upload_to_telegram_failed: {e}")
+        raise server_error("upload_to_telegram_failed") from e
 
     if not msg.animation:
         raise HTTPException(500, "telegram_returned_no_animation")
@@ -585,7 +637,7 @@ async def broadcast_delete_from_users(
     try:
         pairs = await database.get_broadcast_message_ids(broadcast_id)
     except Exception as e:
-        raise HTTPException(500, f"fetch_pairs_failed: {e}")
+        raise server_error("fetch_pairs_failed") from e
     if not pairs:
         raise HTTPException(
             404, "no_messages_to_delete (broadcast log empty)",
@@ -687,7 +739,7 @@ async def broadcast_test_self(
     except TelegramRetryAfter as e:
         raise HTTPException(429, f"flood_wait: подожди {e.retry_after}с")
     except Exception as e:
-        raise HTTPException(500, f"send_failed: {type(e).__name__}: {e}")
+        raise server_error("send_failed") from e
 
     return {
         "ok": True,
@@ -728,7 +780,7 @@ async def broadcast_create(
             tag_color=body.tag_color,
         )
     except Exception as e:
-        raise HTTPException(500, f"create_broadcast_failed: {e}")
+        raise server_error("create_broadcast_failed") from e
 
     # Discount metadata for promo buttons
     if (
@@ -846,11 +898,11 @@ def _build_reply_markup(
             )])
         elif btn == "support":
             rows.append([InlineKeyboardButton(
-                text="💬 Поддержка", url="https://t.me/atlas_suppbot",
+                text="💬 Поддержка", url=get_brand().support_url,
             )])
         elif btn == "channel":
             rows.append([InlineKeyboardButton(
-                text="📢 Наш канал", url="https://t.me/ATC_VPN",
+                text="📢 Наш канал", url=get_brand().channel_url,
             )])
         elif btn == "referral":
             rows.append([InlineKeyboardButton(
@@ -890,7 +942,7 @@ def _build_reply_markup(
             # «🎁 1 год со скидкой 40%». Открывает 2-шаговый flow: тариф →
             # период. Скидка применяется ТОЛЬКО к 365-дневному плану,
             # остальные периоды по обычной цене. Реализация в
-            # app/handlers/admin/broadcast.py:callback_broadcast_gift_1y_40.
+            # app/handlers/payments/broadcast_offers.py:callback_broadcast_gift_1y_40.
             rows.append([InlineKeyboardButton(
                 text="🎁 1 год со скидкой 40%",
                 callback_data="broadcast_gift_1y_40",
@@ -907,7 +959,7 @@ def _build_reply_markup(
         elif btn == "gift_combo":
             # Персональный подарок Combo Basic 1 мес со скидкой (% и часы
             # из полей рассылки). Handler: callback_broadcast_gift_combo
-            # в admin/broadcast.py.
+            # в app/handlers/payments/broadcast_offers.py.
             rows.append([InlineKeyboardButton(
                 text="🎁 Забрать подарок",
                 callback_data=f"broadcast_gift_combo:{broadcast_id}",
@@ -1036,7 +1088,7 @@ async def broadcast_schedule_create(
     try:
         source = await database.get_broadcast(body.source_broadcast_id)
     except Exception as e:
-        raise HTTPException(500, f"source_lookup_failed: {e}")
+        raise server_error("source_lookup_failed") from e
     if not source:
         raise HTTPException(404, "source broadcast not found")
 
@@ -1070,7 +1122,7 @@ async def broadcast_schedule_create(
     except ValueError as ve:
         raise HTTPException(400, str(ve))
     except Exception as e:
-        raise HTTPException(500, f"schedule_create_failed: {e}")
+        raise server_error("schedule_create_failed") from e
 
     bus.publish({
         "type": "broadcast:scheduled",
@@ -1087,53 +1139,3 @@ async def broadcast_schedule_create(
         "scheduled_at_msk": scheduled_utc.astimezone(_MSK_TZ).isoformat(),
         "recurrence": body.recurrence,
     }
-
-
-@router.get("/scheduled")
-async def broadcast_schedule_list(
-    active_only: bool = Query(True),
-    limit: int = Query(200, gt=0, le=500),
-):
-    """Список запланированных задач. active_only=true — только активные,
-    active_only=false — вся история (в т.ч. cancelled/completed)."""
-    try:
-        rows = await database.list_scheduled_broadcasts(
-            active_only=active_only, limit=limit,
-        )
-    except Exception as e:
-        raise HTTPException(500, f"scheduled_list_failed: {e}")
-    return [_serialize(r) for r in rows]
-
-
-@router.get("/scheduled/{sched_id}")
-async def broadcast_schedule_get(sched_id: int = Path(..., gt=0)):
-    try:
-        row = await database.get_scheduled_broadcast(sched_id)
-    except Exception as e:
-        raise HTTPException(500, f"scheduled_get_failed: {e}")
-    if not row:
-        raise HTTPException(404, "scheduled broadcast not found")
-    return _serialize(row)
-
-
-@router.delete("/scheduled/{sched_id}")
-async def broadcast_schedule_cancel(
-    sched_id: int = Path(..., gt=0),
-    admin: dict = Depends(require_admin),
-):
-    """Отменить запланированное задание. Уже отработавшие запуски
-    остаются в истории broadcasts."""
-    try:
-        ok = await database.cancel_scheduled_broadcast(
-            sched_id, cancelled_by=int(admin["sub"]),
-        )
-    except Exception as e:
-        raise HTTPException(500, f"scheduled_cancel_failed: {e}")
-    if not ok:
-        raise HTTPException(404, "not found or already inactive")
-    bus.publish({
-        "type": "broadcast:scheduled_cancelled",
-        "sched_id": sched_id,
-        "by": admin.get("sub"),
-    })
-    return {"ok": True}

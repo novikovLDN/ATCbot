@@ -26,6 +26,11 @@ async def _send_admin_alert(bot: Bot, message: str) -> None:
             timeout=10.0
         )
         _last_alert_at = now
+        try:
+            from app.core import runtime_health
+            runtime_health.record_alert("healthcheck")
+        except Exception:
+            pass
     except Exception as e:
         logger.warning("health_alert_failed error=%s", e)
 
@@ -39,16 +44,21 @@ async def health_check_task(bot: Bot) -> None:
     await asyncio.sleep(jitter_s)
     logger.debug("health_check_task: startup jitter done (%.1fs)", jitter_s)
 
+    from app.core import runtime_health  # dashboard liveness (in-memory)
+    runtime_health.register("healthcheck", interval_s=10 * 60 + 30)
     while True:
         try:
             await asyncio.wait_for(_run_health_check(bot), timeout=30.0)
+            runtime_health.beat("healthcheck")
         except asyncio.TimeoutError:
             logger.error("HEALTH_CHECK_TIMEOUT exceeded 30s")
+            runtime_health.fail("healthcheck", "timeout")
         except asyncio.CancelledError:
             logger.info("health_check_task cancelled")
             break
         except Exception as e:
             logger.exception("HEALTH_CHECK_ERROR error=%s", e)
+            runtime_health.fail("healthcheck", e)
         
         await asyncio.sleep(10 * 60)  # 10 minutes
 

@@ -5,6 +5,7 @@ Webhook-safe: callback.answer() before long ops; no DB connection held during di
 import asyncio
 import logging
 import random
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Set
 
@@ -16,6 +17,7 @@ from aiogram.filters import StateFilter
 from aiogram.exceptions import TelegramBadRequest
 
 import database
+from app.services import grant_outbox
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_callback
@@ -58,7 +60,7 @@ PLANT_TYPES = {
 # Market commission on every harvest — player receives this fraction of the
 # plant's listed reward.  1.0 = full payout (legacy).  Lowered to curb farm
 # passive income: the farm should be an engagement toy, not an income source
-# or a real-cash faucet (balance is withdrawable from 500 ₽).  Single tunable
+# or a real-cash faucet.  Single tunable
 # knob — applies to normal harvest, storm early-harvest, and storm offline
 # auto-harvest (pre-applied in the worker), so there is no dodge path.
 # Seeds are still free; this taxes the sale instead.  Set lower (e.g. 0.35)
@@ -247,11 +249,20 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                 logger.info("GAME_BOWL [user=%s] no_subscription paywall", telegram_id)
                 return
 
-            await conn.execute(
-                "UPDATE users SET game_last_played = $1 WHERE telegram_id = $2",
+            use_outbox = grant_outbox.is_on()
+            # T16: consume the cooldown by CAS on the value read above, so a
+            # double click wins once (flag on AND off); the written timestamp is
+            # the event id of the outbox grant.
+            consumed = await conn.execute(
+                "UPDATE users SET game_last_played = $1 WHERE telegram_id = $2 "
+                "AND game_last_played IS NOT DISTINCT FROM $3",
                 database._to_db_utc(now),
                 telegram_id,
+                game_last_played_raw,
             )
+            if consumed != "UPDATE 1":
+                logger.info("GAME_BOWL [user=%s] cooldown consumed by a concurrent click", telegram_id)
+                return
 
         dice_message = await bot.send_dice(chat_id=chat_id, emoji="🎳")
         await asyncio.sleep(4)
@@ -262,12 +273,26 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                 # Preserve current tariff (don't downgrade Plus to Basic)
                 sub = await database.get_subscription(telegram_id)
                 current_tariff = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
-                result = await database.grant_access(
-                    telegram_id=telegram_id,
-                    duration=timedelta(days=7),
-                    source="game_strike",
-                    tariff=current_tariff,
-                )
+                if use_outbox:
+                    # T16: premium only (0 GB), panel work via the outbox.
+                    outcome = await grant_outbox.grant(
+                        telegram_id=telegram_id,
+                        key=f"game:{telegram_id}:bowling:{now.isoformat()}",
+                        days=7,
+                        tier=current_tariff,
+                        grant_source="game_strike",
+                        grant_kwargs={"tariff": current_tariff},
+                        context={"kind": "game_bowling"},
+                        bot=bot,
+                    )
+                    result = {"subscription_end": outcome.subscription_end}
+                else:
+                    result = await database.grant_access(
+                        telegram_id=telegram_id,
+                        duration=timedelta(days=7),
+                        source="game_strike",
+                        tariff=current_tariff,
+                    )
                 end_dt = result.get("subscription_end")
                 if end_dt and hasattr(end_dt, "strftime"):
                     end_str = end_dt.strftime("%d.%m.%Y")
@@ -386,11 +411,20 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                 logger.info("GAME_DICE [user=%s] no_subscription paywall", telegram_id)
                 return
 
-            await conn.execute(
-                "UPDATE users SET dice_last_played = $1 WHERE telegram_id = $2",
+            use_outbox = grant_outbox.is_on()
+            # T16: consume the cooldown by CAS on the value read above, so a
+            # double click wins once (flag on AND off); the written timestamp is
+            # the event id of the outbox grant.
+            consumed = await conn.execute(
+                "UPDATE users SET dice_last_played = $1 WHERE telegram_id = $2 "
+                "AND dice_last_played IS NOT DISTINCT FROM $3",
                 database._to_db_utc(now),
                 telegram_id,
+                dice_last_played_raw,
             )
+            if consumed != "UPDATE 1":
+                logger.info("GAME_DICE [user=%s] cooldown consumed by a concurrent click", telegram_id)
+                return
 
         dice_message = await bot.send_dice(chat_id=chat_id, emoji="🎲")
         await asyncio.sleep(2)
@@ -401,12 +435,26 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
             # Preserve current tariff (don't downgrade Plus to Basic)
             sub = await database.get_subscription(telegram_id)
             current_tariff = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
-            result = await database.grant_access(
-                telegram_id=telegram_id,
-                duration=timedelta(days=dice_value),
-                source="game_dice",
-                tariff=current_tariff,
-            )
+            if use_outbox:
+                # T16: premium only (0 GB), panel work via the outbox.
+                outcome = await grant_outbox.grant(
+                    telegram_id=telegram_id,
+                    key=f"game:{telegram_id}:dice:{now.isoformat()}",
+                    days=dice_value,
+                    tier=current_tariff,
+                    grant_source="game_dice",
+                    grant_kwargs={"tariff": current_tariff},
+                    context={"kind": "game_dice", "dice_value": dice_value},
+                    bot=bot,
+                )
+                result = {"subscription_end": outcome.subscription_end}
+            else:
+                result = await database.grant_access(
+                    telegram_id=telegram_id,
+                    duration=timedelta(days=dice_value),
+                    source="game_dice",
+                    tariff=current_tariff,
+                )
             end_dt = result.get("subscription_end")
             if end_dt and hasattr(end_dt, "strftime"):
                 end_str = end_dt.strftime("%d.%m.%Y")
@@ -625,20 +673,25 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
     now = datetime.now(timezone.utc)
     
     # Sync statuses
-    changed = False
+    status_updates = []
     for plot in farm_plots:
+        before = plot["status"]
         if plot["status"] == "growing" and plot.get("ready_at"):
             ready_at = datetime.fromisoformat(plot["ready_at"])
             if now >= ready_at:
                 plot["status"] = "ready"
-                changed = True
         if plot["status"] == "ready" and plot.get("dead_at"):
             dead_at = datetime.fromisoformat(plot["dead_at"])
             if now >= dead_at:
                 plot["status"] = "dead"
-                changed = True
-    if changed:
-        await database.save_farm_plots(telegram_id, farm_plots)
+        if plot["status"] != before:
+            status_updates.append({"plot_id": plot["plot_id"], "plant_type": plot.get("plant_type"),
+                                   "planted_at": plot.get("planted_at"),
+                                   "set": {"status": plot["status"]}})
+    if status_updates:
+        # Status only, on the same planting, under the harvest lock — never the
+        # whole stale copy: a plot harvested in between came back ripe (paid twice).
+        await database.apply_farm_notification_flags(telegram_id, status_updates)
     
     # Imminent storm banner (only during the 24h announcement window)
     storm = await _get_imminent_storm()
@@ -768,7 +821,8 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         if balance >= price:
             buttons.append([InlineKeyboardButton(
                 text=f"➕ Купить грядку — {price_rub} ₽ (осталось мест: {remaining})",
-                callback_data="farm_buy_plot",
+                # the count this screen shows: a second tap on it charges nothing
+                callback_data=f"farm_buy_plot:{plot_count}",
                 icon_custom_emoji_id=CE["buy"],
                 style="success",
             )])
@@ -815,9 +869,29 @@ async def callback_game_farm(callback: CallbackQuery):
     await _render_farm(callback, pool)
 
 
+# R4: forged / corrupted callback_data used to raise ValueError / IndexError
+# in int(callback.data.split("_")[-1]). A real button always carries 0..N.
+_PLOT_ID_RE = re.compile(r"[0-9]{1,3}")
+
+
+def _parse_farm_plot_id(data):
+    """Trailing plot id of 'farm_<action>_<n>' callback data; None if malformed."""
+    s = (data or "").rsplit("_", 1)[-1]
+    return int(s) if _PLOT_ID_RE.fullmatch(s) else None
+
+
+async def _answer_stale_farm_button(callback) -> None:
+    language = await resolve_user_language(callback.from_user.id)
+    await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+
+
 @router.callback_query(F.data.startswith("farm_choose_"))
 async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext):
     """Show plant selection screen"""
+    plot_id = _parse_farm_plot_id(callback.data)
+    if plot_id is None:
+        await _answer_stale_farm_button(callback)
+        return
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
 
@@ -835,7 +909,6 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
 
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    plot_id = int(callback.data.split("_")[-1])
     
     buttons = []
     for key, plant in PLANT_TYPES.items():
@@ -857,6 +930,12 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
 @router.callback_query(F.data.startswith("farm_plant_"))
 async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
     """Plant a seed"""
+    rest = (callback.data or "")[len("farm_plant_"):]
+    plot_s, _, plant_type = rest.partition("_")
+    if not _PLOT_ID_RE.fullmatch(plot_s) or plant_type not in PLANT_TYPES:
+        await _answer_stale_farm_button(callback)
+        return
+    plot_id = int(plot_s)
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
 
@@ -874,14 +953,6 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    parts = callback.data.split("_")
-    plot_id = int(parts[2])
-    plant_type = parts[3]
-    
-    if plant_type not in PLANT_TYPES:
-        await callback.answer("Неизвестный тип растения", show_alert=True)
-        return
-    
     pool = await database.get_pool()
     if not pool:
         await safe_edit_text(callback.message,
@@ -891,42 +962,38 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
-    
-    # Find plot
-    plot = None
-    for p in farm_plots:
-        if p["plot_id"] == plot_id:
-            plot = p
-            break
-    
-    if not plot or plot["status"] != "empty":
+    grow_seconds = PLANT_TYPES[plant_type]["days"] * 86400
+
+    def _plant(plot, now):
+        if plot["status"] != "empty":
+            return "unavailable"
+        ready_at = now + timedelta(seconds=grow_seconds)
+        plot.update(
+            status="growing", plant_type=plant_type, planted_at=now.isoformat(),
+            ready_at=ready_at.isoformat(), dead_at=(ready_at + timedelta(hours=24)).isoformat(),
+            notified_ready=False, notified_12h=False, notified_dead=False,
+            water_used_at=None, fertilizer_used_at=None,
+        )
+        return None
+
+    # Check + write on the fresh row under the user's lock (a stale save lost
+    # a concurrent action: buy plot, water, harvest).
+    ok, _reason = await database.update_farm_plot_atomic(telegram_id, plot_id, _plant)
+    if not ok:
         await callback.answer("Грядка недоступна", show_alert=True)
         return
-    
-    now = datetime.now(timezone.utc)
-    grow_seconds = PLANT_TYPES[plant_type]["days"] * 86400
-    ready_at = now + timedelta(seconds=grow_seconds)
-    dead_at = ready_at + timedelta(hours=24)
-    
-    plot["status"] = "growing"
-    plot["plant_type"] = plant_type
-    plot["planted_at"] = now.isoformat()
-    plot["ready_at"] = ready_at.isoformat()
-    plot["dead_at"] = dead_at.isoformat()
-    plot["notified_ready"] = False
-    plot["notified_12h"] = False
-    plot["notified_dead"] = False
-    plot["water_used_at"] = None
-    plot["fertilizer_used_at"] = None
-    
-    await database.save_farm_plots(telegram_id, farm_plots)
+
+    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
 
 
 @router.callback_query(F.data.startswith("farm_water_"))
 async def callback_farm_water(callback: CallbackQuery, state: FSMContext):
     """Water a plant"""
+    plot_id = _parse_farm_plot_id(callback.data)
+    if plot_id is None:
+        await _answer_stale_farm_button(callback)
+        return
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
     
@@ -934,7 +1001,6 @@ async def callback_farm_water(callback: CallbackQuery, state: FSMContext):
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    plot_id = int(callback.data.split("_")[-1])
     
     pool = await database.get_pool()
     if not pool:
@@ -945,38 +1011,35 @@ async def callback_farm_water(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
-    
-    plot = None
-    for p in farm_plots:
-        if p["plot_id"] == plot_id:
-            plot = p
-            break
-    
-    if not plot or plot["status"] != "growing":
-        await callback.answer("Грядка недоступна", show_alert=True)
+    def _water(plot, now):
+        if plot["status"] != "growing":
+            return "unavailable"
+        water_used = plot.get("water_used_at")
+        if water_used and (now - datetime.fromisoformat(water_used)).total_seconds() < 86400:
+            return "cooldown"
+        # Reduce ready_at by 6 hours
+        plot["ready_at"] = (datetime.fromisoformat(plot["ready_at"]) - timedelta(hours=6)).isoformat()
+        plot["water_used_at"] = now.isoformat()
+        return None
+
+    ok, reason = await database.update_farm_plot_atomic(telegram_id, plot_id, _water)
+    if not ok:
+        await callback.answer(
+            "Вы уже поливали сегодня!" if reason == "cooldown" else "Грядка недоступна", show_alert=True,
+        )
         return
-    
-    now = datetime.now(timezone.utc)
-    water_used = plot.get("water_used_at")
-    if water_used:
-        water_time = datetime.fromisoformat(water_used)
-        if (now - water_time).total_seconds() < 86400:
-            await callback.answer("Вы уже поливали сегодня!", show_alert=True)
-            return
-    
-    # Reduce ready_at by 6 hours
-    ready_at = datetime.fromisoformat(plot["ready_at"])
-    plot["ready_at"] = (ready_at - timedelta(hours=6)).isoformat()
-    plot["water_used_at"] = now.isoformat()
-    
-    await database.save_farm_plots(telegram_id, farm_plots)
+
+    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
 
 
 @router.callback_query(F.data.startswith("farm_fert_"))
 async def callback_farm_fert(callback: CallbackQuery, state: FSMContext):
     """Fertilize a plant"""
+    plot_id = _parse_farm_plot_id(callback.data)
+    if plot_id is None:
+        await _answer_stale_farm_button(callback)
+        return
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
     
@@ -984,7 +1047,6 @@ async def callback_farm_fert(callback: CallbackQuery, state: FSMContext):
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    plot_id = int(callback.data.split("_")[-1])
     
     pool = await database.get_pool()
     if not pool:
@@ -995,38 +1057,35 @@ async def callback_farm_fert(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
-    
-    plot = None
-    for p in farm_plots:
-        if p["plot_id"] == plot_id:
-            plot = p
-            break
-    
-    if not plot or plot["status"] != "growing":
-        await callback.answer("Грядка недоступна", show_alert=True)
+    def _fertilize(plot, now):
+        if plot["status"] != "growing":
+            return "unavailable"
+        fert_used = plot.get("fertilizer_used_at")
+        if fert_used and (now - datetime.fromisoformat(fert_used)).total_seconds() < 86400:
+            return "cooldown"
+        # Reduce ready_at by 2 hours
+        plot["ready_at"] = (datetime.fromisoformat(plot["ready_at"]) - timedelta(hours=2)).isoformat()
+        plot["fertilizer_used_at"] = now.isoformat()
+        return None
+
+    ok, reason = await database.update_farm_plot_atomic(telegram_id, plot_id, _fertilize)
+    if not ok:
+        await callback.answer(
+            "Вы уже удобряли сегодня!" if reason == "cooldown" else "Грядка недоступна", show_alert=True,
+        )
         return
-    
-    now = datetime.now(timezone.utc)
-    fert_used = plot.get("fertilizer_used_at")
-    if fert_used:
-        fert_time = datetime.fromisoformat(fert_used)
-        if (now - fert_time).total_seconds() < 86400:
-            await callback.answer("Вы уже удобряли сегодня!", show_alert=True)
-            return
-    
-    # Reduce ready_at by 2 hours
-    ready_at = datetime.fromisoformat(plot["ready_at"])
-    plot["ready_at"] = (ready_at - timedelta(hours=2)).isoformat()
-    plot["fertilizer_used_at"] = now.isoformat()
-    
-    await database.save_farm_plots(telegram_id, farm_plots)
+
+    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
 
 
 @router.callback_query(F.data.startswith("farm_harvest_"))
 async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
     """Harvest a ready plant"""
+    plot_id = _parse_farm_plot_id(callback.data)
+    if plot_id is None:
+        await _answer_stale_farm_button(callback)
+        return
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
     
@@ -1034,7 +1093,6 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    plot_id = int(callback.data.split("_")[-1])
     
     pool = await database.get_pool()
     if not pool:
@@ -1067,6 +1125,10 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("farm_remove_"))
 async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
     """Remove dead plant - show confirmation"""
+    plot_id = _parse_farm_plot_id(callback.data)
+    if plot_id is None:
+        await _answer_stale_farm_button(callback)
+        return
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
     
@@ -1074,11 +1136,9 @@ async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    plot_id = int(callback.data.split("_")[-1])
     
     # Check if this is a confirmation
     if callback.data.startswith("farm_remove_confirm_"):
-        plot_id = int(callback.data.split("_")[-1])
         
         pool = await database.get_pool()
         if not pool:
@@ -1135,7 +1195,7 @@ async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "farm_buy_plot")
+@router.callback_query((F.data == "farm_buy_plot") | F.data.startswith("farm_buy_plot:"))
 async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
     """Buy a new plot"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
@@ -1155,49 +1215,27 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
-
-    if plot_count >= FARM_MAX_PLOTS:
-        await callback.answer("Максимальное количество грядок достигнуто", show_alert=True)
-        return
-
-    price = FARM_PLOT_PRICE_KOPECKS
-    if balance < price:
-        await callback.answer("Недостаточно средств", show_alert=True)
-        return
-
-    # Deduct balance
-    success = await database.decrease_balance(
-        telegram_id=telegram_id,
-        amount=price / 100.0,
-        source="farm_buy_plot",
-        description="Farm plot purchase"
+    # "farm_buy_plot:<count shown on the screen>": the second tap of a double tap
+    # finds the count already changed and is not charged. Old buttons without
+    # the count still buy one plot. Re-check + debit + new plot: one locked tx.
+    expected_count = None
+    if ":" in (callback.data or ""):
+        try:
+            expected_count = int(callback.data.split(":", 1)[1])
+        except ValueError:
+            expected_count = None
+    ok, reason = await database.buy_farm_plot_atomic(
+        telegram_id, FARM_PLOT_PRICE_KOPECKS, FARM_MAX_PLOTS, expected_count=expected_count,
     )
-    
-    if not success:
-        await callback.answer("Ошибка при списании средств", show_alert=True)
+    if not ok and reason != "already_bought":
+        if reason == "max_plots":
+            await callback.answer("Максимальное количество грядок достигнуто", show_alert=True)
+        elif reason == "insufficient_balance":
+            await callback.answer("Недостаточно средств", show_alert=True)
+        else:
+            await callback.answer("Ошибка при списании средств", show_alert=True)
         return
-    
-    # Add new empty plot
-    new_plot = {
-        "plot_id": plot_count,
-        "status": "empty",
-        "plant_type": None,
-        "planted_at": None,
-        "ready_at": None,
-        "dead_at": None,
-        "notified_ready": False,
-        "notified_12h": False,
-        "notified_dead": False,
-        "water_used_at": None,
-        "fertilizer_used_at": None
-    }
-    farm_plots.append(new_plot)
-    plot_count += 1
-    
-    await database.save_farm_plots(telegram_id, farm_plots)
-    await database.update_farm_plot_count(telegram_id, plot_count)
-    
+
     # Refresh balance
     farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
@@ -1206,6 +1244,10 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("farm_dig_") & ~F.data.startswith("farm_dig_confirm_"), StateFilter("*"))
 async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
     """Show confirmation dialog for digging up a plant"""
+    plot_id = _parse_farm_plot_id(callback.data)
+    if plot_id is None:
+        await _answer_stale_farm_button(callback)
+        return
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
     
@@ -1213,7 +1255,6 @@ async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    plot_id = int(callback.data.split("_")[-1])
     
     pool = await database.get_pool()
     if not pool:
@@ -1264,6 +1305,10 @@ async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("farm_dig_confirm_"), StateFilter("*"))
 async def callback_farm_dig_confirm(callback: CallbackQuery, state: FSMContext):
     """Confirm and execute digging up a plant"""
+    plot_id = _parse_farm_plot_id(callback.data)
+    if plot_id is None:
+        await _answer_stale_farm_button(callback)
+        return
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
     
@@ -1271,7 +1316,6 @@ async def callback_farm_dig_confirm(callback: CallbackQuery, state: FSMContext):
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    plot_id = int(callback.data.split("_")[-1])
     
     pool = await database.get_pool()
     if not pool:
@@ -1341,7 +1385,7 @@ async def _find_growing_plot(telegram_id: int, plot_id: int):
 
 @router.callback_query(F.data.startswith("farm_shield:"))
 async def callback_farm_shield(callback: CallbackQuery):
-    """🛡 Накрыть — pay via balance if enough, else show Lava/SBP screen."""
+    """🛡 Накрыть — pay via balance if enough, else show SBP screen."""
     if not await ensure_db_ready_callback(callback):
         return
     await callback.answer()
@@ -1389,7 +1433,6 @@ async def callback_farm_shield(callback: CallbackQuery):
         f"Выберите способ оплаты:"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Картой", callback_data=f"farm_shield_lava:{plot_id}", style="primary")],
         [InlineKeyboardButton(text="📲 СБП", callback_data=f"farm_shield_sbp:{plot_id}", style="primary")],
         [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
@@ -1398,65 +1441,6 @@ async def callback_farm_shield(callback: CallbackQuery):
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
-
-
-@router.callback_query(F.data.startswith("farm_shield_lava:"))
-async def callback_farm_shield_lava(callback: CallbackQuery):
-    """Pay shield via Lava (card)."""
-    if not await ensure_db_ready_callback(callback):
-        return
-    telegram_id = callback.from_user.id
-
-    plot_id = _parse_plot_id(callback.data, "farm_shield_lava")
-    if plot_id < 0:
-        return
-    _, _, _, plot = await _find_growing_plot(telegram_id, plot_id)
-    if plot is None:
-        await callback.answer("Грядка больше не растёт.", show_alert=True)
-        return
-    plant = PLANT_TYPES.get(plot.get("plant_type"), {})
-    shield_cost = storm_shield_price_kopecks(int(plant.get("reward", 0)))
-
-    import lava_service
-    if not lava_service.is_enabled():
-        await callback.answer("Оплата картой временно недоступна.", show_alert=True)
-        return
-
-    try:
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff="farm_storm_shield",
-            period_days=0,
-            price_kopecks=shield_cost,
-            purchase_type="farm_effect",
-            farm_plot_id=plot_id,
-        )
-        invoice = await lava_service.create_invoice(
-            amount_rubles=shield_cost / 100.0,
-            purchase_id=purchase_id,
-            comment=f"Atlas Secure — Накрытие грядки {plot_id + 1}",
-        )
-        invoice_id = invoice["invoice_id"]
-        payment_url = invoice["payment_url"]
-        try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
-        except Exception as e:
-            logger.error("Failed to save Lava invoice_id: %s", e)
-
-        text = (
-            f"💳 <b>Оплата накрытия грядки</b>\n\n"
-            f"Сумма: {shield_cost // 100} ₽\n\n"
-            f"После оплаты грядка накроется автоматически."
-        )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Перейти к оплате", url=payment_url)],
-            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm", icon_custom_emoji_id=CE["back"], style="primary")],
-        ])
-        await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
-        await callback.answer()
-    except Exception as e:
-        logger.exception("FARM_SHIELD_LAVA_ERROR user=%s plot=%s: %s", telegram_id, plot_id, e)
-        await callback.answer("Ошибка создания платежа.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("farm_shield_sbp:"))
@@ -1495,9 +1479,10 @@ async def callback_farm_shield_sbp(callback: CallbackQuery):
             amount_rubles=sbp_kopecks / 100.0,
             description=f"Atlas Secure — Накрытие грядки {plot_id + 1}",
             purchase_id=purchase_id,
+            telegram_id=telegram_id,
         )
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(tx["transaction_id"]))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(tx["transaction_id"]), provider="platega")
         except Exception as e:
             logger.error("Failed to save SBP tx_id: %s", e)
 

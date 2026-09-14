@@ -63,7 +63,7 @@ _log.info("Config loaded for environment: %s", APP_ENV.upper())
 # ====================================================================================
 # Secrets are validated at startup and never logged.
 # Required secrets: BOT_TOKEN, ADMIN_TELEGRAM_ID, DATABASE_URL
-# Optional secrets: TG_PROVIDER_TOKEN, XRAY_API_KEY, PLATEGA_SECRET (via env prefix)
+# Optional secrets: TG_PROVIDER_TOKEN, PLATEGA_SECRET (via env prefix)
 # ====================================================================================
 
 # Telegram Bot Token (получить у @BotFather)
@@ -118,49 +118,6 @@ TARIFFS = {
         180: {"price": 1499},    # 6 месяцев
         365: {"price": 2599},    # 12 месяцев
     },
-    # --- Бизнес-тарифы: выделенные VPN-серверы ---
-    # 2 vCPU · 8 GB RAM · 20 TB трафик · до 5 пользователей
-    "biz_starter": {
-        30: {"price": 2900},     # 1 месяц
-        180: {"price": 14900},   # 6 месяцев
-        365: {"price": 24900},   # 12 месяцев
-        730: {"price": 42900},   # 24 месяца
-    },
-    # 4 vCPU · 16 GB RAM · 20 TB трафик · до 15 пользователей
-    "biz_team": {
-        30: {"price": 5500},
-        180: {"price": 28900},
-        365: {"price": 48900},
-        730: {"price": 84900},
-    },
-    # 8 vCPU · 32 GB RAM · 30 TB трафик · до 50 пользователей
-    "biz_business": {
-        30: {"price": 10900},
-        180: {"price": 56900},
-        365: {"price": 96900},
-        730: {"price": 169900},
-    },
-    # 16 vCPU · 64 GB RAM · 40 TB трафик · до 100 пользователей
-    "biz_pro": {
-        30: {"price": 21500},
-        180: {"price": 109900},
-        365: {"price": 189900},
-        730: {"price": 329900},
-    },
-    # 32 vCPU · 128 GB RAM · 50 TB трафик · до 250 пользователей
-    "biz_enterprise": {
-        30: {"price": 42900},
-        180: {"price": 219900},
-        365: {"price": 379900},
-        730: {"price": 659900},
-    },
-    # 48 vCPU · 192 GB RAM · 60 TB трафик · до 500 пользователей
-    "biz_ultimate": {
-        30: {"price": 64900},
-        180: {"price": 329900},
-        365: {"price": 569900},
-        730: {"price": 989900},
-    },
 }
 
 # ── Telegram MTProto-прокси ─────────────────────────────────────────────
@@ -179,80 +136,10 @@ PROXY_HTTPS_LINK = (
     "&secret=7u9aLwhaS5PXI6GiK2T4OjphenVyZS5taWNyb3NvZnQuY29t"
 )
 
-# Список всех бизнес-тарифов (для проверок)
-BIZ_TARIFFS = ("biz_starter", "biz_team", "biz_business", "biz_pro", "biz_enterprise", "biz_ultimate")
-
-# Все допустимые типы подписок (для валидации в БД и хендлерах)
-VALID_SUBSCRIPTION_TYPES = ("basic", "plus") + BIZ_TARIFFS
-
-def is_biz_tariff(tariff: str) -> bool:
-    """Проверяет, является ли тариф бизнес-тарифом."""
-    return tariff in BIZ_TARIFFS
-
-def tariff_for_vpn_api(tariff: str) -> str:
-    """Маппинг тарифа на VPN API тип (basic/plus). Бизнес → plus."""
-    if tariff in BIZ_TARIFFS:
-        return "plus"
-    if tariff == "plus":
-        return "plus"
-    return "basic"
-
-# --- Страны для бизнес-тарифов ---
-# Ценовые множители относительно базовой цены (Амстердам = 1.0)
-# Основаны на реальной стоимости инфраструктуры в регионе + 10% выше конкурентов
-BIZ_COUNTRIES = {
-    "nl": {
-        "name": "Амстердам",
-        "flag": "🇳🇱",
-        "multiplier": 1.0,  # Базовая цена (Hetzner NL)
-    },
-    "ru": {
-        "name": "Россия",
-        "flag": "🇷🇺",
-        "multiplier": 0.90,  # Selectel/Timeweb дешевле, но +10% над рынком
-    },
-    "uk": {
-        "name": "Великобритания",
-        "flag": "🇬🇧",
-        "multiplier": 1.20,  # UK дороже на ~20% (AWS/Vultr London)
-    },
-    "fr": {
-        "name": "Франция",
-        "flag": "🇫🇷",
-        "multiplier": 1.05,  # OVH Франция, чуть дороже NL
-    },
-    "us": {
-        "name": "США",
-        "flag": "🇺🇸",
-        "multiplier": 1.15,  # US дороже (Vultr/DO East Coast)
-    },
-}
-
-# Конфигурации серверов для бизнес-тарифов (для отображения в профиле)
-BIZ_TIER_SPECS = {
-    "biz_starter":    {"cpu": 2,  "ram": 8,   "traffic": 20, "users": 5},
-    "biz_team":       {"cpu": 4,  "ram": 16,  "traffic": 20, "users": 15},
-    "biz_business":   {"cpu": 8,  "ram": 32,  "traffic": 30, "users": 50},
-    "biz_pro":        {"cpu": 16, "ram": 64,  "traffic": 40, "users": 100},
-    "biz_enterprise": {"cpu": 32, "ram": 128, "traffic": 50, "users": 250},
-    "biz_ultimate":   {"cpu": 48, "ram": 192, "traffic": 60, "users": 500},
-}
-
-def get_biz_price(tariff: str, period_days: int, country: str = "nl") -> int:
-    """Получить цену бизнес-тарифа для конкретной страны (в рублях)."""
-    if tariff not in TARIFFS or period_days not in TARIFFS[tariff]:
-        return 0
-    base_price = TARIFFS[tariff][period_days]["price"]
-    multiplier = BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
-    return int(round(base_price * multiplier / 100) * 100)  # Округление до сотен
-
-def get_biz_price_stars(tariff: str, period_days: int, country: str = "nl") -> int:
-    """Получить цену бизнес-тарифа в Stars для конкретной страны."""
-    if tariff not in TARIFFS_STARS or period_days not in TARIFFS_STARS[tariff]:
-        return 0
-    base_price = TARIFFS_STARS[tariff][period_days]["price"]
-    multiplier = BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
-    return int(round(base_price * multiplier))
+# Все допустимые типы подписок (для валидации в БД и хендлерах).
+# Бизнес-тарифы удалены (решение владельца 2026-09-14): легаси biz_* в БД
+# читаются как "plus" через app.services.tariffs.normalize_tier.
+VALID_SUBSCRIPTION_TYPES = ("basic", "plus")
 
 # Тарифы для оплаты Telegram Stars (цены в Stars, +70% от рублёвых)
 # 1 Star ≈ 1.85 RUB (курс приблизительный, цены округлены)
@@ -269,44 +156,13 @@ TARIFFS_STARS = {
         180: {"price": 1380},    # 1499₽ × 1.7 / 1.85 ≈ 1378 → 1380⭐
         365: {"price": 2390},    # 2599₽ × 1.7 / 1.85 ≈ 2388 → 2390⭐
     },
-    # Бизнес-тарифы Stars (price × 1.7 / 1.85, округление вверх)
-    "biz_starter": {
-        30: {"price": 2665},     # 2900 × 1.7 / 1.85 ≈ 2665⭐
-        180: {"price": 13690},   # 14900 × 1.7 / 1.85 ≈ 13689⭐
-        365: {"price": 22865},   # 24900 × 1.7 / 1.85 ≈ 22865⭐
-        730: {"price": 39405},   # 42900 × 1.7 / 1.85 ≈ 39405⭐
-    },
-    "biz_team": {
-        30: {"price": 5054},
-        180: {"price": 26551},
-        365: {"price": 44919},
-        730: {"price": 78000},
-    },
-    "biz_business": {
-        30: {"price": 10014},
-        180: {"price": 52270},
-        365: {"price": 89027},
-        730: {"price": 156100},
-    },
-    "biz_pro": {
-        30: {"price": 19757},
-        180: {"price": 100981},
-        365: {"price": 174519},
-        730: {"price": 303081},
-    },
-    "biz_enterprise": {
-        30: {"price": 39405},
-        180: {"price": 202054},
-        365: {"price": 349027},
-        730: {"price": 606243},
-    },
-    "biz_ultimate": {
-        30: {"price": 59627},
-        180: {"price": 303081},
-        365: {"price": 523581},
-        730: {"price": 909297},
-    },
 }
+
+# RUB → Stars rule for prices without a row in TARIFFS_STARS (combo, gifts,
+# top-ups): ceil(rub × STARS_MARKUP / RUB_PER_STAR). The same 1.7 / 1.85 as
+# the table above and the top-up / gift invoices (app.services.tariffs.stars_for_rub).
+STARS_MARKUP = 1.7
+RUB_PER_STAR = 1.85
 
 # Время жизни инвойса (в секундах). После истечения инвойс удаляется.
 INVOICE_TIMEOUT_SECONDS = 900  # 15 минут
@@ -339,41 +195,6 @@ if not TG_PROVIDER_TOKEN:
     else:
         print(f"WARNING: {APP_ENV.upper()}_TG_PROVIDER_TOKEN is not set - payments will be disabled", file=sys.stderr)
 
-# Xray Core API Configuration (OPTIONAL - бот работает без VPN API, но VPN-операции блокируются)
-XRAY_API_URL = env("XRAY_API_URL")
-XRAY_API_KEY = env("XRAY_API_KEY")
-# Timeout для XRAY API запросов (в секундах, default 5s)
-XRAY_API_TIMEOUT = float(env("XRAY_API_TIMEOUT", default="5.0"))
-
-# Optional: public URL of VPN server (e.g. for future subscription link features).
-VPN_SERVER_URL = env("VPN_SERVER_URL", default="").rstrip("/")
-
-# Флаг доступности VPN API
-VPN_ENABLED = bool(XRAY_API_URL and XRAY_API_KEY)
-
-# Feature flag для VPN provisioning (по умолчанию true в STAGE, false если VPN_ENABLED=False)
-VPN_PROVISIONING_ENABLED = env("VPN_PROVISIONING_ENABLED", default="true").lower() == "true" if VPN_ENABLED else False
-
-if not VPN_ENABLED:
-    _log.info("ARCH_MODE: API_ONLY_VLESS_GENERATION (REALITY + XTLS Vision)")
-    _log.warning("XRAY_API_URL or XRAY_API_KEY is not set!")
-    _log.warning("VPN operations will be BLOCKED until XRAY_API_URL and XRAY_API_KEY are configured")
-    _log.warning("Bot will continue running, but subscriptions cannot be activated")
-else:
-    _log.info("Using XRAY_API_URL from %s_XRAY_API_URL", APP_ENV.upper())
-    _log.info("Using XRAY_API_KEY from %s_XRAY_API_KEY", APP_ENV.upper())
-    _log.info("XRAY_API_TIMEOUT=%ss", XRAY_API_TIMEOUT)
-    _log.info("VPN_PROVISIONING_ENABLED=%s", VPN_PROVISIONING_ENABLED)
-    _log.info("VPN API configured successfully (VLESS + REALITY)")
-    _log.info("ARCH_MODE: API_ONLY_VLESS_GENERATION (REALITY + XTLS Vision)")
-
-# Xray sync worker: sync DB subscriptions to Xray (default false for production safety)
-XRAY_SYNC_ENABLED = env("XRAY_SYNC_ENABLED", default="false").lower() == "true"
-
-# Bot uses ONLY XRAY_API_URL and XRAY_API_KEY.
-# Port, SNI, public key, short id, fingerprint belong to API server only.
-# Bot receives vless_link from API — never generates links locally.
-
 # Platega (SBP) Configuration
 # Platega.io — единый провайдер: СБП (2), Карта (11), Международные (12)
 PLATEGA_MERCHANT_ID = env("PLATEGA_MERCHANT_ID", default="")
@@ -389,23 +210,15 @@ PLATEGA_INTL_MARKUP_PERCENT = int(env("PLATEGA_INTL_MARKUP_PERCENT", default="0"
 CRYPTOBOT_API_TOKEN = env("CRYPTOBOT_API_TOKEN", default="")
 CRYPTOBOT_API_URL = env("CRYPTOBOT_API_URL") or "https://pay.crypt.bot/api"
 
-# Lava (Card) Configuration
-# Оплата картой через Lava (api.lava.ru)
-LAVA_WALLET_TO = env("LAVA_WALLET_TO", default="")
-LAVA_JWT_TOKEN = env("LAVA_JWT_TOKEN", default="")  # Secret key (apikey in JWT payload)
-LAVA_SIGN_KEY = env("LAVA_SIGN_KEY", default="")  # Additional key for JWT HMAC signing
-LAVA_SHOP_ID = env("LAVA_SHOP_ID", default="")  # Project/shop ID
-LAVA_API_URL = env("LAVA_API_URL") or "https://api.lava.ru"
-
 # Wata (wata.pro) Configuration — H2H REST API.
 # Access token (Bearer JWT) выдаётся в личном кабинете мерчанта.
 # WATA_SANDBOX=true → https://api-sandbox.wata.pro (тестовые карты).
 WATA_ACCESS_TOKEN = env("WATA_ACCESS_TOKEN", default="")
 WATA_SANDBOX = env("WATA_SANDBOX", default="false").lower() in ("1", "true", "yes")
-
-# Site Sync API (Atlas Secure website ↔ Bot sync)
-SITE_API_URL = env("SITE_API_URL", default="")  # e.g. https://qodev.dev/api/bot
-SITE_BOT_API_KEY = env("SITE_BOT_API_KEY", default="")  # X-Bot-Api-Key header
+# Публичный ключ WATA для проверки X-Signature webhook'ов (PEM, RSA). Опционально:
+# если задан — используется без сетевого запроса GET /public-key. Можно одной
+# строкой с литеральными "\n". Пусто → ключ грузится лениво с api.wata.pro.
+WATA_PUBLIC_KEY_PEM = env("WATA_PUBLIC_KEY_PEM", default="")
 
 # Public base URL for webhooks (Railway + Cloudflare). Required for payment webhooks.
 # Example: https://api.yourdomain.com
@@ -431,9 +244,6 @@ MINI_APP_NAME = env("MINI_APP_NAME", default="app")
 # Mini App URL — used for WebApp buttons.
 APP_URL = env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app").rstrip("/")
 
-# Subscription link base URL (domain serving /api/sub/{token}?id={id}).
-SUB_BASE_URL = env("SUB_BASE_URL", default="https://atlassecure.ru").rstrip("/")
-
 # ====================================================================================
 # REMNAWAVE PANEL CONFIGURATION (Bypass / Traffic limits)
 # ====================================================================================
@@ -449,12 +259,10 @@ else:
     _log.info("REMNAWAVE_ENABLED=false (URL or TOKEN not set)")
 
 # Cutover 2026-08: samopis Xray-мастер выведен из эксплуатации, единственный
-# источник provisioning — Remnawave 3.x. Все существующие call-sites
-# `config.VPN_ENABLED` / `config.VPN_PROVISIONING_ENABLED` семантически
-# означают "можно ли боту выдавать/продлять VPN" — переменяем на статус
-# Remnawave, чтобы не переписывать 20+ мест по коду.
-VPN_ENABLED = REMNAWAVE_ENABLED  # noqa: F811 — override с 352
-VPN_PROVISIONING_ENABLED = REMNAWAVE_ENABLED  # noqa: F811 — override с 355
+# источник provisioning — Remnawave 3.x. Все call-sites `config.VPN_ENABLED`
+# семантически означают "можно ли боту выдавать/продлять VPN" — это статус
+# Remnawave.
+VPN_ENABLED = REMNAWAVE_ENABLED
 
 # Traffic limits per tariff (in bytes). Trial has NO bypass.
 TRAFFIC_LIMITS = {
@@ -482,6 +290,15 @@ TRAFFIC_LIMITS_GB = {
 DEVICE_LIMITS = {
     "basic": 5,
     "plus":  7,
+}
+
+# Devices on the PREMIUM panel entity (hwidDeviceLimit) — owner decision
+# 2026-09-14: Basic 10, Plus 14, as the tariff texts say. Combo = its base tier,
+# legacy biz_* = Plus (app.services.tariffs.premium_device_limit).
+# REMNAWAVE_PREMIUM_DEVICE_LIMIT is only the fallback for an unknown tier.
+PREMIUM_DEVICE_LIMITS = {
+    "basic": 10,
+    "plus": 14,
 }
 
 # Traffic packs for purchase (gb -> {price, bytes, discount})
@@ -585,17 +402,10 @@ REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID = env(
     "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID", default=""
 ) or None
 
-# Master switch for the subscription-URL fallback FastAPI router
-# (app/api/subscription_proxy.py).  Default OFF — turn on per environment
-# once the public DNS for sub.atlassecure.ru points at this bot.
-SUBSCRIPTION_PROXY_ENABLED = _envbool("SUBSCRIPTION_PROXY_ENABLED", False)
-
 # ── Task 2 cut-over: Remnawave-only purchase flow ──────────────────────
 # Defaults to TRUE — the bot is fully on Remnawave now and the samopis
 # vpnapi master is decommissioned.  Flip to false ONLY for emergency
-# rollback (e.g. samopis temporarily reinstated); legacy
-# vpn_utils.add_vless_user / update / remove calls become no-ops while
-# this flag is on.
+# rollback (e.g. samopis temporarily reinstated).
 PURCHASE_FLOW_REMNAWAVE = _envbool("PURCHASE_FLOW_REMNAWAVE", True)
 
 # Bypass username pattern.  TZ asks for `tg_{telegram_id}_bypass`, but the
@@ -623,13 +433,6 @@ except (TypeError, ValueError):
 # Bypass far-future expireAt (TZ asks for 2099-12-31; bot historically uses
 # now+10 years which is functionally identical).  Configurable for tests.
 BYPASS_INFINITE_EXPIRE_ISO = env("BYPASS_INFINITE_EXPIRE", default="2099-12-31T23:59:59Z")
-
-# Legacy samopis sub-URL base, used by the fallback endpoint to redirect
-# unmigrated users back to the old infrastructure during the grace period.
-LEGACY_SAMOPIS_SUB_BASE_URL = env(
-    "LEGACY_SAMOPIS_SUB_BASE_URL",
-    default="",
-).rstrip("/")
 
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")

@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 
 from database.core import get_pool
 
-from .registry import REGISTRY, NotificationSpec
+from .registry import REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,7 @@ async def _load_cache() -> None:
         r["key"]: {
             "is_enabled": bool(r["is_enabled"]),
             "text": r["custom_text_ru"] or r["default_text_ru"],
+            "custom": r["custom_text_ru"],
             "trigger_config": _coerce_trigger_config(r["trigger_config"]),
         }
         for r in rows
@@ -174,16 +175,59 @@ async def is_notification_enabled(key: str) -> bool:
     return row["is_enabled"]
 
 
+def _ru_override_applies(language: Optional[str]) -> bool:
+    """True when the RU-only dashboard text may be shown to this user.
+
+    The table has only custom_text_ru / default_text_ru (migration 068), so the
+    override is valid exactly when app.i18n would render Russian anyway: 'ru'
+    and legacy / unknown codes (i18n falls back to ru). 'en' → None, the caller
+    uses its i18n key in English (N-03). language=None keeps the old behaviour.
+    """
+    if language is None:
+        return True
+    from app.i18n import LANGUAGES
+    return language == "ru" or language not in LANGUAGES
+
+
+async def get_custom_notification_text(
+    key: str, *, params: Optional[Dict[str, Any]] = None,
+    language: Optional[str] = None,
+) -> Optional[str]:
+    """Only the text an admin wrote in the dashboard (custom_text_ru), rendered;
+    None when there is none, the key is disabled, or the user is not RU.
+
+    For event messages whose default lives in i18n (the payment success
+    message): the code default is used unless the admin set their own text."""
+    row = await get_row(key)
+    if row is None or not row["is_enabled"] or not row.get("custom"):
+        return None
+    if not _ru_override_applies(language):
+        return None
+    text = row["custom"]
+    if params:
+        try:
+            return text.format(**params)
+        except (KeyError, IndexError, ValueError) as e:
+            logger.warning("automated_notifications render failed key=%s err=%s", key, e)
+    return text
+
+
 async def get_notification_text(
     key: str, *, params: Optional[Dict[str, Any]] = None,
+    language: Optional[str] = None,
 ) -> Optional[str]:
     """Вернуть готовый текст (с str.format) или None если отключено.
 
     Fallback: если ключ нет в БД или что-то сломалось, берём default_text_ru
     из REGISTRY, чтобы не крашить bot-код.
+
+    language: язык получателя. Для не-RU языков (en) возвращает None —
+    вызывающий код берёт i18n-текст на языке пользователя (N-03).
     """
     row = await get_row(key)
     if row is not None and not row["is_enabled"]:
+        return None
+    if not _ru_override_applies(language):
         return None
     if row is not None:
         text = row["text"]

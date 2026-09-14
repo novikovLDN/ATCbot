@@ -1,5 +1,5 @@
 """
-Payment-related callback handlers: topup, withdraw, pay:balance, pay:card, pay:sbp, pay:stars, pay:crypto.
+Payment-related callback handlers: topup, pay:balance, pay:card, pay:sbp, pay:stars, pay:crypto.
 """
 import asyncio
 import logging
@@ -10,29 +10,26 @@ import config
 import database
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, Message
-from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.services.subscriptions import service as subscription_service
 from app.services.subscriptions.service import is_subscription_active
-from app.handlers.notifications import send_referral_cashback_notification
 from app.core.rate_limit import check_rate_limit
-from app.handlers.common.guards import ensure_db_ready_callback, ensure_db_ready_message
+from app.services import provisioning_flags
+from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import (
     safe_edit_text,
     safe_edit_reply_markup,
     get_promo_session,
+    get_applied_promo_code,
     clear_promo_session,
-    sanitize_display_name,
 )
 from app.handlers.common.keyboards import (
-    get_profile_keyboard,
     get_payment_success_keyboard,
 )
-from app.handlers.common.screens import show_profile
-from app.handlers.common.states import TopUpStates, WithdrawStates, PurchaseState
+from app.handlers.common.states import TopUpStates, PurchaseState
 from app.handlers.common.emoji import CE
 
 payments_router = Router()
@@ -44,6 +41,27 @@ INVOICE_TIMEOUT = config.INVOICE_TIMEOUT_SECONDS  # 15 минут
 # Файл-id картинки, которую вешаем на экран «🏦 Оплата через СБП» (Wata).
 # Стабильный file_id из истории бота — загружать заново не надо.
 _WATA_INVOICE_PHOTO_ID = "AgACAgQAAxkBAAGAJRZqgECFrnKCZZWmXbWSjK2-PK1sWQACXRBrGwG9AVC_2M3k-snqYwEAAwIAA3cAAz0E"
+
+
+def _is_combo(fsm_data: dict) -> bool:
+    return (fsm_data.get("combo_bypass_gb") or 0) > 0
+
+
+def _invoice_back(fsm_data: dict, tariff_type: str) -> str:
+    """«Назад» from an invoice screen → the period screen of THIS purchase
+    (08 M14: a Combo fell back to the Basic/Plus periods, SBP to the buy root)."""
+    if _is_combo(fsm_data):
+        from app.services import tariffs
+        return f"combo_tariff:combo_{tariffs.normalize_tier(tariff_type) or 'basic'}"
+    return f"tariff:{tariff_type}"
+
+
+def _tariff_label(fsm_data: dict, tariff_type: str, language: str) -> str:
+    """Tariff name for invoice descriptions — «Combo Basic» for a Combo (08 M16: was «Basic»)."""
+    from app.services import tariffs
+    tier = tariffs.normalize_tier(tariff_type) or "basic"
+    key = f"combo_{tier}" if _is_combo(fsm_data) else tier
+    return i18n_get_text(language, f"tariff.name_{key}")
 
 
 async def _schedule_invoice_deletion(bot: Bot, chat_id: int, invoice_message: Message, timeout: int = INVOICE_TIMEOUT):
@@ -109,17 +127,16 @@ async def delete_all_invoice_messages_for_user(bot: Bot, telegram_id: int) -> in
     return len(stale)
 
 
-# --- User withdrawal flow ---
-MIN_WITHDRAW_RUBLES = 500
-
-
 @payments_router.callback_query(F.data == "topup_balance")
-async def callback_topup_balance(callback: CallbackQuery):
+async def callback_topup_balance(callback: CallbackQuery, state: FSMContext = None):
     """Пополнить баланс"""
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not await ensure_db_ready_callback(callback):
         return
-    
+    # «Отмена» of the custom-amount input lands here: leave that input state.
+    if state is not None and await state.get_state() == TopUpStates.waiting_for_amount:
+        await state.clear()
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
@@ -192,34 +209,10 @@ async def callback_topup_amount(callback: CallbackQuery):
     # Показываем экран выбора способа оплаты
     text = i18n_get_text(language, "main.topup_select_payment_method", amount=amount)
     
-    buttons = [
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.pay_with_card"),
-            callback_data=f"topup_card:{amount}",
-            icon_custom_emoji_id=CE["buy"],
-            style="success",
-        )],
-    ]
-    # СБП — обратно через Platega (revert Wata-миграции).
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "payment.sbp"),
-        callback_data=f"topup_sbp:{amount}",
-        style="primary",
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "payment.stars"),
-        callback_data=f"topup_stars:{amount}",
-        style="primary",
-    )])
-    # Lava-кнопка подменена на Wata: callback уходит в топап-Wata.
-    # Код lava_service не удаляем — оставляем условие видимости.
-    import lava_service
-    if lava_service.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.lava"),
-            callback_data=f"topup_wata:{amount}",
-            style="primary",
-        )])
+    # One method list for preset and custom amounts: one button per cash desk,
+    # SBP only with Platega and with its real markup (08 #12, #14, #20).
+    from app.handlers.common.payment_labels import topup_method_rows
+    buttons = topup_method_rows(language, amount)
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="topup_balance",
@@ -297,165 +290,14 @@ async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
     # Переводим пользователя в состояние ввода суммы
     await state.set_state(TopUpStates.waiting_for_amount)
     
-    # Отправляем сообщение с инструкцией
+    # Отправляем сообщение с инструкцией (+ «Отмена», 08 M17: there was no way out)
     text = i18n_get_text(language, "main.topup_enter_amount")
-    
-    await callback.message.answer(text, parse_mode="HTML")
-
-
-@payments_router.callback_query(F.data == "withdraw_start")
-async def callback_withdraw_start(callback: CallbackQuery, state: FSMContext):
-    """Вывод средств — заглушка, направляем в поддержку"""
-    language = await resolve_user_language(callback.from_user.id)
-    await callback.answer(
-        i18n_get_text(language, "withdraw.request_note", "Обратитесь в техподдержку для создания заявки на вывод средств."),
-        show_alert=True,
-    )
-
-
-@payments_router.callback_query(F.data == "withdraw_confirm_amount", StateFilter(WithdrawStates.withdraw_confirm))
-async def callback_withdraw_confirm_amount(callback: CallbackQuery, state: FSMContext):
-    """Подтверждение суммы → переход к вводу реквизитов"""
-    language = await resolve_user_language(callback.from_user.id)
-    await state.set_state(WithdrawStates.withdraw_requisites)
-    text = i18n_get_text(language, "withdraw.requisites_prompt")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_back_to_amount", icon_custom_emoji_id=CE["back"], style="primary")]
-    ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-    await callback.answer()
-
-
-@payments_router.callback_query(F.data == "withdraw_final_confirm", StateFilter(WithdrawStates.withdraw_final_confirm))
-async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    """Финальное подтверждение: списание, создание заявки, уведомление админу"""
-    if not await ensure_db_ready_callback(callback):
-        return
-    language = await resolve_user_language(callback.from_user.id)
-    telegram_id = callback.from_user.id
-    data = await state.get_data()
-    amount = data.get("withdraw_amount")
-    requisites = data.get("withdraw_requisites", "")
-    if not amount or not requisites:
-        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
-        await state.clear()
-        return
-    amount_kopecks = round(amount * 100)
-    raw_username = callback.from_user.username
-    sanitized_username = sanitize_display_name(raw_username) if raw_username else None
-    wid = await database.create_withdrawal_request(telegram_id, sanitized_username or raw_username, amount_kopecks, requisites)
-    if not wid:
-        await callback.answer(i18n_get_text(language, "withdraw.insufficient_funds"), show_alert=True)
-        await state.clear()
-        return
-    await state.clear()
-    await callback.answer()
-    in_progress_text = i18n_get_text(language, "withdraw.in_progress")
-    has_any_sub, auto_renew = False, False
-    try:
-        sub = await database.get_subscription(telegram_id)
-        has_any_sub = bool(sub and sub.get("expires_at"))
-        auto_renew = bool(sub and sub.get("auto_renew"))
-    except Exception:
-        pass
-    await safe_edit_text(callback.message, in_progress_text, reply_markup=get_profile_keyboard(language, has_any_sub, auto_renew), bot=callback.bot)
-    try:
-        balance = await database.get_user_balance(telegram_id)
-        subscription = await database.get_subscription(telegram_id)
-        has_active = is_subscription_active(subscription) if subscription else False
-        sub_text = i18n_get_text(language, "profile.status_active") if has_active else i18n_get_text(language, "profile.status_inactive")
-        admin_text = (
-            f"💸 Новая заявка на вывод #{wid}\n\n"
-            f"👤 Пользователь: @{sanitized_username or '—'} (ID: {telegram_id})\n"
-            f"📊 Баланс: {balance:.2f} ₽\n"
-            f"💰 Сумма: {amount:.2f} ₽\n"
-            f"📶 Подписка: {sub_text}\n"
-            f"🏦 Реквизиты: {requisites[:200]}"
-        )
-        admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"withdraw_approve:{wid}")],
-            [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"withdraw_reject:{wid}")],
-        ])
-        await bot.send_message(config.ADMIN_TELEGRAM_ID, admin_text, reply_markup=admin_kb, parse_mode="HTML")
-        logger.info(f"ADMIN_NOTIFICATION_SENT withdrawal_id={wid} user={telegram_id} amount={amount:.2f} RUB")
-    except Exception as e:
-        logger.error(f"CRITICAL: Failed to send withdrawal notification to admin: withdrawal_id={wid} user={telegram_id} error={e}", exc_info=True)
-        try:
-            await database._log_audit_event_atomic_standalone(
-                "withdrawal_admin_notify_failed", telegram_id, None,
-                f"withdrawal_id={wid} amount={amount:.2f} error={e}"
-            )
-        except Exception:
-            pass
-
-
-@payments_router.callback_query(F.data == "withdraw_cancel")
-@payments_router.callback_query(F.data == "withdraw_back_to_amount")
-@payments_router.callback_query(F.data == "withdraw_back_to_requisites")
-async def callback_withdraw_cancel(callback: CallbackQuery, state: FSMContext):
-    """Отмена или назад в выводе средств"""
-    await state.clear()
-    language = await resolve_user_language(callback.from_user.id)
-    await show_profile(callback, language)
-    await callback.answer()
-
-
-@payments_router.callback_query(F.data.startswith("withdraw_approve:"))
-async def callback_withdraw_approve(callback: CallbackQuery, bot: Bot):
-    """Админ: подтвердить вывод средств"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer("Доступ запрещён", show_alert=True)
-        return
-    try:
-        wid = int(callback.data.split(":")[1])
-        wr = await database.get_withdrawal_request(wid)
-        if not wr or wr["status"] != "pending":
-            await callback.answer("Заявка уже обработана", show_alert=True)
-            return
-        ok = await database.approve_withdrawal_request(wid, callback.from_user.id)
-        if ok:
-            lang = await resolve_user_language(wr["telegram_id"])
-            text = i18n_get_text(lang, "withdraw.approved")
-            try:
-                await bot.send_message(wr["telegram_id"], text, parse_mode="HTML")
-            except Exception as e:
-                logger.warning(f"Failed to send withdrawal approved notification to {wr['telegram_id']}: {e}")
-            await callback.answer("✅ Подтверждено", show_alert=True)
-            await safe_edit_reply_markup(callback.message, reply_markup=None)
-        else:
-            await callback.answer("Ошибка подтверждения", show_alert=True)
-    except Exception as e:
-        logger.exception(f"Error in withdraw_approve: {e}")
-        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
-
-
-@payments_router.callback_query(F.data.startswith("withdraw_reject:"))
-async def callback_withdraw_reject(callback: CallbackQuery, bot: Bot):
-    """Админ: отклонить вывод (возврат средств)"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer("Доступ запрещён", show_alert=True)
-        return
-    try:
-        wid = int(callback.data.split(":")[1])
-        wr = await database.get_withdrawal_request(wid)
-        if not wr or wr["status"] != "pending":
-            await callback.answer("Заявка уже обработана", show_alert=True)
-            return
-        ok = await database.reject_withdrawal_request(wid, callback.from_user.id)
-        if ok:
-            lang = await resolve_user_language(wr["telegram_id"])
-            text = i18n_get_text(lang, "withdraw.rejected")
-            try:
-                await bot.send_message(wr["telegram_id"], text, parse_mode="HTML")
-            except Exception as e:
-                logger.warning(f"Failed to send withdrawal rejected notification to {wr['telegram_id']}: {e}")
-            await callback.answer("❌ Отклонено", show_alert=True)
-            await safe_edit_reply_markup(callback.message, reply_markup=None)
-        else:
-            await callback.answer("Ошибка отклонения", show_alert=True)
-    except Exception as e:
-        logger.exception(f"Error in withdraw_reject: {e}")
-        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text=i18n_get_text(language, "payment.btn_cancel"),
+        callback_data="topup_balance",
+        style="primary",
+    )]])
+    await callback.message.answer(text, reply_markup=cancel_kb, parse_mode="HTML")
 
 
 @payments_router.callback_query(F.data == "pay:balance")
@@ -494,7 +336,6 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
-    country = fsm_data.get("country")  # Страна для бизнес-тарифов
 
     if not tariff_type or not period_days or not final_price_kopecks:
         error_text = i18n_get_text(language, "errors.session_expired")
@@ -519,9 +360,37 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             shortage=shortage
         )
         await callback.answer(error_text, show_alert=True)
+        # 08 M17: an alert cannot carry a button — a short message with «Пополнить баланс».
+        try:
+            await callback.message.answer(
+                i18n_get_text(language, "errors.insufficient_balance_topup_hint"),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.btn_topup_balance"),
+                    callback_data="topup_balance",
+                    icon_custom_emoji_id=CE["wallet"],
+                    style="success",
+                )]]),
+                parse_mode="HTML",
+            )
+        except Exception as hint_err:  # noqa: BLE001
+            logger.debug("insufficient-balance hint failed: %s", hint_err)
         logger.info(f"Insufficient balance for payment: user={telegram_id}, balance={balance_rubles:.2f} RUB, required={final_price_rubles:.2f} RUB")
         return
     
+    # P0 guard (9c497027) on the balance path too: a Combo flag in FSM with a price
+    # below the Combo price (stale / forged state) is refused before any debit.
+    if (fsm_data.get("combo_bypass_gb") or 0) > 0:
+        _promo = await get_promo_session(state)
+        try:
+            await subscription_service.ensure_combo_price_not_below(
+                telegram_id, tariff_type, period_days, final_price_kopecks,
+                promo_code=_promo.get("promo_code") if _promo else None,
+            )
+        except subscription_service.InvalidTariffError:
+            await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+            await state.set_state(None)
+            return
+
     # КРИТИЧНО: ИДЕМПОТЕНТНОСТЬ - Проверяем FSM state и предотвращаем повторное списание
     # Если уже в processing_payment - значит оплата уже обрабатывается
     current_state = await state.get_state()
@@ -534,18 +403,18 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         await callback.answer(error_text, show_alert=True)
         return
     
-    # Баланса хватает - списываем и активируем подписку в ОДНОЙ транзакции
-    await callback.answer()
-    
-    # КРИТИЧНО: Переходим в состояние processing_payment ПЕРЕД списанием баланса
-    # Это блокирует повторные клики до завершения транзакции
+    # КРИТИЧНО: processing_payment ставится ДО callback.answer() — раньше
+    # второй колбэк двойного тапа проскакивал проверку выше, пока шёл
+    # answer(), и баланс списывался дважды (независимо от флага outbox).
     await state.set_state(PurchaseState.processing_payment)
-    
+    try:
+        await callback.answer()
+    except Exception as e:
+        logger.warning("BALANCE_PAY_CALLBACK_ANSWER_FAILED user=%s err=%s", telegram_id, e)
+
     # КРИТИЧНО: Формируем данные для активации подписки
     months = period_days // 30
-    if config.is_biz_tariff(tariff_type):
-        tariff_name = "Business"
-    elif tariff_type == "basic":
+    if tariff_type == "basic":
         tariff_name = "Basic"
     else:
         tariff_name = "Plus"
@@ -563,7 +432,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         
         # CRITICAL FIX: Получаем промокод из промо-сессии для передачи в finalize_balance_purchase
         promo_session = await get_promo_session(state)
-        promo_code_from_session = promo_session.get("promo_code") if promo_session else None
+        promo_code_from_session = await get_applied_promo_code(state)  # only a code that won
         
         result = await database.finalize_balance_purchase(
             telegram_id=telegram_id,
@@ -572,14 +441,30 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             amount_rubles=final_price_rubles,
             description=transaction_description,
             promo_code=promo_code_from_session,  # CRITICAL: Промокод потребляется внутри транзакции
-            country=country
+            # T10: combo → тариф combo_* в outbox (при выключенном флаге игнорируется)
+            is_combo=(fsm_data.get("combo_bypass_gb") or 0) > 0,
         )
-        
+
         if not result or not result.get("success"):
             error_text = i18n_get_text(language, "errors.payment_processing")
             await callback.message.answer(error_text, parse_mode="HTML")
             await state.set_state(None)
             return
+
+        # T10: finalize пошёл через provisioning outbox — premium, ГБ и is_combo
+        # уже в транзакции списания; панель здесь не трогаем.
+        _outbox = bool(result.get("provisioning_job_id"))
+        if _outbox:
+            _outbox_combo_gb = fsm_data.get("combo_bypass_gb") or 0
+            if _outbox_combo_gb > 0:
+                # Ledger row once, before any early return below.
+                try:
+                    await database.record_traffic_purchase(telegram_id, _outbox_combo_gb, 0)
+                except Exception as ledger_err:
+                    logger.warning(
+                        "COMBO_TRAFFIC_LEDGER_FAIL_BALANCE user=%s gb=%s err=%s",
+                        telegram_id, _outbox_combo_gb, ledger_err,
+                    )
 
         # Оплата прошла — сносим экран выбора способа оплаты, чтобы
         # юзер остался с одним активным сообщением-подтверждением.
@@ -598,45 +483,8 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
             subscription_type = "basic"
         is_upgrade = result.get("is_basic_to_plus_upgrade", False)
-        referral_reward_result = result.get("referral_reward")
-        
-        # Отправляем уведомление о кешбэке (если начислен)
-        if referral_reward_result and referral_reward_result.get("success"):
-            try:
-                notification_sent = await send_referral_cashback_notification(
-                    bot=callback.message.bot,
-                    referrer_id=referral_reward_result.get("referrer_id"),
-                    referred_id=telegram_id,
-                    purchase_amount=final_price_rubles,
-                    cashback_amount=referral_reward_result.get("reward_amount"),
-                    cashback_percent=referral_reward_result.get("percent"),
-                    paid_referrals_count=referral_reward_result.get("paid_referrals_count", 0),
-                    referrals_needed=referral_reward_result.get("referrals_needed", 0),
-                    action_type="purchase" if not is_renewal else "renewal"
-                )
-                if notification_sent:
-                    logger.info(f"Referral cashback processed for balance payment: user={telegram_id}, amount={final_price_rubles} RUB")
-            except Exception as e:
-                logger.warning(
-                    "NOTIFICATION_FAILED",
-                    extra={
-                        "type": "balance_payment_referral",
-                        "user": telegram_id,
-                        "referrer": referral_reward_result.get("referrer_id") if referral_reward_result else None,
-                        "error": str(e)
-                    }
-                )
-        
-        # Site sync (fire-and-forget)
-        try:
-            from app.services.site_sync import full_sync_after_payment, is_enabled as _site_sync_on
-            if _site_sync_on():
-                asyncio.ensure_future(full_sync_after_payment(
-                    telegram_id, period_days, tariff_type, final_price_rubles,
-                    f"balance_{payment_id}",
-                ))
-        except Exception:
-            pass
+        # The referrer is notified by the cashback accrual itself, once, after
+        # the billing transaction commits (app.services.notifications.referral_cashback).
 
         # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
         # Для продлений vpn_key может быть пустым - получаем из подписки
@@ -731,103 +579,20 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
         await state.clear()
         
-        # Один компактный экран: текст + кнопки копирования и профиль (без отдельной отправки ключей)
-        expires_str = expires_at.strftime("%d.%m.%Y")
-        keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
-
-        if is_upgrade:
-            _is_combo = _combo_gb_from_fsm > 0
-            if _is_combo:
-                upgrade_label = "Комбо Plus" if subscription_type == "plus" else "Комбо Basic"
-            else:
-                upgrade_label = "Plus" if subscription_type == "plus" else "Basic"
-            text = (
-                f"✅ Ваш тариф изменён на <b>{upgrade_label}</b>\n"
-                f"📅 До: {expires_str}"
-            )
-            try:
-                await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-            except Exception as e:
-                logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
-        else:
-            _is_combo = _combo_gb_from_fsm > 0
-
-            if config.is_biz_tariff(subscription_type):
-                tariff_label, tariff_icon = "Business", "🏢"
-            elif subscription_type == "plus" and _is_combo:
-                tariff_label, tariff_icon = "Комбо Plus", "🚀"
-            elif subscription_type == "plus":
-                tariff_label, tariff_icon = "Plus", "💎"
-            elif _is_combo:
-                tariff_label, tariff_icon = "Комбо Basic", "🚀"
-            else:
-                tariff_label, tariff_icon = "Basic", "🏆"
-            # Автоуведомления: админ может переопределить текст через
-            # дашборд. Payment success — критичный UX, никогда не
-            # пропускаем отправку: если admin выключил override,
-            # шлём i18n-дефолт как раньше. Toggle-off влияет ТОЛЬКО
-            # на кастомный текст, но факт отправки — всегда.
-            from app.services.automated_notifications import (
-                is_notification_enabled as _autonotif_enabled,
-                get_notification_text as _autonotif_text,
-                log_notification_send as _autonotif_log,
-            )
-            _key = None
-            _params: dict = {}
-            if is_renewal:
-                _key = "payment.success_renewal_compact"
-                _params = {
-                    "tariff_icon": tariff_icon,
-                    "tariff": tariff_label,
-                    "date": expires_str,
-                }
-            else:
-                if subscription_type == "plus":
-                    _key = "payment.success_welcome_plus"
-                    _params = {"date": expires_str}
-                elif config.is_biz_tariff(subscription_type):
-                    _key = None  # business — свой сценарий, не через реестр
-                    text = f"🎉 Добро пожаловать в Atlas Secure!\n🏢 Тариф: Business\n📅 До: {expires_str}"
-                else:
-                    _key = "payment.success_welcome_basic"
-                    _params = {"date": expires_str}
-            if _key is not None:
-                _use_custom = await _autonotif_enabled(_key)
-                _custom = (await _autonotif_text(_key, params=_params)) if _use_custom else None
-                text = _custom or i18n_get_text(language, _key, **_params)
-                try:
-                    await _autonotif_log(
-                        _key, telegram_id,
-                        status="sent" if _use_custom else "skipped_disabled",
-                    )
-                except Exception:
-                    pass
-        # Task 2 cut-over: when PURCHASE_FLOW_REMNAWAVE is on the bot has
-        # already provisioned the premium + bypass entities in Remnawave;
-        # surface both subscription URLs directly in the success text so
-        # the buyer sees them without an extra tap.  Skip on renewal —
-        # the connection links don't change, so the renewal message is a
-        # plain confirmation without the key block.
-        if getattr(config, "PURCHASE_FLOW_REMNAWAVE", False) and not is_renewal:
-            try:
-                sub_row = await database.get_subscription_any(telegram_id)
-                premium_url = (sub_row or {}).get("vpn_key") or ""
-                bypass_url = (sub_row or {}).get("vpn_key_plus") or ""
-                links_block_parts = []
-                if premium_url:
-                    links_block_parts.append(
-                        f"🌍 <b>Premium</b> (основные серверы):\n<code>{premium_url}</code>"
-                    )
-                if bypass_url:
-                    links_block_parts.append(
-                        f"🚧 <b>Bypass</b> (обходы LTE):\n<code>{bypass_url}</code>"
-                    )
-                if links_block_parts:
-                    text = text + "\n\n" + "\n\n".join(links_block_parts)
-            except Exception as e:
-                logger.warning(
-                    "PURCHASE_FLOW_LINKS_RENDER_FAIL user=%s err=%s", telegram_id, e,
-                )
+        # One success message for every payment path (08_payments_ux #3): tariff
+        # incl. Combo (was «Тариф: Basic» for Combo, #17), period, end date, GB,
+        # connect keyboard in the user's language; admin dashboard text if set.
+        from app.services.payments.success_message import build_purchase_success
+        text, keyboard = await build_purchase_success(
+            language,
+            subscription_type=subscription_type,
+            is_combo=_combo_gb_from_fsm > 0,
+            period_days=period_days,
+            expires_at=expires_at,
+            is_renewal=is_renewal,
+            is_upgrade=is_upgrade,
+            telegram_id=telegram_id,
+        )
 
         # ИДЕМПОТЕНТНОСТЬ: mark-before-send pattern
         try:
@@ -858,61 +623,114 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             f"scenario={'renewal' if is_renewal else 'first_purchase'}"
         )
 
-        # Fire-and-forget: create or renew Remnawave bypass user
-        try:
-            from app.services.remnawave_service import renew_remnawave_user_bg
-            if expires_at and subscription_type not in ("trial",) + config.BIZ_TARIFFS:
-                renew_remnawave_user_bg(telegram_id, subscription_type, expires_at, period_days=period_days)
-        except Exception as rmn_err:
-            logger.warning("REMNAWAVE_HOOK_FAIL: balance tg=%s %s", telegram_id, rmn_err)
-
-        # Combo/Bypass: начисляем трафик обхода если покупка через комбо или bypass-only
-        combo_bypass_gb = _combo_gb_from_fsm
-        bypass_only_gb = _bypass_gb_from_fsm
-
-        if combo_bypass_gb > 0 or bypass_only_gb > 0:
-            from app.services import remnawave_service
-            gb = combo_bypass_gb or bypass_only_gb
-            traffic_bytes = gb * 1024**3
-
-            try:
-                rmn_success = await remnawave_service.add_bypass_traffic(
-                    telegram_id,
-                    traffic_bytes,
-                    subscription_type=subscription_type,
-                    subscription_end=expires_at,
-                    period_days=period_days,
+        if _outbox:
+            # T10: no renew_remnawave_user_bg / add_bypass_traffic / FSM GB top-up —
+            # the outbox job (balance:{payment_id}) owns premium + GB.
+            if _bypass_gb_from_fsm > 0:
+                # bypass_only_gb is set nowhere in the bot today; never top up here.
+                logger.error(
+                    "BALANCE_BYPASS_ONLY_IGNORED_OUTBOX user=%s gb=%s payment_id=%s",
+                    telegram_id, _bypass_gb_from_fsm, payment_id,
                 )
-                if not rmn_success:
-                    logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL_BALANCE user={telegram_id} gb={gb}")
-                await database.record_traffic_purchase(telegram_id, gb, 0)
-                logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED_BALANCE user={telegram_id} gb={gb}")
-            except Exception as traffic_err:
-                logger.warning(f"COMBO_BYPASS_TRAFFIC_ERROR_BALANCE user={telegram_id}: {traffic_err}")
+        else:
+            # Fire-and-forget: create or renew Remnawave bypass user.
+            # Not for Combo (like the Telegram path): Combo gets its table GB
+            # below (add_bypass_traffic), no base 10 GB — and both are
+            # read-modify-write on the same bypass limit, so running them
+            # together raced (T0-BAL-COMBO-RENEW: Combo + 10, or one lost).
+            try:
+                from app.services.remnawave_service import renew_remnawave_user_bg
+                if expires_at and subscription_type != "trial" and _combo_gb_from_fsm <= 0:
+                    renew_remnawave_user_bg(telegram_id, subscription_type, expires_at, period_days=period_days)
+            except Exception as rmn_err:
+                logger.warning("REMNAWAVE_HOOK_FAIL: balance tg=%s %s", telegram_id, rmn_err)
 
-            # Mark subscription as combo (OUTSIDE traffic try block)
-            if combo_bypass_gb > 0:
+            # Combo/Bypass: начисляем трафик обхода если покупка через комбо или bypass-only
+            combo_bypass_gb = _combo_gb_from_fsm
+            bypass_only_gb = _bypass_gb_from_fsm
+
+            if combo_bypass_gb > 0 or bypass_only_gb > 0:
+                from app.services import remnawave_service
+                gb = combo_bypass_gb or bypass_only_gb
+                traffic_bytes = gb * 1024**3
+
                 try:
-                    await database.set_combo_flag(telegram_id, True)
-                    logger.info(f"COMBO_FLAG_SET_BALANCE user={telegram_id}")
-                except Exception as flag_err:
-                    logger.warning(f"COMBO_FLAG_FAIL_BALANCE user={telegram_id}: {flag_err}")
+                    rmn_success = await remnawave_service.add_bypass_traffic(
+                        telegram_id,
+                        traffic_bytes,
+                        subscription_type=subscription_type,
+                        subscription_end=expires_at,
+                        period_days=period_days,
+                    )
+                    if not rmn_success:
+                        logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL_BALANCE user={telegram_id} gb={gb}")
+                    await database.record_traffic_purchase(telegram_id, gb, 0)
+                    logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED_BALANCE user={telegram_id} gb={gb}")
+                except Exception as traffic_err:
+                    logger.warning(f"COMBO_BYPASS_TRAFFIC_ERROR_BALANCE user={telegram_id}: {traffic_err}")
 
-            # Bypass-only: mark flag + activate trial if eligible
-            if bypass_only_gb > 0:
-                try:
-                    await database.set_bypass_only_flag(telegram_id, True)
-                    from app.services.trials import service as trial_service
-                    if await trial_service.is_trial_available(telegram_id):
-                        await trial_service.activate_trial(telegram_id)
-                except Exception:
-                    pass
+                # Mark subscription as combo (OUTSIDE traffic try block)
+                if combo_bypass_gb > 0:
+                    try:
+                        await database.set_combo_flag(telegram_id, True)
+                        logger.info(f"COMBO_FLAG_SET_BALANCE user={telegram_id}")
+                    except Exception as flag_err:
+                        logger.warning(f"COMBO_FLAG_FAIL_BALANCE user={telegram_id}: {flag_err}")
 
+                # Bypass-only: mark flag + activate trial if available.
+                # T15: before, activate_trial did not exist (AttributeError
+                # swallowed → no trial). Now only under the "trial" outbox flag;
+                # after the purchase commit, never raises (log + admin alert).
+                if bypass_only_gb > 0:
+                    try:
+                        await database.set_bypass_only_flag(telegram_id, True)
+                    except Exception:
+                        pass
+                    if provisioning_flags.is_on("trial"):
+                        from app.services.trials import service as trial_service
+                        await trial_service.activate_trial_safely(
+                            telegram_id, bot=callback.bot, where=f"balance:{payment_id}",
+                        )
+
+    except database.DuplicateBalancePurchase as e:
+        # P1-2: second tap of a double tap — refused before any debit. The first
+        # tap is still finishing: leave the FSM to it, no admin alert.
+        logger.warning("BALANCE_PAY_DUPLICATE_TAP user=%s: %s", telegram_id, e)
+        try:
+            await callback.answer(
+                i18n_get_text(language, "errors.session_expired_processing"), show_alert=True,
+            )
+        except Exception as answer_err:  # already answered above — nothing else to show
+            logger.debug("BALANCE_PAY_DUPLICATE_ANSWER_FAILED user=%s: %s", telegram_id, answer_err)
     except Exception as e:
         logger.exception(f"CRITICAL: Unexpected error in callback_pay_balance: {e}")
-        error_text = i18n_get_text(language, "errors.payment_processing")
-        await callback.answer(error_text, show_alert=True)
+        if isinstance(e, ValueError) and "PROMO" in str(e).upper():
+            # 08 #13: the promo code ran out between the price screen and the
+            # payment — say so (was «Ошибка обработки платежа»), drop the session.
+            await clear_promo_session(state)
+            try:
+                await callback.message.answer(
+                    i18n_get_text(language, "errors.promo_no_longer_valid"), parse_mode="HTML",
+                )
+            except Exception as msg_err:  # noqa: BLE001
+                logger.debug("promo-invalid message failed: %s", msg_err)
+        else:
+            error_text = i18n_get_text(language, "errors.payment_processing")
+            await callback.answer(error_text, show_alert=True)
         await state.set_state(None)
+        # ValueError = insufficient balance / bad input: user-side, nothing debited.
+        # Anything else is a failed money transaction → the admin must know
+        # (docs/audit/03_payment_matrix.md, alert coverage).
+        if not isinstance(e, ValueError):
+            try:
+                from app.services.admin_alerts import alert_payment_failure
+                await alert_payment_failure(
+                    callback.bot, "balance", telegram_id, f"balance:{tariff_type}_{period_days}", e,
+                    is_transient=False, amount_rubles=final_price_rubles,
+                    tariff=tariff_type, period_days=period_days,
+                )
+            except Exception as alert_err:
+                logger.warning("BALANCE_PAY_ALERT_FAILED user=%s err=%s", telegram_id, alert_err)
 
 
 @payments_router.callback_query(F.data == "pay:card")
@@ -956,11 +774,10 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
-    country = fsm_data.get("country")  # Страна для бизнес-тарифов
 
     # КРИТИЧНО: Получаем промо-сессию для сохранения в pending_purchase
     promo_session = await get_promo_session(state)
-    promo_code = promo_session.get("promo_code") if promo_session else None
+    promo_code = await get_applied_promo_code(state)  # only a code that won as the largest discount
 
     if not tariff_type or not period_days or not final_price_kopecks:
         error_text = i18n_get_text(language, "errors.session_expired")
@@ -995,7 +812,6 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
             period_days=period_days,
             price_kopecks=final_price_kopecks,
             promo_code=promo_code,
-            country=country,
             is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
         )
 
@@ -1013,12 +829,7 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
         
         # Формируем описание тарифа
         months = period_days // 30
-        if config.is_biz_tariff(tariff_type):
-            tariff_name = "Business"
-        elif tariff_type == "basic":
-            tariff_name = "Basic"
-        else:
-            tariff_name = "Plus"
+        tariff_name = _tariff_label(fsm_data, tariff_type, language)
         description = i18n_get_text(language, "buy.invoice_description", tariff_name=tariff_name, months=months)
 
         # Формируем prices (цена в копейках из FSM)
@@ -1095,7 +906,6 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
     fsm_data = await state.get_data()
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
-    country = fsm_data.get("country")  # Страна для бизнес-тарифов
 
     if not tariff_type or not period_days:
         error_text = i18n_get_text(language, "errors.session_expired")
@@ -1104,37 +914,40 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
         return
 
-    # Получаем цену в Stars из TARIFFS_STARS
-    if tariff_type not in config.TARIFFS_STARS or period_days not in config.TARIFFS_STARS[tariff_type]:
+    # Цена в Stars: basic/plus — TARIFFS_STARS, combo — из рублёвой цены combo
+    # (tariffs.stars_price). Раньше combo брал цену basic/plus (HOW_IT_WORKS P1-2).
+    # Скидка (промокод, −15 %, офферы, персональная — действует наибольшая), с
+    # которой экран показал «К оплате: N ₽», переводится в звёзды тем же правилом
+    # RUB→Stars (tariffs.stars_for_purchase); раньше Stars брал полный прайс.
+    from app.services import tariffs as _tariffs
+    is_combo = (fsm_data.get("combo_bypass_gb") or 0) > 0
+    final_price_kopecks = int(fsm_data.get("final_price_kopecks") or 0)
+    try:
+        tariff_key = _tariffs.tariff_key(tariff_type, is_combo)
+        list_price_kopecks = _tariffs.renewal_price_rub(tariff_key, period_days) * 100
+        is_discounted = 0 < final_price_kopecks < list_price_kopecks
+        # pending_purchases.price_kopecks — рублёвая цена (не звёзды × 100):
+        # successful_payment переводит оплаченные звёзды в эти рубли, поэтому
+        # payments.amount, выручка и кэшбэк считаются в рублях.
+        price_kopecks = final_price_kopecks if is_discounted else list_price_kopecks
+        stars_price = _tariffs.stars_for_purchase(tariff_key, period_days, price_kopecks)
+    except _tariffs.TariffConfigError as e:
         error_text = i18n_get_text(language, "errors.tariff")
         await callback.answer(error_text, show_alert=True)
-        logger.error(f"Stars tariff not found: tariff={tariff_type}, period={period_days}")
+        logger.error(f"Stars tariff not found: tariff={tariff_type}, period={period_days}, combo={is_combo}: {e}")
         return
 
-    stars_price = config.TARIFFS_STARS[tariff_type][period_days]["price"]
-    # Для бизнес-тарифов применяем множитель страны к Stars
-    if country and config.is_biz_tariff(tariff_type):
-        multiplier = config.BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
-        stars_price = int(round(stars_price * multiplier))
-
-    # Получаем промо-сессию (промокоды НЕ применяются к Stars — цена фиксирована)
-    promo_session = await get_promo_session(state)
-    promo_code = promo_session.get("promo_code") if promo_session else None
-
-    # Для Stars: цена в копейках = stars_price * 100 (для pending_purchase, хранение)
-    # Но фактическая оплата идёт в Stars, не в рублях
-    stars_price_kopecks = stars_price * 100
-
     try:
-        # Создаем pending_purchase
+        # Промокод пишется в покупку (и списывается при финализации) только когда
+        # он и дал показанную цену — как у остальных способов оплаты.
+        promo_code = await get_applied_promo_code(state) if is_discounted else None
         purchase_id = await subscription_service.create_subscription_purchase(
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
-            price_kopecks=stars_price_kopecks,
+            price_kopecks=price_kopecks,
             promo_code=promo_code,
-            country=country,
-            is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
+            is_combo=is_combo,
         )
 
         await state.update_data(purchase_id=purchase_id, payment_method="stars")
@@ -1149,12 +962,7 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
 
         # Формируем описание
         months = period_days // 30
-        if config.is_biz_tariff(tariff_type):
-            tariff_name = "Business"
-        elif tariff_type == "basic":
-            tariff_name = "Basic"
-        else:
-            tariff_name = "Plus"
+        tariff_name = _tariff_label(fsm_data, tariff_type, language)
         description = i18n_get_text(
             language, "payment.stars_invoice_description",
             tariff_name=tariff_name, months=months
@@ -1236,10 +1044,9 @@ async def _start_platega_payment(
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
-    country = fsm_data.get("country")
 
     promo_session = await get_promo_session(state)
-    promo_code = promo_session.get("promo_code") if promo_session else None
+    promo_code = await get_applied_promo_code(state)  # only a code that won as the largest discount
 
     if not tariff_type or not period_days or not final_price_kopecks:
         error_text = i18n_get_text(language, "errors.session_expired")
@@ -1263,7 +1070,6 @@ async def _start_platega_payment(
             period_days=period_days,
             price_kopecks=marked_price_kopecks,
             promo_code=promo_code,
-            country=country,
             is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
         )
 
@@ -1279,7 +1085,7 @@ async def _start_platega_payment(
 
         tx_data = await platega_service.create_transaction(
             amount_rubles=marked_price_rubles,
-            description=f"Atlas Secure VPN — {tariff_type} {period_days}d",
+            description=f"Atlas Secure VPN — {_tariff_label(fsm_data, tariff_type, 'en')} {period_days}d",
             purchase_id=purchase_id,
             method=method,
             telegram_id=telegram_id,
@@ -1289,7 +1095,7 @@ async def _start_platega_payment(
         redirect_url = tx_data["redirect_url"]
 
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id), provider="platega")
         except Exception as e:
             logger.error(f"Failed to save transaction_id to DB: purchase_id={purchase_id}, error={e}")
 
@@ -1310,7 +1116,7 @@ async def _start_platega_payment(
                 text=i18n_get_text(language, "common.back"),
                 # То же поведение что и на Wata-экране: назад → выбор
                 # периода того же тарифа, а не в главное меню.
-                callback_data=f"tariff:{tariff_type}",
+                callback_data=_invoice_back(fsm_data, tariff_type),
                 icon_custom_emoji_id=CE["back"],
                 style="primary",
             )]
@@ -1404,11 +1210,10 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
-    country = fsm_data.get("country")  # Страна для бизнес-тарифов
 
     # Получаем промо-сессию
     promo_session = await get_promo_session(state)
-    promo_code = promo_session.get("promo_code") if promo_session else None
+    promo_code = await get_applied_promo_code(state)  # only a code that won as the largest discount
 
     if not tariff_type or not period_days or not final_price_kopecks:
         error_text = i18n_get_text(language, "errors.session_expired")
@@ -1435,7 +1240,6 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
             period_days=period_days,
             price_kopecks=sbp_price_kopecks,
             promo_code=promo_code,
-            country=country,
             is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
         )
 
@@ -1452,7 +1256,7 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
         # Создаем транзакцию через Platega API
         tx_data = await platega_service.create_transaction(
             amount_rubles=sbp_price_rubles,
-            description=f"Atlas Secure VPN — {tariff_type} {period_days}d",
+            description=f"Atlas Secure VPN — {_tariff_label(fsm_data, tariff_type, 'en')} {period_days}d",
             purchase_id=purchase_id,
             telegram_id=telegram_id,
         )
@@ -1462,7 +1266,7 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
 
         # Сохраняем invoice_id в БД
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id), provider="platega")
         except Exception as e:
             logger.error(f"Failed to save transaction_id to DB: purchase_id={purchase_id}, error={e}")
 
@@ -1481,13 +1285,21 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_buy_vpn",
+                callback_data=_invoice_back(fsm_data, tariff_type),
                 icon_custom_emoji_id=CE["back"],
                 style="primary",
             )]
         ])
 
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        # 08 M15: registered like every other invoice screen — removed after the
+        # payment (and after the timeout); the payment-method screen goes too.
+        _invoice_messages[purchase_id] = (telegram_id, msg.message_id)
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
+        try:
+            await callback.message.delete()
+        except Exception as _e:
+            logger.debug("delete payment-method (sbp) failed: %s", _e)
         await callback.answer()
 
         # Очищаем FSM state
@@ -1534,10 +1346,9 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
-    country = fsm_data.get("country")
 
     promo_session = await get_promo_session(state)
-    promo_code = promo_session.get("promo_code") if promo_session else None
+    promo_code = await get_applied_promo_code(state)  # only a code that won as the largest discount
 
     if not tariff_type or not period_days or not final_price_kopecks:
         error_text = i18n_get_text(language, "errors.session_expired")
@@ -1563,7 +1374,6 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
             period_days=period_days,
             price_kopecks=final_price_kopecks,
             promo_code=promo_code,
-            country=country,
             is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
         )
 
@@ -1576,12 +1386,7 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
 
         # Формируем описание
         months = period_days // 30
-        if config.is_biz_tariff(tariff_type):
-            tariff_name = "Business"
-        elif tariff_type == "basic":
-            tariff_name = "Basic"
-        else:
-            tariff_name = "Plus"
+        tariff_name = _tariff_label(fsm_data, tariff_type, language)
 
         description = f"Atlas Secure VPN — {tariff_name} {months}m"
 
@@ -1597,7 +1402,7 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
 
         # Сохраняем invoice_id в БД
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id), provider="cryptobot")
         except Exception as e:
             logger.error(f"Failed to save cryptobot invoice_id to DB: purchase_id={purchase_id}, error={e}")
 
@@ -1616,7 +1421,7 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data=f"tariff:{tariff_type}",
+                callback_data=_invoice_back(fsm_data, tariff_type),
                 icon_custom_emoji_id=CE["back"],
                 style="primary",
             )]
@@ -1641,295 +1446,20 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
 
 
-@payments_router.callback_query(F.data == "pay:lava")
-async def callback_pay_lava(callback: CallbackQuery, state: FSMContext):
-    """Оплата картой через Lava (api.lava.ru)
-
-    КРИТИЧНО:
-    - Работает ТОЛЬКО в состоянии choose_payment_method
-    - Создает pending_purchase
-    - Создает invoice через Lava API
-    - Отправляет payment URL пользователю
-    """
-    telegram_id = callback.from_user.id
-
-    # Rate limiting
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
-    if not is_allowed:
-        language = await resolve_user_language(telegram_id)
-        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
-        return
-    language = await resolve_user_language(telegram_id)
-
-    # КРИТИЧНО: Проверяем FSM state — должен быть choose_payment_method
-    current_state = await state.get_state()
-    if current_state != PurchaseState.choose_payment_method:
-        error_text = i18n_get_text(language, "errors.session_expired")
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Invalid FSM state for pay:lava: user={telegram_id}, state={current_state}")
-        await state.set_state(None)
-        return
-
-    # КРИТИЧНО: Получаем данные из FSM state
-    fsm_data = await state.get_data()
-    tariff_type = fsm_data.get("tariff_type")
-    period_days = fsm_data.get("period_days")
-    final_price_kopecks = fsm_data.get("final_price_kopecks")
-    country = fsm_data.get("country")
-
-    promo_session = await get_promo_session(state)
-    promo_code = promo_session.get("promo_code") if promo_session else None
-
-    if not tariff_type or not period_days or not final_price_kopecks:
-        error_text = i18n_get_text(language, "errors.session_expired")
-        await callback.answer(error_text, show_alert=True)
-        logger.error(f"Missing purchase data in FSM for lava: user={telegram_id}")
-        await state.set_state(None)
-        return
-
-    # Проверяем доступность Lava
-    import lava_service
-    if not lava_service.is_enabled():
-        await callback.answer(i18n_get_text(language, "payment.lava_unavailable"), show_alert=True)
-        logger.error("Lava not configured")
-        return
-
-    try:
-        final_price_rubles = final_price_kopecks / 100.0
-
-        # Создаем pending_purchase
-        purchase_id = await subscription_service.create_subscription_purchase(
-            telegram_id=telegram_id,
-            tariff=tariff_type,
-            period_days=period_days,
-            price_kopecks=final_price_kopecks,
-            promo_code=promo_code,
-            country=country,
-            is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
-        )
-
-        await state.update_data(purchase_id=purchase_id, payment_method="lava")
-
-        logger.info(
-            f"Purchase created for lava payment: user={telegram_id}, purchase_id={purchase_id}, "
-            f"tariff={tariff_type}, period_days={period_days}, price={final_price_rubles}"
-        )
-
-        # Формируем описание
-        months = period_days // 30
-        if config.is_biz_tariff(tariff_type):
-            tariff_name = "Business"
-        elif tariff_type == "basic":
-            tariff_name = "Basic"
-        else:
-            tariff_name = "Plus"
-
-        comment = f"Atlas Secure VPN — {tariff_name} {months}m"
-
-        # Создаем invoice через Lava API
-        invoice_data = await lava_service.create_invoice(
-            amount_rubles=final_price_rubles,
-            purchase_id=purchase_id,
-            comment=comment,
-        )
-
-        invoice_id = invoice_data["invoice_id"]
-        payment_url = invoice_data["payment_url"]
-
-        # Сохраняем invoice_id в БД
-        try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
-        except Exception as e:
-            logger.error(f"Failed to save lava invoice_id to DB: purchase_id={purchase_id}, error={e}")
-
-        logger.info(
-            f"invoice_created: provider=lava, user={telegram_id}, purchase_id={purchase_id}, "
-            f"invoice_id={invoice_id}, price={final_price_rubles:.2f}"
-        )
-
-        # Отправляем пользователю ссылку на оплату
-        text = i18n_get_text(language, "payment.lava_waiting", amount=final_price_rubles)
-
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "payment.lava_pay_button"),
-                url=payment_url
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "common.back"),
-                callback_data=f"tariff:{tariff_type}",
-                icon_custom_emoji_id=CE["back"],
-                style="primary",
-            )]
-        ])
-
-        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        _invoice_messages[purchase_id] = (telegram_id, lava_msg.message_id)
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg))
-        try:
-            await callback.message.delete()
-        except Exception as _e:
-            logger.debug("delete payment-method (lava) failed: %s", _e)
-        await callback.answer()
-
-        # Очищаем FSM state
-        await state.set_state(None)
-        await state.clear()
-
-    except Exception as e:
-        logger.exception(f"Error creating Lava invoice: {e}")
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-        await state.set_state(None)
-
-
-@payments_router.callback_query(F.data == "pay:sbp_sub")
-async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMContext):
-    """Оплата рекуррентной СБП-подпиской через Platega (paymentMethod=6).
-
-    MVP: admin-only + только период 30 дней (interval=3 месяц).
-    Итог: юзеру приходит ссылка redirect (окно 30 мин) на привязку
-    счёта в банке. После подтверждения Platega начинает слать
-    callback'и списаний на /webhooks/platega-subscription — их
-    ловит platega_service.process_subscription_webhook_data.
-    """
-    telegram_id = callback.from_user.id
-    import platega_service
-    if not platega_service.is_subscription_visible_to(telegram_id):
-        await callback.answer(
-            "СБП-подписка временно недоступна", show_alert=True,
-        )
-        return
-
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
-    if not is_allowed:
-        language = await resolve_user_language(telegram_id)
-        await callback.answer(
-            rate_limit_message or i18n_get_text(language, "common.rate_limit_message"),
-            show_alert=True,
-        )
-        return
-    language = await resolve_user_language(telegram_id)
-
-    current_state = await state.get_state()
-    if current_state != PurchaseState.choose_payment_method:
-        await callback.answer(
-            i18n_get_text(language, "errors.session_expired"), show_alert=True,
-        )
-        await state.set_state(None)
-        return
-
-    fsm_data = await state.get_data()
-    tariff_type = fsm_data.get("tariff_type")
-    period_days = fsm_data.get("period_days")
-    final_price_kopecks = fsm_data.get("final_price_kopecks")
-
-    if not (tariff_type and period_days and final_price_kopecks):
-        await callback.answer(
-            i18n_get_text(language, "errors.session_expired"), show_alert=True,
-        )
-        await state.set_state(None)
-        return
-
-    # MVP: поддерживаем ТОЛЬКО период=30 дней. Иначе — редиректим на разовую оплату.
-    if int(period_days) != 30:
-        await callback.answer(
-            "СБП-подписка сейчас доступна только для месячного тарифа (30 дней). "
-            "Выберите обычную СБП-оплату.",
-            show_alert=True,
-        )
-        return
-
-    interval = platega_service.SUBSCRIPTION_INTERVAL_MONTH  # 3
-
-    try:
-        final_price_rubles = final_price_kopecks / 100.0
-        if config.is_biz_tariff(tariff_type):
-            tariff_name = "Business"
-        elif tariff_type == "basic":
-            tariff_name = "Basic"
-        elif tariff_type == "plus":
-            tariff_name = "Plus"
-        else:
-            tariff_name = tariff_type
-
-        description = f"Atlas Secure VPN — подписка {tariff_name} (30 дн., авто-продление)"
-
-        hook_base = (getattr(config, "PUBLIC_BASE_URL", "") or "").rstrip("/")
-        return_url = f"{hook_base}/payment/success" if hook_base else None
-        failed_url = f"{hook_base}/payment/fail" if hook_base else None
-
-        sub_result = await platega_service.create_subscription(
-            amount_rubles=final_price_rubles,
-            interval=interval,
-            description=description,
-            telegram_id=telegram_id,
-            tariff_type=tariff_type,
-            period_days=int(period_days),
-            return_url=return_url,
-            failed_url=failed_url,
-        )
-
-        subscription_id = sub_result["subscription_id"]
-        redirect_url = sub_result["redirect_url"]
-
-        logger.info(
-            "platega_subscription_created_from_ui: user=%s sub_id=%s price=%.2f",
-            telegram_id, subscription_id, final_price_rubles,
-        )
-
-        text = (
-            f"🔄 <b>СБП-подписка (авто-продление)</b>\n\n"
-            f"Сумма: <b>{final_price_rubles:.2f} ₽</b> / 30 дней\n"
-            f"Тариф: <b>{tariff_name}</b>\n\n"
-            f"Нажмите кнопку ниже — откроется окно привязки счёта в вашем банке.\n"
-            f"<b>Окно активно 30 минут.</b>\n\n"
-            f"После подтверждения привязки в банке будет проведено первое "
-            f"списание — VPN активируется автоматически. Дальше каждые "
-            f"30 дней сумма будет списываться автоматически, ничего "
-            f"нажимать не нужно.\n\n"
-            f"<i>Отменить подписку можно, написав в поддержку.</i>"
-        )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=f"🔗 Открыть форму привязки ({final_price_rubles:.0f} ₽)",
-                url=redirect_url,
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "common.back"),
-                callback_data=f"tariff:{tariff_type}",
-                icon_custom_emoji_id=CE["back"],
-                style="primary",
-            )],
-        ])
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        try:
-            await callback.message.delete()
-        except Exception as _e:
-            logger.debug("delete payment-method (sbp_sub) failed: %s", _e)
-        await callback.answer()
-        await state.set_state(None)
-        await state.clear()
-
-    except Exception as e:
-        logger.exception(f"Error creating Platega subscription: {e}")
-        await callback.answer(
-            i18n_get_text(language, "errors.payment_create"), show_alert=True,
-        )
-        await state.set_state(None)
-
-
 @payments_router.callback_query(F.data == "pay:wata")
 async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
     """Оплата подписки через Wata (admin-only beta).
 
-    Симметричный клон pay:lava — тот же FSM-flow, но через wata_service.
+    Тот же FSM-flow, что и остальные pay:*, но через wata_service.
     Итог: payment_url открывается в новой вкладке, webhook /webhooks/wata
     финализирует через generic process_confirmed_payment.
     """
     telegram_id = callback.from_user.id
     import wata_service
     if not wata_service.is_visible_to(telegram_id):
-        await callback.answer("Wata пока в закрытой бете", show_alert=True)
+        await callback.answer(
+            i18n_get_text(await resolve_user_language(telegram_id), "payment.wata_beta_only"), show_alert=True,
+        )
         return
 
     is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
@@ -1949,9 +1479,8 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
-    country = fsm_data.get("country")
     promo_session = await get_promo_session(state)
-    promo_code = promo_session.get("promo_code") if promo_session else None
+    promo_code = await get_applied_promo_code(state)  # only a code that won as the largest discount
 
     if not (tariff_type and period_days and final_price_kopecks):
         await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
@@ -1966,18 +1495,12 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
             period_days=period_days,
             price_kopecks=final_price_kopecks,
             promo_code=promo_code,
-            country=country,
             is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
         )
         await state.update_data(purchase_id=purchase_id, payment_method="wata")
 
         months = period_days // 30
-        if config.is_biz_tariff(tariff_type):
-            tariff_name = "Business"
-        elif tariff_type == "basic":
-            tariff_name = "Basic"
-        else:
-            tariff_name = "Plus"
+        tariff_name = _tariff_label(fsm_data, tariff_type, language)
         comment = f"Atlas Secure VPN — {tariff_name} {months}m"
 
         invoice = await wata_service.create_invoice(
@@ -1987,22 +1510,20 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
             user_id=telegram_id,
         )
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]), provider="wata")
         except Exception as e:
             logger.error(f"Failed to save wata invoice_id: {e}")
 
         logger.info(
             f"invoice_created: provider=wata, user={telegram_id}, purchase_id={purchase_id}, price={final_price_rubles:.2f}",
         )
-        text = (
-            f"🏦 <b>Оплата через СБП</b>\n\n"
-            f"Сумма: {final_price_rubles:.2f} ₽\n\n"
-            f"Нажмите кнопку ниже — откроется форма оплаты.\n\n"
-            f"Ждём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n"
-            f"<i>Обработка занимает до 5 минут — зависит от банка.</i>"
-        )
+        # 08 M8/M9: WATA is card / SBP / T-Pay — no longer «Оплата через СБП», and RU/EN.
+        text = i18n_get_text(language, "payment.wata_waiting", amount=f"{final_price_rubles:.2f}")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"💳 Оплатить {final_price_rubles:.0f} ₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.wata_pay_button", amount=f"{final_price_rubles:.0f}"),
+                url=invoice["payment_url"],
+            )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "payment.wata_check_button"),
                 callback_data=f"pay:wata:check:{purchase_id}",
@@ -2013,7 +1534,7 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
                 # Назад с экрана «Оплата через СБП» ведёт обратно на выбор
                 # периода для того же тарифа — экран периода живёт под
                 # хендлером callback_tariff_type (F.data.startswith("tariff:")).
-                callback_data=f"tariff:{tariff_type}",
+                callback_data=_invoice_back(fsm_data, tariff_type),
                 icon_custom_emoji_id=CE["back"],
                 style="primary",
             )],
@@ -2074,10 +1595,15 @@ async def _poll_wata_invoice(
     purchase_id: str,
     invoice_id: str,
 ) -> None:
-    """Фоновый poll конкретного Wata-инвойса до финализации или таймаута."""
-    from app.workers.wata_reconciler import _find_paid_transaction, _extract_amount
+    """Фоновый poll конкретного Wata-инвойса до финализации или таймаута.
+
+    Оплату ищем документированным GET /v2/transactions/?orderId=<purchase_id>
+    (wata_reconciler.resolve_wata_payment: сверка суммы/валюты для VPN,
+    429/сеть = «повторить позже»). invoice_id оставлен в сигнатуре для
+    совместимости вызовов (traffic.py) и как fallback tx_id.
+    """
+    from app.workers import wata_reconciler as _wr
     from app.services.payments.confirmation import process_confirmed_payment
-    import wata_service
 
     try:
         await asyncio.sleep(_WATA_POLL_INITIAL_DELAY_SEC)
@@ -2093,25 +1619,26 @@ async def _poll_wata_invoice(
                 # Webhook / reconciler / кнопка «Проверить» опередили — выходим.
                 return
 
-            status_data = await wata_service.check_link_status(invoice_id)
-            if status_data:
-                paid_tx = _find_paid_transaction(status_data)
-                if paid_tx:
-                    amount = _extract_amount(paid_tx) or (int(purchase.get("price_kopecks") or 0) / 100.0)
-                    tx_id = paid_tx.get("id") or paid_tx.get("transactionId") or invoice_id
-                    logger.info(
-                        "wata_fast_poll_finalizing: user=%s purchase=%s tx=%s amount=%.2f attempt=%d",
-                        telegram_id, purchase_id, tx_id, amount, attempt + 1,
-                    )
-                    await process_confirmed_payment(
-                        provider="wata",
-                        purchase_id=purchase_id,
-                        amount_rubles=float(amount),
-                        invoice_id=str(tx_id),
-                        telegram_id=telegram_id,
-                        bot=bot,
-                    )
-                    return
+            res = await _wr.resolve_wata_payment(purchase_id, purchase, bot=bot)
+            if res["outcome"] == _wr.LOOKUP_MISMATCH:
+                # Сумма/валюта не сошлись — админ уже оповещён, не финализируем.
+                return
+            if res["outcome"] == _wr.LOOKUP_PAID:
+                amount = res["amount"]
+                tx_id = res["tx_id"] or invoice_id
+                logger.info(
+                    "wata_fast_poll_finalizing: user=%s purchase=%s tx=%s amount=%.2f attempt=%d",
+                    telegram_id, purchase_id, tx_id, amount, attempt + 1,
+                )
+                await process_confirmed_payment(
+                    provider="wata",
+                    purchase_id=purchase_id,
+                    amount_rubles=float(amount),
+                    invoice_id=str(tx_id),
+                    telegram_id=telegram_id,
+                    bot=bot,
+                )
+                return
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 "wata_fast_poll error: user=%s purchase=%s attempt=%d err=%s",
@@ -2126,13 +1653,14 @@ async def _poll_wata_invoice(
 
 # ── "Проверить платёж" — принудительная сверка Wata invoice ────────────
 #
-# Кнопка на экране оплаты (см. callback_pay_wata). При клике: дёргаем
-# wata_service.check_link_status, ищем Paid-транзакцию и финализируем
-# через тот же process_confirmed_payment, что и webhook. Идемпотентно
-# благодаря row-level lock в mark_pending_purchase_paid.
+# Кнопка на экране оплаты (см. callback_pay_wata). При клике: ищем Paid-
+# транзакцию через GET /v2/transactions/?orderId=<purchase_id>
+# (wata_reconciler.resolve_wata_payment) и финализируем через тот же
+# process_confirmed_payment, что и webhook. Идемпотентно благодаря
+# row-level lock в mark_pending_purchase_paid.
 #
 # Rate limit: 30 сек на (user, purchase). Wata API сам ограничивает 1
-# GET / 30с на invoice_id — совпадает по цифре.
+# GET / 30с на объект — совпадает по цифре (+ троттл в lookup_paid_transaction).
 _WATA_CHECK_COOLDOWN_SEC = 30
 _wata_check_last_at: dict[tuple[int, str], float] = {}
 _wata_check_lock = asyncio.Lock()
@@ -2167,8 +1695,7 @@ async def callback_pay_wata_check(callback: CallbackQuery):
             return
         _wata_check_last_at[key] = now
 
-    import wata_service
-    from app.workers.wata_reconciler import _find_paid_transaction, _extract_amount
+    from app.workers import wata_reconciler as _wr
     from app.services.payments.confirmation import process_confirmed_payment
 
     try:
@@ -2191,38 +1718,25 @@ async def callback_pay_wata_check(callback: CallbackQuery):
             pass
         return
 
-    # DB-колонка называется provider_invoice_id; get_pending_purchase*
-    # возвращают SELECT * → ключ в dict именно такой.
-    invoice_id = str(
-        purchase.get("provider_invoice_id")
-        or purchase.get("invoice_id")  # alias-совместимость (reconciler-строки)
-        or ""
-    ).strip()
-    if not invoice_id:
+    # Документированный поиск по orderId (= purchase_id): GET
+    # /v2/transactions/?orderId=… Сверка суммы/валюты для VPN — внутри.
+    # 429 / сеть / троттл = «пока не видно оплаты», не ошибка.
+    res = await _wr.resolve_wata_payment(purchase_id, purchase, bot=callback.bot)
+    if res["outcome"] == _wr.LOOKUP_MISMATCH:
+        await callback.answer(
+            i18n_get_text(language, "payment.wata_check_error"),
+            show_alert=True,
+        )
+        return
+    if res["outcome"] != _wr.LOOKUP_PAID:
         await callback.answer(
             i18n_get_text(language, "payment.wata_check_not_paid"),
             show_alert=False,
         )
         return
 
-    status_data = await wata_service.check_link_status(invoice_id)
-    if not status_data:
-        await callback.answer(
-            i18n_get_text(language, "payment.wata_check_not_paid"),
-            show_alert=False,
-        )
-        return
-
-    paid_tx = _find_paid_transaction(status_data)
-    if not paid_tx:
-        await callback.answer(
-            i18n_get_text(language, "payment.wata_check_not_paid"),
-            show_alert=False,
-        )
-        return
-
-    amount = _extract_amount(paid_tx) or (int(purchase.get("price_kopecks") or 0) / 100.0)
-    tx_id = paid_tx.get("id") or paid_tx.get("transactionId") or invoice_id
+    amount = res["amount"]
+    tx_id = res["tx_id"]
 
     logger.info(
         "wata_check_user_initiated: user=%s purchase=%s tx=%s amount=%.2f",
@@ -2315,7 +1829,8 @@ async def callback_topup_sbp(callback: CallbackQuery):
         return
 
     try:
-        # Применяем наценку +11%
+        # Наценка СБП (SBP_MARKUP_PERCENT): оплачивается, но на баланс
+        # зачисляется только запрошенная сумма (решение владельца 2026-09-14).
         amount_kopecks = amount * 100
         sbp_amount_kopecks = platega_service.apply_sbp_markup(amount_kopecks)
         sbp_amount_rubles = sbp_amount_kopecks / 100.0
@@ -2323,20 +1838,22 @@ async def callback_topup_sbp(callback: CallbackQuery):
         purchase_id = await subscription_service.create_balance_topup_purchase(
             telegram_id=telegram_id,
             amount_kopecks=sbp_amount_kopecks,
-            currency="RUB"
+            currency="RUB",
+            credit_kopecks=amount_kopecks,
         )
 
         tx_data = await platega_service.create_transaction(
             amount_rubles=sbp_amount_rubles,
-            description=f"Пополнение баланса на {amount} ₽",
+            description=i18n_get_text(language, "main.topup_invoice_description", amount=amount),
             purchase_id=purchase_id,
+            telegram_id=telegram_id,
         )
 
         transaction_id = tx_data["transaction_id"]
         redirect_url = tx_data["redirect_url"]
 
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id), provider="platega")
         except Exception as e:
             logger.error(f"Failed to save transaction_id to DB: purchase_id={purchase_id}, error={e}")
 
@@ -2360,95 +1877,14 @@ async def callback_topup_sbp(callback: CallbackQuery):
             )]
         ])
 
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        # Removed after the payment like the other invoice screens (08 #15).
+        _invoice_messages[purchase_id] = (telegram_id, msg.message_id)
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg))
         await callback.answer()
 
     except Exception as e:
         logger.exception(f"Error creating Platega SBP transaction for balance top-up: {e}")
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-
-
-@payments_router.callback_query(F.data.startswith("topup_lava:"))
-async def callback_topup_lava(callback: CallbackQuery):
-    """Пополнение баланса через Lava (карта)"""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    telegram_id = callback.from_user.id
-
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
-    if not is_allowed:
-        language = await resolve_user_language(telegram_id)
-        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
-        return
-    language = await resolve_user_language(telegram_id)
-
-    amount_str = callback.data.split(":")[1]
-    try:
-        amount = int(amount_str)
-    except ValueError:
-        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
-        return
-
-    if amount <= 0 or amount > 100000:
-        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
-        return
-
-    import lava_service
-    if not lava_service.is_enabled():
-        await callback.answer(i18n_get_text(language, "payment.lava_unavailable"), show_alert=True)
-        return
-
-    try:
-        amount_kopecks = amount * 100
-        amount_rubles = float(amount)
-
-        purchase_id = await subscription_service.create_balance_topup_purchase(
-            telegram_id=telegram_id,
-            amount_kopecks=amount_kopecks,
-            currency="RUB"
-        )
-
-        invoice_data = await lava_service.create_invoice(
-            amount_rubles=amount_rubles,
-            purchase_id=purchase_id,
-            comment=f"Пополнение баланса на {amount} ₽",
-        )
-
-        invoice_id = invoice_data["invoice_id"]
-        payment_url = invoice_data["payment_url"]
-
-        try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
-        except Exception as e:
-            logger.error(f"Failed to save lava invoice_id to DB: purchase_id={purchase_id}, error={e}")
-
-        logger.info(
-            f"balance_topup_invoice_created: provider=lava, user={telegram_id}, "
-            f"purchase_id={purchase_id}, amount={amount_rubles:.2f}"
-        )
-
-        text = i18n_get_text(language, "payment.lava_waiting", amount=amount_rubles)
-
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "payment.lava_pay_button"),
-                url=payment_url
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "common.back"),
-                callback_data="topup_balance",
-                icon_custom_emoji_id=CE["back"],
-                style="primary",
-            )]
-        ])
-
-        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg))
-        await callback.answer()
-
-    except Exception as e:
-        logger.exception(f"Error creating Lava invoice for balance top-up: {e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
@@ -2461,7 +1897,9 @@ async def callback_topup_wata(callback: CallbackQuery):
 
     import wata_service
     if not wata_service.is_visible_to(telegram_id):
-        await callback.answer("Wata пока в закрытой бете", show_alert=True)
+        await callback.answer(
+            i18n_get_text(await resolve_user_language(telegram_id), "payment.wata_beta_only"), show_alert=True,
+        )
         return
 
     is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
@@ -2492,11 +1930,11 @@ async def callback_topup_wata(callback: CallbackQuery):
         invoice = await wata_service.create_invoice(
             amount_rubles=float(amount),
             purchase_id=purchase_id,
-            comment=f"Пополнение баланса на {amount} ₽",
+            comment=i18n_get_text(language, "main.topup_invoice_description", amount=amount),
             user_id=telegram_id,
         )
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]), provider="wata")
         except Exception as e:
             logger.error(f"Failed to save wata invoice_id: {e}")
 
@@ -2504,15 +1942,12 @@ async def callback_topup_wata(callback: CallbackQuery):
             f"balance_topup_invoice_created: provider=wata, user={telegram_id}, "
             f"purchase_id={purchase_id}, amount={amount}",
         )
-        text = (
-            f"🏦 <b>Оплата через СБП</b>\n\n"
-            f"Сумма: {amount} ₽\n\n"
-            f"Нажмите кнопку ниже — откроется форма оплаты.\n\n"
-            f"Ждём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n"
-            f"<i>Обработка занимает до 5 минут — зависит от банка.</i>"
-        )
+        text = i18n_get_text(language, "payment.wata_waiting", amount=amount)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"💳 Оплатить {amount} ₽", url=invoice["payment_url"])],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.wata_pay_button", amount=amount),
+                url=invoice["payment_url"],
+            )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "payment.wata_check_button"),
                 callback_data=f"pay:wata:check:{purchase_id}",

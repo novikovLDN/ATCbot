@@ -41,14 +41,17 @@ _DEFAULTS: dict = {
 _CACHE_TTL_SEC = 30.0
 _cache: dict = dict(_DEFAULTS)
 _cache_expires_at: float = 0.0
+# Last value set in this process: the fallback when Redis is absent or empty
+# (without it the expired cache reverted to _DEFAULTS 30 s after set_config).
+_mem_config: dict = dict(_DEFAULTS)
 
 
 async def _redis():
     try:
-        from app.utils.redis_client import get_client, is_configured
+        from app.utils.redis_client import get_redis, is_configured
         if not is_configured():
             return None
-        return await get_client()
+        return await get_redis()
     except Exception:
         return None
 
@@ -86,7 +89,7 @@ async def get_config() -> dict:
         except Exception as e:
             logger.warning("sbp_router redis read failed: %s", e)
 
-    _cache = dict(_DEFAULTS)
+    _cache = dict(_mem_config)
     _cache_expires_at = now + _CACHE_TTL_SEC
     return dict(_cache)
 
@@ -96,7 +99,7 @@ async def set_config(*, mode: str, wata_percent: int) -> dict:
 
     Другие процессы бота подхватят через свой 30-сек TTL.
     """
-    global _cache, _cache_expires_at
+    global _cache, _cache_expires_at, _mem_config
     if mode not in _VALID_MODES:
         raise ValueError(f"unknown sbp router mode: {mode!r}")
     pct = max(0, min(100, int(wata_percent)))
@@ -110,6 +113,7 @@ async def set_config(*, mode: str, wata_percent: int) -> dict:
             logger.warning("sbp_router redis write failed: %s", e)
 
     _cache = dict(payload)
+    _mem_config = dict(payload)
     _cache_expires_at = time.monotonic() + _CACHE_TTL_SEC
     logger.info("sbp_router config updated: %s", payload)
     return dict(payload)

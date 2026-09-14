@@ -24,7 +24,7 @@ STEP 1.3 - EXTERNAL DEPENDENCIES POLICY:
 
 import asyncio
 import random
-from typing import Callable, Type, Tuple, Union, Any
+from typing import Callable, Type, Tuple, Any
 import asyncpg
 import aiohttp
 import httpx

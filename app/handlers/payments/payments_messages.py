@@ -4,13 +4,15 @@ Payment message handlers: successful_payment, photo
 VPN key: Primary path via grant_access → vpn_utils.add_vless_user (Xray API).
 Architecture invariant: Bot never generates VLESS locally. vpn_key must come from API only.
 """
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
+from typing import Optional
 
 from aiogram import Router, F
 from aiogram.filters import StateFilter
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, PreCheckoutQuery, WebAppInfo
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, PreCheckoutQuery
 from aiogram.fsm.context import FSMContext
 
 import database
@@ -41,15 +43,19 @@ from app.utils.security import (
     log_security_warning,
 )
 from app.core.feature_flags import get_feature_flags
-from app.handlers.notifications import send_referral_cashback_notification
 from app.handlers.common.keyboards import get_payment_success_keyboard
-from app.handlers.common.states import BroadcastCreate
-from app.handlers.admin.promo_trial import PromoTrialFSM
 from app.handlers.common.utils import clear_promo_session
 from app.handlers.common.emoji import CE
 
 payments_router = Router()
 logger = logging.getLogger(__name__)
+
+# TG-RT-4: Telegram gives the bot 10 s to answer pre_checkout_query (then the
+# user's payment fails). The purchase lookup gets at most this long; a hung DB
+# (exhausted pool) takes the existing "DB error → approve" branch.
+PRE_CHECKOUT_DB_TIMEOUT_S = 5.0
+# Language of the rejection text; DB lookup + this stay well under the 10 s.
+PRE_CHECKOUT_LANG_TIMEOUT_S = 2.0
 
 
 @payments_router.pre_checkout_query()
@@ -64,13 +70,26 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
     if payload.startswith("purchase:"):
         purchase_id = payload.split(":", 1)[1]
         try:
-            pending = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=True)
+            pending = await asyncio.wait_for(
+                database.get_pending_purchase(purchase_id, telegram_id, check_expiry=True),
+                timeout=PRE_CHECKOUT_DB_TIMEOUT_S,
+            )
             if not pending:
                 logger.warning(
                     "PRE_CHECKOUT_REJECTED purchase_id=%s telegram_id=%s reason=expired_or_not_found",
                     purchase_id, telegram_id,
                 )
-                await pre_checkout_query.answer(ok=False, error_message="Invoice expired. Please create a new one.")
+                try:
+                    language = await asyncio.wait_for(
+                        resolve_user_language(telegram_id), timeout=PRE_CHECKOUT_LANG_TIMEOUT_S,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    language = DEFAULT_LANGUAGE
+                await pre_checkout_query.answer(
+                    ok=False, error_message=i18n_get_text(language, "payment.expired"),
+                )
                 return
         except Exception as e:
             logger.error("PRE_CHECKOUT_DB_ERROR purchase_id=%s error=%s", purchase_id, e)
@@ -90,16 +109,9 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
 
 @payments_router.message(
     F.photo,
-    ~StateFilter(BroadcastCreate.waiting_for_message),
-    ~StateFilter(PromoTrialFSM.waiting_for_photo),
 )
 async def log_incoming_photo_file_id(message: Message):
     """Log file_id of incoming photos for later use (e.g. loyalty images).
-
-    Excludes FSM states that legitimately consume an admin-attached
-    photo (broadcast wizard, trial-promo photo attach), so the
-    intended handler in that router gets the message instead of us
-    silently swallowing it for a log line.
 
     Если фото прислал админ в личку — сразу отвечаем file_id в чат,
     чтобы не лезть в логи вручную.
@@ -124,6 +136,333 @@ async def log_incoming_photo_file_id(message: Message):
             )
     except Exception as e:
         logger.warning("PHOTO_FILE_ID_RECEIVED log failed: %s", e)
+
+
+_SHOP_CARD_PROVIDER = "telegram_card"
+
+
+async def _alert_shop_order_lost(bot, stage, pending, telegram_id, amount_rubles, *,
+                                 reason, error=None, provider=_SHOP_CARD_PROVIDER):
+    """Forced admin alert + payment_errors for a paid shop order (no secrets)."""
+    from app.services.payments.confirmation import alert_shop_order_not_notified
+    await alert_shop_order_not_notified(
+        bot,
+        stage=stage,
+        purchase_id=pending.get("purchase_id"),
+        telegram_id=telegram_id,
+        provider=provider,
+        product=f"{pending.get('purchase_type') or '—'} / {pending.get('tariff') or '—'}",
+        amount_rubles=amount_rubles,
+        reason=reason,
+        error=error,
+        pending=pending,
+    )
+
+
+async def _alert_if_shop_row_not_pending(bot, payload, telegram_id, payment, is_stars_payment) -> bool:
+    """successful_payment for a SHOP purchase whose row is no longer 'pending'
+    (create_pending_purchase expired it when the buyer opened another payment
+    method after pre-checkout passed): the buyer is charged and sees an error,
+    the order is not placed. Behaviour stays as is; the admin gets a forced
+    alert to fulfil or refund manually. Never raises.
+
+    Returns True when the shop alert was sent, so the caller skips the generic
+    money-taken alert (one incident = one alert)."""
+    if not payload or not payload.startswith("purchase:") or payload.startswith("purchase:promo:"):
+        return False
+    purchase_id = payload.split(":", 1)[1]
+    try:
+        row = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
+        from app.services.payments.confirmation import _is_notification_only_purchase
+        if not row or row.get("telegram_id") != telegram_id or not _is_notification_only_purchase(row):
+            return False
+        total = payment.total_amount or 0
+        await _alert_shop_order_lost(
+            bot, "shop_order_not_pending", row, telegram_id,
+            None if is_stars_payment else total / 100.0,
+            reason=(
+                f"строка покупки в статусе '{row.get('status')}' (покупатель открыл другой способ "
+                "оплаты) — бот ответил ошибкой, заказ НЕ оформлен"
+                + (f"; оплачено {total} XTR" if is_stars_payment else "")
+            ),
+            provider="telegram_stars" if is_stars_payment else _SHOP_CARD_PROVIDER,
+        )
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.error("SHOP_ROW_NOT_PENDING_ALERT_FAILED purchase_id=%s: %s", purchase_id, type(e).__name__)
+        return False
+
+
+async def _alert_money_taken_not_granted(
+    bot,
+    *,
+    telegram_id: int,
+    purchase_id,
+    error,
+    stage: str,
+    provider: str = "telegram_payment",
+    amount_rubles=None,
+    tariff=None,
+    period_days=None,
+) -> None:
+    """Telegram already charged the user, but the purchase was not (fully)
+    processed: payment_errors row + FORCED admin alert (docs/audit/03_payment_matrix.md,
+    alert coverage). Telegram never retries successful_payment, so without this
+    the admin would learn about it only from the user. Never raises."""
+    err = error if isinstance(error, BaseException) else RuntimeError(str(error))
+    try:
+        await database.log_payment_error(
+            stage=stage,
+            telegram_id=telegram_id,
+            purchase_id=str(purchase_id) if purchase_id else None,
+            payment_provider=provider,
+            amount_rubles=amount_rubles,
+            error_message=f"{type(err).__name__}: {err}"[:500],
+        )
+    except Exception as log_err:
+        logger.warning("TELEGRAM_PAYMENT_ERROR_LOG_FAILED stage=%s: %s", stage, log_err)
+    try:
+        from app.services.admin_alerts import alert_payment_failure
+        await alert_payment_failure(
+            bot, provider, telegram_id, str(purchase_id or "—"), err,
+            is_transient=False,
+            amount_rubles=amount_rubles, tariff=tariff, period_days=period_days,
+        )
+    except Exception as alert_err:
+        logger.warning("TELEGRAM_PAYMENT_ALERT_FAILED stage=%s: %s", stage, alert_err)
+
+
+_UNAVAILABLE_PERSIST_INTERVAL_SEC = 30.0
+_UNAVAILABLE_PERSIST_MAX_WAIT_SEC = 3600.0
+_unavailable_persist_tasks: set = set()
+
+
+def _paid_while_unavailable_record(message: Message, reason: str) -> dict:
+    """Everything the admin needs to grant a Telegram payment by hand (no secrets)."""
+    payment = message.successful_payment
+    user = message.from_user
+    return {
+        "reason": reason,
+        "telegram_id": user.id if user else None,
+        "username": getattr(user, "username", None) if user else None,
+        "currency": getattr(payment, "currency", None),
+        "total_amount": getattr(payment, "total_amount", None),
+        "invoice_payload": getattr(payment, "invoice_payload", None),
+        "telegram_payment_charge_id": getattr(payment, "telegram_payment_charge_id", None),
+        "provider_payment_charge_id": getattr(payment, "provider_payment_charge_id", None),
+    }
+
+
+async def _log_paid_while_unavailable(record: dict) -> bool:
+    """payment_errors row for a payment taken while the bot could not finalize it."""
+    is_stars = record.get("currency") == "XTR"
+    total = record.get("total_amount") or 0
+    row_id = await database.log_payment_error(
+        stage=f"telegram_paid_{record['reason']}",
+        telegram_id=record.get("telegram_id"),
+        purchase_id=(record.get("invoice_payload") or "")[:200] or None,
+        payment_provider="telegram_stars" if is_stars else "telegram_payment",
+        amount_rubles=None if is_stars else total / 100.0,
+        error_message=(
+            f"Telegram charged {total} {'XTR' if is_stars else 'kopecks'} while "
+            f"{record['reason']} — nothing granted, grant manually"
+        ),
+        raw_payload=record,
+    )
+    return row_id is not None
+
+
+async def _persist_when_db_ready(record: dict) -> None:
+    """DB was down when Telegram charged the user: write the payment_errors row
+    as soon as the DB is back (bounded wait; the forced alert already went out)."""
+    waited = 0.0
+    while waited < _UNAVAILABLE_PERSIST_MAX_WAIT_SEC:
+        await asyncio.sleep(_UNAVAILABLE_PERSIST_INTERVAL_SEC)
+        waited += _UNAVAILABLE_PERSIST_INTERVAL_SEC
+        if database.DB_READY:
+            try:
+                if await _log_paid_while_unavailable(record):
+                    logger.info(
+                        "TELEGRAM_PAID_UNAVAILABLE_PERSISTED tg=%s charge=%s",
+                        record.get("telegram_id"), record.get("telegram_payment_charge_id"),
+                    )
+                    return
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TELEGRAM_PAID_UNAVAILABLE_PERSIST_FAILED: %s", type(e).__name__)
+    logger.error(
+        "TELEGRAM_PAID_UNAVAILABLE_NOT_PERSISTED tg=%s charge=%s — only the admin alert has it",
+        record.get("telegram_id"), record.get("telegram_payment_charge_id"),
+    )
+
+
+async def _handle_paid_while_unavailable(message: Message, *, reason: str) -> None:
+    """Telegram already charged the user (card or Stars) but the bot cannot
+    finalize now: the DB is not ready or the payments kill switch is off.
+    Telegram never resends successful_payment, so:
+      - FORCED admin alert with TG ID, amount, currency, payload and charge ids;
+      - a payment_errors row now, or once the DB is back;
+      - the user sees an honest text: payment received, access will be granted
+        manually soon, do NOT pay again (never a "try again" / buy button).
+    Never raises."""
+    record = _paid_while_unavailable_record(message, reason)
+    charge = record.get("telegram_payment_charge_id") or ""
+    ref = charge[-8:] if charge else str(getattr(message, "message_id", "") or "—")
+    is_stars = record.get("currency") == "XTR"
+    total = record.get("total_amount") or 0
+    amount_line = f"{total} XTR" if is_stars else f"{total / 100.0:.2f} RUB"
+    try:
+        from app.services.admin_alerts import send_alert
+        await send_alert(
+            message.bot,
+            "payment",
+            (
+                "[PERMANENT] Telegram payment taken, NOTHING granted\n"
+                f"Reason: {reason}\n"
+                f"User TG ID: {record.get('telegram_id')}"
+                + (f" (@{record['username']})" if record.get("username") else "")
+                + "\n"
+                f"Amount: {amount_line}\n"
+                f"Payload: {record.get('invoice_payload')}\n"
+                f"Telegram charge id: {charge or '—'}\n"
+                f"Provider charge id: {record.get('provider_payment_charge_id') or '—'}\n"
+                f"User reference: {ref}\n"
+                "Grant the purchase manually (the user was told not to pay again)."
+            ),
+            force=True,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("TELEGRAM_PAID_UNAVAILABLE_ALERT_FAILED: %s", type(e).__name__)
+
+    persisted = False
+    if database.DB_READY:
+        try:
+            persisted = await _log_paid_while_unavailable(record)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("TELEGRAM_PAID_UNAVAILABLE_LOG_FAILED: %s", type(e).__name__)
+    if not persisted:
+        task = asyncio.create_task(_persist_when_db_ready(record))
+        _unavailable_persist_tasks.add(task)
+        task.add_done_callback(_unavailable_persist_tasks.discard)
+
+    try:
+        language = await resolve_user_language(message.from_user.id)
+    except Exception:  # noqa: BLE001 — DB down: default language
+        language = DEFAULT_LANGUAGE
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text=i18n_get_text(language, "main.support_button"),
+        url="https://t.me/atlas_suppbot",
+    )]])
+    try:
+        await message.answer(
+            i18n_get_text(language, "main.service_unavailable_payment", ref=ref),
+            reply_markup=keyboard, parse_mode="HTML",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("TELEGRAM_PAID_UNAVAILABLE_USER_MSG_FAILED: %s", type(e).__name__)
+    logger.error(
+        "TELEGRAM_PAID_WHILE_UNAVAILABLE reason=%s tg=%s amount=%s payload=%s",
+        reason, record.get("telegram_id"), amount_line, record.get("invoice_payload"),
+    )
+
+
+def _expected_stars(pending: dict) -> Optional[int]:
+    """Stars the invoice of this purchase asked for (same rules as the invoice
+    code: callback_pay_stars / callback_gift_pay_stars). None — unknown."""
+    from app.services import tariffs
+    ptype = pending.get("purchase_type") or "subscription"
+    try:
+        if ptype == "subscription":
+            key = tariffs.tariff_key(pending.get("tariff"), bool(pending.get("is_combo")))
+            # Same rule as the invoice: a discounted row (price below the catalog)
+            # asked for the discounted stars.
+            return tariffs.stars_for_purchase(
+                key, int(pending.get("period_days") or 0), int(pending.get("price_kopecks") or 0),
+            )
+        if ptype == "gift":
+            row = (config.TARIFFS_STARS.get(pending.get("tariff")) or {}).get(pending.get("period_days"))
+            if row:
+                return int(row["price"])
+            return tariffs.stars_for_rub(int(pending.get("price_kopecks") or 0) / 100)
+    except Exception as e:  # noqa: BLE001 — unknown tariff → caller keeps the raw amount
+        logger.warning("STARS_EXPECTED_UNKNOWN purchase_id=%s: %s", pending.get("purchase_id"), e)
+    return None
+
+
+def _stars_paid_to_rubles(pending: dict, paid_stars: int) -> float:
+    """RUB amount of a Stars payment for a `purchase:` row.
+
+    price_kopecks of a Stars purchase is its RUB list price, so the paid stars
+    are converted at the purchase's own rate: price × paid / expected (exact
+    payment → exactly the price; underpayment stays an underpayment and the
+    amount check rejects it with an alert). Legacy rows, created before this
+    rule, stored stars × 100 — they keep 1 star = 1 unit as before."""
+    price_kopecks = int(pending.get("price_kopecks") or 0)
+    paid = int(paid_stars or 0)
+    if paid * 100 == price_kopecks:
+        return float(paid)
+    expected = _expected_stars(pending)
+    if not expected:
+        return float(paid)
+    return round(price_kopecks / 100.0 * paid / expected, 2)
+
+
+@payments_router.message(F.refunded_payment)
+async def process_refunded_payment(message: Message):
+    """TG-RT-3: Telegram refunded a payment (a Stars refund arrives as the
+    `refunded_payment` service message). Owner rule (docs/audit/SCOPE.md):
+    refunds → log + payment_errors + FORCED admin alert; access is NOT revoked
+    automatically. Never raises."""
+    rp = message.refunded_payment
+    tg = message.from_user.id if message.from_user else None
+    is_stars = rp.currency == "XTR"
+    amount_line = f"{rp.total_amount} XTR" if is_stars else f"{rp.total_amount / 100.0:.2f} {rp.currency}"
+    charge = rp.telegram_payment_charge_id or "—"
+    logger.warning(
+        "TELEGRAM_REFUND tg=%s amount=%s payload=%s charge=%s — access NOT revoked",
+        tg, amount_line, rp.invoice_payload, charge,
+    )
+    try:
+        await database.log_payment_error(
+            stage="telegram_refund",
+            telegram_id=tg,
+            purchase_id=(rp.invoice_payload or "")[:200] or None,
+            payment_provider="telegram_stars" if is_stars else "telegram_payment",
+            amount_rubles=None if is_stars else rp.total_amount / 100.0,
+            error_message=f"Telegram refunded {amount_line}; access not revoked automatically",
+            raw_payload={
+                "telegram_id": tg, "currency": rp.currency, "total_amount": rp.total_amount,
+                "invoice_payload": rp.invoice_payload, "telegram_payment_charge_id": rp.telegram_payment_charge_id,
+                "provider_payment_charge_id": rp.provider_payment_charge_id,
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("TELEGRAM_REFUND_LOG_FAILED tg=%s: %s", tg, type(e).__name__)
+    try:
+        from app.services.admin_alerts import send_alert
+        await send_alert(
+            message.bot,
+            "payment",
+            (
+                "[REFUND] Telegram refunded a payment\n"
+                f"User TG ID: {tg}\n"
+                f"Amount: {amount_line}\n"
+                f"Payload: {rp.invoice_payload}\n"
+                f"Telegram charge id: {charge}\n"
+                "Access was NOT revoked automatically — review the user's subscription manually."
+            ),
+            force=True,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("TELEGRAM_REFUND_ALERT_FAILED tg=%s: %s", tg, type(e).__name__)
+
+
+async def _remember_charge(payment_id, payment) -> None:
+    """TG-RT-2: remember the Telegram charge of a finalized purchase, so a
+    re-delivered successful_payment is recognised. Never raises."""
+    charge = getattr(payment, "telegram_payment_charge_id", None)
+    if payment_id and charge:
+        await database.remember_telegram_charge(int(payment_id), charge)
+
 
 @payments_router.message(F.successful_payment)
 async def process_successful_payment(message: Message, state: FSMContext):
@@ -175,11 +514,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
             f"[FEATURE_FLAG] Payments disabled, skipping payment finalization: "
             f"user={telegram_id}, correlation_id={str(message.message_id) if hasattr(message, 'message_id') else None}"
         )
-        language = await resolve_user_language(telegram_id)
-        await message.answer(
-            i18n_get_text(language, "main.service_unavailable"),
-            parse_mode="HTML",
-        )
+        # The money is already taken (successful_payment): never "try later".
+        await _handle_paid_while_unavailable(message, reason="payments_disabled")
         return
     # READ-ONLY system state awareness (informational only, does not affect flow)
     try:
@@ -196,7 +532,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             )
         
         # VPN API component
-        if config.VPN_ENABLED and config.XRAY_API_URL:
+        if config.REMNAWAVE_ENABLED:
             vpn_component = healthy_component(last_checked_at=now)
         else:
             vpn_component = degraded_component(
@@ -230,25 +566,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not database.DB_READY:
-        language = await resolve_user_language(message.from_user.id)
-        text = i18n_get_text(language, "main.service_unavailable_payment")
-        
-        # Создаем стандартную inline клавиатуру для UX
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "buy.renew_button", "buy_renew_button"),
-                callback_data="menu_buy_vpn",
-                icon_custom_emoji_id=CE["buy"],
-                style="success",
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "main.support_button", "support_button"),
-                url="https://t.me/atlas_suppbot"
-            )]
-        ])
-
-        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        logger.error("Payment received but service unavailable (DB not ready)")
+        await _handle_paid_while_unavailable(message, reason="db_not_ready")
         duration_ms = (time.time() - start_time) * 1000
         log_handler_exit(
             handler_name="process_successful_payment",
@@ -285,6 +603,18 @@ async def process_successful_payment(message: Message, state: FSMContext):
     
     # Определяем, является ли оплата через Telegram Stars
     is_stars_payment = (payment.currency == "XTR")
+
+    # TG-RT-2: Telegram re-delivers an update the webhook did not answer with
+    # 2xx (process killed mid-request by a redeploy). This charge is already on
+    # a payments row → it was finalized: no error screen for the user, no false
+    # "money taken, nothing granted" alert. A DIFFERENT charge is not matched.
+    charge_id = getattr(payment, "telegram_payment_charge_id", None)
+    if charge_id and await database.telegram_charge_seen(charge_id):
+        logger.warning(
+            "TELEGRAM_PAYMENT_REDELIVERED tg=%s charge=…%s payload=%s — already finalized, skipped",
+            telegram_id, charge_id[-8:], payload,
+        )
+        return
 
     # КРИТИЧНО: Логируем получение события оплаты от Telegram
     purchase_id_from_payload = payload.split(":", 1)[1] if payload and payload.startswith("purchase:") else payload
@@ -349,6 +679,12 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )
             except PaymentFinalizationError as e:
                 logger.error(f"Balance topup finalization failed: user={telegram_id}, error={e}")
+                # Telegram already took the money and never resends successful_payment.
+                await _alert_money_taken_not_granted(
+                    message.bot, telegram_id=telegram_id, purchase_id=provider_charge_id, error=e,
+                    stage="telegram_balance_topup_failed", provider=topup_provider,
+                    amount_rubles=payment_amount_rubles,
+                )
                 error_text = i18n_get_text(language, "errors.payment_processing")
                 await message.answer(error_text, parse_mode="HTML")
                 duration_ms = (time.time() - start_time) * 1000
@@ -381,24 +717,11 @@ async def process_successful_payment(message: Message, state: FSMContext):
             # Получаем язык пользователя для сообщения
             language = await resolve_user_language(telegram_id)
             
-            # Отправляем сообщение об успешном пополнении
-            text = i18n_get_text(language, "main.topup_balance_success", balance=new_balance)
-            
-            # Создаем inline клавиатуру для UX
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=i18n_get_text(language, "buy.renew_button", "buy_renew_button"),
-                    callback_data="menu_buy_vpn",
-                    icon_custom_emoji_id=CE["buy"],
-                    style="success",
-                )],
-                [InlineKeyboardButton(
-                    text=i18n_get_text(language, "main.profile", "profile"),
-                    callback_data="menu_profile",
-                    icon_custom_emoji_id=CE["profile"],
-                    style="primary",
-                )]
-            ])
+            # One top-up success message for webhook and Telegram alike (08 #16).
+            from app.services.payments.success_message import build_topup_success
+            text, keyboard = build_topup_success(
+                language, amount=payment_amount_rubles, balance=new_balance,
+            )
             
             # ИДЕМПОТЕНТНОСТЬ: Помечаем ПЕРЕД отправкой, чтобы при краше между send и mark
             # не было дубля уведомления. Лучше потерять уведомление, чем отправить дважды.
@@ -426,34 +749,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     f"user={telegram_id}, error={e}] (notification flagged but message not delivered)"
                 )
             
-            # Отправляем уведомление о кешбэке (если начислен)
-            if referral_reward_result and referral_reward_result.get("success"):
-                try:
-                    notification_sent = await send_referral_cashback_notification(
-                        bot=message.bot,
-                        referrer_id=referral_reward_result.get("referrer_id"),
-                        referred_id=telegram_id,
-                        purchase_amount=payment_amount_rubles,
-                        cashback_amount=referral_reward_result.get("reward_amount"),
-                        cashback_percent=referral_reward_result.get("percent"),
-                        paid_referrals_count=referral_reward_result.get("paid_referrals_count", 0),
-                        referrals_needed=referral_reward_result.get("referrals_needed", 0),
-                        action_type="topup"
-                    )
-                    if notification_sent:
-                        logger.info(
-                            f"REFERRAL_NOTIFICATION_SENT [type=balance_topup, referrer={referral_reward_result.get('referrer_id')}, "
-                            f"referred={telegram_id}, amount={payment_amount_rubles} RUB]"
-                        )
-                        logger.info(f"Referral cashback processed for balance topup: user={telegram_id}, amount={payment_amount_rubles} RUB")
-                    else:
-                        logger.warning(
-                            f"REFERRAL_NOTIFICATION_FAILED [type=balance_topup, referrer={referral_reward_result.get('referrer_id')}, "
-                            f"referred={telegram_id}]"
-                        )
-                except Exception as e:
-                    logger.exception(f"Error sending referral cashback notification for balance topup: user={telegram_id}: {e}")
-            
+            # No referral cashback for a top-up (owner rule N17); the referrer is
+            # notified by the accrual itself (app.services.notifications.referral_cashback).
+
             # Логируем событие
             logger.info(f"Balance topup successful: user={telegram_id}, amount={payment_amount_rubles} RUB, new_balance={new_balance} RUB")
             duration_ms = (time.time() - start_time) * 1000
@@ -469,8 +767,20 @@ async def process_successful_payment(message: Message, state: FSMContext):
             
     except InvalidPaymentPayloadError as e:
         logger.error(f"Invalid payment payload: {payload}, error={e}")
+        # «Заказ не теряется»: a shop row that stopped being 'pending' between
+        # pre-checkout and successful_payment — money taken, order not placed.
+        shop_alerted = await _alert_if_shop_row_not_pending(
+            message.bot, payload, telegram_id, payment, is_stars_payment,
+        )
         language = await resolve_user_language(telegram_id)
         await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+        if not shop_alerted:
+            await _alert_money_taken_not_granted(
+                message.bot, telegram_id=telegram_id, purchase_id=purchase_id_from_payload, error=e,
+                stage="telegram_purchase_not_found",
+                provider="telegram_stars" if is_stars_payment else "telegram_payment",
+                amount_rubles=log_amount,
+            )
         duration_ms = (time.time() - start_time) * 1000
         error_type = classify_error(e)
         log_handler_exit(
@@ -487,6 +797,12 @@ async def process_successful_payment(message: Message, state: FSMContext):
         logger.error(f"Payment service error: {e}")
         language = await resolve_user_language(telegram_id)
         await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+        await _alert_money_taken_not_granted(
+            message.bot, telegram_id=telegram_id, purchase_id=purchase_id_from_payload, error=e,
+            stage="telegram_payment_service_error",
+            provider="telegram_stars" if is_stars_payment else "telegram_payment",
+            amount_rubles=log_amount,
+        )
         duration_ms = (time.time() - start_time) * 1000
         error_type = classify_error(e)
         log_handler_exit(
@@ -540,6 +856,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # Get pending purchase for logging
     pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
     if not pending_purchase:
+        shop_alerted = await _alert_if_shop_row_not_pending(
+            message.bot, payload, telegram_id, payment, is_stars_payment,
+        )
         language = await resolve_user_language(telegram_id)
         await message.answer(i18n_get_text(language, "errors.session_expired"), parse_mode="HTML")
         logger.error(
@@ -562,13 +881,23 @@ async def process_successful_payment(message: Message, state: FSMContext):
             duration_ms=duration_ms,
             reason="pending_purchase_not_found_or_expired"
         )
+        if not shop_alerted:
+            await _alert_money_taken_not_granted(
+                message.bot, telegram_id=telegram_id, purchase_id=purchase_id,
+                error="pending purchase not found — paid via Telegram, nothing granted",
+                stage="telegram_purchase_not_found",
+                provider="telegram_stars" if is_stars_payment else "telegram_payment",
+            )
         return
     
     tariff_type = pending_purchase["tariff"]
     period_days = pending_purchase["period_days"]
     promo_code_used = pending_purchase.get("promo_code")
-    # Для Stars: total_amount = кол-во Stars напрямую; для RUB: total_amount в копейках
-    payment_amount_rubles = payment.total_amount if is_stars_payment else payment.total_amount / 100.0
+    # Для Stars: total_amount = кол-во Stars → рублёвая цена покупки; для RUB: копейки
+    payment_amount_rubles = (
+        _stars_paid_to_rubles(pending_purchase, payment.total_amount)
+        if is_stars_payment else payment.total_amount / 100.0
+    )
     
     # КРИТИЧНО: Логируем верификацию платежа
     logger.info(
@@ -597,6 +926,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 amount_rubles=payment_amount_rubles,
             )
             if gift_result and gift_result.get("is_gift") and gift_result.get("gift_code"):
+                await _remember_charge(gift_result.get("payment_id"), payment)
                 from app.handlers.callbacks.gift import _send_gift_success
                 await _send_gift_success(
                     bot=message.bot,
@@ -624,10 +954,21 @@ async def process_successful_payment(message: Message, state: FSMContext):
             else:
                 logger.error(f"Gift finalization returned unexpected result: {gift_result}")
                 await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+                await _alert_money_taken_not_granted(
+                    message.bot, telegram_id=telegram_id, purchase_id=purchase_id,
+                    error="gift finalization returned an unexpected result", stage="telegram_gift_failed",
+                    provider=payment_provider_name, amount_rubles=payment_amount_rubles,
+                    tariff=tariff_type, period_days=period_days,
+                )
                 return
         except Exception as e:
             logger.exception(f"Gift payment finalization failed: user={telegram_id}, error={e}")
             await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+            await _alert_money_taken_not_granted(
+                message.bot, telegram_id=telegram_id, purchase_id=purchase_id, error=e,
+                stage="telegram_gift_failed", provider=payment_provider_name,
+                amount_rubles=payment_amount_rubles, tariff=tariff_type, period_days=period_days,
+            )
             return
 
     # --- Telegram Premium purchase: mark paid + send success + notify admin ---
@@ -640,6 +981,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 message.bot, telegram_id, purchase_id, pending_purchase,
             )
             await database.mark_pending_purchase_paid(purchase_id)
+            # N17: referral cashback for any purchase (shop too); never raises.
+            await database.award_referral_cashback(
+                buyer_id=telegram_id, purchase_id=purchase_id, amount_rubles=payment_amount_rubles)
             logger.info(
                 "PREMIUM_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
                 purchase_id, telegram_id, payment_amount_rubles,
@@ -668,6 +1012,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 message.bot, telegram_id, purchase_id, pending_purchase,
             )
             await database.mark_pending_purchase_paid(purchase_id)
+            # N17: referral cashback for any purchase (shop too); never raises.
+            await database.award_referral_cashback(
+                buyer_id=telegram_id, purchase_id=purchase_id, amount_rubles=payment_amount_rubles)
             logger.info(
                 "STARS_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
                 purchase_id, telegram_id, payment_amount_rubles,
@@ -696,6 +1043,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 message.bot, telegram_id, purchase_id, pending_purchase,
             )
             await database.mark_pending_purchase_paid(purchase_id)
+            # N17: referral cashback for any purchase (shop too); never raises.
+            await database.award_referral_cashback(
+                buyer_id=telegram_id, purchase_id=purchase_id, amount_rubles=payment_amount_rubles)
             logger.info(
                 "STEAM_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
                 purchase_id, telegram_id, payment_amount_rubles,
@@ -729,11 +1079,81 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 message.bot, telegram_id, region, nominal, payment_amount_rubles,
             )
             await database.mark_pending_purchase_paid(purchase_id)
+            # N17: referral cashback for any purchase (shop too); never raises.
+            await database.award_referral_cashback(
+                buyer_id=telegram_id, purchase_id=purchase_id, amount_rubles=payment_amount_rubles)
             logger.info("APPLE_PAYMENT_FINALIZED purchase_id=%s user=%s", purchase_id, telegram_id)
         except Exception as e:
             logger.exception("APPLE_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
             await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         await state.clear()
+        return
+
+    # --- Spotify purchase (spotify_purchase.cb_pay_card): mark paid + send success + notify admin ---
+    # Mirrors the webhook shop branch (confirmation.process_confirmed_payment):
+    # same detection, mark paid first (idempotent), then send_spotify_success.
+    # Without this branch the purchase fell through to the VPN path below.
+    _spotify_tariff = pending_purchase.get("tariff") or ""
+    is_spotify_purchase = (
+        pending_purchase.get("purchase_type") == "spotify"
+        or _spotify_tariff.startswith("spotify_")
+    )
+    if is_spotify_purchase:
+        try:
+            marked = await database.mark_pending_purchase_paid(purchase_id)
+        except Exception as e:
+            logger.exception("SPOTIFY_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
+            # Money is taken, the order is not marked and nobody is told → forced alert.
+            await _alert_shop_order_lost(
+                message.bot, "shop_mark_paid_failed", pending_purchase, telegram_id,
+                payment_amount_rubles,
+                reason="mark_pending_purchase_paid упал (БД) — покупатель видит «ошибка обработки платежа»",
+                error=e,
+            )
+            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+            await state.clear()
+            return
+        if not marked:
+            logger.info(
+                "SPOTIFY_PAYMENT_ALREADY_FINALIZED purchase_id=%s user=%s — skipping notification",
+                purchase_id, telegram_id,
+            )
+            await state.clear()
+            return
+        # N17: referral cashback for any purchase (shop too); never raises.
+        await database.award_referral_cashback(
+            buyer_id=telegram_id, purchase_id=purchase_id, amount_rubles=payment_amount_rubles)
+        try:
+            from app.handlers.payments.spotify_purchase import send_spotify_success
+            await send_spotify_success(
+                message.bot, telegram_id, purchase_id, pending_purchase,
+                provider=_SHOP_CARD_PROVIDER,
+            )
+        except Exception as e:
+            logger.error(
+                "SPOTIFY_PAYMENT_NOTIFY_FAILED purchase_id=%s error=%s",
+                purchase_id, type(e).__name__,
+            )
+            await _alert_shop_order_lost(
+                message.bot, "shop_admin_notify_failed", pending_purchase, telegram_id,
+                payment_amount_rubles,
+                reason="send_spotify_success упал после mark_pending_purchase_paid",
+                error=e,
+            )
+        logger.info(
+            "SPOTIFY_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
+            purchase_id, telegram_id, payment_amount_rubles,
+        )
+        await state.clear()
+        duration_ms = (time.time() - start_time) * 1000
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="success",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            duration_ms=duration_ms,
+            payment_type="spotify",
+        )
         return
 
     # --- Traffic pack purchase: finalize + add Remnawave traffic ---
@@ -755,6 +1175,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 amount_rubles=payment_amount_rubles,
             )
             if traffic_result and traffic_result.get("is_traffic_pack"):
+                await _remember_charge(traffic_result.get("payment_id"), payment)
                 traffic_gb = int(traffic_result.get("traffic_gb", 0) or 0)
                 tariff_tag = pending_purchase.get("tariff", "") or ""
                 from app.services.payments.confirmation import _handle_traffic_pack_confirmation
@@ -777,6 +1198,11 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         "TRAFFIC_PACK_CONFIRMATION_FAIL user=%s gb=%s purchase=%s err=%s",
                         telegram_id, traffic_gb, purchase_id, conf_err,
                     )
+                    await _alert_money_taken_not_granted(
+                        message.bot, telegram_id=telegram_id, purchase_id=purchase_id, error=conf_err,
+                        stage="telegram_traffic_pack_delivery_failed", provider=payment_provider_name,
+                        amount_rubles=payment_amount_rubles, tariff=tariff_tag,
+                    )
                     await message.answer(
                         i18n_get_text(language, "errors.payment_processing"),
                         parse_mode="HTML",
@@ -784,9 +1210,20 @@ async def process_successful_payment(message: Message, state: FSMContext):
             else:
                 logger.error(f"Traffic pack finalization unexpected result: {traffic_result}")
                 await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+                await _alert_money_taken_not_granted(
+                    message.bot, telegram_id=telegram_id, purchase_id=purchase_id,
+                    error="traffic pack finalization returned an unexpected result",
+                    stage="telegram_traffic_pack_failed", provider=payment_provider_name,
+                    amount_rubles=payment_amount_rubles, tariff=tariff_type,
+                )
         except Exception as e:
             logger.exception(f"Traffic pack payment finalization failed: user={telegram_id}, error={e}")
             await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+            await _alert_money_taken_not_granted(
+                message.bot, telegram_id=telegram_id, purchase_id=purchase_id, error=e,
+                stage="telegram_traffic_pack_failed", provider=payment_provider_name,
+                amount_rubles=payment_amount_rubles, tariff=tariff_type,
+            )
         await state.clear()
         duration_ms = (time.time() - start_time) * 1000
         log_handler_exit(
@@ -810,6 +1247,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         
         payment_id = result.payment_id
+        await _remember_charge(payment_id, payment)
         expires_at = result.expires_at
         vpn_key = result.vpn_key
         is_renewal = result.is_renewal
@@ -934,6 +1372,11 @@ async def process_successful_payment(message: Message, state: FSMContext):
             duration_ms=duration_ms,
             reason="payment_validation_failed"
         )
+        await _alert_money_taken_not_granted(
+            message.bot, telegram_id=telegram_id, purchase_id=purchase_id, error=e,
+            stage="telegram_payment_rejected", provider=payment_provider_name,
+            amount_rubles=payment_amount_rubles, tariff=tariff_type, period_days=period_days,
+        )
         return
         
     except PaymentFinalizationError as e:
@@ -950,6 +1393,12 @@ async def process_successful_payment(message: Message, state: FSMContext):
         error_text = i18n_get_text(language, "errors.subscription_activation")
         await message.answer(error_text, parse_mode="HTML")
         
+        await _alert_money_taken_not_granted(
+            message.bot, telegram_id=telegram_id, purchase_id=purchase_id, error=e,
+            stage="telegram_finalization_failed", provider=payment_provider_name,
+            amount_rubles=payment_amount_rubles, tariff=tariff_type, period_days=period_days,
+        )
+
         # Log event for admin
         try:
             await database._log_audit_event_atomic_standalone(
@@ -997,6 +1446,11 @@ async def process_successful_payment(message: Message, state: FSMContext):
             duration_ms=duration_ms,
             reason="unexpected_error"
         )
+        await _alert_money_taken_not_granted(
+            message.bot, telegram_id=telegram_id, purchase_id=purchase_id, error=e,
+            stage="telegram_unexpected_error", provider=payment_provider_name,
+            amount_rubles=payment_amount_rubles, tariff=tariff_type, period_days=period_days,
+        )
         return
 
     # Промокод уже потреблен в finalize_purchase внутри транзакции
@@ -1041,255 +1495,171 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         return
     
-    # Один компактный экран: текст + кнопки копирования и профиль (без отдельной отправки ключей)
-    is_upgrade = getattr(result, "is_basic_to_plus_upgrade", False)
-    if is_upgrade:
-        _is_combo_purchase = getattr(result, "is_combo", False)
-        if _is_combo_purchase:
-            upgrade_label = "Комбо Plus" if subscription_type == "plus" else "Комбо Basic"
-        else:
-            upgrade_label = "Plus" if subscription_type == "plus" else "Basic"
-        text = (
-            f"✅ Ваш тариф изменён на <b>{upgrade_label}</b>\n"
-            f"📅 До: {expires_str}"
+    # One success message for every payment path (08_payments_ux #3): the tariff
+    # change (upgrade) goes through the same builder and the same notification
+    # flag (M18: it used to skip mark_payment_notification_sent).
+    from app.services.payments.success_message import build_purchase_success
+    text, keyboard = await build_purchase_success(
+        language,
+        subscription_type=subscription_type,
+        is_combo=bool(getattr(result, "is_combo", False)),
+        period_days=period_days,
+        expires_at=expires_at,
+        is_renewal=is_renewal,
+        is_upgrade=bool(getattr(result, "is_basic_to_plus_upgrade", False)),
+        telegram_id=telegram_id,
+    )
+    # ИДЕМПОТЕНТНОСТЬ: Помечаем ПЕРЕД отправкой (mark-before-send pattern)
+    # При краше между mark и send — уведомление потеряно, но не дублировано
+    try:
+        sent = await database.mark_payment_notification_sent(payment_id)
+        if not sent:
+            logger.warning(
+                f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success, payment_id={payment_id}, user={telegram_id}]"
+            )
+            # Already sent by concurrent handler — skip
+            return
+    except Exception as e:
+        logger.error(
+            f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
         )
-        keyboard = get_payment_success_keyboard(language, subscription_type="plus", is_renewal=True)
+
+    try:
+        degradation = i18n_get_text(language, "trial.degradation_notice") if _degradation_notice else ""
+        await message.answer(text + degradation, reply_markup=keyboard, parse_mode="HTML")
+        logger.info(
+            f"NOTIFICATION_SENT [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
+            f"purchase_id={purchase_id}]"
+        )
+    except Exception as e:
+        logger.error(f"Failed to send payment success message: user={telegram_id}, error={e}")
         try:
             await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception as e:
-            logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
-    else:
-        # Determine if this is a combo purchase from finalize result (reliable)
-        _is_combo_purchase = getattr(result, "is_combo", False)
-
-        if config.is_biz_tariff(subscription_type):
-            tariff_label, tariff_emoji = "Business", "🏢"
-        elif subscription_type == "plus" and _is_combo_purchase:
-            tariff_label, tariff_emoji = "Комбо Plus", "🚀"
-        elif subscription_type == "plus":
-            tariff_label, tariff_emoji = "Plus", "💎"
-        elif _is_combo_purchase:
-            tariff_label, tariff_emoji = "Комбо Basic", "🚀"
-        else:
-            tariff_label, tariff_emoji = "Basic", "🏆"
-
-        # Build period string
-        period_str = ""
-        if period_days:
-            if period_days == 30:
-                period_str = "1 месяц"
-            elif period_days == 90:
-                period_str = "3 месяца"
-            elif period_days == 180:
-                period_str = "6 месяцев"
-            elif period_days == 365:
-                period_str = "1 год"
-            else:
-                period_str = f"{period_days} дней"
-
-        from app.i18n import get_text as _i18n_get
-        from app.handlers.common.keyboards import MINI_APP_URL
-        if is_renewal:
-            text = _i18n_get(language, "purchase.success_renewal",
-                             tariff_name=f"{tariff_emoji} {tariff_label}",
-                             period=period_str,
-                             expires_date=expires_str)
-        else:
-            text = _i18n_get(language, "purchase.success_first",
-                             tariff_name=f"{tariff_emoji} {tariff_label}",
-                             period=period_str,
-                             expires_date=expires_str)
-        keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
-        # ИДЕМПОТЕНТНОСТЬ: Помечаем ПЕРЕД отправкой (mark-before-send pattern)
-        # При краше между mark и send — уведомление потеряно, но не дублировано
-        try:
-            sent = await database.mark_payment_notification_sent(payment_id)
-            if not sent:
-                logger.warning(
-                    f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success, payment_id={payment_id}, user={telegram_id}]"
-                )
-                # Already sent by concurrent handler — skip
-                return
-        except Exception as e:
-            logger.error(
-                f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
-            )
-
-        try:
-            degradation = ""
-            try:
-                if _degradation_notice:
-                    degradation = "\n\n⏳ Возможны небольшие задержки"
-            except NameError:
-                pass
-            await message.answer(text + degradation, reply_markup=keyboard, parse_mode="HTML")
-            logger.info(
-                f"NOTIFICATION_SENT [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
-                f"purchase_id={purchase_id}]"
-            )
-        except Exception as e:
-            logger.error(f"Failed to send payment success message: user={telegram_id}, error={e}")
-            try:
-                await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-            except Exception as fallback_err:
-                logger.error(f"Fallback also failed: user={telegram_id}, error={fallback_err}")
+        except Exception as fallback_err:
+            logger.error(f"Fallback also failed: user={telegram_id}, error={fallback_err}")
 
     logger.info(
         f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "
         f"purchase_id={purchase_id}, expires_at={expires_str}, subscription_type={subscription_type}]"
     )
 
-    # КРИТИЧНО: pending_purchase уже помечен как paid в finalize_purchase
-    # Реферальный кешбэк уже обработан в finalize_purchase через process_referral_reward
-    # Отправляем уведомление рефереру (если кешбэк был начислен)
-    referral_reward = result.referral_reward
-    if referral_reward and referral_reward.get("success"):
-        try:
-            # Формируем период подписки для уведомления
-            subscription_period = None
-            if period_days:
-                if period_days == 30:
-                    subscription_period = "1 месяц"
-                elif period_days == 90:
-                    subscription_period = "3 месяца"
-                elif period_days == 180:
-                    subscription_period = "6 месяцев"
-                elif period_days == 365:
-                    subscription_period = "12 месяцев"
-                else:
-                    months = period_days // 30
-                    if months > 0:
-                        subscription_period = f"{months} месяц" + ("а" if months in [2, 3, 4] else ("ев" if months > 4 else ""))
-                    else:
-                        subscription_period = f"{period_days} дней"
-            
-            notification_sent = await send_referral_cashback_notification(
-                bot=message.bot,
-                referrer_id=referral_reward.get("referrer_id"),
-                referred_id=telegram_id,
-                purchase_amount=payment_amount_rubles,
-                cashback_amount=referral_reward.get("reward_amount"),
-                cashback_percent=referral_reward.get("percent"),
-                paid_referrals_count=referral_reward.get("paid_referrals_count", 0),
-                referrals_needed=referral_reward.get("referrals_needed", 0),
-                action_type="purchase",
-                subscription_period=subscription_period
-            )
-            if notification_sent:
-                logger.info(
-                    f"REFERRAL_NOTIFICATION_SENT [type=purchase, referrer={referral_reward.get('referrer_id')}, "
-                    f"referred={telegram_id}, purchase_id={purchase_id}]"
-                )
-            else:
-                logger.warning(
-                    "NOTIFICATION_FAILED",
-                    extra={
-                        "type": "purchase",
-                        "referrer": referral_reward.get("referrer_id"),
-                        "referred": telegram_id,
-                        "purchase_id": purchase_id,
-                        "error": "send_referral_cashback_notification returned False"
-                    }
-                )
-        except Exception as e:
-            logger.warning(
-                "NOTIFICATION_FAILED",
-                extra={
-                    "type": "purchase",
-                    "referred": telegram_id,
-                    "purchase_id": purchase_id if 'purchase_id' in locals() else None,
-                    "referrer": referral_reward.get("referrer_id") if referral_reward else None,
-                    "error": str(e)
-                }
-            )
-    
+    # The referrer is notified by the cashback accrual itself, once, after the
+    # billing transaction commits (app.services.notifications.referral_cashback).
+
     logger.info(
         f"process_successful_payment: PAYMENT_COMPLETE [user={telegram_id}, payment_id={payment_id}, "
         f"tariff={tariff_type}, period_days={period_days}, amount={payment_amount_rubles} RUB, "
         f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_sent=True, subscription_visible=True]"
     )
 
-    # Fire-and-forget: create or renew Remnawave bypass user
-    # Skip for combo purchases — combo traffic is added separately below
     fsm_data = await state.get_data()
     combo_bypass_gb = fsm_data.get("combo_bypass_gb", 0)
-
-    # CRITICAL FSM-FALLBACK: combo_bypass_gb is set in FSM state when the
-    # invoice is created, but Telegram Payments are asynchronous — between
-    # invoice and SUCCESSFUL_PAYMENT the user can open another menu (which
-    # state.clear()s), or the bot can restart (in-memory FSM is gone).
-    # If we lost the FSM but finalize tells us this was a combo, recover
-    # the GB amount from config.COMBO_TARIFFS by tariff + period_days.
-    # Without this, combo Юкасса-buyers got their subscription but NO bypass GB.
-    if combo_bypass_gb <= 0 and getattr(result, "is_combo", False):
-        _sub_type_for_combo = (
-            getattr(result, "subscription_type", None)
-            or (tariff_type or "basic")
-        ).strip().lower()
-        combo_key = f"combo_{_sub_type_for_combo}"
-        combo_info = (config.COMBO_TARIFFS or {}).get(combo_key, {}).get(period_days)
-        if combo_info and combo_info.get("gb"):
-            combo_bypass_gb = int(combo_info["gb"])
-            logger.warning(
-                "COMBO_BYPASS_FSM_FALLBACK user=%s gb=%s combo_key=%s period_days=%s "
-                "purchase_id=%s — FSM was empty, recovered from config",
-                telegram_id, combo_bypass_gb, combo_key, period_days, purchase_id,
-            )
-        else:
-            logger.error(
-                "COMBO_BYPASS_FSM_FALLBACK_FAIL user=%s combo_key=%s period_days=%s "
-                "purchase_id=%s — combo config missing, GB cannot be granted",
-                telegram_id, combo_key, period_days, purchase_id,
-            )
-
-    try:
-        from app.services.remnawave_service import renew_remnawave_user_bg
-        _sub_type = (tariff_type or "basic").strip().lower()
-        if expires_at and _sub_type not in ("trial",) + config.BIZ_TARIFFS and combo_bypass_gb <= 0:
-            renew_remnawave_user_bg(telegram_id, _sub_type, expires_at, period_days=period_days)
-    except Exception as rmn_err:
-        logger.warning("REMNAWAVE_HOOK_FAIL: stars tg=%s %s", telegram_id, rmn_err)
-
-    # Combo/Bypass: начисляем трафик обхода если покупка была через комбо или bypass-only
     bypass_only_gb = fsm_data.get("bypass_only_gb", 0)
 
-    if combo_bypass_gb > 0 or bypass_only_gb > 0:
-        from app.services import remnawave_service
-        gb = combo_bypass_gb or bypass_only_gb
-        traffic_bytes = gb * 1024**3
+    # T9: finalized through the provisioning outbox → the job "purchase:{id}"
+    # owns premium + bypass GB (combo GB from pending_purchases, not FSM); the
+    # combo traffic_purchases row was written in the billing tx and the combo
+    # flag set by finalize_purchase. No renew_bg / add_bypass_traffic /
+    # FSM combo top-up / record_traffic_purchase / set_combo_flag here.
+    _via_outbox = getattr(result, "provisioning_job_id", None) is not None
+    if _via_outbox:
+        logger.info(
+            "BYPASS_GB_VIA_OUTBOX: provider=%s user=%s purchase_id=%s job=%s done=%s "
+            "is_combo=%s fsm_combo_gb=%s",
+            payment_provider_name, telegram_id, purchase_id,
+            getattr(result, "provisioning_job_id", None), getattr(result, "provisioning_done", None),
+            getattr(result, "is_combo", False), combo_bypass_gb,
+        )
+        if bypass_only_gb > 0:
+            # bypass_only_gb is set nowhere in the bot today; never top up here.
+            logger.error(
+                "TELEGRAM_BYPASS_ONLY_IGNORED_OUTBOX user=%s gb=%s purchase_id=%s",
+                telegram_id, bypass_only_gb, purchase_id,
+            )
+    else:
+        # Fire-and-forget: create or renew Remnawave bypass user
+        # Skip for combo purchases — combo traffic is added separately below
+
+        # CRITICAL FSM-FALLBACK: combo_bypass_gb is set in FSM state when the
+        # invoice is created, but Telegram Payments are asynchronous — between
+        # invoice and SUCCESSFUL_PAYMENT the user can open another menu (which
+        # state.clear()s), or the bot can restart (in-memory FSM is gone).
+        # If we lost the FSM but finalize tells us this was a combo, recover
+        # the GB amount from config.COMBO_TARIFFS by tariff + period_days.
+        # Without this, combo Юкасса-buyers got their subscription but NO bypass GB.
+        if combo_bypass_gb <= 0 and getattr(result, "is_combo", False):
+            _sub_type_for_combo = (
+                getattr(result, "subscription_type", None)
+                or (tariff_type or "basic")
+            ).strip().lower()
+            combo_key = f"combo_{_sub_type_for_combo}"
+            combo_info = (config.COMBO_TARIFFS or {}).get(combo_key, {}).get(period_days)
+            if combo_info and combo_info.get("gb"):
+                combo_bypass_gb = int(combo_info["gb"])
+                logger.warning(
+                    "COMBO_BYPASS_FSM_FALLBACK user=%s gb=%s combo_key=%s period_days=%s "
+                    "purchase_id=%s — FSM was empty, recovered from config",
+                    telegram_id, combo_bypass_gb, combo_key, period_days, purchase_id,
+                )
+            else:
+                logger.error(
+                    "COMBO_BYPASS_FSM_FALLBACK_FAIL user=%s combo_key=%s period_days=%s "
+                    "purchase_id=%s — combo config missing, GB cannot be granted",
+                    telegram_id, combo_key, period_days, purchase_id,
+                )
 
         try:
-            rmn_success = await remnawave_service.add_bypass_traffic(
-                telegram_id,
-                traffic_bytes,
-                subscription_type=(tariff_type or "basic").strip().lower(),
-                subscription_end=expires_at,
-                period_days=period_days,
-            )
-            if not rmn_success:
-                logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL user={telegram_id} gb={gb}")
-            await database.record_traffic_purchase(telegram_id, gb, 0)
-            logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED user={telegram_id} gb={gb} type={'combo' if combo_bypass_gb else 'bypass_only'}")
-        except Exception as traffic_err:
-            logger.warning(f"COMBO_BYPASS_TRAFFIC_ERROR user={telegram_id}: {traffic_err}")
+            from app.services.remnawave_service import renew_remnawave_user_bg
+            _sub_type = (tariff_type or "basic").strip().lower()
+            if expires_at and _sub_type != "trial" and combo_bypass_gb <= 0:
+                renew_remnawave_user_bg(telegram_id, _sub_type, expires_at, period_days=period_days)
+        except Exception as rmn_err:
+            logger.warning("REMNAWAVE_HOOK_FAIL: stars tg=%s %s", telegram_id, rmn_err)
 
-        # Mark subscription as combo (OUTSIDE traffic try block)
-        if combo_bypass_gb > 0:
-            try:
-                await database.set_combo_flag(telegram_id, True)
-                logger.info(f"COMBO_FLAG_SET user={telegram_id}")
-            except Exception as flag_err:
-                logger.warning(f"COMBO_FLAG_FAIL user={telegram_id}: {flag_err}")
+        # Combo/Bypass: начисляем трафик обхода если покупка была через комбо или bypass-only
+        if combo_bypass_gb > 0 or bypass_only_gb > 0:
+            from app.services import remnawave_service
+            gb = combo_bypass_gb or bypass_only_gb
+            traffic_bytes = gb * 1024**3
 
-        # Bypass-only: activate 3-day trial if eligible
-        if bypass_only_gb > 0:
             try:
-                from app.services.trials import service as trial_service
-                if await trial_service.is_trial_available(telegram_id):
-                    await trial_service.activate_trial(telegram_id)
-                    logger.info(f"BYPASS_TRIAL_ACTIVATED user={telegram_id}")
-            except Exception:
-                pass
+                rmn_success = await remnawave_service.add_bypass_traffic(
+                    telegram_id,
+                    traffic_bytes,
+                    subscription_type=(tariff_type or "basic").strip().lower(),
+                    subscription_end=expires_at,
+                    period_days=period_days,
+                )
+                if not rmn_success:
+                    logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL user={telegram_id} gb={gb}")
+                await database.record_traffic_purchase(telegram_id, gb, 0)
+                logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED user={telegram_id} gb={gb} type={'combo' if combo_bypass_gb else 'bypass_only'}")
+            except Exception as traffic_err:
+                logger.warning(f"COMBO_BYPASS_TRAFFIC_ERROR user={telegram_id}: {traffic_err}")
+
+            # Mark subscription as combo (OUTSIDE traffic try block)
+            if combo_bypass_gb > 0:
+                try:
+                    await database.set_combo_flag(telegram_id, True)
+                    logger.info(f"COMBO_FLAG_SET user={telegram_id}")
+                except Exception as flag_err:
+                    logger.warning(f"COMBO_FLAG_FAIL user={telegram_id}: {flag_err}")
+
+        from app.services.payments import verify_delivery  # legacy: delayed panel check, alert-only
+        verify_delivery.schedule_legacy_check(telegram_id, source="telegram", ref=str(purchase_id), expect_bypass=(tariff_type or "basic").strip().lower() != "trial")
+
+    if combo_bypass_gb > 0 or bypass_only_gb > 0:
+        # Bypass-only: activate the 3-day trial if available. T15: before, the
+        # function did not exist (AttributeError swallowed → no trial). Now only
+        # under the "trial" outbox flag; after the purchase commit, never raises
+        # (failure → log + admin alert).
+        from app.services import provisioning_flags
+        if bypass_only_gb > 0 and provisioning_flags.is_on("trial"):
+            from app.services.trials import service as trial_service
+            if await trial_service.activate_trial_safely(
+                telegram_id, bot=message.bot, where=f"telegram:{purchase_id}",
+            ):
+                logger.info(f"BYPASS_TRIAL_ACTIVATED user={telegram_id}")
 
     # КРИТИЧНО: Удаляем промо-сессию после успешной оплаты
     await clear_promo_session(state)

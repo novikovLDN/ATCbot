@@ -636,6 +636,19 @@ async def get_promo_session(state: FSMContext) -> Optional[Dict[str, Any]]:
     return promo_session
 
 
+async def get_applied_promo_code(state: FSMContext) -> Optional[str]:
+    """The promo code a purchase stores and consumes: the session code, but not
+    when the FSM price was computed without it (promo_applied is False) — owner
+    rule 2026-09-14: the largest single discount wins, so a code that lost to a
+    bigger personal discount / special offer gave nothing and must not be used
+    up. No promo_applied key (older flows) → the session code, as before."""
+    promo_session = await get_promo_session(state)
+    promo_code = promo_session.get("promo_code") if promo_session else None
+    if promo_code and (await state.get_data()).get("promo_applied") is False:
+        return None
+    return promo_code
+
+
 async def create_promo_session(
     state: FSMContext,
     promo_code: str,
@@ -681,17 +694,39 @@ async def clear_promo_session(state: FSMContext):
     await state.update_data(promo_session=None)
 
 
+def _fit_incident_html(raw: str, budget: int) -> str:
+    """Incident text from the dashboard (HTML, up to 2000 chars) fitted into
+    `budget` visible chars. Valid HTML that fits is kept as is; otherwise it
+    is shown as escaped plain text, cut with «…» — never a 400 from Telegram."""
+    import html as _html
+
+    from app.utils.telegram_html import telegram_html_errors, truncate_plain, visible_length, visible_text
+
+    invalid = bool(telegram_html_errors(raw))
+    if not invalid and visible_length(raw) <= budget:
+        return raw
+    plain = raw if invalid else visible_text(raw)
+    return _html.escape(truncate_plain(plain, budget), quote=False)
+
+
 async def format_text_with_incident(text: str, language: str) -> str:
-    """Добавить баннер инцидента к тексту, если режим активен"""
+    """Добавить баннер инцидента к тексту, если режим активен.
+
+    Результат — подпись к фото главного меню (лимит 1024 символа): текст
+    инцидента подгоняется под остаток лимита, невалидный HTML показывается
+    как обычный текст."""
     try:
         if not database.DB_READY:
             return text
         incident = await database.get_incident_settings()
         if incident and incident.get("is_active"):
+            from app.utils.telegram_html import CAPTION_LIMIT, visible_length
+
             banner = i18n_get_text(language, "incident.banner")
             incident_text = incident.get("incident_text")
             if incident_text:
-                banner += f"\n{incident_text}"
+                reserved = visible_length(f"{banner}\n\n\n⸻\n\n{text}")
+                banner += f"\n{_fit_incident_html(incident_text, CAPTION_LIMIT - reserved)}"
             return f"{banner}\n\n⸻\n\n{text}"
         return text
     except Exception as e:

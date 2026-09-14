@@ -12,7 +12,6 @@ from app.services.language_service import resolve_user_language
 from app.services.notifications import service as notification_service
 from app.services.notifications.service import ReminderType
 from app.utils.telegram_safe import safe_send_message
-from app.core.structured_logger import log_event
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -178,32 +177,46 @@ async def send_smart_reminders(bot: Bot):
 
                 elif reminder_type == ReminderType.REMINDER_7D:
                     notif_key = "subscription.reminder_7d"
-                    text = (await get_notification_text(notif_key)) or i18n.get_text(language, "reminder.paid_7d")
+                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_7d")
                     keyboard = get_renewal_keyboard_7d(language)
                     audit_message = "Paid subscription reminder (7d before expiry)"
 
                 elif reminder_type == ReminderType.REMINDER_3D:
                     notif_key = "subscription.reminder_3d"
-                    text = (await get_notification_text(notif_key)) or i18n.get_text(language, "reminder.paid_3d")
+                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_3d")
                     keyboard = get_renewal_keyboard_3d(language)
                     audit_message = "Paid subscription reminder (3d before expiry)"
 
                 elif reminder_type == ReminderType.REMINDER_1D:
                     notif_key = "subscription.reminder_1d"
-                    text = (await get_notification_text(notif_key)) or i18n.get_text(language, "reminder.paid_1d")
+                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_1d")
                     keyboard = get_renewal_keyboard_1d(language)
                     audit_message = "Paid subscription reminder (1d before expiry)"
 
                 elif reminder_type == ReminderType.REMINDER_24H:
                     notif_key = "subscription.reminder_24h"
-                    text = (await get_notification_text(notif_key)) or i18n.get_text(language, "reminder.paid_24h")
+                    text = (await get_notification_text(notif_key, language=language)) or i18n.get_text(language, "reminder.paid_24h")
                     keyboard = get_renewal_keyboard(language)
                     audit_message = "Paid subscription reminder (24h before expiry)"
 
                 elif reminder_type == ReminderType.REMINDER_3H:
                     notif_key = "subscription.reminder_3h"
-                    text = (await get_notification_text(notif_key)) or i18n.get_text(language, "reminder.paid_3h_special")
-                    keyboard = get_renewal_discount_keyboard(language)
+                    # Owner 2026-09-14: this reminder opens the period's ONE 72 h −15 %
+                    # window (or shows the one already open); the text names its end
+                    # (MSK). Only when enabled — a disabled reminder is skipped below.
+                    offer = None
+                    if await is_notification_enabled(notif_key):
+                        from database.subscriptions import claim_special_offer
+                        offer = await claim_special_offer(telegram_id, subscription.get("expires_at"))
+                    if offer:
+                        from app.services.notifications.special_offer import format_deadline
+                        deadline = format_deadline(language, offer["expires_at"])
+                        text = (await get_notification_text(notif_key, language=language, params={"deadline": deadline})) \
+                            or i18n.get_text(language, "reminder.paid_3h_special", deadline=deadline)
+                        keyboard = get_renewal_discount_keyboard(language)
+                    else:
+                        text = i18n.get_text(language, "reminder.paid_3h_no_offer")
+                        keyboard = get_renewal_keyboard(language)
                     audit_message = "Paid subscription reminder (3h before expiry) with 15% discount"
 
                 # Если админ выключил через дашборд — мгновенный skip.
@@ -322,6 +335,8 @@ async def send_smart_reminders(bot: Bot):
 
 async def reminders_task(bot: Bot):
     """Фоновая задача для отправки напоминаний об окончании подписки (выполняется каждые 30-60 минут)"""
+    from app.core import runtime_health  # dashboard liveness (in-memory)
+    runtime_health.register("reminders", interval_s=45 * 60 + 120, initial_delay_s=60)
     # Небольшая задержка при старте, чтобы БД успела инициализироваться
     await asyncio.sleep(60)
 
@@ -368,6 +383,7 @@ async def reminders_task(bot: Bot):
                 pass
         finally:
             # H2 fix: ITERATION_END always fires in finally block
+            runtime_health.record("reminders", iteration_outcome, iteration_error_type)
             duration_ms = int((time.time() - iteration_start_time) * 1000)
             log_worker_iteration_end(
                 worker_name="reminders",

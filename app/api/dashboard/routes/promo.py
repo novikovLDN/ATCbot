@@ -1,14 +1,15 @@
 """Promo codes — list, create, deactivate."""
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, Field, field_validator
 
 import database
 from app.api.dashboard.deps import require_admin
+from app.api.dashboard.errors import server_error
+from app.api.dashboard.idempotency import IdempotentRoute
 from app.events import bus
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_admin)], route_class=IdempotentRoute)
 
 
 def _serialize(value):
@@ -29,7 +30,7 @@ async def promo_list():
     try:
         rows = await database.get_promo_stats()
     except Exception as e:
-        raise HTTPException(500, f"promo_list_failed: {e}")
+        raise server_error("promo_list_failed") from e
     return _serialize(rows or [])
 
 
@@ -59,7 +60,7 @@ async def promo_create(body: PromoCreate, admin: dict = Depends(require_admin)):
             created_by=int(admin["sub"]),
         )
     except Exception as e:
-        raise HTTPException(500, f"promo_create_failed: {e}")
+        raise server_error("promo_create_failed") from e
     if not promo_id:
         raise HTTPException(409, "code_taken_or_invalid")
     bus.publish({
@@ -79,7 +80,7 @@ async def promo_deactivate(
     try:
         ok = await database.deactivate_promocode(promo_id=promo_id)
     except Exception as e:
-        raise HTTPException(500, f"promo_deactivate_failed: {e}")
+        raise server_error("promo_deactivate_failed") from e
     if not ok:
         raise HTTPException(404, "Promo not found")
     bus.publish({
@@ -100,7 +101,7 @@ async def promo_reactivate(
     try:
         ok = await database.reactivate_promocode(promo_id=promo_id)
     except Exception as e:
-        raise HTTPException(500, f"promo_reactivate_failed: {e}")
+        raise server_error("promo_reactivate_failed") from e
     if not ok:
         raise HTTPException(404, "Promo not found")
     bus.publish({

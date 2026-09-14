@@ -18,9 +18,9 @@ user_router = Router()
 logger = logging.getLogger(__name__)
 
 
-@user_router.message(Command("help"))
+@user_router.message(Command("help", "support"))
 async def cmd_help(message: Message, bot: Bot):
-    """Обработчик команды /help — открывает экран помощи (FAQ / Инструкции / Оператор) с фото."""
+    """Обработчик команд /help и /support (есть в меню команд бота) — открывает экран помощи (FAQ / Инструкции / Оператор) с фото."""
     if message.chat.type != "private":
         return
     if not await ensure_db_ready_message(message):

@@ -10,6 +10,21 @@
 
 ---
 
+> **v3 (2026-09):** метрики дашборда считаются только через `database/revenue.py` и
+> `database/metrics.py`; контракт и список эндпоинтов `/metrics/*`, `/panel/*` —
+> `docs/dashboard/metrics.md`. Панель Remnawave читается только GET-ом через
+> `app/services/panel_stats.py` (кеш 45 с). Вход — см. `docs/dashboard/auth.md`.
+>
+> **v4 (2026-09-14):** экраны «Обзор» (статусы + KPI к такому же прошлому отрезку),
+> «Здоровье» (`/health`, заменил «Операции»: система, платежи, выдача доступа),
+> «Вовлечённость» (`/engagement`). Новые GET-эндпоинты: `/metrics/health`
+> (`app/services/system_health.py`), `/metrics/payments-health`, `/metrics/delivery`,
+> `/metrics/engagement`, `/metrics/pipeline`. Все SQL метрик — read-only транзакция со
+> `statement_timeout` (`database/readonly.py`). Живость воркеров — в памяти процесса
+> (`app/core/runtime_health.py`: каждый воркер регистрируется и отмечает итог цикла).
+> Экраны грузятся лениво (отдельный чанк на экран, `App.tsx`). Определения метрик —
+> `docs/dashboard/metrics.md`, подсказки «?» — `dashboard/src/lib/metricDefs.ts`.
+
 ## 0. Executive summary
 
 | Что есть | Состояние |
@@ -191,7 +206,6 @@ admin-хендлере. Для дашборда — JWT (PyJWT) с тем же `
 | `GET /api/users/{tg_id}/history` | `get_subscription_history(tg_id, limit)` |
 | `GET /api/users/{tg_id}/payments` | через подзапрос payments WHERE telegram_id |
 | `GET /api/users/{tg_id}/discount` | `get_user_discount(tg_id)` |
-| `GET /api/users/{tg_id}/vip` | `is_vip_user(tg_id)` |
 | `GET /api/users/{tg_id}/trial` | `get_trial_info(tg_id)` |
 | `POST /api/users/{tg_id}/grant` body `{days, tariff}` | `admin_grant_access_atomic(...)` |
 | `POST /api/users/{tg_id}/grant-minutes` body `{minutes}` | `admin_grant_access_minutes_atomic(...)` |
@@ -200,8 +214,6 @@ admin-хендлере. Для дашборда — JWT (PyJWT) с тем же `
 | `POST /api/users/{tg_id}/discount` body `{percent, expires_at}` | `create_user_discount(...)` |
 | `DELETE /api/users/{tg_id}/discount` | `delete_user_discount(tg_id)` |
 | `POST /api/users/{tg_id}/balance` body `{delta_rubles, reason}` | `increase_balance` / `decrease_balance` |
-| `POST /api/users/{tg_id}/vip` | `grant_vip_status(tg_id, admin_id)` |
-| `DELETE /api/users/{tg_id}/vip` | `revoke_vip_status(tg_id, admin_id)` |
 | `DELETE /api/users/{tg_id}` | `admin_delete_user_complete(tg_id, admin_id)` |
 
 ### 3.3. Подписки и платежи
@@ -313,7 +325,7 @@ CSV — отдавать через `StreamingResponse` с `media_type="text/csv
 ### Фаза 5 — спецфичи (опционально)
 
 18. **Гифт-ссылки на ГБ** — CRUD
-19. **VIP / Гифт-подписки**
+19. **Гифт-подписки** (VIP удалён 2026-09-14)
 20. **Incident-режим** (баннер)
 21. **Удаление пользователя** (с двойным подтверждением)
 
@@ -609,8 +621,8 @@ if (login) {
    ID.** Чужие айди → `DOCUMENT_INVALID`, рассылка не уходит.
 4. **CSV-экспорт через `StreamingResponse`**, не аккумулировать в памяти —
    на 358k юзеров это OOM.
-5. **VIP > special_offer > personal discount** — приоритет в
-   `calculate_final_price`. Дашборд показывает только итог.
+5. **Скидки: действует наибольшая одна** из промокода, special_offer и personal
+   (`calculate_final_price`; VIP удалён 2026-09-14). Дашборд показывает только итог.
 6. **fast_expiry_cleanup освобождает DB-коннект перед VPN-вызовом** —
    не открывай долгие транзакции в дашборде на тех же подписках.
 7. **WebSocket overflow** — `asyncio.QueueFull` пропускается, не

@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import { auth } from "./auth";
 
 // Single flexible shape. Discriminated unions don't combine well with a
 // catch-all branch (TS can't narrow via .startsWith()); instead we
@@ -34,12 +33,8 @@ export function useEventStream(handler: Handler, enabled = true) {
 
   useEffect(() => {
     if (!enabled) return;
-    // Auth: the WS endpoint accepts either the session cookie (which
-    // the browser sends automatically on same-origin connections) or
-    // a JWT in the query string. Cookie is the new default after
-    // password login; we keep ?token=… as a fallback when a magic-
-    // link bootstrap token is still in localStorage.
-    const token = auth.get();
+    // Auth: the session cookie, sent by the browser with the same-origin
+    // handshake. No token in the URL — URLs end up in proxy logs.
 
     let ws: WebSocket | null = null;
     let closedByUs = false;
@@ -47,9 +42,7 @@ export function useEventStream(handler: Handler, enabled = true) {
     let attempt = 0;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = token
-      ? `${protocol}//${window.location.host}/dashboard/ws?token=${encodeURIComponent(token)}`
-      : `${protocol}//${window.location.host}/dashboard/ws`;
+    const url = `${protocol}//${window.location.host}/dashboard/ws`;
 
     const connect = () => {
       ws = new WebSocket(url);

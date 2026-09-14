@@ -173,10 +173,31 @@ def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResul
     )
 
 
+def _adopt_patch_failed(result: PremiumCreateResult) -> PremiumCreateResult:
+    """The entity exists and is ours, but its expireAt could NOT be set.
+    Reporting the adoption as ok left the panel on the OLD date silently:
+    the renewal sync looked successful — no alert, no re-sync, the provider
+    got 200 (docs/audit/07_e2e.md, E2E-ADOPT-SILENT). A failed result lets
+    the caller's failure path run (legacy renewal: payment_errors + forced
+    alert + re-sync + 5xx; new issuance: pending activation; outbox: retry)."""
+    return PremiumCreateResult(
+        ok=False,
+        panel_uuid=result.panel_uuid,
+        forced_uuid_accepted=False,
+        subscription_url=result.subscription_url,
+        status=result.status,
+        error="adopt_expire_patch_failed",
+        recovered=True,
+        short_uuid=result.short_uuid,
+        panel_id=result.panel_id,
+    )
+
+
 async def _ensure_premium_entity_state(
     panel_uuid: Optional[str],
     existing: dict,
     expire_at: datetime,
+    device_limit: Optional[int] = None,
 ) -> bool:
     """After adopting a premium entity, PATCH expireAt + status (+ Task 6
     externalSquadUuid when configured) so the panel state reflects the
@@ -206,8 +227,17 @@ async def _ensure_premium_entity_state(
     ) or None
     if target_squad:
         update_fields["externalSquadUuid"] = target_squad
+    if device_limit:
+        update_fields["hwidDeviceLimit"] = int(device_limit)   # devices by tariff (owner 2026-09-14)
+    # PATCH the adopted entity by its numeric panel id. The vlessUuid is
+    # resolvable only through the subscriptions cache columns, and those are
+    # exactly what is missing when we adopt (docs/audit/07_e2e.md, E2E-ADOPT):
+    # the PATCH was silently skipped and the panel kept the OLD expireAt.
+    target = existing.get("id") if isinstance(existing, dict) else None
+    if target is None:
+        target = panel_uuid
     try:
-        result = await remnawave_api.update_user(panel_uuid, **update_fields)
+        result = await remnawave_api.update_user(target, **update_fields)
         if result is not None:
             logger.info(
                 "REMNAWAVE_PREMIUM_ADOPTED_PATCHED: uuid=%s expire=%s ext_squad=%s",
@@ -231,6 +261,14 @@ async def _ensure_premium_entity_state(
         return False
 
 
+def _device_limit_for(tier: Optional[str]) -> int:
+    """hwidDeviceLimit of the premium entity: by tariff when known, else the env value."""
+    if tier:
+        from app.services import tariffs
+        return tariffs.premium_device_limit(tier)
+    return int(getattr(config, "REMNAWAVE_PREMIUM_DEVICE_LIMIT", 5))
+
+
 async def create_premium_user_entity(
     telegram_id: int,
     *,
@@ -238,6 +276,7 @@ async def create_premium_user_entity(
     expire_at: datetime,
     existing_username: Optional[str] = None,
     description: str = DEFAULT_DESCRIPTION_MARKER,
+    tier: Optional[str] = None,
 ) -> PremiumCreateResult:
     """Create (or recover) the premium Remnawave entity for a single user.
 
@@ -262,7 +301,9 @@ async def create_premium_user_entity(
     squad_uuid = getattr(config, "REMNAWAVE_MAIN_SQUAD_UUID", "") or ""
     short_uuid = str(uuid_lib.uuid4())[:12]
     username = build_premium_username(telegram_id, existing_username)
-    device_limit = getattr(config, "REMNAWAVE_PREMIUM_DEVICE_LIMIT", 5)
+    # Owner 2026-09-14: devices by tariff (Basic 10 / Plus 14, tariffs.premium_device_limit);
+    # the env value only when the caller does not know the tier.
+    device_limit = _device_limit_for(tier)
 
     # Task 6: stamp every premium entity with the external squad uuid so
     # Remnawave overrides the subscription Template to "Unlimited" (RU
@@ -307,7 +348,9 @@ async def create_premium_user_entity(
                 telegram_id, username, (existing.get("uuid") or "")[:8],
             )
             result = _result_from_existing(existing, http_status=200)
-            await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at)
+            if not await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at,
+                                                      device_limit=device_limit if tier else None):
+                return _adopt_patch_failed(result)
             return result
         logger.warning(
             "REMNAWAVE_PREMIUM_USERNAME_TAKEN_UNRELATED: tg=%s username=%s existing_tg=%s",
@@ -351,11 +394,13 @@ async def create_premium_user_entity(
         )
 
     first_status = int((raw or {}).get("status") or 0)
+    # 3.4.3: a taken username is HTTP 400 errorCode A019 (not 409).
+    username_conflict = remnawave_api.is_username_conflict(raw)
 
-    # ── 2) 409 from POST — race between preflight and POST: another run
-    #      may have created the entity in between.  Re-check by username
-    #      and adopt if it's ours.
-    if first_status == 409:
+    # ── 2) Username conflict from POST — race between preflight and POST
+    #      (or a preflight that failed transiently): the entity exists.
+    #      Re-check by username and adopt if it's ours.
+    if username_conflict:
         try:
             existing = await remnawave_api.find_user_by_username(username)
         except Exception as e:
@@ -369,15 +414,16 @@ async def create_premium_user_entity(
                 telegram_id, (existing.get("uuid") or "")[:8],
             )
             result = _result_from_existing(existing, http_status=409)
-            await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at)
+            if not await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at):
+                return _adopt_patch_failed(result)
             return result
-        # 409 not from a username race we own — fall through to the
-        # forced-UUID retry below (might be uuid conflict).
+        # Username held by an entity that is not ours (or the re-lookup
+        # failed) — retrying without the uuid would hit the same conflict.
 
-    # ── 3) Forced-UUID rejection — retry without forced uuid.  We do NOT
-    #      retry on 409 unless the username turns out unrelated (handled
-    #      above); only 400/422 mean "uuid value not accepted".
-    retryable = force_uuid and first_status in (400, 422)
+    # ── 3) Forced-UUID rejection — retry without forced uuid.  Only a
+    #      400/422 that is NOT the username conflict means "uuid value not
+    #      accepted".
+    retryable = force_uuid and first_status in (400, 422) and not username_conflict
     if retryable:
         logger.warning(
             "REMNAWAVE_PREMIUM_FORCED_UUID_REJECTED: tg=%s requested=%s status=%s — retrying without uuid",
@@ -414,8 +460,14 @@ async def create_premium_user_entity(
 
 # ── Lifecycle (called by handlers AFTER cutover — wired up in a follow-up) ─
 
-async def renew_premium_user(telegram_id: int, new_expire_at: datetime) -> bool:
+async def renew_premium_user(telegram_id: int, new_expire_at: datetime,
+                             tier: Optional[str] = None) -> bool:
     """Patch expireAt on the premium entity. Returns True on success.
+
+    `tier` (basic / plus / combo_* / legacy biz_*): the same PATCH sets the
+    tariff's device limit (owner 2026-09-14: Basic 10, Plus 14) — a renewal or
+    a tariff change keeps the panel cap in line with the tariff. None → the
+    cap is not touched (callers that do not know the tariff).
 
     Retries the PATCH up to 3 times with 1s/2s backoff so a transient
     panel hiccup (500, timeout, brief 4xx) doesn't drop the user into
@@ -443,6 +495,8 @@ async def renew_premium_user(telegram_id: int, new_expire_at: datetime) -> bool:
         ) or None
         if external_squad_uuid:
             update_fields["externalSquadUuid"] = external_squad_uuid
+        if tier:
+            update_fields["hwidDeviceLimit"] = _device_limit_for(tier)
 
         MAX_ATTEMPTS = 3
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -508,96 +562,10 @@ async def disable_premium_user(telegram_id: int) -> bool:
         return False
 
 
-async def reissue_premium_user_entity(
-    telegram_id: int,
-    *,
-    requested_uuid: str,
-    expire_at: datetime,
-    existing_username: Optional[str] = None,
-    description: str = "Premium reissued via bot",
-) -> PremiumCreateResult:
-    """True key reissue: delete the user's current premium entity and
-    create a fresh one.
-
-    The old connection UUID / subscription URL stop working and a brand-new
-    entity (new shortUuid → new subscriptionUrl) is issued — the Remnawave
-    equivalent of the legacy "add new vless user + remove old uuid" flow.
-
-    Because Remnawave keys entities by a deterministic username
-    (`tg_{id}_premium`), the old entity MUST be deleted before the new one
-    can be created.  If `create_premium_user_entity` ends up *adopting* an
-    existing entity (recovered=True) it means the delete did not take
-    effect — that is reported as a failure (`error="reissue_no_rotation"`)
-    so the caller rolls back and the admin can retry.
-    """
-    if not config.REMNAWAVE_ENABLED:
-        return PremiumCreateResult(False, None, False, None, 0, "remnawave_disabled")
-
-    import database  # lazy — keeps unit tests asyncpg-free
-
-    old_panel_uuid = await database.get_remnawave_premium_uuid(telegram_id)
-    if _is_valid_full_uuid(old_panel_uuid):
-        try:
-            deleted = await remnawave_api.delete_user(old_panel_uuid)
-            logger.info(
-                "REMNAWAVE_PREMIUM_REISSUE_DELETE: tg=%s old_uuid=%s result=%s",
-                telegram_id, old_panel_uuid[:8],
-                "ok" if deleted is not None else "not_found_or_failed",
-            )
-        except Exception as e:
-            logger.warning(
-                "REMNAWAVE_PREMIUM_REISSUE_DELETE_ERROR: tg=%s uuid=%s %s",
-                telegram_id, old_panel_uuid[:8], e,
-            )
-
-    result = await create_premium_user_entity(
-        telegram_id,
-        requested_uuid=requested_uuid,
-        expire_at=expire_at,
-        existing_username=existing_username,
-        description=description,
-    )
-    if result.ok and result.recovered:
-        logger.error(
-            "REMNAWAVE_PREMIUM_REISSUE_NO_ROTATION: tg=%s adopted uuid=%s — delete did not take effect",
-            telegram_id, (result.panel_uuid or "")[:8],
-        )
-        return PremiumCreateResult(
-            ok=False,
-            panel_uuid=result.panel_uuid,
-            forced_uuid_accepted=False,
-            subscription_url=None,
-            status=result.status,
-            error="reissue_no_rotation",
-            recovered=False,
-        )
-    return result
-
-
-async def get_premium_subscription_url(telegram_id: int) -> Optional[str]:
-    """Return the panel-issued subscription URL for the premium entity, or None."""
-    if not config.REMNAWAVE_ENABLED:
-        return None
-    import database  # lazy
-    rmn_uuid = await database.get_remnawave_premium_uuid(telegram_id)
-    if not _is_valid_full_uuid(rmn_uuid):
-        return None
-    try:
-        user = await remnawave_api.get_user(rmn_uuid)
-        if not user:
-            return None
-        return user.get("subscriptionUrl") or None
-    except Exception as e:
-        logger.error("REMNAWAVE_PREMIUM_GETURL_ERROR: tg=%s %s", telegram_id, e)
-        return None
-
-
 __all__ = [
     "PremiumCreateResult",
     "build_premium_username",
     "create_premium_user_entity",
     "renew_premium_user",
     "disable_premium_user",
-    "reissue_premium_user_entity",
-    "get_premium_subscription_url",
 ]

@@ -9,7 +9,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.api import telegram_webhook
 from app.api import payment_webhook
 from app.api import deeplink_redirect
-from app.api import subscription_proxy
 from app.api import sub_aggregator_route
 
 logger = logging.getLogger(__name__)
@@ -33,6 +32,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     # Per-prefix exceptions: prefix → max bytes. First match wins.
     _PATH_OVERRIDES = (
         ("/dashboard/api/broadcasts/upload-photo", 10 * 1024 * 1024),
+        ("/dashboard/api/broadcasts/upload-animation", 20 * 1024 * 1024),  # handler: 20 MB GIF/MP4
     )
 
     def __init__(self, app, max_size: int = 1 * 1024 * 1024):
@@ -57,20 +57,45 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+async def flush_alerts_on_shutdown() -> None:
+    """HOW_IT_WORKS P2: on SIGTERM (Railway redeploy) uvicorn runs the app's
+    shutdown handlers, but the provisioning worker's `finally` flush was never
+    reached — buffered alert digests were lost on every deploy. Flush the
+    provisioning digests and the admin_alerts held by the cooldown here.
+    Best effort, bounded, never raises."""
+    import asyncio
+    from app.services import admin_alerts, provisioning
+    bot = getattr(payment_webhook, "_bot", None) or getattr(telegram_webhook, "_bot", None)
+    try:
+        await asyncio.wait_for(provisioning.flush_alert_digests(bot, final=True), 5.0)
+    except (Exception, asyncio.CancelledError) as e:
+        logger.warning("SHUTDOWN_PROVISIONING_DIGEST_FLUSH_FAILED: %s: %s", type(e).__name__, e)
+    if bot is not None:
+        try:
+            await asyncio.wait_for(admin_alerts.flush_all_digests(bot), 5.0)
+        except (Exception, asyncio.CancelledError) as e:
+            logger.warning("SHUTDOWN_ADMIN_ALERT_FLUSH_FAILED: %s: %s", type(e).__name__, e)
+    left = {**provisioning.pending_alert_counts(),
+            **{f"admin:{k}": v for k, v in admin_alerts.pending_digest_counts().items()}}
+    if left:
+        logger.critical("ALERTS_UNSENT_ON_SHUTDOWN: %s (payment_errors / logs hold them)", left)
+
+
+async def drain_payment_tasks_on_shutdown() -> None:
+    """SIGTERM (Railway redeploy): uvicorn runs the shutdown hooks before the
+    process exits — give in-flight Telegram successful_payment finalizations up
+    to 20 s (telegram_webhook.drain_payment_tasks; still running → CRITICAL log +
+    admin alert). Registered BEFORE the alert flush so that alert is flushed too.
+    Never raises."""
+    await telegram_webhook.drain_payment_tasks()
+
+
+app.router.on_shutdown.append(drain_payment_tasks_on_shutdown)
+app.router.on_shutdown.append(flush_alerts_on_shutdown)
 app.add_middleware(RequestSizeLimitMiddleware, max_size=1 * 1024 * 1024)
 app.include_router(telegram_webhook.router)
 app.include_router(payment_webhook.router)
 app.include_router(deeplink_redirect.router)
-
-# Subscription-URL fallback (samopis → Remnawave premium translation) —
-# mounted only when explicitly enabled to keep the production surface area small.
-try:
-    import config as _cfg
-    if getattr(_cfg, "SUBSCRIPTION_PROXY_ENABLED", False):
-        app.include_router(subscription_proxy.router)
-        logger.info("SUBSCRIPTION_PROXY_ENABLED — mounted /sub/{uuid} + /api/sub/{token}")
-except Exception:
-    logger.exception("subscription_proxy mount failed")
 
 # Sub-aggregator embedded endpoint — GET /a/{token}.
 # Работает если SUB_AGGREGATOR_ENABLED=True в config.py. RF-1 nginx делает

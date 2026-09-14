@@ -8,7 +8,7 @@ Tests focus on business logic:
 - Edge cases
 """
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock
 from app.services.subscriptions.service import (
     parse_expires_at,
@@ -16,6 +16,15 @@ from app.services.subscriptions.service import (
     get_subscription_status,
     SubscriptionStatus,
 )
+
+# UTC contract (99697e68 / database/CLAUDE.md): DB rows carry naive UTC,
+# parse_expires_at normalises them to aware UTC, and the domain `now` is
+# aware UTC (datetime.now(timezone.utc)).
+NOW_UTC = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=timezone.utc)
 
 
 class TestParseExpiresAt:
@@ -26,9 +35,13 @@ class TestParseExpiresAt:
         assert parse_expires_at(None) is None
     
     def test_parse_datetime(self):
-        """datetime object should be returned as-is"""
+        """Naive (DB) datetime is interpreted as UTC and returned aware;
+        aware UTC is returned as-is."""
         dt = datetime(2024, 1, 15, 12, 0, 0)
-        assert parse_expires_at(dt) == dt
+        result = parse_expires_at(dt)
+        assert result == _aware(dt)
+        assert result.tzinfo is timezone.utc
+        assert parse_expires_at(NOW_UTC) is NOW_UTC
     
     def test_parse_iso_string(self):
         """ISO format string should be parsed correctly"""
@@ -63,18 +76,18 @@ class TestIsSubscriptionActive:
     
     def test_active_subscription(self):
         """Active subscription with future expiry should return True"""
-        now = datetime(2024, 1, 15, 12, 0, 0)
-        future = datetime(2024, 2, 15, 12, 0, 0)
+        now = NOW_UTC
+        future = datetime(2024, 2, 15, 12, 0, 0)  # naive, as returned by DB
         subscription = {
             "status": "active",
             "expires_at": future,
             "uuid": "test-uuid",
         }
         assert is_subscription_active(subscription, now) is True
-    
+
     def test_expired_subscription(self):
         """Expired subscription should return False"""
-        now = datetime(2024, 1, 15, 12, 0, 0)
+        now = NOW_UTC
         past = datetime(2024, 1, 1, 12, 0, 0)
         subscription = {
             "status": "active",
@@ -96,7 +109,7 @@ class TestIsSubscriptionActive:
     
     def test_no_uuid(self):
         """Subscription without UUID should return False"""
-        now = datetime(2024, 1, 15, 12, 0, 0)
+        now = NOW_UTC
         future = datetime(2024, 2, 15, 12, 0, 0)
         subscription = {
             "status": "active",
@@ -117,10 +130,10 @@ class TestIsSubscriptionActive:
     
     def test_expires_at_exactly_now(self):
         """Subscription expiring exactly at now should return False"""
-        now = datetime(2024, 1, 15, 12, 0, 0)
+        now = NOW_UTC
         subscription = {
             "status": "active",
-            "expires_at": now,
+            "expires_at": datetime(2024, 1, 15, 12, 0, 0),  # naive DB value == now
             "uuid": "test-uuid",
         }
         assert is_subscription_active(subscription, now) is False
@@ -153,7 +166,7 @@ class TestGetSubscriptionStatus:
     
     def test_active_subscription(self):
         """Active subscription should return correct status"""
-        now = datetime(2024, 1, 15, 12, 0, 0)
+        now = NOW_UTC
         future = datetime(2024, 2, 15, 12, 0, 0)
         subscription = {
             "status": "active",
@@ -162,16 +175,16 @@ class TestGetSubscriptionStatus:
             "activation_status": "active",
         }
         status = get_subscription_status(subscription, now)
-        
+
         assert status.is_active is True
         assert status.has_subscription is True
-        assert status.expires_at == future
+        assert status.expires_at == _aware(future)
         assert status.activation_status == "active"
         assert status.is_expired is False
     
     def test_expired_subscription(self):
         """Expired subscription should return correct status"""
-        now = datetime(2024, 1, 15, 12, 0, 0)
+        now = NOW_UTC
         past = datetime(2024, 1, 1, 12, 0, 0)
         subscription = {
             "status": "active",
@@ -180,15 +193,15 @@ class TestGetSubscriptionStatus:
             "activation_status": "active",
         }
         status = get_subscription_status(subscription, now)
-        
+
         assert status.is_active is False
         assert status.has_subscription is True
-        assert status.expires_at == past
+        assert status.expires_at == _aware(past)
         assert status.is_expired is True
     
     def test_pending_activation(self):
         """Subscription with pending activation should return correct status"""
-        now = datetime(2024, 1, 15, 12, 0, 0)
+        now = NOW_UTC
         future = datetime(2024, 2, 15, 12, 0, 0)
         subscription = {
             "status": "active",
@@ -197,16 +210,16 @@ class TestGetSubscriptionStatus:
             "activation_status": "pending",
         }
         status = get_subscription_status(subscription, now)
-        
+
         assert status.is_active is False  # No UUID means not active
         assert status.has_subscription is True
-        assert status.expires_at == future
+        assert status.expires_at == _aware(future)
         assert status.activation_status == "pending"
         assert status.is_expired is False
     
     def test_default_activation_status(self):
         """Should default activation_status to 'active' if not provided"""
-        now = datetime(2024, 1, 15, 12, 0, 0)
+        now = NOW_UTC
         future = datetime(2024, 2, 15, 12, 0, 0)
         subscription = {
             "status": "active",

@@ -1,7 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Bell,
   Check,
   ChevronDown,
   Edit3,
@@ -19,7 +18,11 @@ import { ApiError, endpoints } from "@/lib/api";
 import { Spinner } from "@/components/Spinner";
 import { toast } from "@/store/toast";
 import { fmtDate, fmtNum } from "@/lib/format";
-import { Collapsible } from "@/components/Collapsible";
+import { cn } from "@/lib/cn";
+import { Bento, PageHeader, Surface } from "@/components/ui/Surface";
+import { KpiTile } from "@/components/ui/KpiTile";
+import { IconButton, StatusDot, type Tone } from "@/components/ui/controls";
+import { ErrorState, Skeleton } from "@/components/ui/states";
 
 interface NotifRow {
   key: string;
@@ -47,6 +50,10 @@ const CATEGORY_LABEL: Record<string, string> = {
   reminder: "🔔 Напоминания",
   other: "📦 Прочее",
 };
+
+const FIELD_LABEL = "mb-1.5 block text-[13px] font-medium t-body";
+const FIELD_HELP = "t-mute mt-1.5 text-[12px] leading-5";
+const CODE_CHIP = "rounded-full bg-tile-3 px-2 py-0.5 font-mono text-[12px]";
 
 export function AutomatedNotifications() {
   const list = useQuery({
@@ -86,121 +93,217 @@ export function AutomatedNotifications() {
   const totalCustom = list.data?.filter((n) => n.has_custom_text).length ?? 0;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 pb-8 pt-2 md:pt-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold text-fg">
-            <Bell className="h-5 w-5 text-fg-muted" />
-            Автоуведомления
-          </h1>
-          <p className="mt-1 max-w-xl text-sm text-fg-muted">
-            Все автоматические сообщения, которые бот шлёт пользователям
-            по расписанию (reminders, приветствия, оффер-триггеры).
-            Здесь можно править текст, отключать и менять окно отправки —
-            <b> без релиза</b>.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className="btn-primary"
-            title="Создать своё уведомление (только редактируемое, без code-триггера)"
-          >
-            <Plus className="h-3.5 w-3.5" /> Новое
-          </button>
-          <button
-            type="button"
-            onClick={() => list.refetch()}
-            className="btn-secondary"
-            disabled={list.isFetching}
-          >
-            {list.isFetching ? <Spinner /> : <RefreshCcw className="h-3.5 w-3.5" />}
-            Обновить
-          </button>
-        </div>
-      </header>
+    <>
+      <PageHeader
+        title="Автоуведомления"
+        sub={
+          <>
+            Все автоматические сообщения, которые бот шлёт пользователям по расписанию (reminders, приветствия,
+            оффер-триггеры). Здесь можно править текст, отключать и менять окно отправки — <b>без релиза</b>.
+          </>
+        }
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() => setShowCreate(true)}
+              className="btn-primary"
+              title="Создать своё уведомление (только редактируемое, без code-триггера)"
+            >
+              <Plus className="h-3.5 w-3.5" /> Новое
+            </button>
+            <button
+              type="button"
+              onClick={() => list.refetch()}
+              className="btn-secondary"
+              disabled={list.isFetching}
+            >
+              {list.isFetching ? <Spinner /> : <RefreshCcw className="h-3.5 w-3.5" />}
+              Обновить
+            </button>
+          </>
+        }
+      />
 
-      {/* KPI-сводка */}
-      <div className="grid grid-cols-3 gap-2">
-        <SummaryTile
+      <Bento>
+        {/* KPI-сводка */}
+        <KpiTile
+          className="sm:col-span-2 xl:col-span-4"
+          size="sm"
           label="Активных"
-          value={fmtNum(totalEnabled)}
-          icon={Check}
-          tone="success"
+          loading={list.isLoading}
+          value={<ToneValue tone="ok" label="Активны">{fmtNum(totalEnabled)}</ToneValue>}
         />
-        <SummaryTile
+        <KpiTile
+          className="sm:col-span-2 xl:col-span-4"
+          size="sm"
+          variant="raised"
           label="Отключено"
-          value={fmtNum(totalDisabled)}
-          icon={X}
-          tone="danger"
+          loading={list.isLoading}
+          value={<ToneValue tone="err" label="Отключены">{fmtNum(totalDisabled)}</ToneValue>}
         />
-        <SummaryTile
+        <KpiTile
+          className="sm:col-span-2 xl:col-span-4"
+          size="sm"
+          variant="steel"
           label="С кастомным текстом"
+          loading={list.isLoading}
           value={fmtNum(totalCustom)}
-          icon={Edit3}
         />
-      </div>
 
-      {/* Пояснение как читать колонки */}
-      <div className="rounded-xl border border-info/20 bg-info/[0.06] p-3 text-[12px] leading-relaxed text-fg-muted">
-        <Info className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-info" />
-        <b className="text-info">Подсказки.</b>{" "}
-        <b>Тумблер</b> — включить/отключить уведомление
-        (немедленное действие, следующий тик планировщика уже пропустит).
-        {" · "}
-        <b>Изменить</b> — правка текста и окна отправки (для reminder'ов —
-        сколько часов до истечения, ±допуск).
-        {" · "}
-        <b>Сброс</b> — вернуть заводской текст из кода.
-      </div>
+        {/* Пояснение как читать колонки */}
+        <Surface className="sm:col-span-6 xl:col-span-12" variant="raised" label="Подсказки">
+          <ul className="grid grid-cols-1 gap-2 text-[13px] leading-5 md:grid-cols-3">
+            <li className="rounded-row bg-tile-3 p-3">
+              <span className="font-semibold">Тумблер</span>
+              <span className="t-body">
+                {" "}
+                — включить/отключить уведомление (немедленное действие, следующий тик планировщика уже пропустит).
+              </span>
+            </li>
+            <li className="rounded-row bg-tile-3 p-3">
+              <span className="font-semibold">Изменить</span>
+              <span className="t-body">
+                {" "}
+                — правка текста и окна отправки (для reminder'ов — сколько часов до истечения, ±допуск).
+              </span>
+            </li>
+            <li className="rounded-row bg-tile-3 p-3">
+              <span className="font-semibold">Сброс</span>
+              <span className="t-body"> — вернуть заводской текст из кода.</span>
+            </li>
+          </ul>
+        </Surface>
 
-      {list.isLoading ? (
-        <div className="card flex items-center gap-2 p-6 text-sm text-fg-muted">
-          <Spinner /> Загружаю список…
-        </div>
-      ) : list.isError ? (
-        <div className="card p-4 text-sm text-danger">
-          Не удалось загрузить: {(list.error as ApiError)?.detail ?? "ошибка"}
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {catOrder.map((cat) => {
+        {list.isLoading ? (
+          <Surface className="sm:col-span-6 xl:col-span-12" aria-label="Загружаю список…">
+            <div className="flex flex-col gap-2" role="status" aria-label="Загружаю список…">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-16 rounded-row" />
+              ))}
+            </div>
+          </Surface>
+        ) : list.isError ? (
+          <ErrorState className="sm:col-span-6 xl:col-span-12" error={list.error} onRetry={() => list.refetch()} />
+        ) : (
+          catOrder.map((cat) => {
             const rows = grouped.get(cat);
             if (!rows || rows.length === 0) return null;
             const active = rows.filter((r) => r.is_enabled).length;
             return (
-              <Collapsible
+              <CategoryGroup
                 key={cat}
                 title={CATEGORY_LABEL[cat] ?? cat}
                 subtitle={`${rows.length} уведомлений · активных: ${active}`}
                 defaultOpen={cat === "trial"}
                 remember={`autonotif-cat-${cat}`}
               >
-                <div className="mt-2 space-y-2">
-                  {rows.map((n) => (
-                    <NotificationRow
-                      key={n.key}
-                      row={n}
-                      onEdit={() => setEditing(n)}
-                    />
-                  ))}
-                </div>
-              </Collapsible>
+                {rows.map((n) => (
+                  <NotificationRow key={n.key} row={n} onEdit={() => setEditing(n)} />
+                ))}
+              </CategoryGroup>
             );
-          })}
-        </div>
-      )}
+          })
+        )}
+      </Bento>
 
-      {editing && (
-        <EditModal
-          row={editing}
-          onClose={() => setEditing(null)}
-        />
-      )}
-      {showCreate && (
-        <CreateModal onClose={() => setShowCreate(false)} />
-      )}
+      {editing && <EditModal row={editing} onClose={() => setEditing(null)} />}
+      {showCreate && <CreateModal onClose={() => setShowCreate(false)} />}
+    </>
+  );
+}
+
+function ToneValue({ tone, label, children }: { tone: Tone; label: string; children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-3">
+      <StatusDot tone={tone} label={label} />
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Раскрывающаяся категория. Состояние открытия хранится в localStorage
+ * под тем же ключом, что и у общего Collapsible (`collapsible:<remember>`),
+ * так что сохранённые раньше состояния продолжают работать.
+ */
+function CategoryGroup({
+  title,
+  subtitle,
+  defaultOpen,
+  remember,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  defaultOpen: boolean;
+  remember: string;
+  children: ReactNode;
+}) {
+  const storageKey = `collapsible:${remember}`;
+  const [open, setOpen] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(storageKey);
+      if (v === "1") return true;
+      if (v === "0") return false;
+    } catch {
+      /* localStorage disabled — fall through */
+    }
+    return defaultOpen;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, open ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [open, storageKey]);
+
+  return (
+    <Surface className="sm:col-span-6 xl:col-span-12">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="no-tap-highlight -m-2 flex min-h-[44px] w-[calc(100%+1rem)] items-center justify-between gap-3 rounded-row p-2 text-left transition-colors hover:bg-tile-3"
+        aria-expanded={open}
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block text-[15px] font-semibold">{title}</span>
+          <span className="t-mute mt-0.5 block text-[12px]">{subtitle}</span>
+        </span>
+        <span className="icon-btn icon-btn-sm bg-tile-3" aria-hidden="true">
+          <ChevronDown className={cn("h-4 w-4 transition-transform duration-300 ease-out", open && "rotate-180")} />
+        </span>
+      </button>
+      <div className="collapsible" data-open={open ? "true" : "false"}>
+        <div className="collapsible-inner">
+          <div className="flex flex-col gap-2 pt-4">{children}</div>
+        </div>
+      </div>
+    </Surface>
+  );
+}
+
+function ModalHeader({ title, sub, onClose }: { title: ReactNode; sub?: ReactNode; onClose: () => void }) {
+  return (
+    <div className="mb-4 flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h3 className="text-[18px] font-semibold leading-6">{title}</h3>
+        {sub && <div className="t-mute mt-1 text-[13px] leading-5">{sub}</div>}
+      </div>
+      <IconButton label="Закрыть" onClick={onClose} className="bg-tile-3 hover:bg-tile-4">
+        <X className="h-4 w-4" />
+      </IconButton>
+    </div>
+  );
+}
+
+function Callout({ children }: { children: ReactNode }) {
+  return (
+    <div className="t-body flex gap-2 rounded-row bg-tile-3 p-3 text-[13px] leading-5">
+      <Info className="t-mute mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }
@@ -244,39 +347,22 @@ function CreateModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
-      <div className="card flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden p-0">
-        <div className="flex items-start justify-between gap-3 border-b border-border p-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Plus className="h-4 w-4 text-fg-muted" />
-              <h3 className="text-base font-semibold text-fg">
-                Новое уведомление
-              </h3>
-            </div>
-            <div className="mt-0.5 text-[11px] text-fg-subtle">
-              Создастся редактируемое admin-notification без code-триггера.
-              Отправка — только вручную через «Тест в TG».
-            </div>
-          </div>
-          <button type="button" onClick={onClose} className="btn-ghost">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+      <div className="tile w-full max-w-2xl p-5" role="dialog" aria-modal="true" aria-label="Новое уведомление">
+        <ModalHeader
+          title="Новое уведомление"
+          sub="Создастся редактируемое admin-notification без code-триггера. Отправка — только вручную через «Тест в TG»."
+          onClose={onClose}
+        />
 
-        <div className="flex-1 space-y-3 overflow-y-auto p-4">
-          <div className="rounded-lg border border-info/20 bg-info/[0.06] p-3 text-[12px] leading-relaxed text-fg-muted">
-            <Info className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-info" />
-            <b>Как использовать:</b> admin-notification — заготовка текста
-            для будущих кампаний или пробных отправок. Bot не шлёт их
-            автоматически (нет code-триггера), но их можно править,
-            отправлять себе тестом (кнопка «Тест в TG») и использовать
-            через API из своих скриптов.
-          </div>
+        <div className="flex flex-col gap-4">
+          <Callout>
+            <b>Как использовать:</b> admin-notification — заготовка текста для будущих кампаний или пробных
+            отправок. Bot не шлёт их автоматически (нет code-триггера), но их можно править, отправлять себе
+            тестом (кнопка «Тест в TG») и использовать через API из своих скриптов.
+          </Callout>
 
           <label className="block">
-            <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
-              Ключ (уникальный)
-            </div>
+            <span className={FIELD_LABEL}>Ключ (уникальный)</span>
             <input
               type="text"
               value={key}
@@ -285,17 +371,14 @@ function CreateModal({ onClose }: { onClose: () => void }) {
               className="input font-mono text-[13px]"
               autoFocus
             />
-            <div className="mt-1 text-[10px] text-fg-subtle">
-              Формат: <code>namespace.name</code> · a-z, 0-9, _ · например,{" "}
-              <code>admin.welcome_pro</code>. Namespace <code>admin.</code>{" "}
-              рекомендуется, чтобы отличать от зашитых в коде.
-            </div>
+            <span className={cn(FIELD_HELP, "block")}>
+              Формат: <code>namespace.name</code> · a-z, 0-9, _ · например, <code>admin.welcome_pro</code>.
+              Namespace <code>admin.</code> рекомендуется, чтобы отличать от зашитых в коде.
+            </span>
           </label>
 
           <label className="block">
-            <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
-              Заголовок (что видит админ)
-            </div>
+            <span className={FIELD_LABEL}>Заголовок (что видит админ)</span>
             <input
               type="text"
               value={title}
@@ -306,9 +389,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           </label>
 
           <label className="block">
-            <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
-              Описание (опционально)
-            </div>
+            <span className={FIELD_LABEL}>Описание (опционально)</span>
             <input
               type="text"
               value={description}
@@ -319,14 +400,8 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           </label>
 
           <label className="block">
-            <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
-              Категория
-            </div>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="input"
-            >
+            <span className={FIELD_LABEL}>Категория</span>
+            <select value={category} onChange={(e) => setCategory(e.target.value)} className="input">
               {[
                 ["trial", "🎁 Триал"],
                 ["subscription", "💳 Подписка"],
@@ -345,9 +420,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           </label>
 
           <label className="block">
-            <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
-              Текст сообщения (HTML)
-            </div>
+            <span className={FIELD_LABEL}>Текст сообщения (HTML)</span>
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
@@ -355,22 +428,16 @@ function CreateModal({ onClose }: { onClose: () => void }) {
               placeholder="🎁 <b>Летняя акция!</b>&#10;&#10;Скидка 20% на любой тариф до конца недели."
               className="input font-mono text-[12px] leading-relaxed"
             />
-            <div className="mt-1 text-[10px] text-fg-subtle">
-              Поддерживаются HTML-теги Telegram: <code>&lt;b&gt;</code>,{" "}
-              <code>&lt;i&gt;</code>, <code>&lt;code&gt;</code>,{" "}
-              <code>&lt;blockquote&gt;</code>. Эмодзи и{" "}
-              <code>&lt;tg-emoji&gt;</code> — тоже.
-            </div>
+            <span className={cn(FIELD_HELP, "block")}>
+              Поддерживаются HTML-теги Telegram: <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>,{" "}
+              <code>&lt;code&gt;</code>, <code>&lt;blockquote&gt;</code>. Эмодзи и <code>&lt;tg-emoji&gt;</code> —
+              тоже.
+            </span>
           </label>
         </div>
 
-        <div className="flex items-center gap-2 border-t border-border p-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-secondary flex-1"
-            disabled={create.isPending}
-          >
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          <button type="button" onClick={onClose} className="btn-secondary flex-1" disabled={create.isPending}>
             Отмена
           </button>
           <button
@@ -383,35 +450,6 @@ function CreateModal({ onClose }: { onClose: () => void }) {
             Создать
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function SummaryTile({
-  label,
-  value,
-  icon: Icon,
-  tone,
-}: {
-  label: string;
-  value: string;
-  icon: typeof Bell;
-  tone?: "success" | "danger";
-}) {
-  const textCls =
-    tone === "success"
-      ? "text-success"
-      : tone === "danger"
-      ? "text-danger"
-      : "text-fg";
-  return (
-    <div className="rounded-xl border border-border bg-bg-card p-3">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
-        <Icon className="h-3 w-3" /> {label}
-      </div>
-      <div className={`mt-1 text-lg font-semibold tabular-nums ${textCls}`}>
-        {value}
       </div>
     </div>
   );
@@ -447,67 +485,48 @@ function NotificationRow({
     : "";
 
   return (
-    <div
-      className={
-        row.is_enabled
-          ? "flex items-start gap-3 rounded-xl border border-border bg-bg-card p-3"
-          : "flex items-start gap-3 rounded-xl border border-border/60 bg-bg-subtle/40 p-3 opacity-70"
-      }
-    >
+    <div className="flex items-start gap-3 rounded-row bg-tile-3 p-3">
       <button
         type="button"
         onClick={() => toggle.mutate()}
         disabled={toggle.isPending}
         title={row.is_enabled ? "Отключить" : "Включить"}
-        className={
+        aria-label={row.is_enabled ? "Отключить" : "Включить"}
+        aria-pressed={row.is_enabled}
+        className={cn(
+          "tap-target mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full transition-colors disabled:opacity-50",
           row.is_enabled
-            ? "mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-success/15 text-success transition hover:bg-success/25"
-            : "mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-fg/5 text-fg-subtle transition hover:bg-fg/10"
-        }
+            ? "bg-success/15 text-success hover:bg-success/25"
+            : "t-mute bg-tile-1 hover:bg-tile-4",
+        )}
       >
         <Power className="h-4 w-4" />
       </button>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-baseline gap-2">
-          <span className="text-sm font-semibold text-fg">{row.title}</span>
-          {row.has_custom_text && (
-            <span className="rounded-md bg-info/15 px-1.5 py-0.5 text-[10px] font-semibold text-info">
-              CUSTOM
-            </span>
-          )}
-          {!row.is_enabled && (
-            <span className="rounded-md bg-danger/10 px-1.5 py-0.5 text-[10px] font-semibold text-danger">
-              OFF
-            </span>
-          )}
+      <div className={cn("min-w-0 flex-1", !row.is_enabled && "opacity-70")}>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[14px] font-semibold">{row.title}</span>
+          {row.has_custom_text && <span className="badge-info">CUSTOM</span>}
+          {!row.is_enabled && <span className="badge-danger">OFF</span>}
         </div>
-        <div className="mt-0.5 text-[11px] text-fg-muted">
-          <code className="rounded bg-fg/5 px-1 py-0.5 text-[10px]">
-            {row.key}
-          </code>
+        <div className="t-mute mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
+          <code className="rounded-full bg-tile-1 px-2 py-0.5 font-mono text-[12px]">{row.key}</code>
           {triggerLabel && (
-            <span className="ml-2 inline-flex items-center gap-0.5">
-              <Timer className="h-3 w-3" /> {triggerLabel}
+            <span className="tabular inline-flex items-center gap-1">
+              <Timer className="h-3 w-3" aria-hidden="true" /> {triggerLabel}
             </span>
           )}
-          {row.updated_at && (
-            <span className="ml-2 text-fg-subtle">
-              · изменено {fmtDate(row.updated_at)}
-            </span>
-          )}
+          {row.updated_at && <span>· изменено {fmtDate(row.updated_at)}</span>}
         </div>
-        {row.description && (
-          <div className="mt-1 text-[11px] leading-relaxed text-fg-subtle">
-            {row.description}
-          </div>
-        )}
+        {row.description && <div className="t-body mt-1.5 text-[13px] leading-5">{row.description}</div>}
       </div>
       <button
         type="button"
         onClick={onEdit}
-        className="btn-secondary shrink-0 self-center"
+        className="btn-secondary shrink-0 self-center bg-tile-1 hover:bg-tile-4"
+        aria-label="Изменить"
       >
-        <Edit3 className="h-3.5 w-3.5" /> Изменить
+        <Edit3 className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Изменить</span>
       </button>
     </div>
   );
@@ -625,53 +644,33 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
-      <div className="card flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden p-0">
-        <div className="flex items-start justify-between gap-3 border-b border-border p-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Bell className="h-4 w-4 text-fg-muted" />
-              <h3 className="text-base font-semibold text-fg">{row.title}</h3>
-            </div>
-            <div className="mt-0.5 text-[11px] text-fg-subtle">
-              <code>{row.key}</code>
-            </div>
-          </div>
-          <button type="button" onClick={onClose} className="btn-ghost">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+      <div className="tile w-full max-w-2xl p-5" role="dialog" aria-modal="true" aria-label={row.title}>
+        <ModalHeader title={row.title} sub={<code className={CODE_CHIP}>{row.key}</code>} onClose={onClose} />
 
-        <div className="flex-1 space-y-4 overflow-y-auto p-4">
-          {row.description && (
-            <div className="rounded-lg border border-info/20 bg-info/[0.06] p-3 text-[12px] leading-relaxed text-fg-muted">
-              <Info className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-info" />
-              {row.description}
-            </div>
-          )}
+        <div className="flex flex-col gap-5">
+          {row.description && <Callout>{row.description}</Callout>}
 
           {/* Stats за 7 дней */}
-          <div className="grid grid-cols-4 gap-2">
-            <StatMini label="Отправлено" value={stats.data?.sent ?? 0} tone="success" />
-            <StatMini label="Ошибки" value={stats.data?.failed ?? 0} tone="danger" />
-            <StatMini label="Заблокировали" value={stats.data?.blocked ?? 0} tone="danger" />
-            <StatMini label="Пропущено" value={stats.data?.skipped ?? 0} />
-          </div>
-          <div className="text-[10px] text-fg-subtle">
-            Статистика за последние 7 дней. «Пропущено» — юзеры для которых
-            это уведомление было отключено на момент срабатывания триггера.
+          <div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <StatMini label="Отправлено" value={stats.data?.sent ?? 0} tone="ok" />
+              <StatMini label="Ошибки" value={stats.data?.failed ?? 0} tone="err" />
+              <StatMini label="Заблокировали" value={stats.data?.blocked ?? 0} tone="err" />
+              <StatMini label="Пропущено" value={stats.data?.skipped ?? 0} />
+            </div>
+            <p className={FIELD_HELP}>
+              Статистика за последние 7 дней. «Пропущено» — юзеры для которых это уведомление было отключено на
+              момент срабатывания триггера.
+            </p>
           </div>
 
           {/* Trigger config (для reminder-типа) */}
           {isReminderConfig && (
-            <div className="rounded-xl border border-border bg-bg-subtle/40 p-3">
-              <div className="mb-2 text-[11px] uppercase tracking-wider text-fg-subtle">
-                Окно отправки
-              </div>
-              <div className="grid grid-cols-2 gap-3">
+            <section className="flex flex-col gap-3">
+              <h4 className="text-[15px] font-semibold">Окно отправки</h4>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="block">
-                  <div className="mb-1 text-[11px] text-fg-muted">
-                    За сколько часов до истечения
-                  </div>
+                  <span className={FIELD_LABEL}>За сколько часов до истечения</span>
                   <input
                     type="number"
                     value={beforeH}
@@ -679,13 +678,11 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
                     min={0.1}
                     max={720}
                     step={0.5}
-                    className="input"
+                    className="input tabular"
                   />
                 </label>
                 <label className="block">
-                  <div className="mb-1 text-[11px] text-fg-muted">
-                    Допуск (±часов)
-                  </div>
+                  <span className={FIELD_LABEL}>Допуск (±часов)</span>
                   <input
                     type="number"
                     value={tolH}
@@ -693,29 +690,24 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
                     min={0}
                     max={48}
                     step={0.5}
-                    className="input"
+                    className="input tabular"
                   />
                 </label>
               </div>
-              <div className="mt-2 text-[10px] text-fg-subtle">
-                Планировщик проверяет юзеров раз в минуту. Меньший допуск —
-                более точное окно, но выше риск пропустить (если worker
-                опоздает). 1ч по умолчанию — надёжный баланс.
-              </div>
+              <p className="t-mute text-[12px] leading-5">
+                Планировщик проверяет юзеров раз в минуту. Меньший допуск — более точное окно, но выше риск
+                пропустить (если worker опоздает). 1ч по умолчанию — надёжный баланс.
+              </p>
 
-              <div className="mt-3 border-t border-border/60 pt-3">
-                <div className="mb-1 text-[11px] uppercase tracking-wider text-fg-subtle">
-                  Дополнительный фильтр аудитории (опционально)
-                </div>
+              <label className="block">
+                <span className={FIELD_LABEL}>Дополнительный фильтр аудитории (опционально)</span>
                 <select
                   value={segmentFilter}
                   onChange={(e) => setSegmentFilter(e.target.value)}
                   className="input"
                   disabled={segments.isLoading}
                 >
-                  <option value="">
-                    — Без фильтра (шлём всем кто попал в окно) —
-                  </option>
+                  <option value="">— Без фильтра (шлём всем кто попал в окно) —</option>
                   {(segments.data ?? []).map((s) => (
                     <option key={s.key} value={s.key}>
                       {s.group ? `[${s.group}] ` : ""}
@@ -723,43 +715,40 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
                     </option>
                   ))}
                 </select>
-                <div className="mt-1 text-[10px] text-fg-subtle">
-                  Если задан — reminder уйдёт только тем, кто ЕЩЁ и
-                  входит в этот сегмент на момент срабатывания триггера.
-                  Полезно, например, для «7д до конца, но только тем, кто
-                  никогда не покупал» — узкий таргет.
-                </div>
-              </div>
-            </div>
+                <span className={cn(FIELD_HELP, "block")}>
+                  Если задан — reminder уйдёт только тем, кто ЕЩЁ и входит в этот сегмент на момент срабатывания
+                  триггера. Полезно, например, для «7д до конца, но только тем, кто никогда не покупал» — узкий
+                  таргет.
+                </span>
+              </label>
+            </section>
           )}
 
           {/* Text editor */}
-          <div>
-            <div className="mb-1 flex items-center justify-between">
-              <div className="text-[11px] uppercase tracking-wider text-fg-subtle">
-                Текст сообщения (HTML)
-              </div>
+          <section>
+            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-[15px] font-semibold">Текст сообщения (HTML)</h4>
               <button
                 type="button"
                 onClick={() => reset.mutate()}
                 disabled={reset.isPending || !row.has_custom_text}
-                className="btn-ghost text-[11px]"
+                className="btn-ghost px-3 text-[13px]"
                 title="Восстановить заводской текст"
               >
-                <RotateCcw className="h-3 w-3" /> Сброс к дефолту
+                <RotateCcw className="h-3.5 w-3.5" /> Сброс к дефолту
               </button>
             </div>
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               rows={10}
+              aria-label="Текст сообщения (HTML)"
               className="input font-mono text-[12px] leading-relaxed"
             />
-            <div className="mt-1 text-[10px] text-fg-subtle">
-              Поддерживаются HTML-теги Telegram: <code>&lt;b&gt;</code>,{" "}
-              <code>&lt;i&gt;</code>, <code>&lt;code&gt;</code>,{" "}
-              <code>&lt;blockquote&gt;</code>, <code>&lt;a href&gt;</code>.
-              Эмодзи и <code>&lt;tg-emoji&gt;</code> — тоже.
+            <p className={FIELD_HELP}>
+              Поддерживаются HTML-теги Telegram: <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>,{" "}
+              <code>&lt;code&gt;</code>, <code>&lt;blockquote&gt;</code>, <code>&lt;a href&gt;</code>. Эмодзи и{" "}
+              <code>&lt;tg-emoji&gt;</code> — тоже.
               {row.template_vars.length > 0 && (
                 <>
                   {" · "}
@@ -772,21 +761,22 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
                   ))}
                 </>
               )}
-            </div>
-          </div>
+            </p>
+          </section>
 
           {/* Preview */}
-          <details className="rounded-xl border border-border bg-bg-subtle/40 p-3">
-            <summary className="flex cursor-pointer items-center gap-1 text-[11px] uppercase tracking-wider text-fg-subtle">
-              <ChevronDown className="h-3 w-3" /> Заводской текст (read-only)
+          <details className="group rounded-row bg-tile-3">
+            <summary className="t-body flex min-h-[44px] cursor-pointer list-none items-center [&::-webkit-details-marker]:hidden gap-1.5 px-3 text-[13px] font-medium">
+              <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />
+              Заводской текст (read-only)
             </summary>
-            <pre className="mt-2 whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-fg-muted">
+            <pre className="t-body whitespace-pre-wrap px-3 pb-3 font-mono text-[12px] leading-relaxed">
               {row.default_text_ru}
             </pre>
           </details>
         </div>
 
-        <div className="flex items-center gap-2 border-t border-border p-4">
+        <div className="mt-5 flex flex-wrap items-center gap-2">
           {!row.is_code_registered && (
             <button
               type="button"
@@ -795,8 +785,9 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
                   del.mutate();
               }}
               disabled={del.isPending}
-              className="btn-ghost text-danger hover:text-danger"
+              className="btn-danger"
               title="Удалить admin-created уведомление (код-owned нельзя)"
+              aria-label="Удалить уведомление"
             >
               {del.isPending ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" />}
             </button>
@@ -811,12 +802,7 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
             {testSend.isPending ? <Spinner /> : <Send className="h-3.5 w-3.5" />}
             Тест в TG
           </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-secondary flex-1"
-            disabled={save.isPending}
-          >
+          <button type="button" onClick={onClose} className="btn-secondary flex-1" disabled={save.isPending}>
             Отмена
           </button>
           <button
@@ -841,22 +827,15 @@ function StatMini({
 }: {
   label: string;
   value: number;
-  tone?: "success" | "danger";
+  tone?: Tone;
 }) {
-  const textCls =
-    tone === "success"
-      ? "text-success"
-      : tone === "danger"
-      ? "text-danger"
-      : "text-fg";
   return (
-    <div className="rounded-lg border border-border bg-bg-card p-2 text-center">
-      <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
+    <div className="rounded-row bg-tile-3 p-3">
+      <div className="t-mute flex items-center gap-1.5 text-[12px]">
+        {tone && <StatusDot tone={tone} />}
         {label}
       </div>
-      <div className={`mt-0.5 text-base font-semibold tabular-nums ${textCls}`}>
-        {fmtNum(value)}
-      </div>
+      <div className="tabular mt-1 text-[22px] font-semibold leading-7">{fmtNum(value)}</div>
     </div>
   );
 }

@@ -25,6 +25,9 @@ class _Conn:
         return False
 
     async def fetch(self, query, *args):
+        if "is_reachable = FALSE" in query:
+            # get_users_by_segment's unreachable filter (HOW_IT_WORKS P2): nobody blocked the bot here
+            return []
         self._captured["query"] = query
         self._captured["args"] = args
         return [{"telegram_id": 111}, {"telegram_id": 222}]
@@ -70,7 +73,9 @@ async def test_expired_within_1y_listed_in_dashboard_segments():
         return [1, 2, 3]
 
     with patch.object(br.database, "get_users_by_segment", AsyncMock(side_effect=_fake_count)):
-        out = await br.broadcast_segments.__wrapped__() if hasattr(br.broadcast_segments, "__wrapped__") else await br.broadcast_segments()
+        # GET /segments handler is `segments_list` (b2a90f44); the name
+        # `broadcast_segments` never existed in this module.
+        out = await br.segments_list()
 
     keys = {s["key"] for s in out}
     assert "expired_within_1y" in keys

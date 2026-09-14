@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 
 import database
+from app.utils.telegram_safe import safe_send_message
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -47,11 +48,13 @@ async def farm_notifications_iteration(bot: Bot):
         elif farm_plots is None:
             continue
         
-        changed = False
-        
+        updates = []
+
         for plot in farm_plots:
             if plot["status"] not in ("growing", "ready"):
                 continue
+            upd = {"plot_id": plot.get("plot_id"), "plant_type": plot.get("plant_type"),
+                   "planted_at": plot.get("planted_at"), "set": {}}
             
             plant_type = plot.get("plant_type")
             if not plant_type or plant_type not in PLANT_TYPES:
@@ -61,52 +64,51 @@ async def farm_notifications_iteration(bot: Bot):
             ready_at = datetime.fromisoformat(plot["ready_at"]) if plot.get("ready_at") else None
             dead_at = datetime.fromisoformat(plot["dead_at"]) if plot.get("dead_at") else None
             
+            # R6: a notified_* flag is set only after a delivered message, so a
+            # 429 / network error is retried on the next pass instead of lost.
+            # Status transitions are game state and applied regardless (harvest
+            # checks the status: a dead plot must not stay "ready").
+
             # A: Ready notification
             if ready_at and now >= ready_at and not plot.get("notified_ready"):
-                plot["status"] = "ready"
-                plot["notified_ready"] = True
-                changed = True
-                try:
-                    await bot.send_message(
-                        telegram_id,
-                        f"🌾 Ваши <b>{plant_name}</b> созрели!\n"
-                        f"Заходите скорее собирать урожай, пока он не испортился 🌻",
-                        parse_mode="HTML"
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to send farm ready notification to {telegram_id}: {e}")
-            
+                upd["set"]["status"] = "ready"
+                if await safe_send_message(
+                    bot,
+                    telegram_id,
+                    f"🌾 Ваши <b>{plant_name}</b> созрели!\n"
+                    f"Заходите скорее собирать урожай, пока он не испортился 🌻",
+                    parse_mode="HTML",
+                ):
+                    upd["set"]["notified_ready"] = True
+
             # B: 12h warning
             if dead_at and now >= (dead_at - timedelta(hours=12)) and not plot.get("notified_12h"):
-                plot["notified_12h"] = True
-                changed = True
-                try:
-                    await bot.send_message(
-                        telegram_id,
-                        f"⚠️ Не забудьте собрать <b>{plant_name}</b>!\n"
-                        f"У вас осталось ~12 часов до того, как урожай сгниёт 🕐",
-                        parse_mode="HTML"
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to send farm 12h warning to {telegram_id}: {e}")
-            
+                if await safe_send_message(
+                    bot,
+                    telegram_id,
+                    f"⚠️ Не забудьте собрать <b>{plant_name}</b>!\n"
+                    f"У вас осталось ~12 часов до того, как урожай сгниёт 🕐",
+                    parse_mode="HTML",
+                ):
+                    upd["set"]["notified_12h"] = True
+
             # C: Dead notification
             if dead_at and now >= dead_at and not plot.get("notified_dead"):
-                plot["status"] = "dead"
-                plot["notified_dead"] = True
-                changed = True
-                try:
-                    await bot.send_message(
-                        telegram_id,
-                        f"💀 Ваши <b>{plant_name}</b> сгнили — вы не успели собрать урожай 😢\n"
-                        f"Зайдите на ферму, чтобы убрать погибшее растение.",
-                        parse_mode="HTML"
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to send farm dead notification to {telegram_id}: {e}")
-        
-        if changed:
-            await database.save_farm_plots(telegram_id, farm_plots)
+                upd["set"]["status"] = "dead"
+                if await safe_send_message(
+                    bot,
+                    telegram_id,
+                    f"💀 Ваши <b>{plant_name}</b> сгнили — вы не успели собрать урожай 😢\n"
+                    f"Зайдите на ферму, чтобы убрать погибшее растение.",
+                    parse_mode="HTML",
+                ):
+                    upd["set"]["notified_dead"] = True
+            if upd["set"]:
+                updates.append(upd)
+
+        if updates:
+            # Flags only, on a fresh locked read — never the stale copy (double harvest).
+            await database.apply_farm_notification_flags(telegram_id, updates)
 
 
 def _format_eta(delta_seconds: int) -> str:
@@ -140,11 +142,8 @@ async def broadcast_storm_announce(bot: Bot, users, scheduled_at: datetime):
     )
     sent = 0
     for u in users:
-        try:
-            await bot.send_message(u["telegram_id"], text, parse_mode="HTML")
+        if await safe_send_message(bot, u["telegram_id"], text, parse_mode="HTML"):
             sent += 1
-        except Exception as e:
-            logger.warning("STORM_ANNOUNCE push failed user=%s err=%s", u["telegram_id"], type(e).__name__)
     logger.info("STORM_ANNOUNCE broadcast: sent=%s/%s", sent, len(users))
     return sent
 
@@ -203,9 +202,11 @@ async def farm_storm_iteration(bot: Bot):
         total_k, total_s, total_ah, total_ahk = 0, 0, 0, 0
 
         for u in users:
+            # storm_id: a rerun after a timeout skips plots this storm already
+            # handled (N3); the plots themselves are re-read under the lock (N2).
             result = await database.execute_storm_for_user(
                 u["telegram_id"], u["farm_plots"], u["last_seen_at"],
-                announced_at, plant_rewards,
+                announced_at, plant_rewards, storm_id=storm["id"],
             )
             killed = result["killed"]
             shielded = result["shielded"]
@@ -237,10 +238,7 @@ async def farm_storm_iteration(bot: Bot):
                         lines.append(f"  {emoji} {name} (грядка {plot_id + 1}) +{half_kop // 100} ₽")
                 if shielded > 0:
                     lines.append(f"\n🛡 Спасено плёнкой: {shielded}")
-                try:
-                    await bot.send_message(u["telegram_id"], "\n".join(lines), parse_mode="HTML")
-                except Exception as e:
-                    logger.warning("STORM_WRAPUP push failed user=%s err=%s", u["telegram_id"], type(e).__name__)
+                await safe_send_message(bot, u["telegram_id"], "\n".join(lines), parse_mode="HTML")
 
         await database.mark_storm_executed(
             storm["id"],
@@ -256,6 +254,8 @@ async def farm_storm_iteration(bot: Bot):
 
 async def farm_notifications_task(bot: Bot):
     """Фоновая задача для отправки уведомлений о ферме (выполняется каждые 30 минут)"""
+    from app.core import runtime_health  # dashboard liveness (in-memory)
+    runtime_health.register("farm_notifications", interval_s=1800 + 120, initial_delay_s=60)
     # Небольшая задержка при старте, чтобы БД успела инициализироваться
     await asyncio.sleep(60)
 
@@ -300,6 +300,7 @@ async def farm_notifications_task(bot: Bot):
             except Exception:
                 pass
         finally:
+            runtime_health.record("farm_notifications", iteration_outcome, iteration_error_type)
             duration_ms = int((time.time() - iteration_start_time) * 1000)
             log_worker_iteration_end(
                 worker_name="farm_notifications",

@@ -1,4 +1,4 @@
-// Atlas Admin service worker.
+// Admin dashboard service worker.
 //
 // Two jobs:
 //   1. Be registered so iOS Safari treats the dashboard as installable.
@@ -6,7 +6,7 @@
 //      center. Clicking a notification opens the dashboard (or focuses
 //      an existing tab).
 
-const SW_VERSION = "atlas-admin-v2";
+const SW_VERSION = "admin-v3";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -33,12 +33,12 @@ self.addEventListener("push", (event) => {
     }
   }
 
-  const title = data.title || "Atlas Admin";
+  const title = data.title || "Admin";
   const options = {
     body: data.body || "",
     icon: data.icon || "/dashboard/icon-192.png",
     badge: data.badge || "/dashboard/icon-192.png",
-    tag: data.tag || "atlas",
+    tag: data.tag || "admin",
     data: { url: data.url || "/dashboard/" },
     // Re-show even if there's already one with the same tag.
     renotify: !!data.tag,

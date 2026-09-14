@@ -11,7 +11,26 @@ import { api, ApiError } from "./api";
  * the SDK.
  */
 
-export const isPasskeySupported = () => browserSupportsWebAuthn();
+export const isPasskeySupported = () => browserSupportsWebAuthn() && !isInAppBrowser();
+
+/**
+ * An app's embedded browser (Telegram, Instagram, VK … on iOS: a plain
+ * WKWebView). PublicKeyCredential exists there, but iOS only lets Safari,
+ * SFSafariViewController and apps with the domain's associated-domains
+ * entitlement use passkeys, so the Face ID prompt never appears and the
+ * call fails. Such pages get "open in Safari" guidance instead of a
+ * button that cannot work. Password login works everywhere.
+ */
+export function isInAppBrowser(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  if ((window as unknown as { TelegramWebviewProxy?: unknown }).TelegramWebviewProxy) return true;
+  if (/Telegram|FBAN|FBAV|Instagram|Line\/|VKClient|MicroMessenger/i.test(ua)) return true;
+  // iOS WKWebView: an iPhone/iPad UA without the "Safari/" token that real
+  // Safari, SFSafariViewController and other browsers (CriOS, FxiOS) send.
+  const ios = /iPhone|iPad|iPod/.test(ua);
+  return ios && !/Safari\//.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
+}
 
 export async function registerPasskey(label?: string): Promise<void> {
   const { options, challenge_token } = await api.post<{

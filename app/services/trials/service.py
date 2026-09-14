@@ -12,9 +12,14 @@ All functions are pure business logic:
 - Pure business logic only
 """
 
+import logging
+from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import database
+from app.services import provisioning_flags
+
+logger = logging.getLogger(__name__)
 
 
 # ====================================================================================
@@ -459,3 +464,599 @@ def get_final_reminder_config() -> Dict[str, Any]:
         "has_button": True,
         "db_flag": "trial_notif_71h_sent"
     }
+
+
+# ====================================================================================
+# Trial Activation (T15 — docs/audit/02_payment_core_plan.md §A flow 9)
+# ====================================================================================
+#
+# Unlike the helpers above, activation does I/O (grant_access, outbox job) and
+# logs. It never talks to Telegram itself: the bot is only handed to the
+# provisioning core / admin alerts.
+#
+# Flag "trial" off → the pre-T15 callback_activate_trial steps, moved as is.
+# Flag "trial" on → ONE transaction, zero HTTP inside it:
+#   pg_advisory_xact_lock("trial:{tg}") + users row FOR UPDATE
+#   re-check availability under the lock (double click / concurrent calls)
+#   UPDATE users SET trial_used_at … WHERE trial_used_at IS NULL   (mark used)
+#   grant_access(conn, defer_panel=True, _caller_holds_transaction=True, source="trial", 3 days)
+#   provisioning.enqueue("trial:{tg}", tariffs.for_trial(), premium_until=subscription_end)
+# commit → provisioning.run_now (never raises; failure = job pending + admin alert).
+
+ENTRYPOINT = "trial"
+JOB_SOURCE = "trial"
+TRIAL_DURATION = timedelta(days=3)
+
+_TRIAL_STATE_SQL = """
+    SELECT u.trial_used_at,
+           s.status, s.expires_at, s.source,
+           COALESCE(s.is_bypass_only, FALSE) AS is_bypass_only
+    FROM users u
+    LEFT JOIN subscriptions s ON s.telegram_id = u.telegram_id
+    WHERE u.telegram_id = $1
+    FOR UPDATE OF u
+"""
+
+_MARK_TRIAL_USED_SQL = """
+    UPDATE users
+    SET trial_used_at = CURRENT_TIMESTAMP,
+        trial_expires_at = $1
+    WHERE telegram_id = $2 AND trial_used_at IS NULL
+"""
+
+
+@dataclass(frozen=True)
+class TrialGrant:
+    """Outcome of a trial grant (callback_activate_trial builds its texts from it)."""
+    subscription_end: datetime        # premium end written by grant_access
+    trial_expires_at: datetime        # users.trial_expires_at (activation + 3 days)
+    activated_at: datetime            # "now" of the activation
+    uuid: Optional[str] = None        # None on the outbox path while activation is pending
+    vpn_key: Optional[str] = None
+    job_id: Optional[int] = None      # provisioning job id (outbox path only)
+    applied: Optional[bool] = None    # run_now finished the panel work now (outbox path only)
+
+
+def outbox_on() -> bool:
+    """True when trial activation must go through the provisioning outbox."""
+    return provisioning_flags.is_on(ENTRYPOINT)
+
+
+async def grant_trial(telegram_id: int, *, bot=None) -> Optional[TrialGrant]:
+    """Grant the trial to a user the caller already found eligible
+    (callback_activate_trial checks database.is_eligible_for_trial first).
+
+    Flag off: exactly the pre-T15 handler steps — grant_access(source="trial")
+    on its own connection, then mark_trial_used; raises if no VPN key came back
+    (the trial then stays unused). Never returns None.
+    Flag on: the outbox transaction; returns None when trial_used_at is already
+    set (a concurrent click won). Raises only if nothing was committed.
+    """
+    if outbox_on():
+        return await _grant_trial_outbox(telegram_id, bot=bot, require_available=False)
+    return await _grant_trial_legacy(telegram_id)
+
+
+async def activate_trial(telegram_id: int, *, bot=None) -> bool:
+    """Activate the 3-day trial (3 days premium + TRIAL_BYPASS_MB bypass) now.
+
+    True if THIS call activated a trial; False if it is not available or a
+    concurrent call activated it. Raises only if nothing was committed.
+
+    Flag on: availability = trial_used_at IS NULL, no paid subscription
+    (source='payment') and no active subscription — checked under the users-row
+    lock inside the grant transaction. A bypass-only row (written by
+    ensure_bypass_only_subscription right before, in the traffic-pack
+    confirmation) is not an active subscription: those buyers are exactly the
+    ones the trial is promised to.
+    Flag off: the pre-T15 handler steps (is_eligible_for_trial → grant).
+    """
+    if outbox_on():
+        return (await _grant_trial_outbox(telegram_id, bot=bot, require_available=True)) is not None
+    if not await database.is_eligible_for_trial(telegram_id):
+        return False
+    await _grant_trial_legacy(telegram_id)
+    return True
+
+
+async def activate_trial_safely(telegram_id: int, *, bot=None, where: str) -> bool:
+    """activate_trial for post-purchase hooks: never raises. The purchase is
+    already committed; a failure is logged and alerted to the admin."""
+    try:
+        activated = await activate_trial(telegram_id, bot=bot)
+    except Exception as e:
+        logger.error(
+            "TRIAL_ACTIVATION_FAILED: where=%s tg=%s %s: %s",
+            where, telegram_id, type(e).__name__, e,
+        )
+        await _alert_trial_failure(telegram_id, where, e, bot=bot)
+        return False
+    logger.info("TRIAL_ACTIVATION_AFTER_PURCHASE: where=%s tg=%s activated=%s", where, telegram_id, activated)
+    return activated
+
+
+async def _alert_trial_failure(telegram_id: int, where: str, err: BaseException, *, bot) -> None:
+    try:
+        from app.services import admin_alerts
+        target = bot
+        if target is None:
+            from app.api import payment_webhook
+            target = getattr(payment_webhook, "_bot", None)
+        if target is None:
+            logger.warning("TRIAL_ACTIVATION_ALERT_NO_BOT: where=%s tg=%s", where, telegram_id)
+            return
+        await admin_alerts.send_alert(
+            target, "payment",
+            (
+                "Trial activation after purchase FAILED\n"
+                f"user: tg:{telegram_id}\n"
+                f"where: {where}\n"
+                f"error: {type(err).__name__}: {str(err)[:300]}\n"
+                "The purchase is committed; the trial was NOT granted (nothing written)."
+            ),
+            force=True,
+        )
+    except Exception as e:
+        logger.warning("TRIAL_ACTIVATION_ALERT_FAILED: where=%s tg=%s %s", where, telegram_id, e)
+
+
+async def _grant_trial_legacy(telegram_id: int) -> TrialGrant:
+    """The pre-T15 callback_activate_trial grant, moved as is (same calls, same order)."""
+    duration = TRIAL_DURATION
+    now = datetime.now(timezone.utc)
+    trial_expires_at = now + duration
+
+    # Сначала выдаём VPN-доступ. Если VPN API зависнет или упадёт,
+    # флаг trial_used_at НЕ будет установлен — юзер сможет повторить попытку
+    # (вместо того, чтобы «потерять» триал из-за таймаута внешнего API).
+    result = await database.grant_access(
+        telegram_id=telegram_id,
+        duration=duration,
+        source="trial",
+        admin_telegram_id=None
+    )
+
+    uuid = result.get("uuid")
+    vpn_key = result.get("vless_url")
+    subscription_end = result.get("subscription_end")
+
+    if not uuid or not vpn_key:
+        raise Exception("Failed to create VPN access for trial")
+
+    # VPN успешно выдан — теперь помечаем trial как использованный.
+    # Если этот шаг упадёт, юзер получит доступ, а флаг останется пустым
+    # (в худшем случае сможет активировать повторно — мелкий приемлемый риск
+    # по сравнению с потерей триала из-за обрыва VPN API).
+    mark_ok = await database.mark_trial_used(telegram_id, trial_expires_at)
+    if not mark_ok:
+        logger.error(
+            f"mark_trial_used FAILED after grant_access succeeded: user={telegram_id} — "
+            f"subscription active but trial_used_at not set"
+        )
+    return TrialGrant(
+        subscription_end=subscription_end, trial_expires_at=trial_expires_at,
+        activated_at=now, uuid=uuid, vpn_key=vpn_key,
+    )
+
+
+def _unavailable_reason(row, now: datetime, *, strict: bool) -> Optional[str]:
+    """Why the trial cannot be activated now (None = it can)."""
+    if row is None:
+        return "no_user"
+    if row["trial_used_at"] is not None:
+        return "trial_used"
+    if not strict:
+        return None
+    if row["source"] == "payment":
+        return "paid_subscription"
+    expires = row["expires_at"]
+    if (
+        row["status"] == "active"
+        and expires is not None
+        and database._from_db_utc(expires) > now
+        and not row["is_bypass_only"]
+    ):
+        return "active_subscription"
+    return None
+
+
+def _rows_affected(status) -> int:
+    """asyncpg status "UPDATE n" → n."""
+    try:
+        return int(str(status).split()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+async def _grant_trial_outbox(telegram_id: int, *, bot, require_available: bool) -> Optional[TrialGrant]:
+    from app.services import tariffs
+
+    ent = tariffs.for_trial(TRIAL_DURATION.days)  # config error → raises before any write
+    return await _grant_premium_days_outbox(
+        telegram_id, bot=bot, ent=ent, tag="TRIAL",
+        reason_fn=lambda row, now: _unavailable_reason(row, now, strict=require_available),
+    )
+
+
+async def _grant_premium_days_outbox(telegram_id: int, *, bot, ent, tag: str, reason_fn) -> Optional[TrialGrant]:
+    """The trial outbox transaction for entitlement `ent` (the trial, or the
+    bypass-purchase gift): lock + availability (`reason_fn`) + mark trial used +
+    grant_access(defer_panel) + job "trial:{tg}", zero HTTP; then run_now."""
+    from app.services import provisioning
+
+    key = f"trial:{telegram_id}"
+    pool = await database.get_pool()
+    if pool is None:
+        raise RuntimeError("trial activation: DB pool unavailable")
+    now = datetime.now(timezone.utc)
+    trial_expires_at = now + TRIAL_DURATION
+    reason: Optional[str] = None
+    result: Dict[str, Any] = {}
+    job_id: Optional[int] = None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", key)
+            row = await conn.fetchrow(_TRIAL_STATE_SQL, telegram_id)
+            reason = reason_fn(row, now)
+            if reason is None:
+                existing = await conn.fetchval(
+                    "SELECT id FROM provisioning_jobs WHERE idempotency_key = $1", key,
+                )
+                if existing is not None:
+                    reason = "job_exists"  # trial_used_at was reset by hand: never a 2nd trial job
+            if reason is None:
+                marked = await conn.execute(
+                    _MARK_TRIAL_USED_SQL, database._to_db_utc(trial_expires_at), telegram_id,
+                )
+                if _rows_affected(marked) != 1:
+                    reason = "trial_used"
+            if reason is None:
+                result = await database.grant_access(
+                    telegram_id=telegram_id,
+                    duration=TRIAL_DURATION,
+                    source="trial",
+                    admin_telegram_id=None,
+                    conn=conn,
+                    _caller_holds_transaction=True,
+                    defer_panel=True,
+                ) or {}
+                subscription_end = result.get("subscription_end")
+                if subscription_end is None:
+                    raise RuntimeError("grant_access returned no subscription_end")
+                job_id = await provisioning.enqueue(
+                    conn, key=key, telegram_id=telegram_id, ent=ent,
+                    premium_until=subscription_end, source=JOB_SOURCE,
+                    context={"trial_expires_at": trial_expires_at.isoformat()},
+                )
+    if reason is not None:
+        logger.info("%s_NOT_ACTIVATED: tg=%s reason=%s", tag, telegram_id, reason)
+        return None
+    applied = await provisioning.run_now(job_id, bot=bot)
+    logger.info(
+        "%s_OUTBOX: tg=%s job=%s premium_until=%s bypass_mb=%s applied=%s",
+        tag, telegram_id, job_id, result["subscription_end"].isoformat(),
+        ent.bypass_bytes // (1024 * 1024), applied,
+    )
+    return TrialGrant(
+        subscription_end=result["subscription_end"], trial_expires_at=trial_expires_at,
+        activated_at=now, uuid=result.get("uuid"), vpn_key=result.get("vless_url"),
+        job_id=job_id, applied=applied,
+    )
+
+
+# ====================================================================================
+# Gift for a GB pack bought from «🌐 Только обход блокировок» (owner, 2026-09-14)
+# ====================================================================================
+#
+# A user WITHOUT an active premium subscription who buys GB on that screen gets
+# the purchased GB (the pack path, unchanged) AND the trial's 3 days of basic
+# premium as a gift — regardless of the "trial" feature flag and WITHOUT the
+# trial's TRIAL_BYPASS_MB (the GB are the ones bought). One-time per user in the
+# trial's store: users.trial_used_at (+ the job key "trial:{tg}"). A user who
+# already used the trial or the gift gets only the GB.
+# The gift IS the trial for everything after it: source='trial' +
+# users.trial_expires_at, so the trial expiry turns the row back into bypass-only
+# (the bypass entity keeps working) and a later paid purchase extends it.
+#
+# Outbox (the pack went through the outbox, or the "trial" entry point is on):
+#   the trial transaction with tariffs.for_bypass_purchase_gift() — 0 bytes, so
+#   the job never touches the bypass entity and cannot race the pack job.
+# Legacy (both off; the pack GB were delivered synchronously just before):
+#   claim trial_used_at under the advisory lock (ONE gift even for two concurrent
+#   pack payments), then grant_access(source="trial") with no transaction held.
+#   A failure releases the claim.
+# Any failure → forced admin alert + background retry (60 s / 5 min / 15 min);
+# the user is told when a retry grants it; a final forced alert if it gives up.
+
+GIFT_RETRY_DELAYS_S = (60, 300, 900)
+MSK = timezone(timedelta(hours=3))
+
+_GIFT_STATE_SQL = """
+    SELECT u.trial_used_at,
+           s.status, s.expires_at, s.source,
+           COALESCE(s.is_bypass_only, FALSE) AS is_bypass_only
+    FROM users u
+    LEFT JOIN subscriptions s ON s.telegram_id = u.telegram_id
+    WHERE u.telegram_id = $1
+"""
+
+_RELEASE_GIFT_CLAIM_SQL = """
+    UPDATE users
+    SET trial_used_at = NULL, trial_expires_at = NULL
+    WHERE telegram_id = $1 AND trial_expires_at = $2
+"""
+
+_gift_retry_tasks: Dict[int, Any] = {}   # telegram_id → pending retry task (one per user)
+
+
+def format_gift_until(dt: datetime) -> str:
+    """'DD.MM HH:MM' in Moscow time (the i18n text adds «МСК» / «MSK»)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(MSK).strftime("%d.%m %H:%M")
+
+
+def _gift_unavailable_reason(row, now: datetime) -> Optional[str]:
+    """Why the bypass-purchase gift cannot be granted now (None = it can):
+    the trial / gift was already used, or a premium subscription is active.
+    A bypass-only row (placeholder expires_at) is not a premium subscription."""
+    if row is None:
+        return "no_user"
+    if row["trial_used_at"] is not None:
+        return "trial_used"
+    expires = row["expires_at"]
+    if (
+        row["status"] == "active"
+        and expires is not None
+        and database._from_db_utc(expires) > now
+        and not row["is_bypass_only"]
+    ):
+        return "active_subscription"
+    return None
+
+
+async def is_bypass_gift_available(telegram_id: int) -> bool:
+    """The «🌐 Только обход блокировок» screen promises the gift only when the
+    grant would give it: the same rule, read-only (no lock)."""
+    try:
+        pool = await database.get_pool()
+        if pool is None:
+            return False
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(_GIFT_STATE_SQL, telegram_id)
+    except Exception as e:
+        logger.warning("BYPASS_GIFT_AVAILABILITY_FAILED: tg=%s %s: %s", telegram_id, type(e).__name__, e)
+        return False
+    return _gift_unavailable_reason(row, datetime.now(timezone.utc)) is None
+
+
+async def grant_bypass_purchase_gift(
+    telegram_id: int, *, bot=None, where: str, via_outbox: bool,
+) -> Optional[TrialGrant]:
+    """Grant the 3-day premium gift after a committed bypass-only GB purchase.
+
+    Returns the grant (premium end = .subscription_end) or None: not eligible,
+    or failed. Never raises — a failure is alerted (forced) and retried in the
+    background; the purchase itself stays as it is."""
+    try:
+        return await _attempt_gift(telegram_id, bot=bot, via_outbox=via_outbox)
+    except Exception as e:
+        logger.error(
+            "BYPASS_GIFT_FAILED: where=%s tg=%s outbox=%s %s: %s",
+            where, telegram_id, via_outbox, type(e).__name__, e,
+        )
+        await _send_gift_alert(
+            bot, telegram_id, where,
+            f"error: {type(e).__name__}: {str(e)[:300]}\n"
+            "The GB purchase is committed; the gift is NOT granted yet. "
+            "Retrying in 1 / 5 / 15 min — a final alert follows if it gives up.",
+            title="Bypass-purchase gift (3 days premium) FAILED",
+        )
+        _schedule_gift_retry(telegram_id, bot=bot, where=where, via_outbox=via_outbox)
+        return None
+
+
+async def _attempt_gift(telegram_id: int, *, bot, via_outbox: bool) -> Optional[TrialGrant]:
+    if via_outbox:
+        from app.services import tariffs
+        ent = tariffs.for_bypass_purchase_gift(TRIAL_DURATION.days)
+        return await _grant_premium_days_outbox(
+            telegram_id, bot=bot, ent=ent, tag="BYPASS_GIFT", reason_fn=_gift_unavailable_reason,
+        )
+    return await _grant_gift_legacy(telegram_id)
+
+
+async def _grant_gift_legacy(telegram_id: int) -> Optional[TrialGrant]:
+    now = datetime.now(timezone.utc)
+    trial_expires_at = now + TRIAL_DURATION
+    key = f"trial:{telegram_id}"
+    pool = await database.get_pool()
+    if pool is None:
+        raise RuntimeError("bypass gift: DB pool unavailable")
+    reason: Optional[str] = None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", key)
+            row = await conn.fetchrow(_TRIAL_STATE_SQL, telegram_id)
+            reason = _gift_unavailable_reason(row, now)
+            if reason is None:
+                existing = await conn.fetchval(
+                    "SELECT id FROM provisioning_jobs WHERE idempotency_key = $1", key,
+                )
+                if existing is not None:
+                    reason = "job_exists"
+            if reason is None:
+                marked = await conn.execute(
+                    _MARK_TRIAL_USED_SQL, database._to_db_utc(trial_expires_at), telegram_id,
+                )
+                if _rows_affected(marked) != 1:
+                    reason = "trial_used"
+    if reason is not None:
+        logger.info("BYPASS_GIFT_NOT_ACTIVATED: tg=%s reason=%s", telegram_id, reason)
+        return None
+
+    # The claim is committed; the panel work runs with NO transaction held.
+    try:
+        if not await database.get_remnawave_uuid(telegram_id):
+            # The pack GB are not delivered (no bypass entity in the DB): the legacy
+            # grant would create a trial-size (TRIAL_BYPASS_MB) bypass entity.
+            raise RuntimeError("bypass entity missing (pack GB not delivered yet)")
+        result = await database.grant_access(
+            telegram_id=telegram_id,
+            duration=TRIAL_DURATION,
+            source="trial",
+            admin_telegram_id=None,
+        ) or {}
+        subscription_end = result.get("subscription_end")
+        if subscription_end is None:
+            raise RuntimeError("grant_access returned no subscription_end")
+    except Exception:
+        landed = await _gift_landed_until(telegram_id, now)
+        if landed is not None:
+            # DB granted, the panel sync failed: purchase_flow already alerted
+            # and re-syncs the panel to the DB date — the gift stands.
+            logger.error(
+                "BYPASS_GIFT_PANEL_SYNC_FAILED: tg=%s premium_until=%s — DB granted, panel re-sync pending",
+                telegram_id, landed.isoformat(),
+            )
+            return TrialGrant(subscription_end=landed, trial_expires_at=trial_expires_at, activated_at=now)
+        await _release_gift_claim(pool, telegram_id, trial_expires_at)
+        raise
+    logger.info(
+        "BYPASS_GIFT_LEGACY: tg=%s premium_until=%s action=%s",
+        telegram_id, subscription_end.isoformat(), result.get("action"),
+    )
+    return TrialGrant(
+        subscription_end=subscription_end, trial_expires_at=trial_expires_at,
+        activated_at=now, uuid=result.get("uuid"), vpn_key=result.get("vless_url"),
+    )
+
+
+async def _gift_landed_until(telegram_id: int, now: datetime) -> Optional[datetime]:
+    """Premium end if the gift's DB part is in place (active trial row), else None."""
+    try:
+        sub = await database.get_subscription_any(telegram_id)
+    except Exception:
+        return None
+    if not sub or sub.get("source") != "trial" or sub.get("is_bypass_only") or sub.get("status") != "active":
+        return None
+    expires = sub.get("expires_at")
+    if not isinstance(expires, datetime):
+        return None
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return expires if expires > now else None
+
+
+async def _release_gift_claim(pool, telegram_id: int, trial_expires_at: datetime) -> None:
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(_RELEASE_GIFT_CLAIM_SQL, telegram_id, database._to_db_utc(trial_expires_at))
+    except Exception as e:
+        logger.critical(
+            "BYPASS_GIFT_CLAIM_RELEASE_FAILED: tg=%s %s: %s — trial_used_at stays set, gift NOT granted",
+            telegram_id, type(e).__name__, e,
+        )
+
+
+def _schedule_gift_retry(telegram_id: int, *, bot, where: str, via_outbox: bool) -> None:
+    import asyncio
+    tg = int(telegram_id)
+    running = _gift_retry_tasks.get(tg)
+    if running is not None and not running.done():
+        return
+    try:
+        task = asyncio.get_running_loop().create_task(
+            _gift_retry(tg, bot=bot, where=where, via_outbox=via_outbox),
+        )
+    except RuntimeError as e:
+        logger.error("BYPASS_GIFT_RETRY_NOT_SCHEDULED: tg=%s %s", tg, e)
+        return
+    _gift_retry_tasks[tg] = task
+
+    def _forget(done_task, _tg=tg):
+        if _gift_retry_tasks.get(_tg) is done_task:
+            _gift_retry_tasks.pop(_tg, None)
+    task.add_done_callback(_forget)
+
+
+async def _gift_retry_sleep(seconds: float) -> None:
+    """Separate hook so tests can control the retry timing."""
+    import asyncio
+    await asyncio.sleep(seconds)
+
+
+async def _gift_retry(telegram_id: int, *, bot, where: str, via_outbox: bool) -> None:
+    last_err: Optional[BaseException] = None
+    for delay in GIFT_RETRY_DELAYS_S:
+        await _gift_retry_sleep(delay)
+        try:
+            grant = await _attempt_gift(telegram_id, bot=bot, via_outbox=via_outbox)
+        except Exception as e:
+            last_err = e
+            logger.warning("BYPASS_GIFT_RETRY_FAILED: tg=%s %s: %s", telegram_id, type(e).__name__, e)
+            continue
+        if grant is None:
+            logger.warning("BYPASS_GIFT_RETRY_NOT_ELIGIBLE: tg=%s", telegram_id)
+            await _send_gift_alert(
+                bot, telegram_id, where,
+                "The retry found the user no longer eligible (trial/gift already used or an "
+                "active subscription). Nothing was granted by the retry — check manually.",
+                title="Bypass-purchase gift: retry stopped",
+            )
+            return
+        logger.info(
+            "BYPASS_GIFT_GRANTED_ON_RETRY: tg=%s premium_until=%s",
+            telegram_id, grant.subscription_end.isoformat(),
+        )
+        await _notify_gift_granted_late(bot, telegram_id, grant)
+        return
+    await _send_gift_alert(
+        bot, telegram_id, where,
+        f"last error: {type(last_err).__name__}: {str(last_err)[:300]}\n"
+        "All retries failed. Grant 3 days of premium manually (dashboard).",
+        title="Bypass-purchase gift: GAVE UP",
+    )
+
+
+def _alert_bot(bot):
+    if bot is not None:
+        return bot
+    try:
+        from app.api import payment_webhook
+        return getattr(payment_webhook, "_bot", None)
+    except Exception:
+        return None
+
+
+async def _send_gift_alert(bot, telegram_id: int, where: str, body: str, *, title: str) -> None:
+    try:
+        from app.services import admin_alerts
+        target = _alert_bot(bot)
+        if target is None:
+            logger.warning("BYPASS_GIFT_ALERT_NO_BOT: where=%s tg=%s", where, telegram_id)
+            return
+        await admin_alerts.send_alert(
+            target, "payment",
+            f"{title}\nuser: tg:{telegram_id}\nwhere: {where}\n{body}",
+            force=True,
+        )
+    except Exception as e:
+        logger.warning("BYPASS_GIFT_ALERT_FAILED: where=%s tg=%s %s", where, telegram_id, e)
+
+
+async def _notify_gift_granted_late(bot, telegram_id: int, grant: TrialGrant) -> None:
+    """A retry granted the gift after the purchase message was sent: tell the user."""
+    try:
+        from app.i18n import get_text
+        from app.services.language_service import resolve_user_language
+        from app.utils.telegram_safe import safe_send_message
+        target = _alert_bot(bot)
+        if target is None:
+            return
+        language = await resolve_user_language(telegram_id)
+        text = get_text(language, "bypass.gift_premium_granted",
+                        until=format_gift_until(grant.subscription_end))
+        await safe_send_message(target, telegram_id, text, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("BYPASS_GIFT_LATE_NOTICE_FAILED: tg=%s %s", telegram_id, e)
