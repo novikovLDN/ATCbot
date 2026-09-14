@@ -23,7 +23,7 @@ from app.core.system_state import (
     degraded_component,
     unavailable_component,
 )
-from app.core.rate_limit import check_rate_limit
+from app.core.rate_limit import check_rate_limit, refund_rate_limit
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.screens import show_profile
 from app.handlers.common.states import PromoCodeInput
@@ -180,6 +180,9 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
     # КРИТИЧНО: Проверяем eligibility перед активацией
     is_eligible = await database.is_eligible_for_trial(telegram_id)
     if not is_eligible:
+        # Nothing was activated: the hourly limit must not answer the next click
+        # with «Слишком много запросов» instead of this message.
+        refund_rate_limit(telegram_id, "trial_activate")
         error_text = i18n_get_text(language, "main.trial_not_available")
         await callback.answer(error_text, show_alert=True)
         logger.warning(f"Trial activation attempted by ineligible user: {telegram_id}")
@@ -210,6 +213,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         grant = await trial_service.grant_trial(telegram_id, bot=callback.bot)
         if grant is None:
             # Outbox path only: a concurrent click already activated the trial.
+            refund_rate_limit(telegram_id, "trial_activate")
             not_available_text = i18n_get_text(language, "main.trial_not_available")
             if placeholder_msg is not None:
                 try:
@@ -312,6 +316,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
 
     except Exception as e:
         logger.exception(f"Error activating trial for user {telegram_id}: {e}")
+        refund_rate_limit(telegram_id, "trial_activate")   # a failed attempt can be retried
         error_text = i18n_get_text(language, "main.trial_activation_error")
         await callback.message.answer(error_text, parse_mode="HTML")
 

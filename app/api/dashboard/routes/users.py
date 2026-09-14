@@ -769,6 +769,10 @@ async def user_delete(
         raise server_error("delete_failed") from e
     if not ok:
         raise HTTPException(404, "User not found or delete blocked")
+    # In-memory limits of the deleted account (e.g. trial 1/hour): a
+    # re-registered user starts fresh, like his DB rows.
+    from app.core.rate_limit import get_rate_limiter
+    get_rate_limiter().reset_user(telegram_id)
     bus.publish({
         "type": "admin:user_deleted",
         "telegram_id": telegram_id,

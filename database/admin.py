@@ -4034,6 +4034,13 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
             await conn.execute("DELETE FROM payments WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM broadcast_log WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM traffic_purchases WHERE telegram_id = $1", telegram_id)
+            # Per-user state keyed by telegram_id: a re-registered user must start
+            # clean. The old trial job ("trial:{tg}") blocked a new trial with
+            # job_exists (production 2026-09-14); funnel / notification sends
+            # would skip the new user's messages as "already sent".
+            await conn.execute("DELETE FROM provisioning_jobs WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM funnel_messages WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM automated_notification_sends WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM subscriptions WHERE telegram_id = $1", telegram_id)
             # The users he invited stay: a dangling users.referrer_id made their
             # next paid purchase fail in process_referral_reward ("Referrer … not

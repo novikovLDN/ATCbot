@@ -165,6 +165,31 @@ async def test_delete_user_removes_his_rows_and_panel_entities(e2e):
     assert await e2e.val("SELECT count(*) FROM users WHERE telegram_id=$1", u.id) == 1
 
 
+async def test_after_delete_the_same_account_can_take_the_trial_again(e2e):
+    """Production 2026-09-14: the deleted user's trial job ("trial:{tg}") stayed
+    in provisioning_jobs, the new trial was refused (job_exists), and that failed
+    attempt used up the 1/hour trial limit — every next click was refused."""
+    u = new_user()
+    await e2e.start_user(u)
+    e2e.provisioning("on", "trial")
+    await e2e.tap(u, "activate_trial")
+    await e2e.provisioning_tick()
+    assert e2e.panel.premium(u.id) is not None
+    await _admin(e2e)
+
+    r = await e2e.http.delete(f"{API}/users/{u.id}", headers=ORIGIN)
+    assert r.status_code == 200, r.text
+    await e2e.settle()
+    assert await e2e.val("SELECT count(*) FROM provisioning_jobs WHERE telegram_id=$1", u.id) == 0
+    assert e2e.panel.premium(u.id) is None
+
+    await e2e.start_user(u)
+    await e2e.tap(u, "activate_trial")                  # within the same hour
+    await e2e.provisioning_tick()
+    assert await e2e.val("SELECT trial_used_at IS NOT NULL FROM users WHERE telegram_id=$1", u.id) is True
+    assert e2e.panel.premium(u.id) is not None
+
+
 async def test_invitee_of_an_already_deleted_referrer_can_still_pay(e2e):
     """REF-DANGLING (fixed): a users.referrer_id pointing to a user that no longer
     exists is «no referrer» in process_referral_reward — no cashback, the link
