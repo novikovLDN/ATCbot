@@ -326,6 +326,10 @@ export function Subscribers() {
           </ul>
         </Surface>
 
+        <Surface className="sm:col-span-6 xl:col-span-12" label="Истекают в ближайшие 7 дней" hint={DEF.pipeline}>
+          {d.pipeline ? <PipelineBlock pipe={d.pipeline} /> : <EmptyState title="Не удалось посчитать" />}
+        </Surface>
+
         <Surface className="sm:col-span-6 xl:col-span-4" variant="steel" label="Продления" hint={DEF.renewal_rate}>
           <div className="tabular text-[30px] font-semibold leading-9">{fmtPct(r.renewal_rate)}</div>
           <div className="mt-2">
@@ -367,10 +371,6 @@ export function Subscribers() {
               ))}
             </div>
           )}
-        </Surface>
-
-        <Surface className="sm:col-span-6 xl:col-span-12" label="Истекают в ближайшие 7 дней" hint={DEF.pipeline}>
-          {d.pipeline ? <PipelineBlock pipe={d.pipeline} /> : <EmptyState title="Не удалось посчитать" />}
         </Surface>
 
         <Surface className="sm:col-span-6 xl:col-span-12" variant="raised" label={`Продажи подписок за ${days} дн.`} hint={DEF.motion}>

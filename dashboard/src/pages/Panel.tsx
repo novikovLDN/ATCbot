@@ -193,8 +193,9 @@ export function Panel() {
           label="Ноды"
           aside={
             nodes.data?.available && (
-              <span className="t-mute text-[12px]">
-                в сети {fmtNum(nodes.data.online)} из {fmtNum(nodes.data.total)}
+              <span className="t-mute text-[13px]">
+                в сети {fmtNum(nodes.data.online)} из {fmtNum(nodes.data.enabled ?? nodes.data.total)}
+                {nodes.data.disabled ? `, выключено ${fmtNum(nodes.data.disabled)}` : ""}
               </span>
             )
           }
