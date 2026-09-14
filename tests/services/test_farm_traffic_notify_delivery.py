@@ -155,11 +155,11 @@ def traffic(monkeypatch):
 
 async def test_traffic_notification_retries_a_short_flood_wait(traffic):
     bot = MagicMock(send_message=AsyncMock(side_effect=[_flood(0), _ok()]))
-    await tm._send_traffic_notification(bot, TG, 400 * 1024**2, "traffic_notified_500mb")
+    await tm._send_traffic_notification(bot, TG, 400 * 1024**2, 1024**3, premium=True)
     assert bot.send_message.await_count == 2
 
 
 async def test_blocked_traffic_user_is_marked_unreachable(traffic):
     bot = MagicMock(send_message=AsyncMock(side_effect=_blocked()))
-    await tm._send_traffic_notification(bot, TG, 0, "traffic_notified_0")
+    await tm._send_traffic_notification(bot, TG, 0, 0, premium=False)
     traffic.assert_awaited_once_with(TG)

@@ -1,10 +1,37 @@
 """
-Background worker: check traffic usage and send threshold notifications.
+Background worker: bypass traffic notices.
 
 Runs every 5 minutes. Gated by REMNAWAVE_ENABLED and DB_READY.
+
+Owner rules (2026-09-14):
+  * thresholds of the REMAINING bypass GB: 50, 30, 15, 10, 5, 3, 1 — only
+    those strictly below the amount left at the last GB grant / top-up apply
+    (a user with 20 GB left never gets «50» / «30»);
+  * at most ONE message per check — for the lowest threshold crossed; the
+    higher ones are marked with it (no cascade);
+  * at least MIN_GAP (3 h) between two traffic messages to the same user;
+  * more GB (a grant, a top-up) re-arms the thresholds below the new amount;
+  * 0 GB: premium active → «обход исчерпан, основные серверы работают»; no
+    premium → «доступ отключён, купите ГБ или подписку».
+
+Panel load is never above what it was: the same per-user GET with the same
+pacing, for a SUBSET of the old rows (database.get_traffic_watch_users: users
+already told «трафик закончился» are skipped until GB arrive). A screen that
+has just read the panel (profile / «Моя подписка») runs the same check on that
+data — check_live, no extra request.
+
+State lives in users (migration 084): traffic_notice_floor_bytes (NULL = not
+observed since the last grant; else thresholds >= floor are done) and
+traffic_notice_last_at. Every change is a compare-and-set, claimed before the
+send: the worker and a screen never tell the same threshold twice.
 """
+from __future__ import annotations
+
 import asyncio
 import logging
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -19,117 +46,162 @@ from app.utils.telegram_safe import safe_send_message
 logger = logging.getLogger(__name__)
 
 INTERVAL_SECONDS = 300  # 5 minutes
+REQUEST_PACING_S = 0.2  # between two per-user panel GETs (unchanged)
+
+GB = 1024 ** 3
+THRESHOLDS = tuple(t * GB for t in (50, 30, 15, 10, 5, 3, 1))
+MIN_GAP = timedelta(hours=3)
 
 
-def _format_bytes(b: int) -> str:
-    if b >= 1024**3:
-        return f"{b / 1024**3:.1f} ГБ"
-    if b >= 1024**2:
-        return f"{b / 1024**2:.0f} МБ"
-    return f"{b / 1024:.0f} КБ"
+@dataclass(frozen=True)
+class Decision:
+    new_floor: Optional[int]
+    notice: Optional[int] = None     # threshold bytes to tell (0 = exhausted); None = store only
 
 
-async def _check_user_traffic(bot: Bot, telegram_id: int, rmn_uuid: str) -> None:
-    """Check traffic thresholds and send one-shot notifications."""
+def decide(remaining: int, limit: int, floor: Optional[int], last_at: Optional[datetime],
+           now: datetime, *, legacy_zero_told: bool = False) -> Optional[Decision]:
+    """Pure: what to store / tell for one check (None = nothing at all)."""
+    if limit <= 0:
+        return None                                   # unlimited bypass: nothing to count down
+    remaining = max(0, int(remaining))
+    gap_ok = last_at is None or now - last_at >= MIN_GAP
+    if floor is None or remaining > floor:
+        # First check since a GB grant / top-up: the amount left is the baseline.
+        if remaining > 0:
+            return Decision(new_floor=remaining)
+        if legacy_zero_told:                          # told «0» by the old worker already
+            return Decision(new_floor=0)
+        return Decision(new_floor=0, notice=0) if gap_ok else None
+    crossed = [t for t in THRESHOLDS + (0,) if t < floor and remaining <= t]
+    if not crossed or not gap_ok:
+        return None
+    target = min(crossed)
+    return Decision(new_floor=target, notice=target)
+
+
+def premium_active(row: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    now = now or datetime.now(timezone.utc)
+    exp = row.get("expires_at")
+    return (not row.get("is_bypass_only") and (row.get("source") or "") != "bypass_only"
+            and exp is not None and exp > now)
+
+
+async def apply_check(bot: Bot, telegram_id: int, *, used: int, limit: int, premium: bool,
+                      state: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """Decide, claim (compare-and-set) and — only when claimed — send. True when
+    a message was sent. Never raises."""
+    now = now or datetime.now(timezone.utc)
     try:
-        traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-        if not traffic:
-            logger.warning("TRAFFIC_CHECK_NO_DATA: tg=%s uuid=%s", telegram_id, rmn_uuid[:8] if rmn_uuid else "N/A")
-            return
-
-        used = traffic["usedTrafficBytes"]
-        limit = traffic["trafficLimitBytes"]
-        if limit <= 0:
-            return
-
-        remaining = max(0, limit - used)
-
-        flags = await database.get_traffic_notification_flags(telegram_id)
-        if not flags:
-            return
-
-        for threshold_bytes, flag_key in config.TRAFFIC_NOTIFY_THRESHOLDS:
-            # Порог должен быть строго меньше лимита юзера — иначе он
-            # триггерится СРАЗУ после активации: у trial'а лимит 500 МБ,
-            # но пороги 8/5/3/1 ГБ все ≥ 500 МБ, поэтому за первые
-            # 30 минут летели 6 уведомлений подряд с текстом «купите
-            # дополнительный трафик». Строгое неравенство также
-            # гарантирует что порог 500 МБ не сработает для юзера
-            # с лимитом ровно 500 МБ на моменте активации.
-            # Особый случай: порог 0 ГБ (закончился трафик) — всегда
-            # актуален, любой юзер должен узнать что доступ отключился.
-            if threshold_bytes > 0 and threshold_bytes >= limit:
-                continue
-            if remaining <= threshold_bytes and not flags.get(flag_key, False):
-                await _send_traffic_notification(bot, telegram_id, remaining, flag_key)
-                await database.set_traffic_notification_flag(telegram_id, flag_key)
-                break  # One notification per iteration
-
-    except Exception as e:
+        floor, last_at = state.get("floor"), state.get("last_at")
+        d = decide(max(0, limit - used), limit, floor, last_at, now,
+                   legacy_zero_told=bool(state.get("legacy_zero_told")))
+        if d is None:
+            return False
+        new_last = now if d.notice is not None else last_at
+        if not await database.claim_traffic_notice_state(telegram_id, floor, last_at, d.new_floor, new_last):
+            return False
+        if d.notice is None:
+            return False
+        await _send_traffic_notification(bot, telegram_id, max(0, limit - used), d.notice, premium=premium)
+        return True
+    except Exception as e:  # noqa: BLE001
         logger.warning("TRAFFIC_CHECK_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
+        return False
 
 
-async def _send_traffic_notification(
-    bot: Bot,
-    telegram_id: int,
-    remaining_bytes: int,
-    flag_key: str,
-) -> None:
-    """Send traffic warning notification to user."""
+async def check_live(bot: Bot, telegram_id: int, *, used: int, limit: int, premium: bool) -> bool:
+    """The same check for a screen that has just read the panel — no extra
+    panel request (the numbers are the screen's). Never raises."""
     try:
+        state = await database.get_traffic_notice_state(telegram_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("TRAFFIC_LIVE_STATE_FAILED: tg=%s %s", telegram_id, type(e).__name__)
+        return False
+    if state is None:
+        return False
+    return await apply_check(bot, telegram_id, used=used, limit=limit, premium=premium, state=state)
+
+
+async def _check_user_traffic(bot: Bot, row: Dict[str, Any], now: datetime) -> None:
+    """One background check: one panel GET (as before), then apply_check."""
+    telegram_id = row["telegram_id"]
+    # Prefer numeric id (3.x fast-path без UUID→id auto-resolve).
+    # Fallback на uuid для legacy юзеров без забэкфильнутого id.
+    panel_ref = row.get("remnawave_id") or row["remnawave_uuid"]
+    try:
+        traffic = await remnawave_api.get_user_traffic(panel_ref)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("TRAFFIC_CHECK_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
+        return
+    if not traffic:
+        logger.warning("TRAFFIC_CHECK_NO_DATA: tg=%s", telegram_id)
+        return
+    await apply_check(
+        bot, telegram_id,
+        used=int(traffic.get("usedTrafficBytes") or 0), limit=int(traffic.get("trafficLimitBytes") or 0),
+        premium=premium_active(row, now),
+        state={"floor": row.get("traffic_notice_floor_bytes"), "last_at": row.get("traffic_notice_last_at"),
+               "legacy_zero_told": row.get("legacy_zero_told")},
+        now=now,
+    )
+
+
+def _text_key(threshold: int, premium: bool) -> str:
+    if threshold == 0:
+        return "traffic.zero_premium" if premium else "traffic.zero_no_premium"
+    if threshold >= 10 * GB:
+        return "traffic.left_info"
+    if threshold >= 3 * GB:
+        return "traffic.left_warn"
+    return "traffic.left_last"
+
+
+async def _send_traffic_notification(bot: Bot, telegram_id: int, remaining_bytes: int, threshold: int,
+                                     *, premium: bool) -> None:
+    """Send one traffic notice (already claimed). Never raises."""
+    try:
+        from app.services.subscriptions.live_state import format_bytes
         language = await resolve_user_language(telegram_id)
-
-        if flag_key == "traffic_notified_0":
-            text = i18n_get_text(language, "traffic.notify_zero")
-        elif flag_key == "traffic_notified_500mb":
-            text = i18n_get_text(language, "traffic.notify_500mb", remaining=_format_bytes(remaining_bytes))
-        elif flag_key == "traffic_notified_1gb":
-            text = i18n_get_text(language, "traffic.notify_1gb")
-        elif flag_key == "traffic_notified_3gb":
-            text = i18n_get_text(language, "traffic.notify_3gb", remaining=_format_bytes(remaining_bytes))
-        elif flag_key == "traffic_notified_5gb":
-            text = i18n_get_text(language, "traffic.notify_5gb", remaining=_format_bytes(remaining_bytes))
-        else:
-            text = i18n_get_text(language, "traffic.notify_8gb", remaining=_format_bytes(remaining_bytes))
-
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "traffic.buy_traffic_btn"),
-                callback_data="buy_traffic",
-            )],
-        ])
+        key = _text_key(threshold, premium)
+        text = i18n_get_text(language, key, remaining=format_bytes(language, remaining_bytes))
+        rows = [[InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.buy_traffic_btn"),
+            callback_data="buy_traffic",
+        )]]
+        if key == "traffic.zero_no_premium":
+            rows.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "traffic.buy_subscription"),
+                callback_data="menu_buy_vpn",
+            )])
         # safe_send_message: 403 marks the user unreachable, a short 429 is
-        # retried once. The caller still sets the flag after the attempt (one
-        # try per threshold — no per-5-min retries to a user who blocked the bot).
-        sent = await safe_send_message(bot, telegram_id, text, reply_markup=kb, parse_mode="HTML")
+        # retried once. One try per threshold — no retries to a user who blocked the bot.
+        sent = await safe_send_message(bot, telegram_id, text,
+                                       reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
         if sent:
-            logger.info("TRAFFIC_NOTIFICATION_SENT: tg=%s flag=%s remaining=%d", telegram_id, flag_key, remaining_bytes)
+            logger.info("TRAFFIC_NOTIFICATION_SENT: tg=%s threshold=%d remaining=%d", telegram_id, threshold, remaining_bytes)
         else:
-            logger.warning("TRAFFIC_NOTIFICATION_NOT_DELIVERED: tg=%s flag=%s", telegram_id, flag_key)
-    except Exception as e:
+            logger.warning("TRAFFIC_NOTIFICATION_NOT_DELIVERED: tg=%s threshold=%d", telegram_id, threshold)
+    except Exception as e:  # noqa: BLE001
         logger.warning("TRAFFIC_NOTIFICATION_FAIL: tg=%s %s: %s", telegram_id, type(e).__name__, e)
 
 
 async def traffic_monitor_iteration(bot: Bot) -> None:
-    """Single iteration: check all active Remnawave users."""
-    users = await database.get_active_remnawave_users()
+    """Single iteration: one panel GET per watched user, paced as before."""
+    users = await database.get_traffic_watch_users()
     if not users:
         return
-
-    for user in users:
-        telegram_id = user["telegram_id"]
-        # Prefer numeric id (3.x fast-path без UUID→id auto-resolve).
-        # Fallback на uuid для legacy юзеров без забэкфильнутого id.
-        panel_ref = user.get("remnawave_id") or user["remnawave_uuid"]
-        await _check_user_traffic(bot, telegram_id, panel_ref)
-        await asyncio.sleep(0.2)  # Rate limit API calls
+    now = datetime.now(timezone.utc)
+    for row in users:
+        await _check_user_traffic(bot, row, now)
+        await asyncio.sleep(REQUEST_PACING_S)  # Rate limit API calls
 
 
 async def traffic_monitor_task(bot: Bot) -> None:
     """Main loop — runs every INTERVAL_SECONDS."""
     logger.info("TRAFFIC_MONITOR: starting (interval=%ds)", INTERVAL_SECONDS)
     from app.core import runtime_health  # dashboard liveness (in-memory)
-    # One iteration walks every user with a panel UUID at 0.2 s per call,
+    # One iteration walks every watched user at 0.2 s per call,
     # so it can run long: a generous interval keeps "stale" meaningful.
     runtime_health.register("traffic_monitor", interval_s=INTERVAL_SECONDS + 1800, initial_delay_s=30)
     await asyncio.sleep(30)  # Initial delay

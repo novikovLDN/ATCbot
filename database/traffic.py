@@ -10,6 +10,8 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
+import asyncpg
+
 import database.core as _core
 from database.core import get_pool
 
@@ -326,6 +328,108 @@ async def reset_traffic_notification_flags(telegram_id: int) -> None:
                WHERE telegram_id = $1""",
             telegram_id,
         )
+        # GB arrived: the thresholds below the new amount apply again (the next
+        # check records the new baseline). Separate statement: a missing column
+        # (migration 084 not applied yet) must not break the grant that called us.
+        try:
+            await conn.execute(
+                "UPDATE users SET traffic_notice_floor_bytes = NULL WHERE telegram_id = $1", telegram_id,
+            )
+        except asyncpg.UndefinedColumnError:
+            pass
+
+
+# ── Bypass traffic notices (owner 2026-09-14, migration 084) ───────────
+
+# Background check = a SUBSET of the old selection (active row with a panel
+# pointer): a user already told «трафик закончился» (floor 0) is skipped until
+# GB arrive — a grant resets the floor (reset_traffic_notification_flags), a
+# bought pack after that message shows in traffic_purchases.
+_WATCH_SQL = """
+    SELECT s.telegram_id, s.remnawave_uuid, s.remnawave_id, s.subscription_type,
+           COALESCE(s.is_bypass_only, FALSE) AS is_bypass_only, s.source, s.expires_at,
+           u.traffic_notice_floor_bytes, u.traffic_notice_last_at,
+           COALESCE(u.traffic_notified_0, FALSE) AS legacy_zero_told
+    FROM subscriptions s
+    JOIN users u ON u.telegram_id = s.telegram_id
+    WHERE s.status = 'active'
+      AND s.remnawave_uuid IS NOT NULL
+      AND s.remnawave_uuid != ''
+      AND (u.traffic_notice_floor_bytes IS DISTINCT FROM 0
+           OR EXISTS (SELECT 1 FROM traffic_purchases tp
+                      WHERE tp.telegram_id = s.telegram_id
+                        AND tp.created_at > (u.traffic_notice_last_at AT TIME ZONE 'UTC')))
+"""
+
+
+async def get_traffic_watch_users() -> List[Dict[str, Any]]:
+    """Rows the background traffic check polls (see _WATCH_SQL). [] while
+    migration 084 is missing (the pass is skipped, nothing is guessed)."""
+    if not _core.DB_READY:
+        return []
+    pool = await get_pool()
+    if pool is None:
+        return []
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(_WATCH_SQL)
+        except asyncpg.UndefinedColumnError as e:
+            logger.warning("TRAFFIC_WATCH_SCHEMA_OUTDATED: %s — pass skipped", e)
+            return []
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["traffic_notice_last_at"] = _core._from_db_utc(d["traffic_notice_last_at"]) if d["traffic_notice_last_at"] else None
+        d["expires_at"] = _core._from_db_utc(d["expires_at"]) if d["expires_at"] else None
+        out.append(d)
+    return out
+
+
+async def get_traffic_notice_state(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """{floor, last_at, legacy_zero_told} of one user, or None (no row / schema)."""
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        try:
+            row = await conn.fetchrow(
+                """SELECT traffic_notice_floor_bytes, traffic_notice_last_at,
+                          COALESCE(traffic_notified_0, FALSE) AS legacy_zero_told
+                   FROM users WHERE telegram_id = $1""",
+                telegram_id,
+            )
+        except asyncpg.UndefinedColumnError:
+            return None
+    if row is None:
+        return None
+    last = row["traffic_notice_last_at"]
+    return {"floor": row["traffic_notice_floor_bytes"],
+            "last_at": _core._from_db_utc(last) if last else None,
+            "legacy_zero_told": bool(row["legacy_zero_told"])}
+
+
+async def claim_traffic_notice_state(telegram_id: int, old_floor: Optional[int], old_last_at,
+                                     new_floor: Optional[int], new_last_at) -> bool:
+    """Compare-and-set of the notice state: True only for the caller whose view
+    of the state was current — the worker and a screen never send one notice twice."""
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    to_db = lambda dt: _core._to_db_utc(dt) if dt is not None else None  # noqa: E731
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            """UPDATE users
+               SET traffic_notice_floor_bytes = $4::bigint, traffic_notice_last_at = $5::timestamp
+               WHERE telegram_id = $1
+                 AND traffic_notice_floor_bytes IS NOT DISTINCT FROM $2::bigint
+                 AND traffic_notice_last_at IS NOT DISTINCT FROM $3::timestamp""",
+            telegram_id, old_floor, to_db(old_last_at), new_floor, to_db(new_last_at),
+        )
+    return str(result).endswith(" 1")
 
 
 # ── Traffic purchases ──────────────────────────────────────────────────

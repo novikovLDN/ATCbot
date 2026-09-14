@@ -324,7 +324,12 @@ LANG = {
     'traffic.notify_3gb': "⚠️ {remaining} of bypass traffic remaining 🇷🇺\n\nBuy additional traffic to keep bypass working.",
     'traffic.notify_1gb': "🔴 Less than 1 GB of bypass traffic! Bypass will stop soon.",
     'traffic.notify_500mb': "❗️ Only {remaining} of bypass traffic left!",
-    'traffic.notify_zero': "🚫 Bypass traffic depleted.\n\nAtlas Fast 🇩🇪 continues working without limits.",
+    'traffic.left_info': "💡 {remaining} of bypass traffic left.\n\nYou can top up in advance — GB never expire.",
+    'traffic.left_warn': "📉 {remaining} of bypass traffic left.\n\nTop up GB so bypass keeps working without interruptions.",
+    'traffic.left_last': "🔴 {remaining} of bypass traffic left — bypass turns off soon.\n\nTop up GB to keep it.",
+    'traffic.zero_premium': "🚫 <b>Bypass traffic is used up.</b>\n\nThe main servers of your subscription keep working. Top up GB to get bypass back.",
+    'traffic.zero_no_premium': "🚫 <b>Bypass traffic is used up — access is off.</b>\n\nBuy bypass GB or a subscription to use the service again.",
+    'traffic.notify_zero':"🚫 Bypass traffic depleted.\n\nAtlas Fast 🇩🇪 continues working without limits.",
 
     # Bypass gift links — user-facing redemption messages
     'bypass_gift.activated': "🎁 <b>Gift activated!</b>\n\nYou received <b>{gb} GB</b> of bypass traffic.\n\nThese GB are now available and work independently of your subscription. Open «Enable bypass» to use them.",
