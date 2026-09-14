@@ -194,6 +194,17 @@ SELECT to_regclass('public.provisioning_jobs');                        -- NULL
 - [ ] Если `082` уже есть, **остановиться и разобраться**: 082 нигде, кроме этой ветки, не выкатывалась.
 - [ ] **Про дубль 006.** Раннер ключует миграцию **по числовому префиксу** (`migrations.py:67-73`), а не по имени файла. Файлы `006_add_subscription_fields.sql` и `006_broadcast_discounts.sql` оба имеют версию `'006'`. На существующей БД обе давно применены. **Никогда не удалять и не вставлять руками строку `'006'`** в `schema_migrations`, не создавать новые файлы с занятым номером.
 - [ ] **Блокировки.** 081 создаёт индексы без `CONCURRENTLY`: на время построения записи в `users`, `subscriptions`, `audit_log` ждут. При текущем объёме это секунды. Если таблицы большие, деплоить в тихое время.
+- [ ] **092 (`broadcast_log`) — создать индекс руками ДО деплоя.** Лог рассылок большой (строка на получателя), и без индекса дашборд «Вовлечённость» падает по таймауту. Миграция идёт в транзакции, `CONCURRENTLY` в ней нельзя, а построение обычным `CREATE INDEX` может не уложиться в `command_timeout=30` с (см. ниже) и заблокирует запись в лог. Поэтому заранее:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_broadcast_log_broadcast_status
+    ON broadcast_log (broadcast_id, status);
+-- проверка: индекс валиден
+SELECT indexrelid::regclass, indisvalid FROM pg_index
+ WHERE indexrelid = 'idx_broadcast_log_broadcast_status'::regclass;   -- indisvalid = t
+```
+
+  Если `indisvalid = f` (построение прервалось), `DROP INDEX CONCURRENTLY idx_broadcast_log_broadcast_status;` и создать снова. После этого миграция 092 — no-op.
 - [ ] **Таймаут.** Миграции идут на соединении пула с `command_timeout=30` с (`database/core.py:250`, env `DB_POOL_COMMAND_TIMEOUT` **без префикса**). Если построение индекса не уложится в 30 с:
   - миграция 081 упадёт;
   - бот уйдёт в деградированный режим;
