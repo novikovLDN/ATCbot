@@ -125,6 +125,56 @@ async def log_incoming_photo_file_id(message: Message):
     except Exception as e:
         logger.warning("PHOTO_FILE_ID_RECEIVED log failed: %s", e)
 
+
+@payments_router.message(F.refunded_payment)
+async def process_refunded_payment(message: Message):
+    """TG-RT-3: Telegram refunded a payment (a Stars refund arrives as the
+    `refunded_payment` service message). Refunds → log + payment_errors +
+    FORCED admin alert; access is NOT revoked automatically. Never raises."""
+    rp = message.refunded_payment
+    tg = message.from_user.id if message.from_user else None
+    is_stars = rp.currency == "XTR"
+    amount_line = f"{rp.total_amount} XTR" if is_stars else f"{rp.total_amount / 100.0:.2f} {rp.currency}"
+    charge = rp.telegram_payment_charge_id or "—"
+    logger.warning(
+        "TELEGRAM_REFUND tg=%s amount=%s payload=%s charge=%s — access NOT revoked",
+        tg, amount_line, rp.invoice_payload, charge,
+    )
+    try:
+        await database.log_payment_error(
+            stage="telegram_refund",
+            telegram_id=tg,
+            purchase_id=(rp.invoice_payload or "")[:200] or None,
+            payment_provider="telegram_stars" if is_stars else "telegram_payment",
+            amount_rubles=None if is_stars else rp.total_amount / 100.0,
+            error_message=f"Telegram refunded {amount_line}; access not revoked automatically",
+            raw_payload={
+                "telegram_id": tg, "currency": rp.currency, "total_amount": rp.total_amount,
+                "invoice_payload": rp.invoice_payload, "telegram_payment_charge_id": rp.telegram_payment_charge_id,
+                "provider_payment_charge_id": rp.provider_payment_charge_id,
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("TELEGRAM_REFUND_LOG_FAILED tg=%s: %s", tg, type(e).__name__)
+    try:
+        from app.services.admin_alerts import send_alert
+        await send_alert(
+            message.bot,
+            "payment",
+            (
+                "[REFUND] Telegram refunded a payment\n"
+                f"User TG ID: {tg}\n"
+                f"Amount: {amount_line}\n"
+                f"Payload: {rp.invoice_payload}\n"
+                f"Telegram charge id: {charge}\n"
+                "Access was NOT revoked automatically — review the user's subscription manually."
+            ),
+            force=True,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("TELEGRAM_REFUND_ALERT_FAILED tg=%s: %s", tg, type(e).__name__)
+
+
 @payments_router.message(F.successful_payment)
 async def process_successful_payment(message: Message, state: FSMContext):
     """Обработчик successful_payment - успешная оплата картой
