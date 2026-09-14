@@ -39,6 +39,18 @@ def test_days_added_on_top_of_a_paid_subscription_keep_every_paid_reminder(left,
     assert d.should_send and d.reminder_type.value == kind
 
 
+@pytest.mark.parametrize("left", [timedelta(hours=2, minutes=5), timedelta(hours=3), timedelta(hours=3, minutes=55)])
+def test_paid_3h_window_is_wider_than_the_pass_interval(left):
+    """#14: a 1 h window with a pass every 45 min — one missed pass lost the 3 h
+    reminder. Now ±1 h with a pass every 15 min."""
+    import reminders
+    d = ns.should_send_reminder(_row(expires_at=NOW + left), NOW)
+    assert d.should_send and d.reminder_type.value == "reminder_3h"
+    assert reminders.REMINDERS_INTERVAL_SECONDS <= 15 * 60
+    # the window survives at least three passes
+    assert timedelta(hours=2) >= 3 * timedelta(seconds=reminders.REMINDERS_INTERVAL_SECONDS)
+
+
 @pytest.mark.parametrize("days", [3, 7, 14, 30])
 def test_free_days_get_the_24h_reminder_whatever_their_number(days):
     """#18: only exactly 7 days got a reminder (3 / 14 / 30 — nothing)."""

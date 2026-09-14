@@ -247,8 +247,9 @@ def should_send_reminder(
                 )
             return ReminderDecision(should_send=True, reminder_type=ReminderType.REMINDER_1D)
 
-        # Reminder at 3 hours — special 15% discount offer
-        elif is_within_time_window(time_until_expiry, timedelta(hours=3), timedelta(hours=0.5)):
+        # Reminder at 3 hours — special 15% discount offer. ±1 h (like the trial's):
+        # the reminders pass runs every 15 min, a missed pass must not lose it (#14).
+        elif is_within_time_window(time_until_expiry, timedelta(hours=3), timedelta(hours=1)):
             if subscription.get("reminder_3h_sent", False):
                 return ReminderDecision(
                     should_send=False,

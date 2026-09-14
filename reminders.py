@@ -31,6 +31,11 @@ _REMINDER_3D_PHOTO = {
 # Idempotency: skip if reminder sent within this window (container restart guard)
 REMINDER_IDEMPOTENCY_WINDOW = timedelta(minutes=30)
 
+# #14 (docs/notifications/matrix.md): a pass every 15 min. The 3 h reminder's
+# window is 2 h wide (service.should_send_reminder), so it survives a missed
+# pass or a restart; at 45 min with a 1 h window one hiccup lost it.
+REMINDERS_INTERVAL_SECONDS = 15 * 60
+
 logger = logging.getLogger(__name__)
 
 
@@ -334,7 +339,7 @@ async def send_smart_reminders(bot: Bot):
 async def reminders_task(bot: Bot):
     """Фоновая задача для отправки напоминаний об окончании подписки (выполняется каждые 30-60 минут)"""
     from app.core import runtime_health  # dashboard liveness (in-memory)
-    runtime_health.register("reminders", interval_s=45 * 60 + 120, initial_delay_s=60)
+    runtime_health.register("reminders", interval_s=REMINDERS_INTERVAL_SECONDS + 120, initial_delay_s=60)
     # Небольшая задержка при старте, чтобы БД успела инициализироваться
     await asyncio.sleep(60)
 
@@ -394,5 +399,4 @@ async def reminders_task(bot: Bot):
         if iteration_outcome == "cancelled":
             break
         
-        # Проверяем каждые 45 минут для баланса между точностью и нагрузкой
-        await asyncio.sleep(45 * 60)  # 45 минут в секундах
+        await asyncio.sleep(REMINDERS_INTERVAL_SECONDS)
