@@ -78,6 +78,8 @@ async def assert_gift_state(e2e, u, t0, *, gb: int, flag: str) -> dict:
     lo, hi = t0 + timedelta(days=3), utcnow() + timedelta(days=3)
     assert lo - timedelta(seconds=5) <= sub["expires_at"] <= hi + timedelta(seconds=5), sub["expires_at"]
     assert sub["uuid"], "premium key not written"
+    # #6: the trial worker must not announce «500 МБ в подарок» to the gift
+    assert sub["trial_notif_bypass_activated_sent"] is True
     assert sub["remnawave_uuid"], "bypass pointer missing — expiry would disable the bypass entity"
     user = await e2e.row("SELECT trial_used_at, trial_expires_at FROM users WHERE telegram_id=$1", u.id)
     assert user["trial_used_at"] is not None

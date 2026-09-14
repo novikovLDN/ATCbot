@@ -723,6 +723,8 @@ async def _grant_premium_days_outbox(telegram_id: int, *, bot, ent, tag: str, re
                 subscription_end = result.get("subscription_end")
                 if subscription_end is None:
                     raise RuntimeError("grant_access returned no subscription_end")
+                if tag == "BYPASS_GIFT":
+                    await conn.execute(_GIFT_NO_TRIAL_BYPASS_NOTICE_SQL, telegram_id)
                 job_id = await provisioning.enqueue(
                     conn, key=key, telegram_id=telegram_id, ent=ent,
                     premium_until=subscription_end, source=JOB_SOURCE,
@@ -778,6 +780,15 @@ _GIFT_STATE_SQL = """
     FROM users u
     LEFT JOIN subscriptions s ON s.telegram_id = u.telegram_id
     WHERE u.telegram_id = $1
+"""
+
+# #6 (docs/notifications/matrix.md): the gift row is source='trial', so the
+# trial worker's fallback sent «🛡 Обход подключён — 500 МБ в подарок» 5 min
+# later — false: the gift has no trial MB, the GB are the ones bought. Mark it
+# as already sent in the gift's own write.
+_GIFT_NO_TRIAL_BYPASS_NOTICE_SQL = """
+    UPDATE subscriptions SET trial_notif_bypass_activated_sent = TRUE
+    WHERE telegram_id = $1
 """
 
 _RELEASE_GIFT_CLAIM_SQL = """
@@ -910,6 +921,11 @@ async def _grant_gift_legacy(telegram_id: int) -> Optional[TrialGrant]:
         subscription_end = result.get("subscription_end")
         if subscription_end is None:
             raise RuntimeError("grant_access returned no subscription_end")
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(_GIFT_NO_TRIAL_BYPASS_NOTICE_SQL, telegram_id)
+        except Exception as e:  # noqa: BLE001 — the gift stands; worst case one wrong notice
+            logger.warning("BYPASS_GIFT_NOTICE_FLAG_FAILED: tg=%s %s", telegram_id, type(e).__name__)
     except Exception:
         landed = await _gift_landed_until(telegram_id, now)
         if landed is not None:
