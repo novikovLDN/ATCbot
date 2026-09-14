@@ -58,6 +58,41 @@ async def test_sync_removes_retired_rows_and_stale_windows(monkeypatch):
     assert strips and set(strips[0][0]) == set(FIXED_WINDOW_KEYS) and list(strips[0][1]) == list(WINDOW_FIELDS)
 
 
+async def test_window_only_patch_of_a_fixed_window_reminder_leaves_its_config_alone(monkeypatch):
+    """The window fields of a paid reminder are dropped; what was left ({}) was
+    written as the whole trigger_config — its segment_filter was wiped."""
+    from app.api.dashboard.routes import automated_notifications as route
+    update = AsyncMock(return_value=True)
+    monkeypatch.setattr(route, "update_notification", update)
+    payload = route.UpdatePayload(trigger_config={"before_expiry_hours": 20, "tolerance_hours": 1})
+    try:
+        await route.patch_notification(payload, key="subscription.reminder_7d", admin={"sub": "1"})
+    except Exception:
+        pass           # the response part after the update is not under test
+    assert update.await_args.kwargs["trigger_config"] is None
+
+
+async def test_update_notification_merges_trigger_config_fields(monkeypatch):
+    """PATCH changes only the fields it carries: {"segment_filter": …} must not
+    drop the stored window, a window must not drop the stored segment_filter."""
+    conn = _Conn()
+
+    class _Pool:
+        def acquire(self):
+            class _A:
+                async def __aenter__(self_inner):
+                    return conn
+
+                async def __aexit__(self_inner, *exc):
+                    return False
+            return _A()
+
+    monkeypatch.setattr(helper, "get_pool", AsyncMock(return_value=_Pool()))
+    await helper.update_notification("trial.reminder_24h", trigger_config={"segment_filter": "paid"})
+    (sql, args), = [(s, a) for s, a in conn.executed if s.lstrip().startswith("UPDATE automated_notifications")]
+    assert "trigger_config = COALESCE(trigger_config, '{}'::jsonb) || $2::jsonb" in " ".join(sql.split())
+
+
 @pytest.mark.parametrize("key,kept", [
     ("subscription.reminder_7d", {"segment_filter": "paid"}),
     ("trial.reminder_24h", {"segment_filter": "paid", "before_expiry_hours": 20, "tolerance_hours": 1}),

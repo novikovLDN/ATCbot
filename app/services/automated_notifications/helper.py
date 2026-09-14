@@ -373,7 +373,9 @@ async def update_notification(
         args.append(bool(is_enabled))
         idx += 1
     if trigger_config is not None:
-        fields.append(f"trigger_config = ${idx}::jsonb")
+        # Only the provided fields change (a window PATCH keeps segment_filter
+        # and vice versa); a field is cleared by sending it empty / null.
+        fields.append(f"trigger_config = COALESCE(trigger_config, '{{}}'::jsonb) || ${idx}::jsonb")
         args.append(_to_json(trigger_config))
         idx += 1
     if edited_by is not None:

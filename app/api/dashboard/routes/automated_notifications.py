@@ -165,8 +165,8 @@ async def patch_notification(
     if tc is not None and key in FIXED_WINDOW_KEYS:
         # #22: the paid reminders' windows are fixed in code — a window here
         # would be stored and never applied. segment_filter still applies.
-        tc = {k: v for k, v in tc.items() if k not in WINDOW_FIELDS}
-        payload.trigger_config = tc
+        tc = {k: v for k, v in tc.items() if k not in WINDOW_FIELDS} or None
+        payload.trigger_config = tc    # nothing left → the stored config is not touched
     if tc is not None:
         if "before_expiry_hours" in tc:
             try:
