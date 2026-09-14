@@ -182,7 +182,8 @@ async def claim(telegram_id: int, chain: str, anchor_at: datetime, step: str, ea
     * the chain rule still holds for this user and this event (a purchase or a
       trial activation since the batch was read stops the chain here);
     * no funnel message today (MSK) and no other lifecycle notification in the
-      last hours (automated_notification_sends, funnel keys excluded);
+      last hours (automated_notification_sends, funnel keys excluded, and the
+      traffic notices — users.traffic_notice_last_at);
     * earlier unsent steps are marked skipped (the latest due step wins);
     * the row is inserted — ON CONFLICT DO NOTHING: an overlapping pass or a
       restart never sends the step twice.
@@ -204,11 +205,18 @@ async def claim(telegram_id: int, chain: str, anchor_at: datetime, step: str, ea
                 telegram_id, _aware(day_start),
             ):
                 return None, "daily_cap"
+            # Other notifications: everything logged to automated_notification_sends
+            # (reminders, trial, «subscription ended», auto-renewal) and the traffic
+            # notices, whose send time is users.traffic_notice_last_at (naive UTC).
             if await conn.fetchval(
-                """SELECT 1 FROM automated_notification_sends
-                   WHERE telegram_id = $1 AND status = 'sent' AND sent_at >= $2::timestamptz
-                     AND key NOT LIKE 'funnel.%'
-                   LIMIT 1""",
+                """SELECT 1 WHERE EXISTS (
+                       SELECT 1 FROM automated_notification_sends
+                       WHERE telegram_id = $1 AND status = 'sent' AND sent_at >= $2::timestamptz
+                         AND key NOT LIKE 'funnel.%')
+                   OR EXISTS (
+                       SELECT 1 FROM users
+                       WHERE telegram_id = $1
+                         AND traffic_notice_last_at >= ($2::timestamptz AT TIME ZONE 'UTC'))""",
                 telegram_id, _aware(other_since),
             ):
                 return None, "other_notification"

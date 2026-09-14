@@ -23,6 +23,9 @@ from app import i18n as _i18n
 logger = logging.getLogger(__name__)
 
 MSK = timezone(timedelta(hours=3))
+# automated_notification_sends key of a delivered «subscription ended» notice
+# (read by the sales funnel's «6 h after another notification» rule).
+EXPIRED_NOTICE_KEY = "subscription.expired"
 
 _tasks: set = set()
 
@@ -116,6 +119,10 @@ async def notify_expired(bot, telegram_id: int, *, has_bypass: bool, free: bool 
         text, keyboard = await expired_notice(language, telegram_id, has_bypass=has_bypass, free=free)
         sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard, parse_mode="HTML")
         logger.info("EXPIRY_NOTICE_SENT user=%s bypass=%s sent=%s", telegram_id, has_bypass, sent is not None)
+        if sent is not None:
+            # The sales funnel waits 6 h after another notification: it reads this log.
+            from app.services.automated_notifications import log_notification_send
+            await log_notification_send(EXPIRED_NOTICE_KEY, telegram_id, status="sent")
         return sent is not None
     except Exception as e:  # noqa: BLE001
         logger.warning("EXPIRY_NOTICE_FAILED user=%s: %s", telegram_id, type(e).__name__)

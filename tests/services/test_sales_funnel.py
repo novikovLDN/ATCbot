@@ -339,6 +339,34 @@ async def test_telegram_refusal_is_recorded_failed(monkeypatch):
     assert env.finished == [(1, "failed", None, None)] and env.logged == [("funnel.start_1h", "failed")]
 
 
+@pytest.mark.parametrize("delivered", [True, False])
+async def test_the_expiry_notice_is_recorded_for_the_6h_gap(monkeypatch, delivered):
+    """The claim's «no funnel message within 6 h of another notification» reads
+    automated_notification_sends; «subscription ended» recorded nothing there."""
+    from app.services import language_service
+    from app.services.notifications import special_offer
+    from app.utils import telegram_safe
+    logged = []
+
+    async def fake_log(key, tg, *, status="sent", error=None):
+        logged.append((key, tg, status))
+
+    async def fake_notice(language, tg, **kw):
+        return "ended", None
+
+    async def fake_send(bot, tg, text, **kw):
+        return SimpleNamespace(message_id=1) if delivered else None
+
+    async def fake_lang(tg):
+        return "ru"
+    monkeypatch.setattr(autonotif, "log_notification_send", fake_log)
+    monkeypatch.setattr(special_offer, "expired_notice", fake_notice)
+    monkeypatch.setattr(telegram_safe, "safe_send_message", fake_send)
+    monkeypatch.setattr(language_service, "resolve_user_language", fake_lang)
+    assert await special_offer.notify_expired(object(), 42, has_bypass=False) is delivered
+    assert logged == ([("subscription.expired", 42, "sent")] if delivered else [])
+
+
 # ── pass / worker ────────────────────────────────────────────────────────
 
 async def test_outside_the_window_only_the_cutoff_is_fixed(monkeypatch):

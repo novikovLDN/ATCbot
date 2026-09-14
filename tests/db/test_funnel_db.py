@@ -91,3 +91,36 @@ async def test_claim_dedups_stops_and_caps(pool):
     async with pool.acquire() as c:
         await c.execute("UPDATE users SET trial_used_at = $2 WHERE telegram_id = $1", TG, _to_db_utc(now))
     assert await funnel_db.claim(TG, "start", a, "1d", ("1h",), **kw_next_day) == (None, "stopped")
+
+
+async def test_claim_waits_6h_after_an_expiry_or_a_traffic_notice(pool):
+    """«Nothing within 6 h of another notification» saw only the reminders: the
+    «subscription ended» notice and the traffic notices recorded nothing there."""
+    now = datetime.now(UTC)
+    await _start_user(pool, now - timedelta(hours=2))
+    (a,) = [r["anchor_at"] for r in await funnel_db.fetch_due(
+        "start", now=now, lower=now - timedelta(days=1), steps=[("1h", 3600.0)],
+        day_start=now - timedelta(hours=1), limit=10) if r["telegram_id"] == TG]
+    kw = dict(now=now, lower=now - timedelta(days=1), day_start=now - timedelta(hours=1),
+              other_since=now - timedelta(hours=6))
+    try:
+        async with pool.acquire() as c:          # a traffic notice 1 h ago
+            await c.execute("UPDATE users SET traffic_notice_last_at = $2 WHERE telegram_id = $1",
+                            TG, _to_db_utc(now - timedelta(hours=1)))
+        assert await funnel_db.claim(TG, "start", a, "1h", (), **kw) == (None, "other_notification")
+
+        async with pool.acquire() as c:          # 7 h ago; «subscription ended» 1 h ago
+            await c.execute("UPDATE users SET traffic_notice_last_at = $2 WHERE telegram_id = $1",
+                            TG, _to_db_utc(now - timedelta(hours=7)))
+            await c.execute("INSERT INTO automated_notification_sends (key, telegram_id, status, sent_at) "
+                            "VALUES ('subscription.expired', $1, 'sent', $2)", TG, now - timedelta(hours=1))
+        assert await funnel_db.claim(TG, "start", a, "1h", (), **kw) == (None, "other_notification")
+
+        async with pool.acquire() as c:          # both older than 6 h
+            await c.execute("UPDATE automated_notification_sends SET sent_at = $2 WHERE telegram_id = $1",
+                            TG, now - timedelta(hours=7))
+        cid, reason = await funnel_db.claim(TG, "start", a, "1h", (), **kw)
+        assert cid and reason == "claimed"
+    finally:
+        async with pool.acquire() as c:
+            await c.execute("DELETE FROM automated_notification_sends WHERE telegram_id = $1", TG)
