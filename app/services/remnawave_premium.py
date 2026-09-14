@@ -206,8 +206,15 @@ async def _ensure_premium_entity_state(
     ) or None
     if target_squad:
         update_fields["externalSquadUuid"] = target_squad
+    # PATCH the adopted entity by its numeric panel id. The vlessUuid is
+    # resolvable only through the subscriptions cache columns, and those are
+    # exactly what is missing when we adopt: the PATCH was silently skipped
+    # and the panel kept the OLD expireAt (hotfix of 4fae422c).
+    target = existing.get("id") if isinstance(existing, dict) else None
+    if target is None:
+        target = panel_uuid
     try:
-        result = await remnawave_api.update_user(panel_uuid, **update_fields)
+        result = await remnawave_api.update_user(target, **update_fields)
         if result is not None:
             logger.info(
                 "REMNAWAVE_PREMIUM_ADOPTED_PATCHED: uuid=%s expire=%s ext_squad=%s",

@@ -779,3 +779,43 @@ async def test_renew_premium_user_retries_on_exception_too():
         )
     assert ok is True
     assert update_mock.await_count == 2
+
+
+# ── Hotfix (4fae422c): adopted entity is PATCHed by its numeric id ────
+
+@pytest.mark.asyncio
+async def test_adoption_patches_by_numeric_id_when_uuid_cache_is_empty():
+    """The owner's example: after the first purchase the first renewal
+    extended the DB but not the panel. The adopted entity was PATCHed by
+    vlessUuid, which remnawave_api resolves only through the subscriptions
+    cache columns — exactly what is empty when we adopt — so the PATCH was
+    silently skipped. The real update_user must send PATCH {id: 382}."""
+    from app.services import remnawave_api
+    existing = {
+        "id": 382,
+        "vlessUuid": SAMPLE_UUID,
+        "shortUuid": "rec",
+        "username": "tg_42_premium",
+        "telegramId": 42,
+        "subscriptionUrl": "https://r/sub/rec",
+    }
+    request_mock = AsyncMock(return_value={"id": 382})
+    p_cfg, p_find, p_create, _, create_mock = _patch_api(
+        _cfg_stub(), find=AsyncMock(return_value=existing),
+    )
+    with p_cfg, p_find, p_create, \
+            patch.object(remnawave_api, "_lookup_cached_id_by_uuid", AsyncMock(return_value=None)), \
+            patch.object(remnawave_api, "_lookup_telegram_id_by_uuid", AsyncMock(return_value=None)), \
+            patch.object(remnawave_api, "_request", request_mock):
+        result = await remnawave_premium.create_premium_user_entity(
+            42, requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.ok is True
+    assert result.recovered is True
+    create_mock.assert_not_called()
+    request_mock.assert_awaited_once()
+    assert request_mock.call_args.args[:2] == ("PATCH", "/api/users")
+    body = request_mock.call_args.kwargs["json"]
+    assert body["id"] == 382
+    assert body["expireAt"].startswith("2030-01-01")
