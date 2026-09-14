@@ -5,7 +5,7 @@ import logging
 import re
 import unicodedata
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
@@ -36,7 +36,10 @@ def _sanitize_text(text: str) -> str:
     return "".join(cleaned).strip()
 
 
-@payments_router.message(TopUpStates.waiting_for_amount)
+# ~successful_payment / ~refunded_payment: this router runs before
+# payments_messages — a payment for an invoice sent earlier must not be eaten
+# by the "enter the amount" screen (TG-RT-9).
+@payments_router.message(TopUpStates.waiting_for_amount, ~F.successful_payment, ~F.refunded_payment)
 async def process_topup_amount(message: Message, state: FSMContext):
     """Обработка введенной суммы пополнения - показываем экран выбора способа оплаты"""
     # SAFE STARTUP GUARD: Проверка готовности БД
