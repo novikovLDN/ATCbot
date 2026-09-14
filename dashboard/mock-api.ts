@@ -32,6 +32,97 @@ const MOCK_TAGS = {
   _done0: 0,
 };
 
+/** Mutable state of the mocked /premium-repair job (Settings → «Премиум больше 5 лет»). */
+const MOCK_REPAIR = {
+  running_kind: null as "check" | "apply" | null,
+  check: {
+    state: "idle",
+    started_at: null as string | null,
+    finished_at: null as string | null,
+    started_by: null as number | null,
+    last_error: null as string | null,
+    summary: null as Record<string, unknown> | null,
+    would_fix: 0,
+    eta_seconds: 0,
+    stale: false,
+  },
+  apply: {
+    state: "idle",
+    total: 0,
+    done: 0,
+    fixed: 0,
+    errors: 0,
+    skipped: 0,
+    plus_one_day: 0,
+    db_shortened: 0,
+    candidates: 0,
+    remaining: 0,
+    limit: null as number | null,
+    last_error: null as string | null,
+    summary: null as Record<string, unknown> | null,
+    started_at: null as string | null,
+    updated_at: null as string | null,
+    finished_at: null as string | null,
+    started_by: null as number | null,
+  },
+  report: null as { kind: "check" | "apply"; generated_at: string; rows: number } | null,
+  _t0: 0,
+  _done0: 0,
+};
+
+/** Rows of the mocked premium repair report: 36 users, 2 skipped, 1 error after a repair. */
+function mockRepairRows(kind: "check" | "apply") {
+  const now = Date.now();
+  return Array.from({ length: 36 }, (_, i) => {
+    const tg = 400_100 + i * 131;
+    const source = i % 5 === 0 ? "fallback" : i % 3 === 0 ? "db" : "purchases";
+    const skip = i === 7 || i === 19;
+    const failed = kind === "apply" && i === 11;
+    const action = skip ? "skip" : failed ? "error" : kind === "apply" ? "fixed" : "would_fix";
+    return {
+      telegram_id: tg,
+      panel_id: 9_000 + i,
+      panel_username: `tg_${tg}_premium`,
+      panel_expire_at: new Date(now + (3_650 - i) * DAY).toISOString(),
+      db_expires_at: i % 4 === 0 ? new Date(now + 3_640 * DAY).toISOString() : null,
+      target: new Date(now + (skip ? 1_900 + i : source === "fallback" ? 1 : 20 + i * 9) * DAY).toISOString(),
+      target_source: source,
+      fallback: source === "fallback" ? (i % 2 ? "no_payments" : "past_date") : null,
+      db_leaked: i % 4 === 0,
+      db_shortened: action === "fixed" && i % 4 === 0,
+      action,
+      reason: skip ? "would_extend" : failed ? "panel_patch_rejected" : null,
+    };
+  });
+}
+
+function mockRepairSummary() {
+  const rows = mockRepairRows("check");
+  const act = rows.filter((r) => r.action === "would_fix");
+  const n = (pred: (r: (typeof rows)[number]) => boolean) => act.filter(pred).length;
+  return {
+    panel_entities: 4_210,
+    premium_entities: 1_980,
+    candidates: rows.length,
+    actions: { would_fix: act.length, skip: rows.length - act.length },
+    skip_reasons: { would_extend: rows.length - act.length },
+    error_reasons: {},
+    fallback: {
+      none: n((r) => !r.fallback),
+      no_payments: n((r) => r.fallback === "no_payments"),
+      past_date: n((r) => r.fallback === "past_date"),
+    },
+    target_source: {
+      purchases: n((r) => r.target_source === "purchases"),
+      db: n((r) => r.target_source === "db"),
+      fallback: n((r) => r.target_source === "fallback"),
+    },
+    plus_one_day: n((r) => !!r.fallback),
+    db_leaked: n((r) => r.db_leaked),
+    db_shortened: 0,
+  };
+}
+
 /** Deterministic pseudo-random so the charts don't reshuffle on reload. */
 function seeded(seed: number) {
   let s = seed;
@@ -1138,6 +1229,146 @@ export function mockApi(): Plugin {
             st.state = "stopped";
             st.running = false;
             st.finished_at = new Date().toISOString();
+            return send({ ok: true, status: view() });
+          }
+        }
+
+        // ── Premium > 5 years (Settings) — a check, then a paced repair ──
+        if (path.startsWith("/premium-repair/")) {
+          const st = MOCK_REPAIR;
+          const iso = () => new Date().toISOString();
+          const tick = () => {
+            if (st.running_kind === "check" && Date.now() - st._t0 > 2_500) {
+              const summary = mockRepairSummary();
+              const would = summary.actions.would_fix;
+              Object.assign(st.check, {
+                state: "done",
+                finished_at: iso(),
+                summary,
+                would_fix: would,
+                eta_seconds: Math.ceil(would / 2),
+                stale: false,
+              });
+              st.report = { kind: "check", generated_at: iso(), rows: 36 };
+              st.running_kind = null;
+            }
+            if (st.running_kind === "apply") {
+              const a = st.apply;
+              a.done = Math.min(a.total, st._done0 + Math.floor(((Date.now() - st._t0) / 1000) * 2));
+              a.errors = a.done > 11 ? 1 : 0;
+              a.fixed = a.done - a.errors;
+              a.plus_one_day = Math.floor(a.fixed / 5);
+              a.db_shortened = Math.floor(a.fixed / 4);
+              a.last_error = a.errors ? "tg:401541: panel_patch_rejected" : null;
+              a.updated_at = iso();
+              if (a.done >= a.total) {
+                Object.assign(a, { state: "done", finished_at: a.updated_at, remaining: 0 });
+                st.report = { kind: "apply", generated_at: iso(), rows: 36 };
+                st.running_kind = null;
+              }
+            }
+          };
+          const view = () => {
+            tick();
+            return {
+              running: st.running_kind !== null,
+              running_kind: st.running_kind,
+              rate_per_sec: 2,
+              check: st.check,
+              apply: st.apply,
+              report: st.report,
+            };
+          };
+          const runApply = () => {
+            st._t0 = Date.now();
+            st._done0 = st.apply.done;
+            st.apply.state = "running";
+            st.running_kind = "apply";
+          };
+          tick();
+          if (path === "/premium-repair/status") return send(view());
+          if (path === "/premium-repair/report") {
+            if (!st.report) return send({ kind: null, generated_at: null, total: 0, offset: 0, rows: [] });
+            const rows = mockRepairRows(st.report.kind);
+            const offset = Number(q.get("offset")) || 0;
+            const limit = Number(q.get("limit")) || 50;
+            return send({
+              kind: st.report.kind,
+              generated_at: st.report.generated_at,
+              total: rows.length,
+              offset,
+              rows: rows.slice(offset, offset + limit),
+            });
+          }
+          if (path === "/premium-repair/report.csv") {
+            if (!st.report) return send({ detail: "no_report" }, 404);
+            const rows = mockRepairRows(st.report.kind);
+            const cols = Object.keys(rows[0]) as (keyof (typeof rows)[number])[];
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/csv; charset=utf-8");
+            res.end([cols.join(","), ...rows.map((r) => cols.map((c) => String(r[c] ?? "")).join(","))].join("\n") + "\n");
+            return;
+          }
+          if (path === "/premium-repair/check") {
+            if (st.running_kind) return send({ detail: "already_running" }, 409);
+            Object.assign(st.check, {
+              state: "running",
+              started_at: iso(),
+              finished_at: null,
+              started_by: 1,
+              last_error: null,
+              summary: null,
+              stale: false,
+            });
+            st._t0 = Date.now();
+            st.running_kind = "check";
+            return send({ ok: true, status: view() });
+          }
+          if (path === "/premium-repair/start") {
+            if (st.running_kind) return send({ detail: "already_running" }, 409);
+            Object.assign(st.apply, {
+              total: st.check.would_fix || 34,
+              done: 0,
+              fixed: 0,
+              errors: 0,
+              skipped: 0,
+              plus_one_day: 0,
+              db_shortened: 0,
+              candidates: 36,
+              remaining: 0,
+              limit: null,
+              last_error: null,
+              summary: null,
+              started_at: iso(),
+              finished_at: null,
+              started_by: 1,
+            });
+            st.check.stale = true;
+            runApply();
+            return send({ ok: true, status: view() });
+          }
+          if (path === "/premium-repair/pause") {
+            if (st.running_kind !== "apply") return send({ detail: "not_running" }, 409);
+            st.apply.state = "paused";
+            st.apply.remaining = st.apply.total - st.apply.done;
+            st.running_kind = null;
+            return send({ ok: true, status: view() });
+          }
+          if (path === "/premium-repair/resume") {
+            if (st.running_kind) return send({ detail: "already_running" }, 409);
+            if (st.apply.state !== "paused" && st.apply.state !== "interrupted")
+              return send({ detail: "not_resumable" }, 409);
+            runApply();
+            return send({ ok: true, status: view() });
+          }
+          if (path === "/premium-repair/stop") {
+            if (!["running", "paused", "interrupted"].includes(st.apply.state)) return send({ detail: "not_running" }, 409);
+            Object.assign(st.apply, {
+              state: "stopped",
+              remaining: st.apply.total - st.apply.done,
+              finished_at: iso(),
+            });
+            if (st.running_kind === "apply") st.running_kind = null;
             return send({ ok: true, status: view() });
           }
         }

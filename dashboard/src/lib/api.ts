@@ -990,7 +990,120 @@ export const endpoints = {
     api.post<RemnawaveTagsActionResult>("/remnawave-tags/resume", {}, { idempotencyKey: newIdempotencyKey() }),
   remnawaveTagsStop: () =>
     api.post<RemnawaveTagsActionResult>("/remnawave-tags/stop", {}, { idempotencyKey: newIdempotencyKey() }),
+
+  // ── Premium expireAt > 5 years (Settings) ─────────────────────────
+  premiumRepairStatus: () => api.get<PremiumRepairStatus>("/premium-repair/status"),
+  premiumRepairReport: (limit: number, offset = 0) =>
+    api.get<PremiumRepairReport>(`/premium-repair/report?offset=${offset}&limit=${limit}`),
+  premiumRepairCheck: () =>
+    api.post<PremiumRepairActionResult>("/premium-repair/check", {}, { idempotencyKey: newIdempotencyKey() }),
+  premiumRepairStart: (limit: number | null) =>
+    api.post<PremiumRepairActionResult>(
+      "/premium-repair/start",
+      limit ? { limit } : {},
+      { idempotencyKey: newIdempotencyKey() },
+    ),
+  premiumRepairPause: () =>
+    api.post<PremiumRepairActionResult>("/premium-repair/pause", {}, { idempotencyKey: newIdempotencyKey() }),
+  premiumRepairResume: () =>
+    api.post<PremiumRepairActionResult>("/premium-repair/resume", {}, { idempotencyKey: newIdempotencyKey() }),
+  premiumRepairStop: () =>
+    api.post<PremiumRepairActionResult>("/premium-repair/stop", {}, { idempotencyKey: newIdempotencyKey() }),
+  premiumRepairCsv: () =>
+    downloadCsv("/premium-repair/report.csv", `premium_over_5y_${new Date().toISOString().slice(0, 10)}.csv`),
 };
+
+export type PremiumRepairState = RemnawaveTagsState;
+
+/** premium_repair.summarize() (+ the job's cumulative counters for an apply). */
+export interface PremiumRepairSummary {
+  panel_entities: number;
+  premium_entities: number;
+  /** Premium entities with expireAt > now + 5 years. */
+  candidates: number;
+  actions: Partial<Record<"would_fix" | "fixed" | "skip" | "error", number>>;
+  skip_reasons: Record<string, number>;
+  error_reasons: Record<string, number>;
+  fallback: Record<string, number>;
+  target_source: Partial<Record<"purchases" | "db" | "fallback", number>>;
+  /** Go to now + 1 day (no purchases / a past date). */
+  plus_one_day: number;
+  /** Leaked DB dates (> 5 years, not bypass-only) to shorten. */
+  db_leaked: number;
+  db_shortened: number;
+  remaining?: number;
+}
+
+export interface PremiumRepairCheck {
+  state: PremiumRepairState;
+  started_at: string | null;
+  finished_at: string | null;
+  started_by: number | null;
+  last_error: string | null;
+  summary: PremiumRepairSummary | null;
+  would_fix: number;
+  eta_seconds: number;
+  /** A repair ran after this check: its numbers no longer hold. */
+  stale: boolean;
+}
+
+export interface PremiumRepairApply {
+  state: PremiumRepairState;
+  total: number;
+  done: number;
+  fixed: number;
+  errors: number;
+  skipped: number;
+  plus_one_day: number;
+  db_shortened: number;
+  candidates: number;
+  /** Not reached (pause / stop / trial limit). */
+  remaining: number;
+  limit: number | null;
+  last_error: string | null;
+  summary: PremiumRepairSummary | null;
+  started_at: string | null;
+  updated_at: string | null;
+  finished_at: string | null;
+  started_by: number | null;
+}
+
+export interface PremiumRepairStatus {
+  running: boolean;
+  running_kind: "check" | "apply" | null;
+  rate_per_sec: number;
+  check: PremiumRepairCheck;
+  apply: PremiumRepairApply;
+  report: { kind: "check" | "apply"; generated_at: string; rows: number } | null;
+}
+
+export interface PremiumRepairRow {
+  telegram_id: number;
+  panel_id: number | null;
+  panel_username: string;
+  panel_expire_at: string | null;
+  db_expires_at?: string | null;
+  target: string | null;
+  target_source: "purchases" | "db" | "fallback" | null;
+  fallback: "no_payments" | "past_date" | null;
+  db_leaked: boolean;
+  db_shortened: boolean;
+  action: "would_fix" | "fixed" | "skip" | "error";
+  reason: string | null;
+}
+
+export interface PremiumRepairReport {
+  kind: "check" | "apply" | null;
+  generated_at: string | null;
+  total: number;
+  offset: number;
+  rows: PremiumRepairRow[];
+}
+
+export interface PremiumRepairActionResult {
+  ok: boolean;
+  status: PremiumRepairStatus;
+}
 
 export type RemnawaveTag = "TRIAL" | "BASIC" | "PLUS" | "COMBO_BASIC" | "COMBO_PLUS" | "BYPASS";
 

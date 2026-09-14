@@ -16,23 +16,17 @@ from fastapi import HTTPException
 
 import database
 import database.core
-from app.services import admin_alerts, premium_repair, remnawave_api
-from app.services.tariffs import extend_expiry
+from app.services import premium_repair, premium_repair_job, remnawave_api
 from database import reconciliation as recon
-from tests.fakes.remnawave_http import GIB, FakeRemnawaveHTTP
+from tests.fakes.premium_repair_world import FIVE_Y, MemKV, install_world, pay, sub
+from tests.fakes.remnawave_http import GIB
 
 NOW = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
 FAR = NOW + timedelta(days=3650)
-FIVE_Y = timedelta(days=365 * 5)
 
 
 def utc(y, m, d):
     return datetime(y, m, d, tzinfo=timezone.utc)
-
-
-def pay(pid, tariff, when):
-    """A payments row as asyncpg returns it (naive UTC)."""
-    return {"id": pid, "tariff": tariff, "effective_at": when.astimezone(timezone.utc).replace(tzinfo=None)}
 
 
 def inputs(payments=(), *, db_exp=None, status="active", bypass_only=False, source="payment",
@@ -122,94 +116,10 @@ def test_never_extend_the_panel():
 
 # ── the bulk service on the panel fake ─────────────────────────────────
 
-class FakeDB:
-    """In-memory stand-in for load_repair_inputs / record_premium_repair
-    (their SQL is covered on real Postgres in tests/db/test_premium_repair_db.py)."""
-
-    def __init__(self):
-        self.subs: dict = {}
-        self.pays: dict = {}
-        self.records: list = []
-
-    async def load(self, ids):
-        out = {}
-        for tg in ids:
-            s = self.subs.get(tg)
-            e = recon._count_payments(self.pays.get(tg, []))
-            e.update(db_row=s is not None, db_expires_at=s["expires_at"] if s else None,
-                     db_status=s["status"] if s else None, db_source=s["source"] if s else None,
-                     db_is_bypass_only=s["is_bypass_only"] if s else False,
-                     admin_grant_days=s.get("admin_grant_days", 0) if s else 0)
-            out[tg] = e
-        return out
-
-    async def record(self, tg, **kw):
-        self.records.append((tg, kw))
-        s = self.subs.get(tg)
-        shortened = False
-        if (kw["shorten_db"] and s and not s["is_bypass_only"] and s["source"] != "bypass_only"
-                and s["expires_at"] > kw["now"] + FIVE_Y and s["expires_at"] > kw["new_expires_at"]):
-            s["expires_at"] = kw["new_expires_at"]
-            shortened = True
-        return {"log_id": len(self.records), "db_shortened": shortened}
-
-
-def sub(exp, *, status="active", source="payment", bypass_only=False):
-    return {"expires_at": exp, "status": status, "source": source, "is_bypass_only": bypass_only}
-
-
 @pytest.fixture
 def w(monkeypatch):
-    now = datetime.now(timezone.utc)
-    far = now + timedelta(days=3650)
-    http = FakeRemnawaveHTTP().install(monkeypatch)
-    db = FakeDB()
-    monkeypatch.setattr(recon, "load_repair_inputs", db.load)
-    monkeypatch.setattr(recon, "record_premium_repair", db.record)
-    monkeypatch.setattr(recon, "get_pool", AsyncMock(return_value=object()))
-    clock = {"t": 1000.0}
-
-    async def fake_sleep(seconds):
-        clock["t"] += seconds
-
-    monkeypatch.setattr(premium_repair, "_clock", lambda: clock["t"])
-    monkeypatch.setattr(premium_repair, "_sleep", fake_sleep)
-    patch_times: list = []
-    real_update = remnawave_api.update_user
-
-    async def timed_update(user_id, **fields):
-        patch_times.append(clock["t"])
-        return await real_update(user_id, **fields)
-
-    monkeypatch.setattr(remnawave_api, "update_user", timed_update)
-    alerts = AsyncMock(return_value=True)
-    monkeypatch.setattr(admin_alerts, "send_alert", alerts)
-
-    paid_301 = now - timedelta(days=30)
-    # 301: a year bought a month ago; DB row leaked to +10y → shortened too.
-    http.seed_premium(301, far)
-    http.seed_bypass(301, 5 * GIB)
-    db.pays[301] = [pay(11, "plus_365", paid_301)]
-    db.subs[301] = sub(far)
-    # 302: no payments, no DB row → tomorrow.
-    http.seed_premium(302, far)
-    # 303: one old month (past) → tomorrow; bypass-only DB row keeps its placeholder.
-    http.seed_premium(303, far)
-    http.seed_bypass(303, GIB)
-    db.pays[303] = [pay(31, "basic_30", now - timedelta(days=700))]
-    db.subs[303] = sub(far, source="bypass_only", bypass_only=True)
-    # 304: a month paid 10 days ago, but the bot accounts a later sane date (gift/balance).
-    http.seed_premium(304, far)
-    db.pays[304] = [pay(41, "basic_30", now - timedelta(days=10))]
-    db.subs[304] = sub(now + timedelta(days=200))
-    # Not candidates: a sane premium, a bypass entity, foreign usernames.
-    http.seed_premium(305, now + timedelta(days=400))
-    http.seed_bypass(306, GIB)
-    http.seed("tg_abc_premium", tg=None, limit=0, expire_at=far)
-    http.seed("tg_307_premium_old", tg=307, limit=0, expire_at=far)
-    http.seed("vip_308", tg=308, limit=0, expire_at=far)
-    yield SimpleNamespace(http=http, db=db, now=now, far=far, clock=clock, patch_times=patch_times,
-                          alerts=alerts, target_301=extend_expiry(paid_301, 365))
+    """The seeded world (tests/fakes/premium_repair_world.py): candidates 301–304."""
+    yield install_world(monkeypatch)
 
 
 def by_tg(plan):
@@ -338,6 +248,7 @@ def script(monkeypatch):
     # Run from outside, the CLI must never re-run migrations / inline DDL on prod.
     monkeypatch.setattr(database.core, "init_db", AsyncMock(side_effect=AssertionError("init_db called")))
     monkeypatch.setattr(mod, "_make_bot", lambda: object())
+    monkeypatch.setattr(premium_repair_job, "_store", MemKV())     # no dashboard job
     return mod
 
 

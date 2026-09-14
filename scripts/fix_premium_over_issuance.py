@@ -14,7 +14,12 @@ and the bypass-only +10y placeholder are never touched.
   python -m scripts.fix_premium_over_issuance --apply               # asks to confirm
   python -m scripts.fix_premium_over_issuance --apply --yes --limit 20
 
-Exit code: 0 ok, 1 finished with user errors, 2 DB / panel unavailable, 3 not confirmed.
+The same repair runs from the dashboard (Дашборд → «Ещё» → «Настройки» →
+«Премиум больше 5 лет», app/services/premium_repair_job). --apply is refused
+while a dashboard repair is running, paused or interrupted, unless --force.
+
+Exit code: 0 ok, 1 finished with user errors, 2 DB / panel unavailable,
+3 not confirmed / refused (dashboard job).
 """
 from __future__ import annotations
 
@@ -53,7 +58,19 @@ def _make_bot():
     return Bot(token=config.BOT_TOKEN)
 
 
-async def _main(*, apply: bool, yes: bool, limit: Optional[int], out: Optional[str]) -> int:
+async def _dashboard_job_blocks(force: bool) -> bool:
+    """True (and a message) when a dashboard repair is not finished and no --force."""
+    from app.services import premium_repair_job
+    a = (await premium_repair_job.get_status())["apply"]
+    if a["state"] in ("running", "interrupted", "paused") and not force:
+        print(f"a dashboard repair is {a['state']} (done {a['done']}/{a['total']}): "
+              "continue or stop it from the dashboard, or pass --force")
+        return True
+    return False
+
+
+async def _main(*, apply: bool, yes: bool, limit: Optional[int], out: Optional[str],
+                force: bool = False) -> int:
     # Only a pool — never init_db(): run from outside it would re-run the
     # migrations and the inline ALTER TABLE ... IF NOT EXISTS (ACCESS EXCLUSIVE
     # locks) on the live production DB.
@@ -65,6 +82,8 @@ async def _main(*, apply: bool, yes: bool, limit: Optional[int], out: Optional[s
     except Exception as e:  # noqa: BLE001
         print(f"database unavailable: {type(e).__name__}")
         return 2
+    if apply and await _dashboard_job_blocks(force):
+        return 3
     try:
         plan = await premium_repair.build_plan()
     except premium_repair.PanelUnavailable as e:
@@ -110,8 +129,9 @@ def main(argv=None) -> int:
     p.add_argument("--yes", action="store_true", help="do not ask for confirmation with --apply")
     p.add_argument("--limit", type=int, default=None, help="at most N PATCHes this run")
     p.add_argument("--out", default=None, help="CSV report path (default: ./premium_over_issuance_<UTC>.csv)")
+    p.add_argument("--force", action="store_true", help="apply even if a dashboard repair is not finished")
     args = p.parse_args(argv)
-    return asyncio.run(_main(apply=args.apply, yes=args.yes, limit=args.limit, out=args.out))
+    return asyncio.run(_main(apply=args.apply, yes=args.yes, limit=args.limit, out=args.out, force=args.force))
 
 
 if __name__ == "__main__":
