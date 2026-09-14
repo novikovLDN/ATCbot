@@ -664,7 +664,7 @@ async def _open_buy_screen(
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
+    await state.update_data(purchase_id=None, tariff_type=None, period_days=None, combo_bypass_gb=0)
     await database.cancel_pending_purchases(telegram_id, "new_purchase_started")
     # Снести залипшие invoice-экраны от предыдущих покупок (Wata «Ждём
     # платёж», Lava/Platega, нативный Telegram Payments invoice и т.п.).

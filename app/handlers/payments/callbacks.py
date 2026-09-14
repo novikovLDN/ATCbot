@@ -129,7 +129,9 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
         )],
     ]
 
-    await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
+    # combo_bypass_gb=0: a Combo flag left from an abandoned Combo screen must not
+    # turn the next Basic/Plus purchase into Combo at the Basic price (P0).
+    await state.update_data(purchase_id=None, tariff_type=None, period_days=None, combo_bypass_gb=0)
     await state.set_state(PurchaseState.choose_tariff)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -265,7 +267,7 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
         promo_session = await get_promo_session(state)
         promo_code = promo_session.get("promo_code") if promo_session else None
 
-        await state.update_data(tariff_type=new_tariff, purchase_id=None, period_days=None)
+        await state.update_data(tariff_type=new_tariff, purchase_id=None, period_days=None, combo_bypass_gb=0)
         await state.set_state(PurchaseState.choose_period)
 
         periods = config.TARIFFS.get(new_tariff, {})
@@ -426,7 +428,7 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     )
     # КРИТИЧНО: Сохраняем tariff_type в FSM state
     # Промо-сессия НЕ сбрасывается при выборе тарифа - она независима от покупки
-    await state.update_data(tariff_type=tariff_type)
+    await state.update_data(tariff_type=tariff_type, combo_bypass_gb=0)
     
     # КРИТИЧНО: Получаем промо-сессию (проверяет срок действия автоматически)
     promo_session = await get_promo_session(state)
@@ -436,7 +438,7 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     # Для бизнес-тарифов → сначала выбор страны
     if config.is_biz_tariff(tariff_type):
         await state.set_state(PurchaseState.choose_country)
-        await state.update_data(tariff_type=tariff_type)
+        await state.update_data(tariff_type=tariff_type, combo_bypass_gb=0)
         text = i18n_get_text(language, f"buy.tariff_{tariff_type}_desc")
         text += "\n\n" + i18n_get_text(language, "buy.choose_country")
         buttons = []
@@ -717,7 +719,7 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     if stored_tariff != tariff_type:
         logger.warning(f"Tariff mismatch: FSM={stored_tariff}, callback={tariff_type}, user={telegram_id}")
         # Обновляем tariff_type в FSM
-        await state.update_data(tariff_type=tariff_type)
+        await state.update_data(tariff_type=tariff_type, combo_bypass_gb=0)
     
     # КРИТИЧНО: Получаем промо-сессию (проверяет срок действия автоматически)
     promo_session = await get_promo_session(state)
@@ -761,7 +763,8 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
                 tariff_type=tariff_type,
                 period_days=period_days,
                 final_price_kopecks=price_info["final_price_kopecks"],
-                discount_percent=price_info["discount_percent"]
+                discount_percent=price_info["discount_percent"],
+                combo_bypass_gb=0,
             )
             downgrade_text = i18n_get_text(
                 language, "buy.downgrade_confirm_text",
@@ -780,7 +783,8 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         tariff_type=tariff_type,
         period_days=period_days,
         final_price_kopecks=price_info["final_price_kopecks"],
-        discount_percent=price_info["discount_percent"]
+        discount_percent=price_info["discount_percent"],
+        combo_bypass_gb=0,  # regular period chosen → not Combo (P0: stale Combo flag)
     )
     
     log_event(
@@ -905,7 +909,7 @@ async def callback_corporate_access_request(callback: CallbackQuery, state: FSMC
     language = await resolve_user_language(telegram_id)
 
     await state.set_state(PurchaseState.choose_biz_tier)
-    await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
+    await state.update_data(purchase_id=None, tariff_type=None, period_days=None, combo_bypass_gb=0)
 
     text = i18n_get_text(language, "buy.biz_screen_title")
 

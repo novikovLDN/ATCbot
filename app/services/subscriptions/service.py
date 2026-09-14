@@ -173,6 +173,30 @@ async def create_subscription_purchase(
             raise InvalidTariffError(f"Invalid period_days: {period_days} for tariff {tariff}")
         if price_kopecks <= 0:
             raise PurchaseCreationError(f"Invalid price: {price_kopecks} kopecks")
+        if is_combo:
+            # P0 guard: never sell Combo (combo GB) below the Combo price. The UI
+            # price comes from FSM; a stale Combo flag once paired it with a
+            # Basic/Plus price. Recompute with the same discount chain.
+            combo_row = (config.COMBO_TARIFFS.get(f"combo_{tariff}") or {}).get(period_days)
+            if not combo_row:
+                raise InvalidTariffError(f"No combo tariff for {tariff}/{period_days}")
+            combo_price_info = await calculate_price(
+                telegram_id=telegram_id,
+                tariff=tariff,
+                period_days=period_days,
+                promo_code=promo_code,
+                base_price_override_rubles=combo_row["price"],
+            )
+            if price_kopecks < combo_price_info["final_price_kopecks"]:
+                logger.error(
+                    "COMBO_PRICE_BELOW_COMBO user=%s tariff=%s period=%s price=%s expected=%s",
+                    telegram_id, tariff, period_days, price_kopecks,
+                    combo_price_info["final_price_kopecks"],
+                )
+                raise InvalidTariffError(
+                    f"Combo price {price_kopecks} below combo price "
+                    f"{combo_price_info['final_price_kopecks']} for {tariff}/{period_days}"
+                )
 
         # SECURITY: Block new subscription purchases when VPN is disabled
         # Balance top-ups and gifts are still allowed
