@@ -57,6 +57,21 @@ class NotificationSpec:
 # Registry — dict keyed by notification-key.
 REGISTRY: Dict[str, NotificationSpec] = {}
 
+# #22 (docs/notifications/matrix.md): keys the dashboard listed but the bot
+# never sends — their rows are removed at the registry sync, so the admin does
+# not tune a notification that does not exist.
+RETIRED_KEYS = frozenset({"trial.reminder_6h", "subscription.reminder_24h"})
+
+# Paid reminders: their windows are fixed in code (7 d ±3 h, 3 d ±2.4 h,
+# 1 d ±1 h, 3 h ±1 h — app/services/notifications/service.py); only the
+# enable toggle, the text and segment_filter apply. The dashboard does not get
+# window fields for them (the sync strips stale ones, a patch drops new ones).
+FIXED_WINDOW_KEYS = frozenset({
+    "subscription.reminder_7d", "subscription.reminder_3d",
+    "subscription.reminder_1d", "subscription.reminder_3h",
+})
+WINDOW_FIELDS = ("before_expiry_hours", "tolerance_hours")
+
 
 def register_notification(spec: NotificationSpec) -> None:
     """Register a notification. Idempotent — при повторной регистрации
@@ -89,26 +104,6 @@ register_notification(NotificationSpec(
     ),
     template_vars=[],
     default_trigger={"before_expiry_hours": 24, "tolerance_hours": 1},
-))
-
-register_notification(NotificationSpec(
-    key="trial.reminder_6h",
-    title="Триал: за 6 часов до истечения (legacy 71h-slot)",
-    description=(
-        "Старая ветка (i18n main.trial_notification_71h) — «через 6 часов "
-        "пробный доступ завершится». Работает параллельно с новым "
-        "trial.reminder_3h. Wire-up идёт через TRIAL_NOTIFICATION_SCHEDULE "
-        "в app/services/trials — при желании можно отключить через "
-        "тумблер тут, чтобы не дублировать 3h reminder."
-    ),
-    category="trial",
-    default_text_ru=(
-        "🔔 Через 6 часов пробный доступ завершится и VPN отключится\n\n"
-        "Не теряйте защиту — подключите подписку от 199₽ и пользуйтесь "
-        "без ограничений 💎"
-    ),
-    template_vars=[],
-    default_trigger={"before_expiry_hours": 6, "tolerance_hours": 0.5},
 ))
 
 register_notification(NotificationSpec(
@@ -168,7 +163,7 @@ register_notification(NotificationSpec(
         "доступ не прервётся."
     ),
     template_vars=[],
-    default_trigger={"before_expiry_hours": 24 * 7, "tolerance_hours": 12},
+    default_trigger={},   # window fixed in code (FIXED_WINDOW_KEYS)
 ))
 
 register_notification(NotificationSpec(
@@ -185,7 +180,7 @@ register_notification(NotificationSpec(
         "Продлите заранее — и доступ не прервётся ни на секунду 🤍"
     ),
     template_vars=[],
-    default_trigger={"before_expiry_hours": 24 * 3, "tolerance_hours": 6},
+    default_trigger={},   # window fixed in code (FIXED_WINDOW_KEYS)
 ))
 
 register_notification(NotificationSpec(
@@ -199,26 +194,7 @@ register_notification(NotificationSpec(
         "VPN продолжил работать."
     ),
     template_vars=[],
-    default_trigger={"before_expiry_hours": 24, "tolerance_hours": 2},
-))
-
-register_notification(NotificationSpec(
-    key="subscription.reminder_24h",
-    title="Подписка: за 24 часа (legacy)",
-    description=(
-        "Старая ветка reminder-логики — 24 часа до истечения. "
-        "Действует одновременно с reminder_1d, обычно один из них "
-        "выигрывает первым. Оставлен для BC."
-    ),
-    category="subscription",
-    default_text_ru=(
-        "<tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> "
-        "Осталось менее 24 часов подписки\n\n"
-        "Продлите сейчас одним нажатием, чтобы VPN продолжил работать "
-        "без перерыва 🛡"
-    ),
-    template_vars=[],
-    default_trigger={"before_expiry_hours": 24, "tolerance_hours": 1},
+    default_trigger={},   # window fixed in code (FIXED_WINDOW_KEYS)
 ))
 
 # ── Payment success (event-triggered, окно не применимо) ─────────────
@@ -338,7 +314,7 @@ register_notification(NotificationSpec(
         "Успейте — <b>скидка 15%</b> на продление. Действует до {deadline}."
     ),
     template_vars=["deadline"],
-    default_trigger={"before_expiry_hours": 3, "tolerance_hours": 1},
+    default_trigger={},   # window fixed in code (FIXED_WINDOW_KEYS)
 ))
 
 

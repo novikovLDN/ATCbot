@@ -22,7 +22,7 @@ from app.api.dashboard.errors import server_error
 from app.services.automated_notifications import (
     REGISTRY, sync_registry_to_db,
 )
-from app.services.automated_notifications.registry import VALID_CATEGORIES
+from app.services.automated_notifications.registry import FIXED_WINDOW_KEYS, VALID_CATEGORIES, WINDOW_FIELDS
 from app.services.automated_notifications.helper import (
     get_row, get_stats, update_notification,
 )
@@ -162,6 +162,11 @@ async def patch_notification(
         raise HTTPException(400, "empty patch")
     # Валидация trigger_config для reminders
     tc = payload.trigger_config
+    if tc is not None and key in FIXED_WINDOW_KEYS:
+        # #22: the paid reminders' windows are fixed in code — a window here
+        # would be stored and never applied. segment_filter still applies.
+        tc = {k: v for k, v in tc.items() if k not in WINDOW_FIELDS}
+        payload.trigger_config = tc
     if tc is not None:
         if "before_expiry_hours" in tc:
             try:

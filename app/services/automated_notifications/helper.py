@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 
 from database.core import get_pool
 
-from .registry import REGISTRY
+from .registry import FIXED_WINDOW_KEYS, REGISTRY, RETIRED_KEYS, WINDOW_FIELDS
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,17 @@ async def sync_registry_to_db() -> int:
                     spec.default_text_ru, list(spec.template_vars),
                 )
             count += 1
+        # #22: rows of keys the bot never sends go; paid reminders lose the
+        # window fields that were never applied (segment_filter stays).
+        await conn.execute(
+            "DELETE FROM automated_notifications WHERE key = ANY($1::text[])", sorted(RETIRED_KEYS),
+        )
+        await conn.execute(
+            """UPDATE automated_notifications
+               SET trigger_config = COALESCE(trigger_config, '{}'::jsonb) - $2::text[]
+               WHERE key = ANY($1::text[]) AND trigger_config ?| $2::text[]""",
+            sorted(FIXED_WINDOW_KEYS), list(WINDOW_FIELDS),
+        )
     logger.info("automated_notifications: upserted %d specs", count)
     touch_cache()
     return count
