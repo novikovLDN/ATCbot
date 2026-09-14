@@ -40,6 +40,15 @@ class Conn:
         self.completed_sent = completed_sent
         self.sub_writes: list = []
 
+    def transaction(self):
+        class _Tx:
+            async def __aenter__(self_inner):
+                return self_inner
+
+            async def __aexit__(self_inner, *exc):
+                return False
+        return _Tx()
+
     async def fetchrow(self, sql, *args):
         if "SELECT expires_at FROM subscriptions" in sql:          # get_active_paid_subscription
             s = self.sub
@@ -78,15 +87,19 @@ class Conn:
 class Pool:
     def __init__(self, conn):
         self.conn = conn
+        self.held = 0          # connections checked out right now
 
     def acquire(self):
         conn = self.conn
+        pool = self
 
         class _Ctx:
             async def __aenter__(self):
+                pool.held += 1
                 return conn
 
             async def __aexit__(self, *exc):
+                pool.held -= 1
                 return False
         return _Ctx()
 
@@ -146,6 +159,32 @@ async def test_trial_with_bypass_ends_with_one_message(env, monkeypatch):
     texts = [c.args[2] for c in env["sent"].await_args_list]
     assert texts == [get_text("ru", "trial.expired")]
     assert any("is_bypass_only = TRUE" in w for w in conn.sub_writes), "the GB keep working (bypass-only)"
+
+
+@pytest.mark.parametrize("bypass", [True, False])
+async def test_trial_expiry_holds_no_connection_during_the_panel_call_or_the_send(env, monkeypatch, bypass):
+    """#17: the pool connection stayed checked out during disable_premium_user
+    (HTTP to the panel) and the Telegram sends."""
+    from app.services import remnawave_premium, remnawave_service
+    monkeypatch.setattr(remnawave_service, "extend_remnawave_for_bypass_bg", lambda *_a, **_k: None)
+    trial = {"status": "active", "source": "trial", "is_bypass_only": False,
+             "expires_at": _naive(NOW - timedelta(hours=1)), "uuid": "u-1",
+             "remnawave_uuid": "rw-1" if bypass else None}
+    pool = Pool(Conn(dict(trial)))
+    held_during = {}
+
+    async def disable(tg):
+        held_during["panel"] = pool.held
+
+    async def send(bot, tg, text, **kw):
+        held_during["send"] = pool.held
+        return MagicMock(message_id=1)
+    monkeypatch.setattr(remnawave_premium, "disable_premium_user", disable)
+    monkeypatch.setattr(tn, "safe_send_message", send)
+
+    await tn._process_single_trial_expiration(MagicMock(), pool, dict(_row(), uuid="u-1"), NOW)
+
+    assert held_during == {"panel": 0, "send": 0}
 
 
 async def test_bypass_only_row_already_told_gets_nothing(env):

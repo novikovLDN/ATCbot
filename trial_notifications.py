@@ -794,33 +794,42 @@ async def _claim_notice_for_bypass_only_row(conn, telegram_id: int) -> bool:
 
 
 async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datetime):
-    """Process expiration for a single trial user. Acquires and releases DB connection internally."""
-    # The bypass-only case only claims inside; the send holds no DB connection.
+    """Process expiration for a single trial user. The DB work runs on short
+    connections; the panel call and the Telegram send hold none (#17)."""
     if await _expire_single_trial(bot, pool, row, now):
-        await send_trial_expired_notice(bot, row["telegram_id"])
+        telegram_id = row["telegram_id"]
+        if await send_trial_expired_notice(bot, telegram_id):
+            logger.info(f"trial_completed: user={telegram_id}, completed_at={now.isoformat()}")
+
+
+def _log_paid_skip(telegram_id: int, trial_expires_at, active_paid) -> None:
+    paid_expires_at = active_paid["expires_at"]
+    logger.info(
+        "Trial cleanup skipped: user has active paid subscription; "
+        f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
+        f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}"
+    )
 
 
 async def _expire_single_trial(bot: Bot, pool, row: dict, now: datetime) -> bool:
-    """True → the "trial ended" notice for a bypass-only row was claimed; the
-    caller sends it. Every other outcome is handled here (returns False)."""
+    """True → the one "trial ended" notice was claimed (committed); the caller
+    sends it with no connection held. Every other outcome is handled here.
+
+    #17 (docs/notifications/matrix.md): the connection used to stay checked out
+    of the pool during the panel call (disable_premium_user) and both Telegram
+    sends. Now: decide on a short connection → panel call with none held →
+    expire the row + claim the notice in one short transaction."""
     telegram_id = row["telegram_id"]
-    uuid_val = row["uuid"]
-    trial_used_at = database._from_db_utc(row["trial_used_at"]) if row["trial_used_at"] else None
     trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
 
-    async with pool.acquire() as conn:
-        try:
+    # Phase 1 — decide (short connection)
+    try:
+        async with pool.acquire() as conn:
             # PRODUCTION HOTFIX: Trial must NEVER revoke VPN or modify subscription if user has active paid.
             active_paid = await database.get_active_paid_subscription(conn, telegram_id, now)
             if active_paid:
-                paid_expires_at = active_paid["expires_at"]
-                logger.info(
-                    "Trial cleanup skipped: user has active paid subscription; "
-                    f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-                    f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}"
-                )
-                return
-
+                _log_paid_skip(telegram_id, trial_expires_at, active_paid)
+                return False
             should_expire, reason = await trial_service.should_expire_trial(
                 telegram_id=telegram_id,
                 trial_expires_at=trial_expires_at,
@@ -832,85 +841,75 @@ async def _expire_single_trial(bot: Bot, pool, row: dict, now: datetime) -> bool
                 if reason == "no_active_trial_subscription":
                     return await _claim_notice_for_bypass_only_row(conn, telegram_id)
                 return False
+    except trial_service.TrialServiceError as e:
+        logger.warning(f"trial_expiry_skipped: user={telegram_id}, service_error={type(e).__name__}: {str(e)}")
+        return False
+    except Exception as e:
+        logger.exception(f"Error expiring trial subscription for user {telegram_id}: {e}")
+        return False
 
-            logger.info(
-                f"TRIAL_EXPIRATION_EXECUTED: "
-                f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-                f"decision=EXECUTED"
-            )
+    logger.info(
+        f"TRIAL_EXPIRATION_EXECUTED: "
+        f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
+        f"decision=EXECUTED"
+    )
 
-            active_paid_recheck = await database.get_active_paid_subscription(conn, telegram_id, now)
-            if active_paid_recheck:
-                paid_expires_at = active_paid_recheck["expires_at"]
-                logger.info(
-                    "Trial cleanup skipped: user has active paid subscription; "
-                    f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-                    f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}"
+    # Phase 2 — the panel, with no connection held. 3.x: the premium entity is
+    # disabled after the trial (the bypass entity, if any, stays — below).
+    try:
+        from app.services import remnawave_premium
+        await remnawave_premium.disable_premium_user(telegram_id)
+        logger.info("trial_expired: Remnawave premium disabled tg=%s", telegram_id)
+    except Exception as e:
+        logger.warning("trial_expired: disable_premium_user failed tg=%s err=%s", telegram_id, e)
+
+    # Phase 3 — expire the row and claim the notice (one short transaction)
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                active_paid = await database.get_active_paid_subscription(conn, telegram_id, now)
+                if active_paid:
+                    _log_paid_skip(telegram_id, trial_expires_at, active_paid)
+                    return False
+                # Check if user has Remnawave bypass traffic — keep it active
+                has_remnawave = await conn.fetchval(
+                    "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1 AND remnawave_uuid IS NOT NULL",
+                    telegram_id,
                 )
-                return
-
-            # 3.x: убрать Remnawave premium entity после истечения триала
-            # (bypass, если он был у trial-юзера, обрабатывается ниже — либо
-            # оставляем как "bypass-only" при has_remnawave). Premium
-            # должен быть отключён/удалён иначе живёт в панели вечно.
-            try:
-                from app.services import remnawave_premium
-                await remnawave_premium.disable_premium_user(telegram_id)
-                logger.info(
-                    "trial_expired: Remnawave premium disabled tg=%s", telegram_id,
-                )
-            except Exception as e:
-                logger.warning(
-                    "trial_expired: disable_premium_user failed tg=%s err=%s",
-                    telegram_id, e,
-                )
-
-            # Check if user has Remnawave bypass traffic — keep it active
-            has_remnawave = await conn.fetchval(
-                "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1 AND remnawave_uuid IS NOT NULL",
-                telegram_id,
-            )
-            if has_remnawave:
-                # Transition to bypass-only: remove Xray but keep Remnawave and active status
-                from datetime import timedelta
-                far_future = database._to_db_utc(now + timedelta(days=3650))
-                await conn.execute("""
-                    UPDATE subscriptions
-                    SET uuid = NULL, vpn_key = NULL, vpn_key_plus = NULL,
-                        is_bypass_only = TRUE,
-                        expires_at = $2,
-                        source = 'bypass_only'
-                    WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
-                """, telegram_id, far_future)
-                logger.info(f"trial_expired: TRANSITION_TO_BYPASS_ONLY user={telegram_id} — Remnawave stays active")
-                # Extend Remnawave expiry so bypass keeps working
-                try:
-                    from app.services.remnawave_service import extend_remnawave_for_bypass_bg
-                    extend_remnawave_for_bypass_bg(telegram_id)
-                except Exception as rmn_err:
-                    logger.warning(f"REMNAWAVE_BYPASS_EXTEND_FAIL: tg={telegram_id} {rmn_err}")
-                # The trial end is ONE message — «пробный завершён» below (#1):
-                # no «основная подписка закончилась» (and no −15 %) on top of it.
-            else:
-                await conn.execute("""
-                    UPDATE subscriptions
-                    SET status = 'expired', uuid = NULL, vpn_key = NULL
-                    WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
-                """, telegram_id)
-
-            # N-05: same exactly-once claim + send as fast_expiry_cleanup.
-            if await claim_trial_expired_notice(telegram_id, conn):
-                if await send_trial_expired_notice(bot, telegram_id):
-                    logger.info(
-                        f"trial_completed: user={telegram_id}, "
-                        f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
-                        f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-                        f"completed_at={now.isoformat()}"
-                    )
-        except trial_service.TrialServiceError as e:
-            logger.warning(f"trial_expiry_skipped: user={telegram_id}, service_error={type(e).__name__}: {str(e)}")
-        except Exception as e:
-            logger.exception(f"Error expiring trial subscription for user {telegram_id}: {e}")
+                if has_remnawave:
+                    # Transition to bypass-only: remove the premium key, keep Remnawave and active status
+                    from datetime import timedelta
+                    far_future = database._to_db_utc(now + timedelta(days=3650))
+                    await conn.execute("""
+                        UPDATE subscriptions
+                        SET uuid = NULL, vpn_key = NULL, vpn_key_plus = NULL,
+                            is_bypass_only = TRUE,
+                            expires_at = $2,
+                            source = 'bypass_only'
+                        WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
+                    """, telegram_id, far_future)
+                    logger.info(f"trial_expired: TRANSITION_TO_BYPASS_ONLY user={telegram_id} — Remnawave stays active")
+                    # Extend Remnawave expiry so bypass keeps working (background task)
+                    try:
+                        from app.services.remnawave_service import extend_remnawave_for_bypass_bg
+                        extend_remnawave_for_bypass_bg(telegram_id)
+                    except Exception as rmn_err:
+                        logger.warning(f"REMNAWAVE_BYPASS_EXTEND_FAIL: tg={telegram_id} {rmn_err}")
+                    # The trial end is ONE message — «пробный завершён» (#1):
+                    # no «основная подписка закончилась» (and no −15 %) on top of it.
+                else:
+                    await conn.execute("""
+                        UPDATE subscriptions
+                        SET status = 'expired', uuid = NULL, vpn_key = NULL
+                        WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
+                    """, telegram_id)
+                # N-05: same exactly-once claim as fast_expiry_cleanup.
+                return await claim_trial_expired_notice(telegram_id, conn)
+    except trial_service.TrialServiceError as e:
+        logger.warning(f"trial_expiry_skipped: user={telegram_id}, service_error={type(e).__name__}: {str(e)}")
+    except Exception as e:
+        logger.exception(f"Error expiring trial subscription for user {telegram_id}: {e}")
+    return False
 
 
 async def expire_trial_subscriptions(bot: Bot):
