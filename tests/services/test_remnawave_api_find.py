@@ -80,11 +80,13 @@ async def test_find_user_by_short_uuid_uses_resolve():
 @pytest.mark.asyncio
 async def test_find_user_unwraps_response_user_key():
     """Панель может обернуть в {user: {...}} — расспаковываем."""
-    user = {"id": 382, "username": "tg_42_premium"}
+    user = {"id": 382, "username": "tg_42_premium", "trafficLimitBytes": 0,
+            "expireAt": "2030-01-01T00:00:00.000Z", "subscriptionUrl": "https://rmnw/sub/x"}
     req_mock = AsyncMock(return_value={"user": user})
     with patch.object(remnawave_api, "_request", req_mock):
         out = await remnawave_api.find_user_by_username("tg_42_premium")
     assert out == user
+    req_mock.assert_awaited_once()  # full entity → no GET enrichment
 
 
 # ── Hotfix (e835827f): 3.4.3 answers a taken username with 400 A019 ───
@@ -102,3 +104,53 @@ async def test_find_user_unwraps_response_user_key():
 ])
 def test_is_username_conflict_matches_3_4_3_a019(raw, expected):
     assert remnawave_api.is_username_conflict(raw) is expected
+
+
+# ── Hotfix (b8a33479): never return a trimmed /resolve entity ─────────
+# 3.4.3 ResolveUserCommand.ResponseSchema: {id, username, shortUuid} only.
+TRIMMED = {"id": 382, "username": "42", "shortUuid": "short123"}
+
+
+@pytest.mark.asyncio
+async def test_find_user_by_username_failed_completion_is_none():
+    """GET /api/users/{id} after /resolve fails → None, never the trimmed
+    entity (no trafficLimitBytes → add_bypass_traffic wiped accumulated GB)."""
+    req_mock = AsyncMock(side_effect=[TRIMMED, None])
+    with patch.object(remnawave_api, "_request", req_mock):
+        out = await remnawave_api.find_user_by_username("42")
+    assert out is None
+    assert req_mock.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_find_user_by_username_completion_exception_is_none():
+    req_mock = AsyncMock(side_effect=[TRIMMED, RuntimeError("boom")])
+    with patch.object(remnawave_api, "_request", req_mock):
+        out = await remnawave_api.find_user_by_username("42")
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_find_user_by_username_completes_a_trimmed_entity():
+    full = {**TRIMMED, "trafficLimitBytes": 50 * 1024**3,
+            "expireAt": "2099-12-31T23:59:59.000Z", "subscriptionUrl": "https://r/sub/x"}
+    req_mock = AsyncMock(side_effect=[TRIMMED, full])
+    with patch.object(remnawave_api, "_request", req_mock):
+        out = await remnawave_api.find_user_by_username("42")
+    assert out == full
+
+
+@pytest.mark.asyncio
+async def test_bypass_entity_safe_does_not_return_trimmed_entity(monkeypatch):
+    """get_bypass_entity_safe → username fallback with a failed completion
+    must be 'no entity', so add_bypass_traffic cannot compute 0 + N."""
+    import database
+    monkeypatch.setattr(database, "get_remnawave_id", AsyncMock(return_value=None), raising=False)
+    set_id = AsyncMock()
+    monkeypatch.setattr(database, "set_remnawave_id", set_id, raising=False)
+    monkeypatch.setattr(database, "set_remnawave_uuid", AsyncMock(), raising=False)
+    req_mock = AsyncMock(side_effect=[TRIMMED, None])
+    with patch.object(remnawave_api, "_request", req_mock):
+        out = await remnawave_api.get_bypass_entity_safe(42)
+    assert out is None
+    set_id.assert_not_awaited()

@@ -711,6 +711,12 @@ async def find_user_by_telegram_id(telegram_id: int) -> Optional[Dict[str, Any]]
     return await _stream_first(f"telegramId={int(telegram_id)}")
 
 
+# Keys a caller relies on (add_bypass_traffic reads trafficLimitBytes,
+# adoption needs id/expireAt/subscriptionUrl). A /resolve answer without them
+# is trimmed and must be completed by GET /api/users/{id} (hotfix of b8a33479).
+_STATE_REQUIRED_KEYS = ("id", "trafficLimitBytes", "expireAt", "subscriptionUrl")
+
+
 async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     """POST /api/users/resolve body {username} — точечный поиск в 3.x.
 
@@ -748,21 +754,35 @@ async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
             entity = result
     if entity is None:
         return None
-    # subscriptionUrl обязателен для клиента → дозагрузка через GET по id.
-    if not entity.get("subscriptionUrl") and entity.get("id") is not None:
+    if all(k in entity for k in _STATE_REQUIRED_KEYS):
+        return entity
+    # 3.4.3 /resolve returns ONLY {id, username, shortUuid}
+    # (commands/users/resolve-user.command.ts) → complete it via GET by id.
+    full = None
+    if entity.get("id") is not None:
         try:
             full = await _request(
                 "GET", f"/api/users/{int(entity['id'])}", quiet=True,
             )
-            if isinstance(full, dict):
-                # Merge full over entity — полная entity обязана быть super-set.
-                return {**entity, **full}
         except Exception as e:
             logger.warning(
                 "find_user_by_username: full-fetch failed username=%s id=%s err=%s",
                 username, entity.get("id"), e,
             )
-    return entity
+            full = None
+    if isinstance(full, dict):
+        # Merge full over entity — полная entity обязана быть super-set.
+        return {**entity, **full}
+    # The trimmed entity has no trafficLimitBytes / expireAt / subscriptionUrl.
+    # Returning it made callers read limit=0 (add_bypass_traffic then PATCHed
+    # trafficLimitBytes=+N only, wiping the accumulated GB) or adopt with an
+    # empty URL. A failed completion is a failed lookup.
+    logger.warning(
+        "REMNAWAVE_RESOLVE_INCOMPLETE: username=%s id=%s — full entity not "
+        "fetched, lookup reported as failed",
+        username, entity.get("id"),
+    )
+    return None
 
 
 async def find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
