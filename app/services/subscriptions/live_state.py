@@ -154,7 +154,7 @@ def format_bytes(language: str, b: int) -> str:
     gb, mb = 1024 ** 3, 1024 ** 2
     if b >= gb:
         v = b / gb
-        num = f"{v:.1f}".rstrip("0").rstrip(".") if v < 10 else f"{v:.0f}"
+        num = f"{v:.1f}".rstrip("0").rstrip(".") if v < 100 else f"{v:.0f}"
         return f"{num} {_i18n.get_text(language, 'common.unit_gb')}"
     if b >= mb:
         return f"{b / mb:.0f} {_i18n.get_text(language, 'common.unit_mb')}"

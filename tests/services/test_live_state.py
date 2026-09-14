@@ -94,7 +94,7 @@ async def test_a_panel_error_is_unavailable(monkeypatch):
 
 @pytest.mark.parametrize("lang,b,text", [
     ("ru", int(7.5 * GB), "7.5 ГБ"), ("en", 12 * GB, "12 GB"), ("ru", 640 * 1024 ** 2, "640 МБ"),
-    ("ru", 0, "0 ГБ"), ("en", 3 * GB, "3 GB"),
+    ("ru", 0, "0 ГБ"), ("en", 3 * GB, "3 GB"), ("ru", int(10.5 * GB), "10.5 ГБ"), ("ru", 150 * GB, "150 ГБ"),
 ])
 def test_format_bytes(lang, b, text):
     assert ls.format_bytes(lang, b) == text
