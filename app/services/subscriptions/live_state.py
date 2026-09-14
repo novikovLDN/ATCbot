@@ -26,7 +26,7 @@ from app import i18n as _i18n
 logger = logging.getLogger(__name__)
 
 PANEL_TIMEOUT_S = 3.0
-CACHE_TTL_S = 20.0
+CACHE_TTL_S = 30.0   # owner 2026-09-14: repeated presses must not hammer the panel
 # Panel expireAt vs DB expires_at: the same tolerance as the delivery check.
 PREMIUM_TOLERANCE = timedelta(minutes=5)
 # One mismatch alert per user per this many seconds (the panel read is cached

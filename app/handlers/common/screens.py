@@ -3,6 +3,7 @@ Pure presentation screen helpers. Reusable for callbacks and message commands.
 No router decorators, no handler-level logic — only rendering and keyboard building.
 """
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Union
 
 import config
@@ -84,6 +85,70 @@ def _fmt_bytes_pretty(b: int) -> str:
         return f"{mb:.1f} МБ" if mb < 10 else f"{mb:.0f} МБ"
     kb = b / 1024
     return f"{kb:.0f} КБ"
+
+
+_MSK = timezone(timedelta(hours=3))
+_traffic_tasks: set = set()
+
+
+def _msk_date(dt: datetime) -> str:
+    """#21: every date the user sees is Moscow time."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_MSK).strftime("%d.%m.%Y")
+
+
+def _tariff_label(language: str, sub) -> str:
+    """Tariff of the premium in the user's language (no hardcoded «Комбо» / «Trial»)."""
+    if not sub:
+        return "—"
+    if (sub.get("source") or "") == "trial":
+        return i18n_get_text(language, "profile.tariff_trial")
+    from app.services.payments.success_message import tariff_display
+    return tariff_display(language, sub.get("subscription_type"), bool(sub.get("is_combo")))
+
+
+def _access_lines(language: str, view, *, prefix_keys: bool = True) -> list:
+    """«📆 Подписка: …» + «⭐️ Тариф: …» from the reconciled live view."""
+    if view.pending:
+        return [i18n_get_text(language, "profile.status_pending"),
+                i18n_get_text(language, "profile.info_tariff", tariff=_tariff_label(language, view.sub))]
+    if view.premium_active and view.premium_until:
+        return [i18n_get_text(language, "profile.info_active_until", date=_msk_date(view.premium_until)),
+                i18n_get_text(language, "profile.info_tariff", tariff=_tariff_label(language, view.sub))]
+    return [i18n_get_text(language, "profile.info_inactive"),
+            i18n_get_text(language, "profile.info_tariff_none")]
+
+
+def _bypass_line(language: str, view, *, left_key: str, none_key: str) -> str:
+    """Bypass GB left / limit as the panel shows them now; «—» without an
+    entity or while the panel does not answer (the screen then says so)."""
+    from app.services.subscriptions.live_state import format_bytes
+    b = view.bypass
+    if b.state != "present":
+        return i18n_get_text(language, none_key)
+    if b.unlimited:
+        return i18n_get_text(language, "main.my_sub_bypass_unlimited")
+    return i18n_get_text(language, left_key, remaining=format_bytes(language, b.remaining),
+                         limit=format_bytes(language, b.limit))
+
+
+def _schedule_traffic_check(bot, telegram_id: int, view) -> None:
+    """Owner 2026-09-14: the screen has just read the bypass entity — run the
+    traffic threshold check on THAT data (no extra panel request). Background
+    task: the screen never waits for it. Never raises."""
+    try:
+        b = view.bypass
+        if b.state != "present" or b.unlimited or bot is None:
+            return
+        import asyncio
+        from app.workers import traffic_monitor
+        task = asyncio.get_running_loop().create_task(traffic_monitor.check_live(
+            bot, telegram_id, used=b.used, limit=b.limit, premium=bool(view.premium_active)))
+        _traffic_tasks.add(task)
+        task.add_done_callback(_traffic_tasks.discard)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("SCREEN_TRAFFIC_CHECK_SCHEDULE_FAILED: tg=%s %s", telegram_id, type(e).__name__)
 
 
 async def _render_bypass_line(
@@ -483,11 +548,14 @@ async def show_profile(message_or_query, language: str):
         balance_rubles = await database.get_user_balance(telegram_id)
         balance_str = f"{balance_rubles:.2f}"
 
-        # Получаем информацию о подписке (активной или истекшей)
-        subscription = await database.get_subscription_any(telegram_id)
-        subscription_status = get_subscription_status(subscription)
-        has_active_subscription = subscription_status.is_active
-        expires_at = subscription_status.expires_at
+        # Owner 2026-09-14: «актуальную информацию надо давать 100%» — the panel
+        # (source of truth) reconciled with the DB, cached 30 s per user; a
+        # panel that does not answer → DB values + a note, never stale numbers.
+        from app.services.subscriptions import live_state
+        view = await live_state.get_view(telegram_id)
+        subscription = view.sub
+        has_active_subscription = view.premium_active or view.pending
+        expires_at = view.premium_until
 
         auto_renew = bool(subscription and subscription.get("auto_renew"))
         sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
@@ -498,50 +566,24 @@ async def show_profile(message_or_query, language: str):
         # Header — имя + Telegram ID
         text = _profile_header(display_name, telegram_id)
 
-        is_trial = sub_type == "trial"
+        is_trial = bool(subscription) and (subscription.get("source") or "") == "trial"
         is_combo = subscription.get("is_combo", False) if subscription else False
-        is_bypass_only = subscription.get("is_bypass_only", False) if subscription else False
+        is_bypass_only = view.is_bypass_only
 
         # Собираем инфо-строки (одна колонка, без blockquote)
-        info_lines = []
-        if has_active_subscription and expires_at and not is_bypass_only:
-            date_str = format_date_ru(expires_at)
-            info_lines.append(i18n_get_text(language, "profile.info_active_until", "📆 Подписка: активна до {date}", date=date_str))
-            if sub_type == "plus":
-                tariff_label = "Комбо Plus" if is_combo else "Plus"
-            elif is_trial:
-                tariff_label = "Trial"
-            else:
-                tariff_label = "Комбо Basic" if is_combo else "Basic"
-            info_lines.append(i18n_get_text(language, "profile.info_tariff", "⭐️ Тариф: {tariff}", tariff=tariff_label))
-        else:
-            info_lines.append(i18n_get_text(language, "profile.info_inactive", "📆 Подписка: не активна"))
-            info_lines.append(i18n_get_text(language, "profile.info_tariff_none", "⭐️ Тариф: —"))
-
-        # Трафик обхода — единый helper (правильно обрабатывает безлимит,
-        # согласованные единицы, кейсы missing entity).
-        bypass_line = await _render_bypass_line(
-            telegram_id, language,
-            none_key="profile.info_bypass_none",
-            left_key="profile.info_bypass_left",
-            none_default="💎 Трафик обхода: —",
-            left_default="💎 Трафик обхода: {remaining} из {limit}",
-        )
-        info_lines.append(bypass_line)
+        info_lines = _access_lines(language, view, prefix_keys=True)
+        info_lines.append(_bypass_line(language, view, left_key="profile.info_bypass_left",
+                                       none_key="profile.info_bypass_none"))
 
         # Автопродление
-        if has_active_subscription and not is_bypass_only:
-            info_lines.append("")  # пустая строка перед служебными полями
-            info_lines.append(
-                i18n_get_text(language, "profile.info_auto_renew_on", "🔁 Автопродление: включено")
-                if auto_renew
-                else i18n_get_text(language, "profile.info_auto_renew_none", "🔁 Автопродление: —")
-            )
-        else:
-            info_lines.append("")
-            info_lines.append(i18n_get_text(language, "profile.info_auto_renew_none", "🔁 Автопродление: —"))
+        info_lines.append("")  # пустая строка перед служебными полями
+        info_lines.append(
+            i18n_get_text(language, "profile.info_auto_renew_on")
+            if auto_renew and has_active_subscription and not is_bypass_only
+            else i18n_get_text(language, "profile.info_auto_renew_none")
+        )
 
-        info_lines.append(i18n_get_text(language, "profile.info_balance", "💰 Баланс: {balance} ₽", balance=balance_str))
+        info_lines.append(i18n_get_text(language, "profile.info_balance", balance=balance_str))
 
         # Приглашено друзей — счётчик по реф-ссылке
         try:
@@ -554,6 +596,9 @@ async def show_profile(message_or_query, language: str):
         info_lines.append(i18n_get_text(language, "profile.info_invited_friends", "👥 Приглашено друзей: {count}", count=invited_count))
 
         text += "\n".join(info_lines)
+        if view.panel_unavailable:
+            text += i18n_get_text(language, "profile.panel_unavailable")
+        _schedule_traffic_check(bot, telegram_id, view)
 
         # Bypass entity auto-provision (fire-and-forget) —
         # трафик уже показан выше цифрами, здесь только гарантируем,
@@ -808,51 +853,51 @@ async def _open_my_subscription_screen(event: Union[Message, CallbackQuery], bot
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    subscription = await database.get_subscription_any(telegram_id)
-    subscription_status = get_subscription_status(subscription)
-    has_active_subscription = subscription_status.is_active
-    expires_at = subscription_status.expires_at
-    sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
-    is_bypass_only = bool(subscription and subscription.get("is_bypass_only"))
-    is_combo = bool(subscription and subscription.get("is_combo"))
-    is_trial = sub_type == "trial"
+    # Owner 2026-09-14: «актуальную информацию надо давать 100%» — see show_profile.
+    from app.services.subscriptions import live_state
+    view = await live_state.get_view(telegram_id)
+    subscription = view.sub
+    has_active_subscription = view.premium_active or view.pending
+    is_bypass_only = view.is_bypass_only
 
-    # Тариф
-    if has_active_subscription and not is_bypass_only:
-        if sub_type == "plus":
-            tariff_label = "Комбо Plus" if is_combo else "Plus"
-        elif is_trial:
-            tariff_label = "Trial"
-        else:
-            tariff_label = "Комбо Basic" if is_combo else "Basic"
-        active_line = i18n_get_text(language, "main.my_sub_active_until", "Активна до: {date}", date=format_date_ru(expires_at))
+    # Тариф / статус
+    if view.pending:
+        tariff_label = _tariff_label(language, subscription)
+        active_line = i18n_get_text(language, "main.my_sub_pending")
+    elif view.premium_active and view.premium_until:
+        tariff_label = _tariff_label(language, subscription)
+        active_line = i18n_get_text(language, "main.my_sub_active_until", date=_msk_date(view.premium_until))
     else:
         tariff_label = "—"
-        active_line = i18n_get_text(language, "main.my_sub_active_until_none", "Активна до: —")
+        active_line = i18n_get_text(language, "main.my_sub_active_until_none")
 
-    # Трафик обхода (остаток / лимит) — единый helper.
-    bypass_line = await _render_bypass_line(
-        telegram_id, language,
-        none_key="main.my_sub_bypass_none",
-        left_key="main.my_sub_bypass_left",
-        none_default="Трафик обхода: —",
-        left_default="Трафик обхода: {remaining} из {limit}",
-    )
+    # Трафик обхода (остаток / лимит) — из панели.
+    bypass_line = _bypass_line(language, view, left_key="main.my_sub_bypass_left", none_key="main.my_sub_bypass_none")
 
-    # Есть ли доступ к обходу (bypass entity с трафиком)? Если строка НЕ
-    # «none»-вариант — у юзера есть bypass-ключ, значит есть что подключать
+    # Есть ли доступ к обходу (bypass entity с трафиком) — есть что подключать
     # даже без основной подписки.
-    _none_line = i18n_get_text(language, "main.my_sub_bypass_none", "Трафик: —")
-    has_bypass_access = bypass_line != _none_line
+    has_bypass_access = bool(view.bypass.works)
 
-    _title = i18n_get_text(language, "main.my_sub_title", "<b>Информация о подписке</b>")
-    _tariff_line = i18n_get_text(language, "profile.info_tariff", "⭐️ Тариф: {tariff}", tariff=tariff_label)
+    auto_renew = bool(subscription and subscription.get("auto_renew")) and has_active_subscription and not is_bypass_only
+    try:
+        balance_str = f"{await database.get_user_balance(telegram_id):.2f}"
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"my_subscription: balance fetch failed for {telegram_id}: {e}")
+        balance_str = "—"
+
+    _title = i18n_get_text(language, "main.my_sub_title")
+    _tariff_line = i18n_get_text(language, "profile.info_tariff", tariff=tariff_label)
     text = (
         f"{_title}\n\n"
         f"{_tariff_line}\n"
         f"📆 {active_line}\n"
-        f"💎 {bypass_line}"
+        f"💎 {bypass_line}\n\n"
+        + i18n_get_text(language, "profile.info_auto_renew_on" if auto_renew else "profile.info_auto_renew_none")
+        + "\n" + i18n_get_text(language, "profile.info_balance", balance=balance_str)
     )
+    if view.panel_unavailable:
+        text += i18n_get_text(language, "profile.panel_unavailable")
+    _schedule_traffic_check(bot, telegram_id, view)
 
     has_proxy = False
     try:
