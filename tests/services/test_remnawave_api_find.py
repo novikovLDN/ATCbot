@@ -154,3 +154,40 @@ async def test_bypass_entity_safe_does_not_return_trimmed_entity(monkeypatch):
         out = await remnawave_api.get_bypass_entity_safe(42)
     assert out is None
     set_id.assert_not_awaited()
+
+
+# ── Hotfix (30ba0cbc): a uuid resolves to its own entity ──────────────
+BYPASS_VLESS = "bbbbbbbb-0000-4000-8000-000000000001"
+PREMIUM_VLESS = "cccccccc-0000-4000-8000-000000000002"
+BOTH = _stream([
+    {"id": 22, "username": "tg_42_premium", "telegramId": 42, "vlessUuid": PREMIUM_VLESS},
+    {"id": 12, "username": "42", "telegramId": 42, "vlessUuid": BYPASS_VLESS},
+])
+
+
+@pytest.fixture
+def uncached(monkeypatch):
+    monkeypatch.setattr(remnawave_api, "_lookup_cached_id_by_uuid", AsyncMock(return_value=None))
+    monkeypatch.setattr(remnawave_api, "_lookup_telegram_id_by_uuid", AsyncMock(return_value=42))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value,expected", [(BYPASS_VLESS, 12), (PREMIUM_VLESS, 22)])
+async def test_resolve_uuid_picks_entity_by_vless_uuid(uncached, value, expected):
+    """stream?telegramId returns BOTH entities (premium first); the uuid must
+    resolve to its own entity, not to the first one."""
+    with patch.object(remnawave_api, "_request", AsyncMock(return_value=BOTH)):
+        assert await remnawave_api._resolve_to_int_id(value) == expected
+
+
+@pytest.mark.asyncio
+async def test_resolve_unknown_uuid_with_two_entities_is_none(uncached):
+    with patch.object(remnawave_api, "_request", AsyncMock(return_value=BOTH)):
+        assert await remnawave_api._resolve_to_int_id("dddddddd-0000-4000-8000-000000000003") is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_lone_entity_still_accepted(uncached):
+    one = _stream([{"id": 12, "username": "42", "telegramId": 42, "vlessUuid": BYPASS_VLESS}])
+    with patch.object(remnawave_api, "_request", AsyncMock(return_value=one)):
+        assert await remnawave_api._resolve_to_int_id("eeeeeeee-0000-4000-8000-000000000004") == 12

@@ -409,13 +409,34 @@ async def _resolve_to_int_id(value: Union[str, int]) -> Optional[int]:
     tg_id = await _lookup_telegram_id_by_uuid(s)
     if tg_id is None:
         return None
-    entity = await find_user_by_telegram_id(tg_id)
-    if entity and entity.get("id") is not None:
-        try:
-            return int(entity["id"])
-        except (TypeError, ValueError):
-            pass
-    return None
+    # Bypass and premium entities share telegramId, so stream?telegramId=
+    # returns BOTH; taking the first one sent the PATCH to the other entity.
+    # Pick the entity whose vlessUuid is the value we were given (the bot
+    # stores vlessUuid — 3.4.3 UsersSchema has no `uuid`). A lone result is
+    # still accepted (legacy rows cached a 2.x uuid that is no vlessUuid).
+    # Hotfix of 30ba0cbc.
+    page = await _request("GET", f"/api/users/stream?telegramId={int(tg_id)}")
+    if isinstance(page, dict):
+        users = page.get("users") or []
+    elif isinstance(page, list):
+        users = page
+    else:
+        users = []
+    users = [u for u in users if isinstance(u, dict)]
+    matched = [u for u in users if s in (str(u.get("vlessUuid") or ""), str(u.get("uuid") or ""))]
+    if not matched and len(users) == 1:
+        matched = users
+    if len(matched) != 1:
+        if users:
+            logger.warning(
+                "REMNAWAVE_RESOLVE_AMBIGUOUS: uuid=%s tg=%s entities=%d matched=%d — not guessing",
+                s[:8], tg_id, len(users), len(matched),
+            )
+        return None
+    try:
+        return int(matched[0]["id"])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 async def get_all_users(
