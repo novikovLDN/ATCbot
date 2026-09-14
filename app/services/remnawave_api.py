@@ -448,8 +448,13 @@ async def get_all_users(
     progress_cb=None,
     page_delay: float = 0.0,
     max_retries: int = 3,
+    on_page=None,
 ) -> Optional[list]:
     """GET /api/users/stream с курсорной пагинацией (3.x).
+
+    on_page (optional, sync callable) receives each page's users; they are then
+    NOT collected and the result is [] on success (None on failure, as without
+    it). For full-panel scans that must not hold every user dict in memory.
 
     3.x перевёл общий scan на stream-endpoint. Default size = 250,
     max = 1000. Пагинация: ответ {users, nextCursor: string|null, hasMore}
@@ -502,7 +507,10 @@ async def get_all_users(
             next_cursor = None
         else:
             return None
-        collected.extend(batch)
+        if on_page is not None:
+            on_page(batch)
+        else:
+            collected.extend(batch)
         if progress_cb is not None:
             try:
                 if asyncio.iscoroutinefunction(progress_cb):
