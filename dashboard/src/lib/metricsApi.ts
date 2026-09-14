@@ -223,6 +223,9 @@ export interface SystemHealth {
     url_set?: boolean;
     url_host?: string | null;
     pending_update_count?: number;
+    /** v5: queue size at the previous check; null right after start. */
+    pending_prev?: number | null;
+    pending_growing?: boolean;
     last_error_at?: string | null;
     last_error_age_s?: number | null;
     last_error_message?: string | null;
@@ -386,6 +389,10 @@ export interface OverviewReport {
     online_now: number | null;
     nodes_online: number | null;
     nodes_total: number | null;
+    /** v5: disabled nodes are not problems; offline = offline + connecting. */
+    nodes_enabled?: number | null;
+    nodes_offline?: number | null;
+    nodes_disabled?: number | null;
   };
   alerts: Alert[];
 }
@@ -482,6 +489,9 @@ export interface PanelNodes {
   available: boolean;
   nodes: PanelNode[];
   total?: number;
+  /** v5: switched off in the panel on purpose. */
+  disabled?: number;
+  enabled?: number;
   online?: number;
   offline?: number;
   users_online?: number;

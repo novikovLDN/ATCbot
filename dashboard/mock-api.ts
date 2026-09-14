@@ -406,9 +406,12 @@ function mockOverview(days: number) {
       silent: ["cryptobot"],
     },
     delivery: { status: "ok", reasons: [], queue_open: 2, dead: 0, activations_pending: 1 },
-    panel: { checked: true, available: true, online_now: 486, nodes_online: 5, nodes_total: 6 },
+    panel: {
+      checked: true, available: true, online_now: 486, nodes_online: 5, nodes_total: 7,
+      nodes_enabled: 6, nodes_offline: 1, nodes_disabled: 1,
+    },
     alerts: [
-      { level: "critical", key: "nodes_offline", title: "Ноды офлайн: 1", detail: "Пользователи этих нод без VPN.", link: "/panel" },
+      { level: "warning", key: "nodes_offline", title: "Ноды не в сети: 1 из 6", detail: "Клиенты переключатся на другие ноды. Проверьте ноду в панели.", link: "/panel" },
       { level: "warning", key: "health_worker_traffic_monitor", title: "Система: деградация", detail: "«Мониторинг трафика» давно не завершал цикл.", link: "/health" },
       { level: "warning", key: "payment_errors", title: "Ошибки платежей за 24 ч: 3", detail: "amount_mismatch ×2, telegram_payment_rejected ×1", link: "/health" },
       { level: "warning", key: "silent_cryptobot", title: "Провайдер молчит", detail: "CryptoBot: последняя оплата 19 ч назад, обычно не дольше 16 ч.", link: "/health" },
@@ -570,12 +573,12 @@ function mockPanelOverview() {
 }
 
 function mockNodes() {
-  const names = ["NL-Amsterdam-1", "DE-Frankfurt-1", "FI-Helsinki-1", "RU-Moscow-bypass", "KZ-Almaty-1", "US-NY-1"];
+  const names = ["NL-Amsterdam-1", "DE-Frankfurt-1", "FI-Helsinki-1", "RU-Moscow-bypass", "KZ-Almaty-1", "US-NY-1", "TR-Istanbul-old"];
   const nodes = names.map((name, i) => ({
     uuid: `node-${i}`,
     name,
     country: name.slice(0, 2),
-    state: i === 4 ? "offline" : "online",
+    state: i === 4 ? "offline" : i === 6 ? "disabled" : "online",
     status_message: i === 4 ? "Connection timeout" : null,
     users_online: i === 4 ? 0 : 60 + i * 23,
     traffic_used_bytes: (3 + i) * 1024 ** 4,
@@ -587,6 +590,8 @@ function mockNodes() {
     available: true,
     nodes: nodes.sort((a, b) => (a.state === "offline" ? -1 : b.state === "offline" ? 1 : 0)),
     total: nodes.length,
+    disabled: 1,
+    enabled: nodes.length - 1,
     online: 5,
     offline: 1,
     users_online: nodes.reduce((s, n) => s + n.users_online, 0),
@@ -633,7 +638,7 @@ function mockHealth() {
     redis: { configured: true, ok: true, latency_ms: 0.9 },
     webhook: {
       ok: true, latency_ms: 88, url_set: true, url_host: "bot.atlassecure.example",
-      pending_update_count: 0, last_error_at: ago(3 * H), last_error_age_s: 10_800,
+      pending_update_count: 0, pending_prev: 0, pending_growing: false, last_error_at: ago(3 * H), last_error_age_s: 10_800,
       last_error_message: "Read timeout expired", max_connections: 40,
     },
     workers: [
