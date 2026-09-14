@@ -267,6 +267,25 @@ async def _grant_trial_expired_discount(telegram_id: int) -> None:
         logger.warning("trial_expired: discount not applied user=%s err=%s", telegram_id, type(e).__name__)
 
 
+async def notify_trial_expired(bot: Bot, telegram_id: int) -> bool:
+    """Claim (short connection) + send «trial ended» for a trial that has just
+    ended and committed — for code that has no connection of its own
+    (check_and_disable_expired_subscription). Exactly once per user: the same
+    users.trial_completed_sent claim as both workers. Never raises."""
+    try:
+        pool = await database.get_pool()
+        if pool is None:
+            return False
+        async with pool.acquire() as conn:
+            claimed = await claim_trial_expired_notice(telegram_id, conn)
+        if not claimed:
+            return False
+        return await send_trial_expired_notice(bot, telegram_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("trial_expired: notice failed user=%s err=%s", telegram_id, type(e).__name__)
+        return False
+
+
 async def send_trial_expired_notice(bot: Bot, telegram_id: int) -> bool:
     """Apply the discount, then send "trial ended". Call only after a True claim."""
     await _grant_trial_expired_discount(telegram_id)
@@ -870,23 +889,8 @@ async def _expire_single_trial(bot: Bot, pool, row: dict, now: datetime) -> bool
                     extend_remnawave_for_bypass_bg(telegram_id)
                 except Exception as rmn_err:
                     logger.warning(f"REMNAWAVE_BYPASS_EXTEND_FAIL: tg={telegram_id} {rmn_err}")
-                # Notify user that main subscription expired but bypass keeps working
-                try:
-                    language = await resolve_user_language(telegram_id)
-                    bypass_text = i18n.get_text(language, "traffic.subscription_expired_bypass_active")
-                    bypass_kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text=i18n.get_text(language, "traffic.buy_traffic_btn"),
-                            callback_data="buy_traffic",
-                        )],
-                        [InlineKeyboardButton(
-                            text=i18n.get_text(language, "traffic.buy_subscription"),
-                            callback_data="menu_buy_vpn",
-                        )],
-                    ])
-                    await safe_send_message(bot, telegram_id, bypass_text, parse_mode="HTML", reply_markup=bypass_kb)
-                except Exception as notif_err:
-                    logger.warning(f"trial_expired: failed to send bypass-only notification to {telegram_id}: {notif_err}")
+                # The trial end is ONE message — «пробный завершён» below (#1):
+                # no «основная подписка закончилась» (and no −15 %) on top of it.
             else:
                 await conn.execute("""
                     UPDATE subscriptions

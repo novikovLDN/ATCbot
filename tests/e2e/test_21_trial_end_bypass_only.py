@@ -91,7 +91,9 @@ async def test_row_turned_bypass_only_by_a_screen_open(e2e, flag):
     assert await database.check_and_disable_expired_subscription(u.id) is True
     await e2e.settle()
     assert (await e2e.sub(u.id))["is_bypass_only"] is True
-    assert await completed_sent(e2e, u) is False
+    # #1: this path now sends «пробный завершён» itself (claimed once) — not
+    # «основная подписка закончилась»; the workers below add nothing
+    assert await completed_sent(e2e, u) is True
 
     await run_workers(e2e)
     await assert_told_once_bypass_kept(e2e, u, mark, limit=500 * MB)

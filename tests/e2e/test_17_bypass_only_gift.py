@@ -25,6 +25,7 @@ from tests.fakes import providers_http as prov
 GIFT_PROMISE = get_text("ru", "bypass.buy_title_trial")
 GIFT_LINE = get_text("ru", "bypass.gift_premium_granted").split("{", 1)[0]
 BYPASS_WORKS = get_text("ru", "traffic.subscription_expired_bypass_active").split("\n", 1)[0]
+TRIAL_ENDED = get_text("ru", "trial.expired")
 FALSE_CLAIMS = ("VPN перестанет", "VPN будет отключ", "вернётся к блокировкам")
 FLAGS = pytest.mark.parametrize("flag", ["off", "on"])
 
@@ -217,7 +218,9 @@ async def test_lifecycle_gift_ends_gb_stay_then_basic_then_more_gb_then_no_secon
     byp = e2e.panel.bypass(u.id)
     assert (byp["status"], byp["trafficLimitBytes"]) == ("ACTIVE", 15 * GIB), "the GB must keep working"
     texts = e2e.user_texts(u.id, mark)
-    assert any(BYPASS_WORKS in t for t in texts), texts
+    # #1: the gift IS the trial — its end is ONE message, «пробный завершён»
+    assert texts == [TRIAL_ENDED], texts
+    assert not [t for t in texts if BYPASS_WORKS in t], texts
     assert not [t for t in texts for claim in FALSE_CLAIMS if claim in t], texts
     # a second worker round changes nothing
     m2 = e2e.tg.mark()

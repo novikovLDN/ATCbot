@@ -244,6 +244,19 @@ async def test_check_and_disable_notifies_after_its_commit(world, monkeypatch, b
         schedule.assert_called_once_with(TG, has_bypass=expected)
 
 
+async def test_check_and_disable_ends_a_trial_with_the_trial_notice_only(world, monkeypatch):
+    """#1: a trial that ends on the screen-open path gets «пробный завершён», not
+    «основная подписка закончилась −15 %»."""
+    world(source="trial", bypass=True)
+    schedule = MagicMock(return_value=True)
+    trial_notice = MagicMock(return_value=True)
+    monkeypatch.setattr(so, "schedule_expired_notice", schedule)
+    monkeypatch.setattr(so, "schedule_trial_expired_notice", trial_notice)
+    assert await database.check_and_disable_expired_subscription(TG) is True
+    schedule.assert_not_called()
+    trial_notice.assert_called_once_with(TG)
+
+
 def test_grant_skips_a_window_the_reminder_already_opened():
     """The 3 h reminder opened the window at end − 3 h → the expiry must not re-open it."""
     naive_end = ENDED

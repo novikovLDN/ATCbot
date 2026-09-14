@@ -441,6 +441,21 @@ async def test_n05_fast_expiry_delivers_trial_expired_exactly_once(monkeypatch, 
     assert await tn.claim_trial_expired_notice(TG, conn) is False
 
 
+async def test_trial_end_with_bypass_is_one_message_without_the_15_percent(monkeypatch):
+    """#1: the trial row with a bypass entity becomes bypass-only → the user got
+    «пробный завершён −30 %» AND «основная подписка закончилась −15 %»."""
+    from app.services.notifications import special_offer
+    conn = _ExpiryConn(source="trial", bypass=True)
+    fec, sent, _discount = _patch_expiry(monkeypatch, conn)
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(special_offer, "notify_expired", notify)
+
+    await _run_one_expiry_iteration(fec)
+
+    assert _texts(sent) == [i18n.get_text("ru", "trial.expired")]
+    notify.assert_not_awaited()
+
+
 async def test_n05_trial_expired_text_promises_what_is_applied():
     for lang in ("ru", "en"):
         text = i18n.get_text(lang, "trial.expired")

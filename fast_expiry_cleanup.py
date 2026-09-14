@@ -324,7 +324,10 @@ async def fast_expiry_cleanup_task(bot=None):
                                                                 except Exception as rmn_err:
                                                                     logger.warning(f"REMNAWAVE_BYPASS_EXTEND_FAIL: tg={telegram_id} {rmn_err}")
                                                                 # Notify the user after the commit (below).
-                                                                expired_notice_pending = "bypass"
+                                                                # A trial gets ONE message — «пробный
+                                                                # завершён» (#1): not this one too.
+                                                                if source != "trial":
+                                                                    expired_notice_pending = "bypass"
                                                         else:
                                                             update_result = await conn.execute(
                                                                 """UPDATE subscriptions

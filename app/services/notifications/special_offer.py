@@ -119,3 +119,21 @@ def schedule_expired_notice(telegram_id: int, *, has_bypass: bool) -> bool:
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
     return True
+
+
+def schedule_trial_expired_notice(telegram_id: int) -> bool:
+    """A TRIAL ended on this path: «trial ended» (the one message of a trial end,
+    #1), claimed once per user like the workers do. False when no bot / loop."""
+    try:
+        from app.services import purchase_flow
+        bot = purchase_flow._alert_bot()
+        if bot is None:
+            return False
+        loop = asyncio.get_running_loop()
+        import trial_notifications
+    except Exception:  # noqa: BLE001
+        return False
+    task = loop.create_task(trial_notifications.notify_trial_expired(bot, telegram_id))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+    return True

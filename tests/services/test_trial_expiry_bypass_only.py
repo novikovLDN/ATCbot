@@ -58,6 +58,8 @@ class Conn:
         raise AssertionError(f"unexpected fetchrow: {sql}")
 
     async def fetchval(self, sql, *args):
+        if "SELECT remnawave_uuid FROM subscriptions" in sql:
+            return self.sub.get("remnawave_uuid")
         if "FROM subscriptions" in sql and "bypass_only" in sql:
             s = self.sub
             return True if s["status"] == "active" and (s["is_bypass_only"] or s["source"] == "bypass_only") else None
@@ -129,6 +131,21 @@ async def test_bypass_only_row_gets_trial_end_once_and_keeps_its_bypass(env):
 
     await tn._process_single_trial_expiration(MagicMock(), Pool(conn), _row(), NOW)
     assert env["sent"].await_count == 1, "trial ended is sent once"
+
+
+async def test_trial_with_bypass_ends_with_one_message(env, monkeypatch):
+    """#1 / #23: the trial worker used to send «основная подписка закончилась»
+    (without checking its UPDATE) and then «пробный завершён»."""
+    from app.services import remnawave_service
+    monkeypatch.setattr(remnawave_service, "extend_remnawave_for_bypass_bg", lambda *_a, **_k: None)
+    trial = {"status": "active", "source": "trial", "is_bypass_only": False,
+             "expires_at": _naive(NOW - timedelta(hours=1)), "uuid": "u-1", "remnawave_uuid": "rw-1"}
+    conn = Conn(dict(trial))
+    await tn._process_single_trial_expiration(MagicMock(), Pool(conn), dict(_row(), uuid="u-1"), NOW)
+
+    texts = [c.args[2] for c in env["sent"].await_args_list]
+    assert texts == [get_text("ru", "trial.expired")]
+    assert any("is_bypass_only = TRUE" in w for w in conn.sub_writes), "the GB keep working (bypass-only)"
 
 
 async def test_bypass_only_row_already_told_gets_nothing(env):
