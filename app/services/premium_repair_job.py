@@ -84,6 +84,7 @@ _APPLY_DEFAULT: Dict[str, Any] = {
     "plus_one_day": 0, "db_shortened": 0, "candidates": 0, "remaining": 0, "limit": None,
     "last_error": None, "summary": None, "started_at": None, "updated_at": None,
     "finished_at": None, "started_by": None,
+    "phase": None,              # "scan" (reading the panel) → "patch" (fixing); the card shows it
 }
 
 
@@ -334,6 +335,11 @@ async def _run_apply(doc: Dict[str, Any], *, resume: bool, limit: Optional[int],
     plan: Optional[Dict[str, Any]] = None
     started = time.monotonic()
     try:
+        # The panel scan takes a minute or two: say so, or the card shows "0 of 0"
+        # with a «Пауза» where «Исправить» was, and a second tap pauses the run
+        # before the first PATCH (production 2026-09-14).
+        a["phase"] = "scan"
+        await _save(doc)
         plan = await premium_repair.build_plan()
         todo = sum(1 for r in plan["rows"] if r["action"] == "would_fix")
         if limit is not None:
@@ -341,7 +347,8 @@ async def _run_apply(doc: Dict[str, Any], *, resume: bool, limit: Optional[int],
         if not resume:
             a["candidates"] = plan["stats"]["candidates"]
         base = int(a.get("fixed") or 0)          # a resumed run keeps what it already fixed
-        a.update(total=base + todo, done=base, errors=0, skipped=0, last_error=None, remaining=0)
+        a.update(total=base + todo, done=base, errors=0, skipped=0, last_error=None, remaining=0,
+                 phase="patch")
         await _save(doc)
         unsaved = 0
 
@@ -381,6 +388,7 @@ async def _run_apply(doc: Dict[str, Any], *, resume: bool, limit: Optional[int],
         a["last_error"] = _error_text(e)
         logger.warning("PREMIUM_REPAIR_APPLY_FAILED: %s", type(e).__name__)
     a["state"] = final
+    a["phase"] = None
     if final in TERMINAL_STATES:
         a["finished_at"] = _now_iso()
     a["summary"] = _summary(a, plan)

@@ -997,6 +997,8 @@ export interface PremiumRepairApply {
   /** Not reached (pause / stop / trial limit). */
   remaining: number;
   limit: number | null;
+  /** "scan" while the run re-reads the panel, "patch" while fixing. */
+  phase?: "scan" | "patch" | null;
   last_error: string | null;
   summary: PremiumRepairSummary | null;
   started_at: string | null;
