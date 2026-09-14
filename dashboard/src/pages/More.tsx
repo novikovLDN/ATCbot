@@ -5,6 +5,7 @@
 import { NavLink } from "react-router-dom";
 import { ChevronRight, LogOut } from "lucide-react";
 import { MORE_GROUPS, logout } from "@/lib/nav";
+import { navIcon } from "@/components/navIcons";
 import { useBranding } from "@/lib/branding";
 import { usePrefs, type Theme } from "@/store/prefs";
 import { PageHeader } from "@/components/ui/Surface";
@@ -27,19 +28,22 @@ export function More() {
         <section key={g.title} className="mb-7">
           <h2 className="section-h mb-1.5 px-4">{g.title}</h2>
           <ul className="nav-group tile overflow-hidden">
-            {g.items.map(({ to, label, icon: Icon }) => (
-              <li key={to}>
-                <NavLink to={to} className="nav-row">
-                  <span className="nav-icon">
-                    <Icon className="h-[18px] w-[18px]" strokeWidth={2} aria-hidden="true" />
-                  </span>
-                  <span className="nav-row-body">
-                    <span className="nav-row-label">{label}</span>
-                    <ChevronRight className="row-chevron h-[18px] w-[18px]" strokeWidth={2.2} aria-hidden="true" />
-                  </span>
-                </NavLink>
-              </li>
-            ))}
+            {g.items.map(({ to, label }) => {
+              const Icon = navIcon(to);
+              return (
+                <li key={to}>
+                  <NavLink to={to} className="nav-row">
+                    <span className="nav-icon">
+                      <Icon className="h-[18px] w-[18px]" strokeWidth={2} aria-hidden="true" />
+                    </span>
+                    <span className="nav-row-body">
+                      <span className="nav-row-label">{label}</span>
+                      <ChevronRight className="row-chevron h-[18px] w-[18px]" strokeWidth={2.2} aria-hidden="true" />
+                    </span>
+                  </NavLink>
+                </li>
+              );
+            })}
           </ul>
         </section>
       ))}

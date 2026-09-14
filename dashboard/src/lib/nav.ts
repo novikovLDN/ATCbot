@@ -1,43 +1,27 @@
 /**
  * Navigation map of the admin, one place for the tab bar, the «Ещё»
  * screen, the desktop sidebar and the compact navigation-bar title.
+ *
+ * Only the tab-bar icons live here (they are in the entry chunk); icons
+ * of the other sections are in components/navIcons.ts, imported only by
+ * the lazy «Ещё» screen and the lazy desktop sidebar.
  */
-import {
-  Activity,
-  BarChart3,
-  BellRing,
-  FlaskConical,
-  Gauge,
-  Gift,
-  Handshake,
-  HeartPulse,
-  LayoutGrid,
-  Link2,
-  Megaphone,
-  ScrollText,
-  Server,
-  Settings,
-  ShieldAlert,
-  Tag,
-  TicketPercent,
-  UserSearch,
-  Users,
-  Wallet,
-  Wrench,
-  type LucideIcon,
-} from "lucide-react";
+import { HeartPulse, LayoutGrid, Users, Wallet, type LucideIcon } from "lucide-react";
 import { endpoints } from "@/lib/api";
 import { auth } from "@/lib/auth";
 
 export interface NavItem {
   to: string;
   label: string;
-  icon: LucideIcon;
   end?: boolean;
 }
 
+export interface TabItem extends NavItem {
+  icon: LucideIcon;
+}
+
 /** Bottom tab bar (plus «Ещё»): the four screens opened most. */
-export const TABS: NavItem[] = [
+export const TABS: TabItem[] = [
   { to: "/", label: "Обзор", icon: LayoutGrid, end: true },
   { to: "/money", label: "Деньги", icon: Wallet },
   { to: "/subscribers", label: "Подписчики", icon: Users },
@@ -48,49 +32,49 @@ export const MORE_GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: "Данные",
     items: [
-      { to: "/panel", label: "Панель Remnawave", icon: Server },
-      { to: "/users", label: "Пользователи", icon: UserSearch },
-      { to: "/engagement", label: "Вовлечённость", icon: Activity },
-      { to: "/statistics", label: "Продажи по тарифам", icon: BarChart3 },
+      { to: "/panel", label: "Панель Remnawave" },
+      { to: "/users", label: "Пользователи" },
+      { to: "/engagement", label: "Вовлечённость" },
+      { to: "/statistics", label: "Продажи по тарифам" },
     ],
   },
   {
     title: "Сообщения",
     items: [
-      { to: "/broadcasts", label: "Рассылки", icon: Megaphone },
-      { to: "/automated-notifications", label: "Автоуведомления", icon: BellRing },
+      { to: "/broadcasts", label: "Рассылки" },
+      { to: "/automated-notifications", label: "Автоуведомления" },
     ],
   },
   {
     title: "Продажи",
     items: [
-      { to: "/pricing", label: "Цены и скидки", icon: Tag },
-      { to: "/promo", label: "Промокоды", icon: TicketPercent },
-      { to: "/links", label: "Ссылки", icon: Link2 },
-      { to: "/referrals", label: "Рефералы", icon: Handshake },
-      { to: "/bgift", label: "Гифт-ГБ", icon: Gift },
-      { to: "/beta-applications", label: "VPN-Инноватор", icon: FlaskConical },
+      { to: "/pricing", label: "Цены и скидки" },
+      { to: "/promo", label: "Промокоды" },
+      { to: "/links", label: "Ссылки" },
+      { to: "/referrals", label: "Рефералы" },
+      { to: "/bgift", label: "Гифт-ГБ" },
+      { to: "/beta-applications", label: "VPN-Инноватор" },
     ],
   },
   {
     title: "Контроль",
     items: [
-      { to: "/audit", label: "Журнал действий", icon: ScrollText },
-      { to: "/bypass-audit", label: "Bypass-аудит", icon: ShieldAlert },
-      { to: "/traffic-audit", label: "Аудит трафика", icon: Gauge },
-      { to: "/service", label: "Сервис", icon: Wrench },
+      { to: "/audit", label: "Журнал действий" },
+      { to: "/bypass-audit", label: "Bypass-аудит" },
+      { to: "/traffic-audit", label: "Аудит трафика" },
+      { to: "/service", label: "Сервис" },
     ],
   },
   {
     title: "Приложение",
-    items: [{ to: "/settings", label: "Настройки", icon: Settings }],
+    items: [{ to: "/settings", label: "Настройки" }],
   },
 ];
 
 export const MORE_ITEMS: NavItem[] = MORE_GROUPS.flatMap((g) => g.items);
 
 /** v3 names, kept for any caller that still imports them. */
-export const PRIMARY_NAV = TABS;
+export const PRIMARY_NAV: NavItem[] = TABS;
 export const MORE_NAV = MORE_ITEMS;
 
 function matches(pathname: string, to: string): boolean {
@@ -106,7 +90,7 @@ export function inMore(pathname: string): boolean {
 export function titleFor(pathname: string): string {
   if (pathname === "/more") return "Ещё";
   if (pathname === "/broadcasts/new") return "Новая рассылка";
-  const all = [...TABS, ...MORE_ITEMS];
+  const all: NavItem[] = [...TABS, ...MORE_ITEMS];
   const hit = all.find((i) => (i.end ? pathname === i.to : matches(pathname, i.to)));
   return hit?.label ?? "";
 }
