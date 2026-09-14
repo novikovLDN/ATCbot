@@ -54,9 +54,16 @@ def _make_bot():
 
 
 async def _main(*, apply: bool, yes: bool, limit: Optional[int], out: Optional[str]) -> int:
-    from database.core import init_db
-    if not await init_db():
-        print("database init failed")
+    # Only a pool — never init_db(): run from outside it would re-run the
+    # migrations and the inline ALTER TABLE ... IF NOT EXISTS (ACCESS EXCLUSIVE
+    # locks) on the live production DB.
+    from database.core import get_pool
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+    except Exception as e:  # noqa: BLE001
+        print(f"database unavailable: {type(e).__name__}")
         return 2
     try:
         plan = await premium_repair.build_plan()
