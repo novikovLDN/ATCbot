@@ -612,10 +612,14 @@ async def get_active_paid_subscription(conn, telegram_id: int, now: datetime):
     """Single source of truth: does user have an active paid (non-trial) subscription?
     Paid subscription ALWAYS overrides trial logic. Used by trial_notifications and
     fast_expiry_cleanup to skip trial notifications and trial cleanup when paid exists.
-    Returns: row with expires_at or None. Caller must pass existing conn (same transaction)."""
+    Returns: row with expires_at or None. Caller must pass existing conn (same transaction).
+    A bypass-only row is never paid: its expires_at is a 10-year placeholder
+    (ensure_bypass_only_subscription / the expiry transitions), not a premium end."""
     return await conn.fetchrow("""
         SELECT expires_at FROM subscriptions
-        WHERE telegram_id = $1 AND source != 'trial' AND status = 'active' AND expires_at > $2
+        WHERE telegram_id = $1 AND source NOT IN ('trial', 'bypass_only')
+          AND NOT COALESCE(is_bypass_only, FALSE)
+          AND status = 'active' AND expires_at > $2
         LIMIT 1
     """, telegram_id, _to_db_utc(now))
 

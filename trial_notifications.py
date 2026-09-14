@@ -753,8 +753,37 @@ async def process_trial_notifications(bot: Bot):
         )
 
 
+async def _claim_notice_for_bypass_only_row(conn, telegram_id: int) -> bool:
+    """The trial ended and the user's row is ALREADY bypass-only: another path
+    turned the trial row into bypass-only without sending "trial ended"
+    (check_and_disable_expired_subscription on a screen open,
+    ensure_bypass_only_subscription when GB are bought right after the end).
+    Claim the one notice (users.trial_completed_sent, as everywhere). The row
+    and the bypass entity are left alone — the GB keep working."""
+    bypass_only = await conn.fetchval(
+        """SELECT TRUE FROM subscriptions
+           WHERE telegram_id = $1 AND status = 'active'
+             AND (COALESCE(is_bypass_only, FALSE) OR source = 'bypass_only')""",
+        telegram_id,
+    )
+    if not bypass_only:
+        return False
+    claimed = await claim_trial_expired_notice(telegram_id, conn)
+    if claimed:
+        logger.info(f"trial_expired_bypass_only: user={telegram_id} — trial-ended notice claimed, bypass kept")
+    return claimed
+
+
 async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datetime):
     """Process expiration for a single trial user. Acquires and releases DB connection internally."""
+    # The bypass-only case only claims inside; the send holds no DB connection.
+    if await _expire_single_trial(bot, pool, row, now):
+        await send_trial_expired_notice(bot, row["telegram_id"])
+
+
+async def _expire_single_trial(bot: Bot, pool, row: dict, now: datetime) -> bool:
+    """True → the "trial ended" notice for a bypass-only row was claimed; the
+    caller sends it. Every other outcome is handled here (returns False)."""
     telegram_id = row["telegram_id"]
     uuid_val = row["uuid"]
     trial_used_at = database._from_db_utc(row["trial_used_at"]) if row["trial_used_at"] else None
@@ -781,7 +810,9 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
             )
             if not should_expire:
                 logger.debug(f"trial_expiry_skipped: user={telegram_id}, reason={reason}")
-                return
+                if reason == "no_active_trial_subscription":
+                    return await _claim_notice_for_bypass_only_row(conn, telegram_id)
+                return False
 
             logger.info(
                 f"TRIAL_EXPIRATION_EXECUTED: "
