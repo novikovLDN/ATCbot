@@ -387,6 +387,31 @@ async def test_outside_the_window_only_the_cutoff_is_fixed(monkeypatch):
     assert calls == ["cutoff", "cutoff", "due", "due", "due"]
 
 
+async def test_the_window_is_rechecked_before_every_send(monkeypatch):
+    """The 10–21 MSK window was checked once per pass; a pass lasts up to 240 s,
+    so sends at 21:0x happened. Now it is checked before every candidate."""
+    async def fake_started(now):
+        return now
+
+    async def fake_due(chain, **k):
+        return ([{"telegram_id": i, "anchor_at": NOW - 2 * H, "step": "1h"} for i in (1, 2, 3)]
+                if chain == "start" else [])
+    processed = []
+
+    async def fake_process(bot, chain, tg, anchor, step, **kw):
+        processed.append(tg)
+        return "sent"
+    answers = iter([True, True, False])          # pass start, 1st candidate, then 21:00
+    monkeypatch.setattr(funnel, "in_send_window", lambda now: next(answers, False))
+    monkeypatch.setattr(funnel_db, "get_or_init_started_at", fake_started)
+    monkeypatch.setattr(funnel_db, "fetch_due", fake_due)
+    monkeypatch.setattr(funnel, "process_candidate", fake_process)
+    monkeypatch.setattr(funnel, "_new_pacer", lambda: None)
+    counts = await funnel.run_pass(object(), now=msk(2026, 9, 14, 20, 59))
+    assert processed == [1]
+    assert counts == {"sent": 1, "outside_window": 1}
+
+
 async def test_worker_survives_errors_and_propagates_cancel(monkeypatch):
     from app.workers import sales_funnel as worker
     passes, sleeps = [], []

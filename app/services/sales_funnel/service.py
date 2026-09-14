@@ -359,6 +359,7 @@ async def run_pass(bot, *, now: Optional[datetime] = None) -> Dict[str, int]:
     if not in_send_window(now):
         return {"outside_window": 1}
     pacer = _new_pacer()
+    closed = False
     for chain, steps in CHAINS.items():
         lower = lookback_start(chain, cutoff, now)
         due = await funnel_db.fetch_due(
@@ -367,11 +368,18 @@ async def run_pass(bot, *, now: Optional[datetime] = None) -> Dict[str, int]:
             day_start=msk_day_start(now), limit=BATCH_PER_CHAIN,
         )
         for cand in due:
+            # A pass can last minutes: the window is re-checked before every send.
+            if not in_send_window(now + timedelta(seconds=time.monotonic() - started)):
+                counts["outside_window"] = 1
+                closed = True
+                break
             outcome = await process_candidate(
                 bot, chain, cand["telegram_id"], cand["anchor_at"], cand["step"],
                 now=now, lower=lower, pacer=pacer,
             )
             counts[outcome] = counts.get(outcome, 0) + 1
+        if closed:
+            break
     log_event(
         logger, component="worker", operation="sales_funnel_pass", outcome="success",
         duration_ms=int((time.monotonic() - started) * 1000),
