@@ -625,8 +625,11 @@ async def test_post409_adoption_patches_expire_at_and_squad():
 
 
 @pytest.mark.asyncio
-async def test_adoption_patch_failure_does_not_break_recovery():
-    """If the PATCH itself raises, adoption still succeeds (next renewal retries)."""
+async def test_adoption_patch_failure_is_reported_as_failure():
+    """If the expireAt PATCH of an adopted entity fails, the adoption is a
+    FAILURE (hotfix of a4b2455e): reporting ok left the panel on the old
+    date with no alert and no re-sync. The entity is still identified
+    (recovered, panel_uuid) for the caller's retry."""
     cfg = _cfg_stub(REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID=EXT_SQUAD_UUID)
     existing = {
         "uuid": PANEL_UUID,
@@ -648,8 +651,38 @@ async def test_adoption_patch_failure_does_not_break_recovery():
             requested_uuid=SAMPLE_UUID,
             expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
         )
-    assert result.ok is True
+    assert result.ok is False
+    assert result.error == "adopt_expire_patch_failed"
     assert result.recovered is True
+    assert result.panel_uuid == PANEL_UUID
+    create_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post409_adoption_patch_returning_none_is_reported_as_failure():
+    """Same rule on the post-409 adoption path, PATCH answered None (not sent /
+    failed) instead of raising."""
+    first_call = {"ok": False, "status": 409, "body": "username taken", "response": None}
+    existing_after_race = {
+        "id": 382, "vlessUuid": SAMPLE_UUID, "shortUuid": "racesh",
+        "username": "tg_42_premium", "telegramId": 42,
+        "subscriptionUrl": "https://r/sub/race",
+    }
+    find_mock = AsyncMock(side_effect=[None, existing_after_race])
+    create_mock = AsyncMock(return_value=first_call)
+    update_mock = AsyncMock(return_value=None)
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create, patch.object(
+        remnawave_premium.remnawave_api, "update_user", update_mock,
+    ):
+        result = await remnawave_premium.create_premium_user_entity(
+            42, requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.ok is False
+    assert result.error == "adopt_expire_patch_failed"
+    assert result.recovered is True
+    create_mock.assert_called_once()
 
 
 # ── renew_premium_user: externalSquadUuid safety net ──────────────────

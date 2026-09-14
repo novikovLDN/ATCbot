@@ -173,6 +173,26 @@ def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResul
     )
 
 
+def _adopt_patch_failed(result: PremiumCreateResult) -> PremiumCreateResult:
+    """The entity exists and is ours, but its expireAt could NOT be set.
+    Reporting the adoption as ok left the panel on the OLD date silently:
+    the renewal looked successful — no alert, no retry, the provider got
+    200. A failed result lets the caller's failure path run
+    (provision_subscription raises → transient payment error: alert + 5xx +
+    provider retry). Hotfix of a4b2455e."""
+    return PremiumCreateResult(
+        ok=False,
+        panel_uuid=result.panel_uuid,
+        forced_uuid_accepted=False,
+        subscription_url=result.subscription_url,
+        status=result.status,
+        error="adopt_expire_patch_failed",
+        recovered=True,
+        short_uuid=result.short_uuid,
+        panel_id=result.panel_id,
+    )
+
+
 async def _ensure_premium_entity_state(
     panel_uuid: Optional[str],
     existing: dict,
@@ -193,7 +213,7 @@ async def _ensure_premium_entity_state(
     Returns True on success, False on failure.  On failure logs CRITICAL:
     the user has paid but the panel state is now out-of-sync with DB and
     requires manual repair (re-trigger sync or admin PATCH).  Never
-    raises — the adoption itself still succeeds.
+    raises; the caller reports the adoption as failed (_adopt_patch_failed).
     """
     if not panel_uuid:
         return False
@@ -314,7 +334,8 @@ async def create_premium_user_entity(
                 telegram_id, username, (existing.get("uuid") or "")[:8],
             )
             result = _result_from_existing(existing, http_status=200)
-            await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at)
+            if not await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at):
+                return _adopt_patch_failed(result)
             return result
         logger.warning(
             "REMNAWAVE_PREMIUM_USERNAME_TAKEN_UNRELATED: tg=%s username=%s existing_tg=%s",
@@ -376,7 +397,8 @@ async def create_premium_user_entity(
                 telegram_id, (existing.get("uuid") or "")[:8],
             )
             result = _result_from_existing(existing, http_status=409)
-            await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at)
+            if not await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at):
+                return _adopt_patch_failed(result)
             return result
         # 409 not from a username race we own — fall through to the
         # forced-UUID retry below (might be uuid conflict).
