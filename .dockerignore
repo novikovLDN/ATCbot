@@ -37,6 +37,11 @@ scripts/
 # image, incy_crypto._SCRIPT_PATH.is_file() returns False on startup, the
 # kill-switch flips, and the Incy button never appears in the UI.
 !scripts/incy_encode.mjs
+# Owner tools run inside the container (`railway ssh` → python -m scripts.<name>):
+# the premium expireAt repair and the Remnawave tag backfill.
+!scripts/__init__.py
+!scripts/fix_premium_over_issuance.py
+!scripts/backfill_remnawave_tags.py
 
 # Audit reports
 *_AUDIT.md
