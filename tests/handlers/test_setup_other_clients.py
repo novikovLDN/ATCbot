@@ -107,13 +107,28 @@ async def test_macos_step1_has_no_karing_store_button(env):
 
 
 @pytest.mark.parametrize("platform", ["ios", "android", "macos", "windows"])
-async def test_other_clients_button_sits_right_above_next(env, platform):
+async def test_download_screen_has_no_other_clients_button(env, platform):
+    """Owner 2026-09-14: «Другие клиенты» lives on the one-tap key screen."""
     cb = _callback(f"setup_step1:{platform}")
     await nav.callback_setup_step1(cb)
+    datas = [b.callback_data for b in _flat(_sent(cb)[1])]
+    assert f"setup_other:{platform}" not in datas
+    assert f"setup_step2:{platform}" in datas
+
+
+@pytest.mark.parametrize("aggregator", [False, True], ids=["dual-key", "aggregator"])
+@pytest.mark.parametrize("platform", ["ios", "android", "macos", "windows"])
+async def test_other_clients_button_sits_right_above_done(env, monkeypatch, platform, aggregator):
+    if aggregator:
+        monkeypatch.setattr(sub_aggregator, "is_enabled_for", lambda _id: True)
+        monkeypatch.setattr(sub_aggregator, "ensure_pair",
+                            AsyncMock(return_value="https://sub.atlassecure.ru/agg/ONE"))
+    cb = _callback(f"setup_step2:{platform}")
+    await nav.callback_setup_step2(cb)
     rows = _rows(_sent(cb)[1])
     datas = [row[0].callback_data for row in rows]
     i = datas.index(f"setup_other:{platform}")
-    assert datas[i + 1] == f"setup_step2:{platform}"
+    assert datas[i + 1] == "setup_done"
     assert rows[i][0].text == "🧩 Другие клиенты"
 
 
@@ -190,7 +205,7 @@ async def test_other_clients_one_tap_buttons_per_platform(env, platform, clients
         assert parse_qs(urlsplit(url).query)["url"][0] in (PREMIUM, BYPASS)
     assert len(one_tap) == 2 * len(clients)  # Premium + Обход per client
     back = _flat(kb)[-1]
-    assert back.callback_data == f"setup_step1:{platform}"
+    assert back.callback_data == f"setup_step2:{platform}"   # back to the one-tap key screen
 
 
 async def test_other_clients_bypass_only_user(env):
@@ -219,7 +234,7 @@ async def test_other_clients_without_keys(env):
     await nav.callback_setup_other(cb)
     text, kb = env["sent"]["text"], env["sent"]["kb"]
     assert "Ключей пока нет" in text
-    assert [b.callback_data for b in _flat(kb) if b.callback_data] == ["setup_step1:windows"]
+    assert [b.callback_data for b in _flat(kb) if b.callback_data] == ["setup_step2:windows"]
 
 
 @pytest.mark.parametrize("lang", ["ru", "en"])
