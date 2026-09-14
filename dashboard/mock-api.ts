@@ -981,6 +981,49 @@ export function mockApi(): Plugin {
         if (path === "/panel/nodes") return send(mockNodes());
         if (path === "/panel/bandwidth") return send(mockBandwidth(Number(q.get("days")) || 14));
         if (path === "/pricing/tariffs") return send(mockTariffs());
+        // Shape of GET /payments/recent (routes/payments.py → get_recent_payments_feed).
+        if (path === "/payments/recent") {
+          const limit = Number(q.get("limit")) || 20;
+          const kinds = [
+            { purchase_type: "subscription", tariff: "basic", is_combo: false, price_kopecks: 19_900 },
+            { purchase_type: "subscription", tariff: "plus", is_combo: false, price_kopecks: 34_900 },
+            { purchase_type: "traffic_pack", tariff: "traffic_15gb", is_combo: false, price_kopecks: 14_900 },
+            { purchase_type: "subscription", tariff: "plus", is_combo: true, price_kopecks: 49_900 },
+          ];
+          const providers = ["platega", "wata", "cryptobot", "telegram_payment", "telegram_stars"];
+          const statuses = ["paid", "paid", "paid", "pending", "expired"];
+          return send(
+            Array.from({ length: Math.min(limit, 12) }, (_, i) => ({
+              id: 90_000 - i,
+              purchase_id: `pp_${90_000 - i}`,
+              telegram_id: 100_100 + i * 37,
+              username: i % 3 ? `user${i}` : null,
+              status: statuses[i % statuses.length],
+              payment_provider: providers[i % providers.length],
+              created_at: new Date(Date.now() - (i * 7 + 2) * 60_000).toISOString(),
+              ...kinds[i % kinds.length],
+            })),
+          );
+        }
+        // Shape of GET /stats/hourly (app/api/dashboard/routes/stats.py).
+        if (path === "/stats/hourly") {
+          const d = Number(q.get("days")) || 7;
+          return send({
+            days: d,
+            tz: "Europe/Moscow",
+            series: Array.from({ length: 24 }, (_, hour) => {
+              const w = 0.25 + Math.max(0, Math.sin(((hour - 7) / 24) * Math.PI * 2)) + (hour >= 19 && hour <= 23 ? 0.6 : 0);
+              return {
+                hour,
+                revenue_rubles: Math.round(w * 1_900 * d),
+                payments_count: Math.round(w * 4.5 * d),
+                new_users: Math.round(w * 12 * d),
+                new_subscriptions: Math.round(w * 3 * d),
+                new_paid_subscriptions: Math.round(w * 2 * d),
+              };
+            }),
+          });
+        }
         // Shape of GET /payments/breakdown (app/api/dashboard/routes/payments.py).
         if (path === "/payments/breakdown")
           return send({
