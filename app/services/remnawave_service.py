@@ -15,6 +15,7 @@ from typing import Any, Optional
 import config
 import database
 from app.services import remnawave_api
+from app.services.tariffs import PANEL_TAG_BYPASS
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,8 @@ async def create_remnawave_user(
                     update_fields["trafficLimitBytes"] = int(traffic_limit)
                 if not existing.get("telegramId"):
                     update_fields["telegramId"] = int(telegram_id)
+                if existing.get("tag") != PANEL_TAG_BYPASS:
+                    update_fields["tag"] = PANEL_TAG_BYPASS
                 adopted = await remnawave_api.update_user(
                     int(existing_id) if existing_id is not None else existing_uuid,
                     **update_fields,
@@ -177,6 +180,7 @@ async def create_remnawave_user(
             expire_at=expire_str,
             device_limit=_device_limit_for_tariff(tariff),
             telegram_id=telegram_id,
+            tag=PANEL_TAG_BYPASS,
         )
         if result:
             # 3.x: response не отдаёт `uuid` — только `vlessUuid` + `id`.
@@ -275,6 +279,7 @@ async def renew_remnawave_user(
         far_future = datetime.now(timezone.utc) + timedelta(days=3650)
         expire_str = far_future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        tag_field = {} if user_data.get("tag") == PANEL_TAG_BYPASS else {"tag": PANEL_TAG_BYPASS}
         patched = await remnawave_api.update_user(
             api_target,
             trafficLimitBytes=new_limit,
@@ -282,6 +287,7 @@ async def renew_remnawave_user(
             # 3.x: hwidDeviceLimit (update-user.command.ts:53); deviceLimit
             # в контракте нет и вырезался валидатором панели.
             hwidDeviceLimit=_device_limit_for_tariff(tariff),
+            **tag_field,
         )
         if patched is None:
             # M-RENEW-GB-SILENT (docs/audit/03_payment_matrix.md): update_user
@@ -528,7 +534,8 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
         # ещё не было выдано) — не безлимит. Складываем без условий.
         new_limit = current_limit + int(extra_bytes)
 
-        result = await remnawave_api.update_user(api_target, trafficLimitBytes=new_limit)
+        tag_field = {} if entity.get("tag") == PANEL_TAG_BYPASS else {"tag": PANEL_TAG_BYPASS}
+        result = await remnawave_api.update_user(api_target, trafficLimitBytes=new_limit, **tag_field)
         if result is not None:
             # Re-enable if disabled
             if entity.get("status") != "ACTIVE":

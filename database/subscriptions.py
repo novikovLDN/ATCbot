@@ -1929,12 +1929,18 @@ async def grant_access(
                     from app.services import purchase_flow
                     _is_trial = (source == "trial")
                     _period_days = max(1, int(duration.total_seconds() // 86400))
+                    # Day grants (admin / game / promo) keep the panel tag; the paid
+                    # and trial call stays exactly as before.
+                    _tag_kw = ({"keep_panel_tag": True}
+                               if source not in _PAID_GRANT_SOURCES and source not in ("trial", "balance")
+                               else {})
                     vless_result = await purchase_flow.provision_subscription(
                         telegram_id,
                         tariff=tariff or "basic",
                         subscription_end=subscription_end,
                         period_days=_period_days,
                         is_trial=_is_trial,
+                        **_tag_kw,
                     )
                     vless_url = vless_result.get("vless_url")
                     vless_url_plus = vless_result.get("vless_url_plus")
@@ -5443,6 +5449,9 @@ async def _finalize_purchase_locked(
         sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
         try:
             from app.services import purchase_flow
+            from app.services.tariffs import premium_panel_tag
+            # The combo flag of this purchase is written after the sync — pass the tag.
+            sync_info = {**sync_info, "panel_tag": premium_panel_tag(tariff_type, is_combo=bool(is_combo_purchase))}
             await purchase_flow.sync_renewal_to_remnawave(sync_info)
         except Exception as e:
             logger.critical(

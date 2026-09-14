@@ -37,9 +37,13 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import config
-from app.services import remnawave_bypass, remnawave_premium
+from app.services import remnawave_bypass, remnawave_premium, tariffs
 
 logger = logging.getLogger(__name__)
+
+# provision_subscription(panel_tag=...) default: derive the premium tag from
+# (tariff, is_trial, is_combo) — the purchase being provisioned.
+DERIVE_TAG = object()
 
 # Free-tier traffic allowance for the bypass entity on a Trial run.
 # Sourced from config.TRIAL_BYPASS_MB (default 500 MB).
@@ -130,11 +134,19 @@ async def provision_subscription(
     period_days: int,
     is_trial: bool = False,
     is_combo: bool = False,
+    panel_tag=DERIVE_TAG,
+    keep_panel_tag: bool = False,
 ) -> dict:
     """Provision premium + bypass entities for a purchase / trial / renewal.
 
     Returns a dict shaped like the legacy `vpn_utils.add_vless_user`:
     keys `uuid`, `vless_url`, `vless_url_plus`, `subscription_type`.
+
+    Panel tags (owner 2026-09-14): the premium entity gets `panel_tag` —
+    by default tariffs.premium_panel_tag(tariff, is_combo, is_trial); callers
+    that re-provision the CURRENT row pass it explicitly (None = untouched).
+    `keep_panel_tag` (day grants): an existing entity keeps its tag, only a new
+    one gets the tag. The bypass entity is always BYPASS (remnawave_bypass).
 
     On any non-recoverable error a RuntimeError is raised so the caller's
     existing retry logic (`MAX_VPN_RETRIES` loop in grant_access) kicks in.
@@ -154,6 +166,8 @@ async def provision_subscription(
         legacy_uuid = None
 
     requested_uuid = legacy_uuid or str(uuid_lib.uuid4())
+    if panel_tag is DERIVE_TAG:
+        panel_tag = tariffs.premium_panel_tag(tariff, is_combo=is_combo, is_trial=is_trial)
 
     # ── Premium entity ───────────────────────────────────────────────
     existing_premium_uuid = await database.get_remnawave_premium_uuid(telegram_id)
@@ -162,7 +176,9 @@ async def provision_subscription(
 
     if existing_premium_uuid:
         # Renewal: PATCH expireAt.  Bypass entity is handled below independently.
-        renewed = await remnawave_premium.renew_premium_user(telegram_id, subscription_end, tier=tariff)
+        renewed = await remnawave_premium.renew_premium_user(
+            telegram_id, subscription_end, tier=tariff, tag=None if keep_panel_tag else panel_tag,
+        )
         if not renewed:
             logger.warning(
                 "PURCHASE_FLOW: premium renew returned False — falling back to create-flow tg=%s",
@@ -179,6 +195,8 @@ async def provision_subscription(
             expire_at=subscription_end,
             description=f"Premium via bot ({tariff})",
             tier=tariff,   # devices by tariff (owner 2026-09-14)
+            tag=panel_tag,
+            tag_on_adopt=not keep_panel_tag,
         )
         if not result.ok:
             raise RuntimeError(f"premium provision failed: status={result.status} error={result.error}")
@@ -371,11 +389,28 @@ async def sync_renewal_to_remnawave(sync_info: dict) -> None:
         raise
 
 
+async def _renewal_panel_tag(tg: int, sync_info: dict) -> Optional[str]:
+    """Premium tag after a legacy renewal: sync_info["panel_tag"] when the
+    caller knows the purchase (finalize_purchase: combo), else the committed
+    subscriptions row — the tariff the bot shows now (a day grant keeps the row's
+    source and tariff, so the tag stays). A read error → None (tag untouched)."""
+    if "panel_tag" in sync_info:
+        return sync_info["panel_tag"]
+    try:
+        import database
+        sub = await database.get_subscription_any(tg)
+    except Exception as e:  # noqa: BLE001 — a tag never fails a renewal
+        logger.warning("RENEWAL_SYNC_TAG_READ_FAILED: tg=%s %s: %s", tg, type(e).__name__, e)
+        return None
+    return tariffs.premium_panel_tag_for_subscription(sub)
+
+
 async def _sync_renewal_once(sync_info: dict) -> None:
     from app.services import remnawave_premium
     tg = int(sync_info["telegram_id"])
     new_expire = sync_info["subscription_end"]
-    ok = await remnawave_premium.renew_premium_user(tg, new_expire, tier=sync_info.get("tariff"))
+    tag = await _renewal_panel_tag(tg, sync_info)
+    ok = await remnawave_premium.renew_premium_user(tg, new_expire, tier=sync_info.get("tariff"), tag=tag)
     if not ok:
         # Premium entity не найден — вызовем полный provision, который
         # создаст premium (и bypass если нужно) через preflight+adopt.
@@ -392,6 +427,7 @@ async def _sync_renewal_once(sync_info: dict) -> None:
             period_days=int(sync_info.get("period_days") or 30),
             is_trial=False,
             is_combo=bool(sync_info.get("is_combo", False)),
+            panel_tag=tag,
         )
 
 

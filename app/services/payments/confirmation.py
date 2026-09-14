@@ -532,12 +532,14 @@ async def _process_confirmed_payment(
             )
             if still_active:
                 _pd = (pending.get("period_days") if pending else None) or 30
+                from app.services.tariffs import premium_panel_tag_for_subscription
                 await purchase_flow.provision_subscription(
                     telegram_id,
                     tariff=sub_tariff,
                     subscription_end=sub_expires,
                     period_days=int(_pd),
                     is_trial=False,
+                    panel_tag=premium_panel_tag_for_subscription(sub),   # resync of the current row
                 )
                 logger.info(
                     f"WEBHOOK_REPLAY_RESYNCED: provider={provider}, user={telegram_id}, "

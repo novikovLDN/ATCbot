@@ -274,6 +274,47 @@ def premium_device_limit(tier) -> int:
     return int(getattr(config, "REMNAWAVE_PREMIUM_DEVICE_LIMIT", 5))
 
 
+# ── Remnawave user tags (owner 2026-09-14) ─────────────────────────────
+# Panel 3.4.3 has ONE tag per user: ^[A-Z0-9_]+$, up to 16 chars, nullable
+# (libs/contract/commands/users/{create,update}-user.command.ts; see
+# docs/providers/remnawave_3.4.3.md §3a). The premium entity carries the
+# user's current tariff, the bypass entity always BYPASS. On expiry the last
+# tariff tag stays (the panel status EXPIRED already says it ended).
+PANEL_TAG_TRIAL = "TRIAL"
+PANEL_TAG_BYPASS = "BYPASS"
+PREMIUM_PANEL_TAGS = ("TRIAL", "BASIC", "PLUS", "COMBO_BASIC", "COMBO_PLUS")
+PANEL_TAGS = PREMIUM_PANEL_TAGS + (PANEL_TAG_BYPASS,)
+
+
+def premium_panel_tag(tariff, *, is_combo: bool = False, is_trial: bool = False) -> Optional[str]:
+    """Tag of the PREMIUM entity for a tariff: basic → BASIC, plus → PLUS,
+    combo_basic / (basic, is_combo) → COMBO_BASIC, combo_plus → COMBO_PLUS,
+    trial → TRIAL, legacy biz_* → PLUS. None for anything else (day grants,
+    packs, unknown) — the caller then leaves the panel tag as it is."""
+    if is_trial:
+        return PANEL_TAG_TRIAL
+    t = normalize_tier(tariff)
+    t = t.strip().lower() if isinstance(t, str) else t
+    if t == "trial":
+        return PANEL_TAG_TRIAL
+    if is_combo and t in BASE_TARIFFS:
+        t = f"combo_{t}"
+    if t in BASE_TARIFFS or t in COMBO_KEYS:
+        return t.upper()
+    return None
+
+
+def premium_panel_tag_for_subscription(sub) -> Optional[str]:
+    """Premium tag for a subscriptions row as the bot sees it now: a trial row
+    (source='trial', also the one-time bypass-purchase gift) → TRIAL, otherwise
+    subscription_type + the is_combo flag. A bypass-only row has no premium
+    tariff (its subscription_type is a placeholder) → None."""
+    if not sub or sub.get("is_bypass_only"):
+        return None
+    is_trial = str(sub.get("source") or "").strip().lower() == "trial"
+    return premium_panel_tag(sub.get("subscription_type"), is_combo=bool(sub.get("is_combo")), is_trial=is_trial)
+
+
 def stars_for_rub(rub: float) -> int:
     """Stars for a RUB price: ceil(rub × STARS_MARKUP / RUB_PER_STAR) — the rule
     the top-up and gift Stars invoices use."""

@@ -2426,6 +2426,7 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                     subscription_end=subscription_end_pre,
                     period_days=days,
                     is_trial=False,
+                    keep_panel_tag=True,   # a day grant keeps the panel tag
                 )
                 pre_provisioned_uuid = {
                     "uuid": vless_result["uuid"].strip(),
@@ -3385,6 +3386,7 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
                     subscription_end=subscription_end_pre,
                     period_days=max(1, minutes // 1440),
                     is_trial=False,
+                    keep_panel_tag=True,   # a day grant keeps the panel tag
                 )
                 pre_provisioned_uuid = {
                     "uuid": vless_result["uuid"].strip(),

@@ -174,8 +174,10 @@ async def test_basic_with_existing_bypass_3gb_becomes_13gb(monkeypatch, panel, j
     assert (row["bypass_base_bytes"], row["bypass_target_bytes"]) == (3 * GIB, 13 * GIB)
     # absolute PATCH, trusted, addressed by the bypass entity's own numeric id
     traffic = [s for s in seen if "trafficLimitBytes" in s[1]]
+    # the untagged bypass entity gets BYPASS in the same PATCH (no extra request)
     assert traffic == [(panel.bypass[TG]["id"],
-                        {"trafficLimitBytes": 13 * GIB, "status": "ACTIVE", "_trust_bypass": True})]
+                        {"trafficLimitBytes": 13 * GIB, "status": "ACTIVE", "_trust_bypass": True,
+                         "tag": "BYPASS"})]
     (_, pid, fields), = premium_patches(panel)
     assert pid == panel.premium[TG]["id"]
     assert fields["expireAt"].startswith(UNTIL.strftime("%Y-%m-%dT%H:%M:%S"))

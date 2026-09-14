@@ -32,6 +32,7 @@ Low-level HTTP client for Remnawave Panel API (verified against backend 3.4.3).
     X-Forwarded-Proto=https — бот шлёт их сам (_headers).
 """
 import logging
+import re
 from typing import Optional, Dict, Any, Literal, Union
 
 import httpx
@@ -169,6 +170,78 @@ def is_username_conflict(raw: Optional[Dict[str, Any]]) -> bool:
     return "username already exists" in str(body or "").lower()
 
 
+# ── User tag (3.4.3) ───────────────────────────────────────────────────
+#
+# ONE tag per user: `tag` on POST /api/users and PATCH /api/users, string
+# ^[A-Z0-9_]+$ up to 16 chars, nullable (create-user.command.ts:81-94,
+# update-user.command.ts:41-50; UsersSchema.tag users.schema.ts:16). The bot
+# sets the tariff tag on the premium entity and BYPASS on the bypass entity
+# (tariffs.premium_panel_tag). A tag must never fail a purchase: an invalid
+# value is dropped before sending, and a 400 that names the tag is answered by
+# resending the same request once WITHOUT the tag (logged REMNAWAVE_TAG_REJECTED).
+
+_TAG_RE = re.compile(r"^[A-Z0-9_]{1,16}$")
+_TAG_WORD_RE = re.compile(r"\btag\b", re.IGNORECASE)
+
+
+def clean_tag(tag: Any) -> Optional[str]:
+    """`tag` if the panel accepts it (3.4.3 regex + length), else None (logged)."""
+    if tag is None:
+        return None
+    if isinstance(tag, str) and _TAG_RE.match(tag):
+        return tag
+    logger.warning("REMNAWAVE_TAG_INVALID: %r not sent (^[A-Z0-9_]+$, max 16)", str(tag)[:40])
+    return None
+
+
+def _is_tag_rejection(raw: Optional[Dict[str, Any]]) -> bool:
+    """A 400 whose body names the `tag` field (zod error path ["tag"] / message)."""
+    if _raw_status(raw) != 400:
+        return False
+    return bool(_TAG_WORD_RE.search(str((raw or {}).get("body") or "")))
+
+
+def _request_result(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A _request_raw envelope reduced to what _request returns."""
+    if not raw.get("ok"):
+        return None
+    if _raw_status(raw) in (202, 204):
+        return dict(_EMPTY_OK)
+    resp = raw.get("response")
+    return resp if isinstance(resp, (dict, list)) else dict(_EMPTY_OK)
+
+
+async def _send_tagged(method: str, path: str, body: Dict[str, Any], *, raw: bool):
+    """POST/PATCH `body`; if the panel rejects its tag, send it once more without
+    the tag — the write itself (expireAt, limit, create) must still happen.
+    Without a tag in the body this is exactly _request / _request_raw."""
+    if not body.get("tag"):
+        body = {k: v for k, v in body.items() if k != "tag"}
+        if raw:
+            return await _request_raw(method, path, json=body)
+        return await _request(method, path, json=body)
+    first = await _request_raw(method, path, json=body)
+    if not first.get("ok") and _is_tag_rejection(first):
+        logger.warning(
+            "REMNAWAVE_TAG_REJECTED: %s %s tag=%s status=%s — sent again without the tag",
+            method, path, body.get("tag"), _raw_status(first),
+        )
+        stripped = {k: v for k, v in body.items() if k != "tag"}
+        if raw:
+            return await _request_raw(method, path, json=stripped)
+        return await _request(method, path, json=stripped)
+    return first if raw else _request_result(first)
+
+
+async def set_user_tag(user_id: int, tag: str) -> Dict[str, Any]:
+    """Tag-only PATCH /api/users {id, tag} (the tag backfill). No fallback, no
+    other field: returns the _request_raw envelope so the caller counts errors."""
+    cleaned = clean_tag(tag)
+    if cleaned is None:
+        return {"ok": False, "status": 0, "body": None, "response": None, "error": "invalid_tag"}
+    return await _request_raw("PATCH", "/api/users", json={"id": int(user_id), "tag": cleaned})
+
+
 # ── User CRUD ──────────────────────────────────────────────────────────
 
 async def create_user(
@@ -184,9 +257,13 @@ async def create_user(
     telegram_id: Optional[int] = None,
     traffic_limit_strategy: str = "NO_RESET",
     external_squad_uuid: Optional[str] = None,
+    tag: Optional[str] = None,
     raw_response: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """POST /api/users — create a new Remnawave user (3.x).
+
+    `tag`: the user tag (clean_tag); a panel that rejects it gets the POST
+    again without the tag — the user is still created (_send_tagged).
 
     ⚠️ 3.x панель больше НЕ принимает custom `uuid` при создании — она
     генерит сама. Параметр `uuid` уходит в поле `vlessUuid` (VLESS UUID
@@ -222,6 +299,9 @@ async def create_user(
         body["telegramId"] = int(telegram_id)
     if external_squad_uuid:
         body["externalSquadUuid"] = external_squad_uuid
+    cleaned_tag = clean_tag(tag)
+    if cleaned_tag:
+        body["tag"] = cleaned_tag
 
     if squad_uuid is None:
         effective_squad = config.REMNAWAVE_SQUAD_UUID
@@ -232,9 +312,9 @@ async def create_user(
 
     path = "/api/users"
     if raw_response:
-        return await _request_raw("POST", path, json=body)
+        return await _send_tagged("POST", path, body, raw=True)
 
-    result = await _request("POST", path, json=body)
+    result = await _send_tagged("POST", path, body, raw=False)
     if result:
         logger.info(
             "REMNAWAVE_CREATE: success for %s, id=%s squad_in_response=%s",
@@ -589,7 +669,14 @@ async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, 
         # Иначе callers (add_traffic и т.п.) видят truthy dict и ложно
         # логируют SUCCESS, а трафик так и не добавлен.
         return None
+    if "tag" in fields:
+        # The bot only ever SETS a tag (never clears it): invalid / None → not sent.
+        cleaned = clean_tag(fields.pop("tag"))
+        if cleaned:
+            fields["tag"] = cleaned
     body = {"id": resolved, **fields}
+    if "tag" in body:
+        return await _send_tagged("PATCH", "/api/users", body, raw=False)
     return await _request("PATCH", "/api/users", json=body)
 
 
