@@ -420,12 +420,6 @@ async def callback_setup_step1(callback: CallbackQuery):
             style="primary",
         )])
 
-    # «Другие клиенты» — над кнопкой перехода к установке в одно нажатие.
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "setup.other_clients_btn"),
-        callback_data=f"setup_other:{platform}",
-        style="primary",
-    )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.next_step"),
         callback_data=f"setup_step2:{platform}",
@@ -550,6 +544,7 @@ async def callback_setup_step2(callback: CallbackQuery):
                 url=f"{base_url}/open/v2raytun?url={q}",
                 style="primary",
             )])
+        buttons.append(_other_clients_row(language, platform))
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "setup.btn_done"),
             callback_data="setup_done",
@@ -667,6 +662,7 @@ async def callback_setup_step2(callback: CallbackQuery):
             buttons.append(row_karing)
 
     # === Bottom buttons ===
+    buttons.append(_other_clients_row(language, platform))
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_done"),
         callback_data="setup_done",
@@ -1161,6 +1157,16 @@ async def callback_setup_manual(callback: CallbackQuery):
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
+def _other_clients_row(language: str, platform: str) -> list:
+    """«🧩 Другие клиенты» — on the one-tap key screen, right above «Готово»
+    (owner 2026-09-14: not on the download screen)."""
+    return [InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.other_clients_btn"),
+        callback_data=f"setup_other:{platform}",
+        style="primary",
+    )]
+
+
 def _other_clients_screen(
     language: str, platform: str, premium_url: str | None, bypass_url: str | None,
 ) -> tuple[str, InlineKeyboardMarkup]:
@@ -1239,7 +1245,7 @@ def _other_clients_screen(
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data=f"setup_step1:{platform}",
+        callback_data=f"setup_step2:{platform}",      # opened from the one-tap key screen
         icon_custom_emoji_id=CE["back"],
         style="primary",
     )])

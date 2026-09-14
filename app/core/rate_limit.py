@@ -183,7 +183,23 @@ class RateLimiter:
                 )
 
                 return False, f"Слишком много запросов. Попробуйте через {wait_seconds} секунд."
-    
+
+    def reset_user(self, telegram_id: int) -> None:
+        """Forget every bucket of a user (admin deleted him: a re-registered
+        account starts with fresh limits, e.g. can take the trial again)."""
+        with self._lock:
+            for key in [k for k in self._buckets if k[0] == telegram_id]:
+                del self._buckets[key]
+
+    def refund(self, telegram_id: int, action_key: str) -> None:
+        """Give back the token of an attempt that did nothing (e.g. a trial that
+        was not granted), so the next click is not refused for the whole window."""
+        with self._lock:
+            bucket = self._buckets.get((telegram_id, action_key))
+            if bucket is not None:
+                with bucket._lock:
+                    bucket.tokens = min(float(bucket.max_tokens), bucket.tokens + 1)
+
     def get_status(self, telegram_id: int, action_key: str) -> Dict[str, Any]:
         """
         Get rate limit status for user and action.
@@ -256,3 +272,8 @@ def check_rate_limit(telegram_id: int, action_key: str) -> Tuple[bool, Optional[
         Tuple of (is_allowed, error_message)
     """
     return get_rate_limiter().check_rate_limit(telegram_id, action_key)
+
+
+def refund_rate_limit(telegram_id: int, action_key: str) -> None:
+    """Return the token of an attempt that did nothing (convenience function)."""
+    get_rate_limiter().refund(telegram_id, action_key)
