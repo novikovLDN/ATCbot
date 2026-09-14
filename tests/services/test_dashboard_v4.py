@@ -193,6 +193,43 @@ class TestOverallStatus:
         assert o["status"] == "degraded"
         assert {r["key"] for r in o["reasons"]} == {"webhook_backlog", "webhook_error"}
 
+    def test_recent_webhook_error_with_idle_queue_is_info_only(self):
+        # Telegram retries by itself: an error with an empty, non-growing
+        # queue has healed and must not paint the home screen yellow.
+        o = sh.overall_status(self.base(webhook={"ok": True, "url_set": True, "pending_update_count": 0,
+                                                 "pending_growing": False,
+                                                 "last_error_age_s": 60, "last_error_message": "timeout"}))
+        assert o["status"] == "ok"
+        assert [(r["key"], r["level"]) for r in o["reasons"]] == [("webhook_error", "info")]
+
+    def test_recent_webhook_error_with_growing_queue_is_degraded(self):
+        o = sh.overall_status(self.base(webhook={"ok": True, "url_set": True, "pending_update_count": 7,
+                                                 "pending_growing": True,
+                                                 "last_error_age_s": 60, "last_error_message": "timeout"}))
+        assert o["status"] == "degraded"
+        assert o["reasons"][0]["key"] == "webhook_error"
+
+    def test_old_webhook_error_is_ignored(self):
+        o = sh.overall_status(self.base(webhook={"ok": True, "url_set": True, "pending_update_count": 9,
+                                                 "pending_growing": True,
+                                                 "last_error_age_s": 3 * 3600, "last_error_message": "timeout"}))
+        assert o == {"status": "ok", "reasons": []}
+
+    def test_track_webhook_queue_growth(self, monkeypatch):
+        monkeypatch.setattr(sh, "_last_webhook_pending", None)
+        first = {"ok": True, "pending_update_count": 3}
+        sh._track_webhook_queue(first)
+        assert first["pending_growing"] is False and first["pending_prev"] is None
+        grew = {"ok": True, "pending_update_count": 5}
+        sh._track_webhook_queue(grew)
+        assert grew["pending_growing"] is True and grew["pending_prev"] == 3
+        shrank = {"ok": True, "pending_update_count": 1}
+        sh._track_webhook_queue(shrank)
+        assert shrank["pending_growing"] is False
+        failed = {"ok": False, "error": "timeout"}
+        sh._track_webhook_queue(failed)
+        assert "pending_growing" not in failed and sh._last_webhook_pending == 1
+
     def test_webhook_unset_is_down(self):
         o = sh.overall_status(self.base(webhook={"ok": True, "url_set": False, "pending_update_count": 0}))
         assert o["status"] == "down"
