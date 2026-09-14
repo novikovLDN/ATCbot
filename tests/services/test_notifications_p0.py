@@ -231,6 +231,28 @@ async def test_day_grant_on_a_bypass_only_row_is_the_grant(frozen):
     assert args[1] == "game_dice"
 
 
+class _TrialUserConn(SubsConn):
+    """The user's trial is still running (users.trial_expires_at in the future)."""
+
+    async def fetchrow(self, sql, *args):
+        if "from users" in _norm(sql):
+            self.calls.append(("fetchrow", _norm(sql), args))
+            return {"trial_expires_at": h.naive(datetime(2099, 1, 1, tzinfo=timezone.utc))}
+        return await super().fetchrow(sql, *args)
+
+
+async def test_a_purchase_during_the_trial_completes_it(frozen):
+    """Owner rule: trial messages stop as soon as the user buys — also the
+    «пробный завершён −30 %» notice (it came when the premium ended within 24 h
+    of the purchase, the trial worker's look-back)."""
+    conn = _TrialUserConn(_row("basic", source="trial"), in_tx=True)
+    await db_subs.grant_access(telegram_id=TG, duration=timedelta(days=30), conn=conn, source="payment",
+                               tariff="basic", tariff_period_days=30,
+                               _caller_holds_transaction=True, defer_panel=True)
+    ends = [c for c in conn.calls if c[1].startswith("update users set trial_expires_at")]
+    assert len(ends) == 1 and "trial_completed_sent = true" in ends[0][1]
+
+
 async def test_paid_period_during_a_trial_still_ends_the_trial(frozen):
     row = _row("basic", source="trial")
     _result, conn = await _grant(row, source="payment", tariff="basic", tariff_period_days=30)

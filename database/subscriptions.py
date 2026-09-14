@@ -1079,6 +1079,19 @@ _PAID_GRANT_SOURCES = frozenset({"payment", "auto_renew", "gift"})
 # the end date — the subscription keeps its source and tariff (#3, #4).
 _DAY_GRANT_SOURCES = frozenset({"trial", "admin", "game_strike", "game_dice"})
 
+# A paid purchase during the trial ends the trial NOW — and completes it: after
+# a purchase «пробный завершён −30 %» must never come (owner rule: trial
+# messages stop as soon as the user buys). Without the flag, a premium that
+# ended within 24 h of the purchase (the trial worker's look-back) got it.
+_TRIAL_ENDED_BY_PAYMENT_SQL = (
+    "UPDATE users SET trial_expires_at = $1, trial_completed_sent = TRUE "
+    "WHERE telegram_id = $2 AND trial_expires_at > $1"
+)
+
+
+async def _end_trial_on_payment(conn, telegram_id: int, now: datetime) -> None:
+    await conn.execute(_TRIAL_ENDED_BY_PAYMENT_SQL, _to_db_utc(now), telegram_id)
+
 
 async def grant_access(
     telegram_id: int,
@@ -1559,7 +1572,7 @@ async def grant_access(
                     old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
                     if old_trial_expires_at and _from_db_utc(old_trial_expires_at) > now:
                         await conn.execute(
-                            "UPDATE users SET trial_expires_at = $1 WHERE telegram_id = $2 AND trial_expires_at > $1",
+                            _TRIAL_ENDED_BY_PAYMENT_SQL,
                             _to_db_utc(now), telegram_id
                         )
                         logger.info(
@@ -2130,7 +2143,7 @@ async def grant_access(
             old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
             if old_trial_expires_at and _from_db_utc(old_trial_expires_at) > now:
                 await conn.execute(
-                    "UPDATE users SET trial_expires_at = $1 WHERE telegram_id = $2 AND trial_expires_at > $1",
+                    _TRIAL_ENDED_BY_PAYMENT_SQL,
                     _to_db_utc(now), telegram_id
                 )
                 logger.info(
