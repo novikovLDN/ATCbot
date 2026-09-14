@@ -347,6 +347,55 @@ async def _send_autorenew_failure_notices(bot, notices: list) -> None:
             logger.warning("AUTORENEW_FAILURE_NOTICE_FAILED user=%s: %s", telegram_id, type(e).__name__)
 
 
+INSUFFICIENT_BALANCE_KEY = "autorenew.insufficient_balance"
+
+
+def _rub(amount) -> str:
+    return f"{float(amount):.2f}".rstrip("0").rstrip(".")
+
+
+async def _send_insufficient_balance_notices(bot, pool, notices: list) -> None:
+    """#5: «не хватает N ₽, пополните до ДД.ММ.ГГГГ ЧЧ:ММ МСК» — ONCE per period
+    (automated_notification_sends since the period's last day; survives
+    restarts), after the batch committed, one short connection per check.
+    Never raises."""
+    from app.services.notifications.special_offer import format_deadline
+    for n in notices:
+        telegram_id = n["telegram_id"]
+        try:
+            expires_at = n["expires_at"]
+            async with acquire_connection(pool, "auto_renewal_insufficient") as conn:
+                already = await conn.fetchval(
+                    "SELECT 1 FROM automated_notification_sends WHERE key = $1 AND telegram_id = $2 "
+                    "AND status = 'sent' AND sent_at >= $3 LIMIT 1",
+                    INSUFFICIENT_BALANCE_KEY, telegram_id, expires_at - timedelta(hours=24),
+                )
+            if already:
+                continue
+            lang = await resolve_user_language(telegram_id)
+            missing = round(float(n["amount_rubles"]) - float(n["balance_rubles"]), 2)
+            text = i18n.get_text(
+                lang, INSUFFICIENT_BALANCE_KEY,
+                amount=_rub(n["amount_rubles"]), balance=_rub(n["balance_rubles"]),
+                missing=_rub(missing), deadline=format_deadline(lang, expires_at),
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=i18n.get_text(lang, "main.btn_topup_balance"), callback_data="topup_balance")],
+                [InlineKeyboardButton(text=i18n.get_text(lang, "buy.renew_button"), callback_data="menu_buy_vpn")],
+            ])
+            sent = await safe_send_message(bot, telegram_id, text, reply_markup=kb)
+            if sent is None:
+                continue
+            async with acquire_connection(pool, "auto_renewal_insufficient_log") as conn:
+                await conn.execute(
+                    "INSERT INTO automated_notification_sends (key, telegram_id, status) VALUES ($1, $2, 'sent')",
+                    INSUFFICIENT_BALANCE_KEY, telegram_id,
+                )
+            await asyncio.sleep(0.05)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("AUTORENEW_INSUFFICIENT_NOTICE_FAILED user=%s: %s", telegram_id, type(e).__name__)
+
+
 async def process_auto_renewals(bot: Bot):
     """
     Обработать автопродление подписок, которые истекают в течение RENEWAL_WINDOW
@@ -381,9 +430,14 @@ async def process_auto_renewals(bot: Bot):
         AND s.expires_at > $2
         AND s.uuid IS NOT NULL
         AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')
+        AND NOT (s.telegram_id = ANY($4::bigint[]))
         ORDER BY s.id ASC
         LIMIT $3
         FOR UPDATE SKIP LOCKED"""
+    # #5: a subscription whose balance fell short is retried by the NEXT pass
+    # (after a top-up), never again within this one.
+    short_of_balance: list = []
+    insufficient_notices: list = []
 
     # Pool is created with acquire timeout in database._get_pool_config() (DB_POOL_ACQUIRE_TIMEOUT, default 10s).
     # This worker does not call VPN API (no httpx); only DB and Telegram.
@@ -411,7 +465,8 @@ async def process_auto_renewals(bot: Bot):
                     due_query,
                     database._to_db_utc(renewal_threshold),
                     database._to_db_utc(now),
-                    BATCH_SIZE
+                    BATCH_SIZE,
+                    list(short_of_balance),
                 )
 
                 if not subscriptions:
@@ -675,7 +730,26 @@ async def process_auto_renewals(bot: Bot):
                                 logger.info(f"Auto-renewal successful: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={amount_rubles} RUB, expires_at={expires_str}")
 
                         else:
-                            logger.debug(f"Insufficient balance for auto-renewal: user={telegram_id}, balance={balance_rubles:.2f} RUB, required={amount_rubles:.2f} RUB")
+                            # #5: not enough on the balance. The attempt used to burn
+                            # the period's marker in silence — a top-up an hour later
+                            # renewed nothing. Give the marker back (the next pass
+                            # retries), tell the user how much is missing (once per
+                            # period, after the commit).
+                            logger.info(
+                                "AUTO_RENEWAL_INSUFFICIENT_BALANCE: user=%s balance=%.2f required=%.2f",
+                                telegram_id, balance_rubles, amount_rubles,
+                            )
+                            await conn.execute(
+                                "UPDATE subscriptions SET last_auto_renewal_at = $1 WHERE telegram_id = $2",
+                                sub_row.get("last_auto_renewal_at"), telegram_id,
+                            )
+                            short_of_balance.append(telegram_id)
+                            insufficient_notices.append({
+                                "telegram_id": telegram_id,
+                                "amount_rubles": amount_rubles,
+                                "balance_rubles": balance_rubles,
+                                "expires_at": database._from_db_utc(sub_row["expires_at"]),
+                            })
                     
                     except _OutboxRenewalAborted as e:
                         logger.error(f"Failed to decrease balance for auto-renewal: user={telegram_id} ({e})")
@@ -812,6 +886,8 @@ async def process_auto_renewals(bot: Bot):
                         pass
             # «Auto-renewal did not go through» (08 #14) — after the commit.
             await _send_autorenew_failure_notices(bot, failure_notices)
+            due_notices, insufficient_notices[:] = list(insufficient_notices), []
+            await _send_insufficient_balance_notices(bot, pool, due_notices)
         finally:
             # Release connection (equivalent to __aexit__)
             try:

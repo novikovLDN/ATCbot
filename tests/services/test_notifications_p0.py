@@ -543,6 +543,28 @@ async def test_n05_existing_bigger_discount_is_not_downgraded(monkeypatch):
 # N-06: auto-renewal success shows the amount actually charged
 # ═══════════════════════════════════════════════════════════════════════
 
+async def test_insufficient_balance_gives_the_attempt_back_and_tells_the_user(monkeypatch):
+    """#5: the marker was committed and nothing was said — a top-up an hour later
+    renewed nothing in this period."""
+    import auto_renewal
+    w = h.install(monkeypatch)
+    w.seed_active_subscription(days_left=0)
+    w.sub["expires_at"] = h.naive(h.utcnow() + timedelta(hours=2))
+    w.balance_kopecks = 5000                     # 50 ₽ < the Basic price
+    notices = AsyncMock()
+    monkeypatch.setattr(auto_renewal, "_send_insufficient_balance_notices", notices)
+
+    out = await h.run_auto_renewal(w, monkeypatch, last_payment_tariff="basic_30")
+
+    out["decrease_balance"].assert_not_awaited()
+    markers = [a for kind, s, a in w.conn.calls
+               if kind == "execute" and s.startswith("update subscriptions set last_auto_renewal_at")]
+    assert len(markers) == 2 and markers[-1][0] is None, "the attempt must be given back for a retry"
+    (n,), = [c.args[2] for c in notices.await_args_list if c.args[2]]
+    price = config.TARIFFS["basic"][30]["price"]
+    assert (n["telegram_id"], n["amount_rubles"], n["balance_rubles"]) == (h.TG, float(price), 50.0)
+
+
 async def test_n06_auto_renewal_message_shows_charged_amount(monkeypatch):
     w = h.install(monkeypatch)
     w.seed_active_subscription(days_left=0)
