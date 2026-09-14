@@ -425,6 +425,112 @@ async def execute_storm_for_user(
     }
 
 
+async def harvest_plot_atomic(
+    telegram_id: int,
+    plot_id: int,
+    plant_rewards: Dict[str, int],
+    payout_factor: float,
+    mode: str = "ready",
+) -> Tuple[bool, str, int]:
+    """Atomically harvest ONE plot under an advisory lock — kills the
+    double-harvest race.
+
+    The legacy handler did read → check status → credit → save with no lock,
+    so two fast clicks could both observe the plot as harvestable and each
+    credit the reward (money duplication). Here the status check, the credit
+    and the plot reset all happen inside a single transaction holding
+    pg_advisory_xact_lock(telegram_id), so the second click sees the plot
+    already reset and gets "wrong_status".
+
+    mode="ready"  → require status 'ready',   pay int(reward * payout_factor).
+    mode="early"  → require status 'growing', pay that // 2 (storm early-harvest).
+
+    plant_rewards maps plant_type → FULL listed reward (kopecks). The
+    commission (payout_factor) is applied here, in one place.
+
+    Returns (ok, reason, payout_kopecks). reason ∈
+        {"ok","plot_not_found","wrong_status","no_reward",
+         "user_not_found","db_not_ready"}.
+    """
+    if not _core.DB_READY:
+        return False, "db_not_ready", 0
+    pool = await get_pool()
+    if pool is None:
+        return False, "db_not_ready", 0
+
+    required_status = "ready" if mode == "ready" else "growing"
+    source = "farm_harvest" if mode == "ready" else "farm_early_harvest"
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+            row = await conn.fetchrow(
+                "SELECT farm_plots FROM users WHERE telegram_id = $1 FOR UPDATE",
+                telegram_id,
+            )
+            if not row:
+                return False, "user_not_found", 0
+            plots = row["farm_plots"]
+            if isinstance(plots, str):
+                plots = json.loads(plots)
+            if not isinstance(plots, list):
+                return False, "plot_not_found", 0
+
+            idx = None
+            for i, p in enumerate(plots):
+                if int(p.get("plot_id", -1)) == plot_id:
+                    idx = i
+                    break
+            if idx is None:
+                return False, "plot_not_found", 0
+            target = plots[idx]
+            if target.get("status") != required_status:
+                # Already harvested by a concurrent click, or not ready yet.
+                return False, "wrong_status", 0
+
+            reward = int(plant_rewards.get(target.get("plant_type") or "", 0))
+            payout = int(reward * payout_factor)
+            if mode == "early":
+                payout //= 2
+            if payout <= 0:
+                return False, "no_reward", 0
+
+            # Reset the plot to empty (same shape as a normal harvest cleanup).
+            plots[idx] = {
+                "plot_id": plot_id,
+                "status": "empty",
+                "plant_type": None,
+                "planted_at": None,
+                "ready_at": None,
+                "dead_at": None,
+                "notified_ready": False,
+                "notified_12h": False,
+                "notified_dead": False,
+                "water_used_at": None,
+                "fertilizer_used_at": None,
+                "storm_shielded": False,
+            }
+            await conn.execute(
+                "UPDATE users SET farm_plots = $1::jsonb WHERE telegram_id = $2",
+                json.dumps(plots), telegram_id,
+            )
+            await conn.execute(
+                "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
+                payout, telegram_id,
+            )
+            await conn.execute(
+                """INSERT INTO balance_transactions
+                   (user_id, amount, type, source, description)
+                   VALUES ($1, $2, 'topup', $3, $4)""",
+                telegram_id, payout, source, f"Farm {mode} harvest plot {plot_id}",
+            )
+    logger.info(
+        "FARM_HARVEST_ATOMIC user=%s plot=%s mode=%s payout_kopecks=%s",
+        telegram_id, plot_id, mode, payout,
+    )
+    return True, "ok", payout
+
+
 # ──────────────────────────────────────────────────────────────────────
 # last_seen
 # ──────────────────────────────────────────────────────────────────────

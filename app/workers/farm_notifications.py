@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Import PLANT_TYPES - try importing from app.handlers.game
 # If circular import occurs, we'll use fallback
 try:
-    from app.handlers.game import PLANT_TYPES
+    from app.handlers.game import PLANT_TYPES, FARM_HARVEST_PAYOUT_FACTOR
 except ImportError:
     # Fallback: define PLANT_TYPES here if import fails
     PLANT_TYPES = {
@@ -29,6 +29,7 @@ except ImportError:
         "apple":     {"emoji": "🍏", "name": "Яблоня",   "days": 8,  "reward": 1500},
         "lavender":  {"emoji": "💜", "name": "Лаванда",  "days": 6,  "reward": 2000},
     }
+    FARM_HARVEST_PAYOUT_FACTOR = 0.5
 
 
 async def farm_notifications_iteration(bot: Bot):
@@ -191,7 +192,13 @@ async def farm_storm_iteration(bot: Bot):
             # execution as "no online window existed" — everyone is offline.
             announced_at = now
 
-        plant_rewards = {k: v["reward"] for k, v in PLANT_TYPES.items()}
+        # Pre-apply the harvest commission so storm offline auto-harvest (50%)
+        # is 50% of the COMMISSIONED payout, matching normal/early harvest —
+        # no dodge path where dying offline in a storm pays more than selling.
+        plant_rewards = {
+            k: int(v["reward"] * FARM_HARVEST_PAYOUT_FACTOR)
+            for k, v in PLANT_TYPES.items()
+        }
         users = await database.list_users_with_growing_plots()
         total_k, total_s, total_ah, total_ahk = 0, 0, 0, 0
 

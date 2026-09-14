@@ -159,11 +159,11 @@ class TestKeyboard:
 
     def test_support_button_uses_configured_url(self):
         from app.services import migration_broadcast
-        with patch.object(migration_broadcast, "SUPPORT_URL", "https://t.me/Atlas_SupportSecurity"):
+        with patch.object(migration_broadcast, "SUPPORT_URL", "https://t.me/atlas_suppbot"):
             with patch.object(migration_broadcast, "config", _cfg()):
                 kb = migration_broadcast.build_migration_keyboard("https://rmnw/sub/X")
         support = next(b for b in kb.inline_keyboard[0] if b.text == "💬 Поддержка")
-        assert support.url == "https://t.me/Atlas_SupportSecurity"
+        assert support.url == "https://t.me/atlas_suppbot"
 
     def test_obnovit_button_skipped_when_no_public_origin(self):
         from app.services import migration_broadcast

@@ -158,9 +158,21 @@ def should_send_reminder(
     
     time_until_expiry = calculate_time_until_expiry(expires_at, now)
 
-    # Skip trial subscriptions — they have their own notification system (trial_notifications.py)
+    # Skip trial subscriptions — они обслуживаются отдельным worker'ом
+    # (trial_notifications.py), который ориентируется на
+    # users.trial_expires_at, а не на subscriptions.expires_at.
+    #
+    # ВАЖНО: триальная subscription_row обычно создаётся с
+    #   subscription_type='basic' (или 'plus'), source='trial'.
+    # Поэтому фильтровать только по subscription_type недостаточно —
+    # юзеры с триалом пройдут фильтр и получат paid-reminder
+    # параллельно с trial-reminder'ом (видели в логах двойные
+    # уведомления «Пробный период заканчивается завтра» + «Подписка
+    # заканчивается завтра» с разницей в 4 минуты). Дополнительно
+    # ловим триал по source.
     subscription_type = (subscription.get("subscription_type") or "").strip().lower()
-    if subscription_type == "trial":
+    source = (subscription.get("source") or "").strip().lower()
+    if subscription_type == "trial" or source == "trial":
         return ReminderDecision(
             should_send=False,
             reminder_type=None,
@@ -369,6 +381,27 @@ def format_referral_notification_text(
     Format referral cashback notification text.
     """
     from app.i18n import get_text as i18n_get_text
+
+    # Русские пользователи — новый стиль «Круга Амбассадоров» (рандом из 3 шаблонов).
+    if language == "ru":
+        from app.services.notifications.loyalty_pushes import pick_purchase_push
+        # Определяем следующий тир по количеству оплативших.
+        if paid_referrals_count < 25:
+            next_tier = "Хранитель"
+        elif paid_referrals_count < 50:
+            next_tier = "Инсайдер"
+        elif paid_referrals_count < 75:
+            next_tier = "Лидер"
+        elif paid_referrals_count < 100:
+            next_tier = "Амбассадор"
+        else:
+            next_tier = None
+        return pick_purchase_push(
+            amount=cashback_amount,
+            percent=cashback_percent,
+            next_level_name=next_tier,
+            referrals_needed=referrals_needed,
+        )
 
     if referrals_needed > 0:
         if language == "ru":

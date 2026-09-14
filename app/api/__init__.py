@@ -10,6 +10,7 @@ from app.api import telegram_webhook
 from app.api import payment_webhook
 from app.api import deeplink_redirect
 from app.api import subscription_proxy
+from app.api import sub_aggregator_route
 
 logger = logging.getLogger(__name__)
 
@@ -18,17 +19,38 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
-    """SECURITY: Reject requests with body larger than max_size (DDoS protection)."""
+    """SECURITY: Reject requests with body larger than max_size (DDoS protection).
+
+    Path-aware: the dashboard broadcast photo-upload endpoint legitimately
+    accepts up to 10 MB images (handler enforces its own 10 MB check at
+    `app/api/dashboard/routes/broadcasts.py:upload_photo`). Cutting it at
+    1 MB here used to fire 413 before the request even reached the
+    handler. Other endpoints (Telegram webhook, payment webhooks,
+    dashboard JSON APIs) stay on the 1 MB default — there's no
+    legitimate reason for any of them to exceed it.
+    """
+
+    # Per-prefix exceptions: prefix → max bytes. First match wins.
+    _PATH_OVERRIDES = (
+        ("/dashboard/api/broadcasts/upload-photo", 10 * 1024 * 1024),
+    )
 
     def __init__(self, app, max_size: int = 1 * 1024 * 1024):
         super().__init__(app)
         self.max_size = max_size
 
+    def _limit_for(self, path: str) -> int:
+        for prefix, lim in self._PATH_OVERRIDES:
+            if path.startswith(prefix):
+                return lim
+        return self.max_size
+
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
         if content_length:
             try:
-                if int(content_length) > self.max_size:
+                lim = self._limit_for(request.url.path)
+                if int(content_length) > lim:
                     return Response(status_code=413, content="Request body too large")
             except (ValueError, TypeError):
                 return Response(status_code=400, content="Invalid Content-Length")
@@ -49,6 +71,42 @@ try:
         logger.info("SUBSCRIPTION_PROXY_ENABLED — mounted /sub/{uuid} + /api/sub/{token}")
 except Exception:
     logger.exception("subscription_proxy mount failed")
+
+# Sub-aggregator embedded endpoint — GET /a/{token}.
+# Работает если SUB_AGGREGATOR_ENABLED=True в config.py. RF-1 nginx делает
+# HTTPS reverse-proxy https://subscription.palantirdns.uk/{token} → сюда.
+try:
+    import config as _cfg
+    if getattr(_cfg, "SUB_AGGREGATOR_ENABLED", False):
+        app.include_router(sub_aggregator_route.router)
+        logger.info("SUB_AGGREGATOR_ENABLED — mounted /a/{token}")
+except Exception:
+    logger.exception("sub_aggregator_route mount failed")
+
+# Admin web dashboard — mounted only when JWT_SECRET + DASHBOARD_BASE_URL are
+# set (config.DASHBOARD_ENABLED). When disabled, the bot runs identically to
+# the pre-dashboard build. When enabled:
+#   /dashboard/api/*   — REST (auth, stats, users, ...)
+#   /dashboard/ws      — WebSocket fan-out from app.events.bus
+#   /dashboard/*       — static React SPA (mounted later, see DASHBOARD_DIST_DIR)
+try:
+    import config as _cfg
+    if getattr(_cfg, "DASHBOARD_ENABLED", False):
+        from app.api import dashboard as _dashboard
+        app.include_router(_dashboard.router, prefix="/dashboard/api")
+        app.include_router(_dashboard.ws_router, prefix="/dashboard")
+        # Static SPA mount is conditional — only if dashboard/dist exists.
+        # During Phase 1A (backend only) the directory may not be built yet.
+        import os as _os
+        _dist = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))), "dashboard", "dist")
+        if _os.path.isdir(_dist):
+            from fastapi.staticfiles import StaticFiles
+            app.mount("/dashboard", StaticFiles(directory=_dist, html=True), name="dashboard-spa")
+            logger.info("DASHBOARD mounted: api+ws+static (dist=%s)", _dist)
+        else:
+            logger.info("DASHBOARD mounted: api+ws only (no dist at %s yet)", _dist)
+except Exception:
+    logger.exception("dashboard mount failed")
 
 
 @app.get("/health")

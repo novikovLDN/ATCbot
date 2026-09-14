@@ -31,6 +31,7 @@ import config
 import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
+from app.handlers.common.emoji import CE
 
 bgift_setup_router = Router()
 logger = logging.getLogger(__name__)
@@ -82,7 +83,7 @@ def _resolve_public_base_url() -> str:
     return ""
 
 
-SUPPORT_URL = "https://t.me/Atlas_SupportSecurity"
+SUPPORT_URL = "https://t.me/atlas_suppbot"
 
 
 # ── Step 0: device select ─────────────────────────────────────────────
@@ -110,16 +111,18 @@ async def callback_bgift_setup(callback: CallbackQuery):
     text = i18n_get_text(language, "bgift_setup.select_device")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="bgift_step1:ios"),
-            InlineKeyboardButton(text="🤖 Android", callback_data="bgift_step1:android"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="bgift_step1:ios", style="primary"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="bgift_step1:android", style="primary"),
         ],
         [
-            InlineKeyboardButton(text="🍎 Mac", callback_data="bgift_step1:macos"),
-            InlineKeyboardButton(text="🪟 Windows", callback_data="bgift_step1:windows"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="bgift_step1:macos", style="primary"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="bgift_step1:windows", style="primary"),
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -164,8 +167,6 @@ async def callback_bgift_step1(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
 
     text = i18n_get_text(language, "setup.install_app")
-    if platform != "windows":
-        text += i18n_get_text(language, "setup.install_app_v2ray_hint")
 
     buttons: list = []
     ios_links = _ios_happ_links()
@@ -187,28 +188,22 @@ async def callback_bgift_step1(callback: CallbackQuery):
                 text="📲 Установить Happ",
                 url=links["happ"],
             )])
-        if "v2raytun" in links:
-            buttons.append([InlineKeyboardButton(
-                text="📲 Установить V2RayTun",
-                url=links["v2raytun"],
-            )])
     elif platform == "windows":
         buttons.append([InlineKeyboardButton(
             text="📲 Скачать Happ",
             url="https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
         )])
-        buttons.append([InlineKeyboardButton(
-            text="📲 Скачать V2RayTun",
-            url="https://github.com/mdf45/v2raytun/releases/tag/v3.7.10",
-        )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.next_step"),
         callback_data=f"bgift_step2:{platform}",
+        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="bgift_setup",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -250,11 +245,14 @@ async def _fetch_subscription_url(telegram_id: int) -> str:
         return ""
     try:
         from app.services import remnawave_api
+        from app.services.user_subscription_links import _rewrite_sub_host
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
             return ""
         traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-        return ((traffic or {}).get("subscriptionUrl") or "").strip()
+        raw = ((traffic or {}).get("subscriptionUrl") or "").strip()
+        # sub.atlassecure.ru → subscription.vps-cloud.uk (cert-fix).
+        return _rewrite_sub_host(raw) or ""
     except Exception as e:
         logger.warning("BGIFT_FETCH_SUB_URL_FAIL user=%s err=%s", telegram_id, e)
         return ""
@@ -298,10 +296,6 @@ async def callback_bgift_step2(callback: CallbackQuery):
                 text="🌐 Добавить ключ в Happ",
                 url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
             )])
-            buttons.append([InlineKeyboardButton(
-                text="🌐 Добавить ключ в V2RayTun",
-                url=f"{base_url}/open/v2raytun?url={quote(sub_url, safe='')}",
-            )])
         except Exception as e:
             logger.warning("BGIFT_DEEPLINK_BUILD_FAIL user=%s err=%s", telegram_id, e)
             buttons = []  # drop partial deeplink rows on failure
@@ -309,6 +303,7 @@ async def callback_bgift_step2(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text="✅ Готово",
         callback_data="setup_done",
+        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text="💬 Поддержка",
@@ -317,6 +312,8 @@ async def callback_bgift_step2(callback: CallbackQuery):
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data=f"bgift_step1:{platform}",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)

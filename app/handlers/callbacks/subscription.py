@@ -1,6 +1,6 @@
 """
 Subscription-related callback handlers: toggle_auto_renew, activate_trial,
-menu_profile, menu_vip_access, renewal_pay, subscription_history.
+menu_profile, renewal_pay.
 """
 import asyncio
 import logging
@@ -40,6 +40,64 @@ from app.handlers.common.states import PromoCodeInput
 
 subscription_router = Router()
 logger = logging.getLogger(__name__)
+
+
+async def _activate_referral_and_notify(bot, telegram_id: int) -> None:
+    """Referral activation + notification рефереру.
+
+    Вынесено из callback_activate_trial в отдельный background task,
+    чтобы юзер не ждал: (а) activate_referral запроса, (б) выборки
+    статистики реферера, (в) send_message к рефереру. Всё это не
+    блокирует основной flow активации триала.
+
+    Ошибки логируем внутри, наверх не пробрасываем — task fire&forget.
+    """
+    try:
+        activation_result = await activate_referral(
+            telegram_id, activation_type="trial",
+        )
+        if not activation_result.get("success"):
+            return
+        if not activation_result.get("was_activated"):
+            return
+
+        referrer_id = activation_result.get("referrer_id")
+        logger.info(
+            f"REFERRAL_ACTIVATED [referrer={referrer_id}, "
+            f"referred={telegram_id}, type=trial, state=ACTIVATED]"
+        )
+        if not referrer_id:
+            return
+
+        try:
+            import database as _db
+            ref_stats = await _db.get_referral_statistics(referrer_id)
+            ref_percent = int(ref_stats.get("cashback_percent", 10))
+            from app.services.notifications.loyalty_pushes import pick_trial_push
+            notification_text = pick_trial_push(ref_percent)
+            await bot.send_message(
+                chat_id=referrer_id,
+                text=notification_text,
+                parse_mode="HTML",
+            )
+            logger.info(
+                f"REFERRAL_NOTIFICATION_SENT [type=trial_activation, "
+                f"referrer={referrer_id}, referred={telegram_id}]"
+            )
+        except Exception as e:
+            logger.warning(
+                "NOTIFICATION_FAILED",
+                extra={
+                    "type": "trial_activation",
+                    "referrer": referrer_id,
+                    "referred": telegram_id,
+                    "error": str(e),
+                },
+            )
+    except Exception as e:
+        logger.warning(
+            f"Failed to activate referral for trial: user={telegram_id}, error={e}"
+        )
 
 
 @subscription_router.callback_query(F.data.startswith("toggle_auto_renew:"))
@@ -139,6 +197,20 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer()
 
+    # Мгновенный отклик до тяжёлых вызовов — юзер видит «⏳ Активирую…»
+    # уже через миллисекунду, а не смотрит на «печатает…» пока
+    # Remnawave отвечает на grant_access (1–3 сек). Placeholder-сообщение
+    # потом edit'нем в финальный success. Если answer() упадёт — не
+    # блокирует flow, просто идём дальше без placeholder'а.
+    placeholder_msg = None
+    try:
+        placeholder_text = i18n_get_text(language, "trial.activating")
+        placeholder_msg = await callback.message.answer(
+            placeholder_text, parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
     try:
         duration = timedelta(days=3)
         now = datetime.now(timezone.utc)
@@ -172,53 +244,36 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                 f"subscription active but trial_used_at not set"
             )
 
-        # 2. REFERRAL LIFECYCLE: Activate referral (REGISTERED → ACTIVATED)
-        try:
-            activation_result = await activate_referral(telegram_id, activation_type="trial")
-            if activation_result.get("success") and activation_result.get("was_activated"):
-                logger.info(
-                    f"REFERRAL_ACTIVATED [referrer={activation_result.get('referrer_id')}, "
-                    f"referred={telegram_id}, type=trial, state=ACTIVATED]"
-                )
-
-                referrer_id = activation_result.get("referrer_id")
-                if referrer_id:
-                    try:
-                        referrer_language_notif = await resolve_user_language(referrer_id)
-
-                        title_trial = i18n_get_text(referrer_language_notif, "referral.trial_activated_title")
-                        trial_period_line = i18n_get_text(referrer_language_notif, "referral.trial_period")
-                        first_payment_msg_notif = i18n_get_text(referrer_language_notif, "referral.first_payment_notification")
-                        notification_text = f"{title_trial}\n\n{trial_period_line}\n\n{first_payment_msg_notif}"
-
-                        await callback.bot.send_message(
-                            chat_id=referrer_id,
-                            text=notification_text,
-                            parse_mode="HTML",
-                        )
-
-                        logger.info(
-                            f"REFERRAL_NOTIFICATION_SENT [type=trial_activation, referrer={referrer_id}, "
-                            f"referred={telegram_id}]"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "NOTIFICATION_FAILED",
-                            extra={
-                                "type": "trial_activation",
-                                "referrer": referrer_id,
-                                "referred": telegram_id,
-                                "error": str(e)
-                            }
-                        )
-        except Exception as e:
-            logger.warning(f"Failed to activate referral for trial: user={telegram_id}, error={e}")
+        # REFERRAL LIFECYCLE: активация + пуш рефереру. Выносим в
+        # background task — юзер видит success мгновенно, не ждёт
+        # ни выборку статистики реферера, ни send_message ему.
+        # Исключения логируем внутри task'а, наверх не пробрасываем.
+        asyncio.create_task(_activate_referral_and_notify(
+            callback.bot, telegram_id,
+        ))
 
         logger.info(
             f"trial_activated: user={telegram_id}, trial_used_at={now.isoformat()}, "
             f"trial_expires_at={trial_expires_at.isoformat()}, subscription_expires_at={subscription_end.isoformat()}, "
             f"uuid={uuid[:8]}..."
         )
+
+        # Через 5 минут после активации — «Обход подключён» + кнопка на
+        # экран установки Happ/Incy. Запускаем таском, чтобы вернуть
+        # управление пользователю сразу. Дублирует scheduler'ный fallback
+        # в trial_notifications.py — если бот перезапустится до срабатывания
+        # sleep, scheduler подхватит по флагу на следующем тике.
+        try:
+            from app.services.trials.bypass_activation_delay import (
+                schedule_bypass_activated_notification,
+            )
+            schedule_bypass_activated_notification(callback.bot, telegram_id)
+        except Exception as e:
+            logger.warning(
+                "trial_activated: failed to schedule bypass_activated notif "
+                "for user=%s: %s (scheduler will still pick it up)",
+                telegram_id, e,
+            )
 
         expires_str = subscription_end.strftime("%d.%m.%Y")
         from html import escape as html_escape
@@ -227,19 +282,47 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str, sub_url=html_escape(sub_url))
         try:
             if _degradation_notice:
-                success_text += "\n\n⏳ Возможны небольшие задержки"
+                success_text += i18n_get_text(language, "trial.degradation_notice", "\n\n⏳ Возможны небольшие задержки")
         except NameError:
             pass
 
         from app.handlers.common.keyboards import get_payment_success_keyboard
         trial_keyboard = get_payment_success_keyboard(language, subscription_type="basic")
-        await callback.message.answer(success_text, parse_mode="HTML", reply_markup=trial_keyboard)
 
-        # Обновляем главное меню (кнопка trial должна исчезнуть)
-        text = i18n_get_text(language, "main.welcome")
-        text = await format_text_with_incident(text, language)
-        keyboard = await get_main_menu_keyboard(language, telegram_id)
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+        # Финализация: если placeholder «⏳ Активирую…» отправился —
+        # edit'им ЕГО в success_text (быстрее, чем answer + delete);
+        # если не отправился — fallback на обычный answer.
+        finalized = False
+        if placeholder_msg is not None:
+            try:
+                await placeholder_msg.edit_text(
+                    success_text, parse_mode="HTML", reply_markup=trial_keyboard,
+                )
+                finalized = True
+            except Exception as e:
+                logger.debug(
+                    "trial placeholder edit failed, fallback to answer: %s", e,
+                )
+        if not finalized:
+            await callback.message.answer(
+                success_text, parse_mode="HTML", reply_markup=trial_keyboard,
+            )
+
+        # Убираем предыдущее сообщение (где висела кнопка «Пробный
+        # период») — теперь оно неактуально, триал уже активирован.
+        # Раньше здесь стоял edit на main.welcome, из-за чего юзер
+        # видел ДВА сообщения подряд: «Доступ активирован» +
+        # промо-welcome «💎 Atlas Secure … Интернет без блокировок».
+        # Второе визуально дублировало главное меню, которое юзеру
+        # прямо сейчас не нужно — он идёт устанавливать. При следующем
+        # /start или menu-клике меню перерисуется без trial-кнопки
+        # автоматически.
+        try:
+            await callback.message.delete()
+        except Exception:
+            # Не критично: если Telegram отказал (сообщение старше 48ч,
+            # флуд-лимит, юзер сам удалил) — просто идём дальше.
+            pass
 
     except Exception as e:
         logger.exception(f"Error activating trial for user {telegram_id}: {e}")
@@ -294,31 +377,6 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
 
 
-@subscription_router.callback_query(F.data == "menu_vip_access")
-async def callback_vip_access(callback: CallbackQuery):
-    """Обработчик кнопки 'VIP-доступ'"""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    is_vip = await database.is_vip_user(telegram_id)
-
-    text = i18n_get_text(language, "main.vip_access_text", "vip_access_text")
-
-    if is_vip:
-        text += "\n\n" + i18n_get_text(language, "main.vip_status_active")
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.contact_manager_button"),
-            url="https://t.me/Atlas_SupportSecurity"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_profile"
-        )]
-    ])
-
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
     await callback.answer()
 
 
@@ -369,12 +427,12 @@ async def callback_renewal_pay(callback: CallbackQuery):
     period_days = 30
     months = period_days // 30
     if months == 1:
-        period_text = "1 месяц"
+        period_text = i18n_get_text(language, "buy.period_text_1", "1 месяц")
     elif months in [2, 3, 4]:
-        period_text = f"{months} месяца"
+        period_text = i18n_get_text(language, "buy.period_text_2_4", "{months} месяца", months=months)
     else:
-        period_text = f"{months} месяцев"
-    description = f"Atlas Secure VPN продление подписки на {period_text}"
+        period_text = i18n_get_text(language, "buy.period_text_5_plus", "{months} месяцев", months=months)
+    description = i18n_get_text(language, "buy.renewal_invoice_description", "Atlas Secure VPN продление подписки на {period_text}", period_text=period_text)
 
     language = await resolve_user_language(telegram_id)
     prices = [LabeledPrice(label=i18n_get_text(language, "payment.label"), amount=amount * 100)]
@@ -399,51 +457,3 @@ async def callback_renewal_pay(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
-@subscription_router.callback_query(F.data == "subscription_history")
-async def callback_subscription_history(callback: CallbackQuery):
-    """История подписок"""
-    await callback.answer()
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    history = await database.get_subscription_history(telegram_id, limit=5)
-
-    if not history:
-        text = i18n_get_text(language, "subscription.history_empty", "subscription_history_empty")
-        await callback.message.answer(text, parse_mode="HTML")
-        return
-
-    text = i18n_get_text(language, "subscription.history", "subscription_history") + "\n\n"
-
-    action_type_map = {
-        "purchase": i18n_get_text(language, "subscription.history_action_purchase", "subscription_history_action_purchase"),
-        "renewal": i18n_get_text(language, "subscription.history_action_renewal", "subscription_history_action_renewal"),
-        "reissue": i18n_get_text(language, "subscription.history_action_reissue", "subscription_history_action_reissue"),
-        "manual_reissue": i18n_get_text(language, "subscription.history_action_manual_reissue", "subscription_history_action_manual_reissue"),
-    }
-
-    for record in history:
-        start_date = record["start_date"]
-        if isinstance(start_date, str):
-            start_date = datetime.fromisoformat(start_date)
-        start_str = start_date.strftime("%d.%m.%Y")
-
-        end_date = record["end_date"]
-        if isinstance(end_date, str):
-            end_date = datetime.fromisoformat(end_date)
-        end_str = end_date.strftime("%d.%m.%Y")
-
-        action_type = record["action_type"]
-        action_text = action_type_map.get(action_type, action_type)
-
-        text += f"• {start_str} — {action_text}\n"
-
-        if action_type in ["purchase", "reissue", "manual_reissue"]:
-            key_label = i18n_get_text(language, "subscription.history_key_label")
-            text += f"  {key_label} {record['vpn_key']}\n"
-
-        expires_label = i18n_get_text(language, "subscription.history_expires")
-        text += f"  {expires_label} {end_str}\n\n"
-
-    await callback.message.answer(text, reply_markup=get_back_keyboard(language), parse_mode="HTML")

@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# TypeScript incremental build cache (генерится `tsc -b`, локально)
+*.tsbuildinfo
+
 # Python
 __pycache__/
 *.py[cod]
@@ -17,6 +20,9 @@ eggs/
 .eggs/
 lib/
 lib64/
+# Dashboard SPA source has its own lib/ (TypeScript), keep it tracked.
+!dashboard/src/lib/
+!dashboard/src/lib/**
 parts/
 sdist/
 var/
@@ -51,4 +57,14 @@ venv.bak/
 
 # VPN keys (sensitive data)
 vpn_keys.txt
+
+# Node.js sidecar — installed via `npm install` in Docker / dev shell
+node_modules/
+
+# Dashboard PNG icons генерятся `scripts/generate-icons.mjs` из
+# dashboard/public/icon.svg + icon-mono.svg на каждом билде (prebuild).
+dashboard/public/apple-touch-icon.png
+dashboard/public/icon-192.png
+dashboard/public/icon-512.png
+dashboard/public/icon-mask-512.png
 

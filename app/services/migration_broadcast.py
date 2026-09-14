@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 # ── Configurable knobs ────────────────────────────────────────────────
 
 MIGRATION_CUTOFF_DATE_STR = "18.05.2026"   # display text in the body
-SUPPORT_URL = getattr(config, "SUPPORT_URL", None) or "https://t.me/Atlas_SupportSecurity"
+SUPPORT_URL = getattr(config, "SUPPORT_URL", None) or "https://t.me/atlas_suppbot"
 BROADCAST_RATE_PER_SEC = int(getattr(config, "BROADCAST_RATE_PER_SEC", 20) or 20)
 BROADCAST_CONCURRENCY = int(getattr(config, "MIGRATION_BROADCAST_CONCURRENCY", 5) or 5)
 

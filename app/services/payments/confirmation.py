@@ -25,6 +25,79 @@ class TransientPaymentError(Exception):
     pass
 
 
+async def _get_current_bypass_bytes(telegram_id: int) -> Optional[int]:
+    """Snapshot текущего trafficLimitBytes bypass entity перед top-up.
+    Нужен verify_bypass_delivery — точно сравнить diff после add_traffic.
+
+    Резолвим через get_bypass_entity_safe (username=str(tg)) — ТУ ЖЕ энтити,
+    что патчит add_bypass_traffic. Раньше читали через remnawave_uuid, и при
+    контаминации колонок baseline/add/verify расходились по разным энтити.
+    """
+    try:
+        from app.services import remnawave_api
+        entity = await remnawave_api.get_bypass_entity_safe(telegram_id)
+        if not isinstance(entity, dict):
+            return None
+        return int(entity.get("trafficLimitBytes") or 0)
+    except Exception:
+        return None
+
+
+async def _deliver_bypass_gb(telegram_id: int, extra_bytes: int) -> bool:
+    """Начислить `extra_bytes` bypass-трафика, СОЗДАВ entity если его нет.
+
+    Единый устойчивый примитив доставки bypass ГБ для ЛЮБОГО платежа
+    (combo-подписка, обычный renewal, traffic-pack). 3 ветки:
+      1. Top-up существующей bypass entity (clean primitive по numeric id).
+      2. Нет по кешу → re-resolve через get_bypass_entity_safe (self-heal
+         DB-указателей) и повторный top-up.
+      3. Entity нет в панели вообще → create fresh с extra_bytes как
+         первичным лимитом + персист uuid/id в БД.
+
+    ⚠️ Почему это важно: раньше combo/renewal-путь звал только
+    remnawave_bypass.add_bypass_traffic (top-up-only), который возвращает
+    False, если у юзера ещё НЕТ bypass entity (renewal активной premium-
+    подписки, у которой bypass так и не создался). Итог: срок продлевался,
+    а ГБ обхода молча не начислялись. Теперь падаем на create, как это
+    давно делает traffic-pack.
+
+    Возвращает True если ГБ реально доставлены.
+    """
+    if extra_bytes <= 0:
+        return False
+    from app.services import remnawave_bypass, remnawave_api
+
+    # Ветка 1 — top-up (entity уже есть по кешу).
+    if await remnawave_bypass.add_bypass_traffic(telegram_id, extra_bytes=extra_bytes):
+        return True
+
+    # Ветка 2 — re-resolve через username (self-heal DB) + повторный top-up.
+    entity = await remnawave_api.get_bypass_entity_safe(telegram_id)
+    if entity is not None:
+        if await remnawave_bypass.add_bypass_traffic(telegram_id, extra_bytes=extra_bytes):
+            return True
+
+    # Ветка 3 — entity в панели нет → создаём fresh с extra_bytes как лимитом.
+    result_create = await remnawave_bypass.create_bypass_user_entity(
+        telegram_id, traffic_limit_bytes=extra_bytes,
+    )
+    if result_create.ok:
+        if result_create.panel_uuid:
+            await database.set_remnawave_bypass_cache(
+                telegram_id,
+                str(result_create.panel_uuid),
+                str(result_create.subscription_url) if result_create.subscription_url else None,
+                str(result_create.short_uuid) if result_create.short_uuid else None,
+            )
+        if result_create.panel_id is not None:
+            try:
+                await database.set_remnawave_id(telegram_id, int(result_create.panel_id))
+            except (TypeError, ValueError):
+                pass
+        return True
+    return False
+
+
 async def process_confirmed_payment(
     provider: str,
     purchase_id: str,
@@ -63,12 +136,13 @@ async def process_confirmed_payment(
         _purchase_type = pending.get("purchase_type") or "subscription"
         _tariff = pending.get("tariff") or ""
 
-        # Stars / Premium / Apple ID / Steam / Proxy — just mark paid + send
-        # notifications (no subscription to finalize)
+        # Stars / Premium / Apple ID / Steam / Spotify / Proxy — just mark
+        # paid + send notifications (no subscription to finalize)
         if (
-            _purchase_type in ("telegram_stars", "telegram_premium", "steam", "proxy")
+            _purchase_type in ("telegram_stars", "telegram_premium", "steam", "proxy", "spotify")
             or _tariff.startswith("apple_id_")
             or _tariff.startswith("steam_")
+            or _tariff.startswith("spotify_")
         ):
             marked = await database.mark_pending_purchase_paid(purchase_id)
             if not marked:
@@ -98,6 +172,9 @@ async def process_confirmed_payment(
                     nominal = int(tariff_parts[3]) if len(tariff_parts) >= 4 else 0
                     from app.handlers.callbacks.navigation import send_apple_id_success
                     await send_apple_id_success(bot, telegram_id, region, nominal, amount_rubles)
+                elif _purchase_type == "spotify" or _tariff.startswith("spotify_"):
+                    from app.handlers.payments.spotify_purchase import send_spotify_success
+                    await send_spotify_success(bot, telegram_id, purchase_id, pending)
             except Exception as notif_err:
                 logger.error(f"{provider} webhook: notification failed for {_purchase_type}: {notif_err}")
 
@@ -114,14 +191,38 @@ async def process_confirmed_payment(
             logger.error(f"{provider} webhook: finalize_purchase failed: {result}")
             raise Exception(f"finalize_purchase returned invalid result: {result}")
 
+        if result.get("remnawave_sync_failed"):
+            err = result.get("remnawave_sync_error") or "unknown"
+            logger.error(
+                f"WEBHOOK_RETRY_REQUESTED: provider={provider}, user={telegram_id}, "
+                f"purchase_id={purchase_id}, remnawave_sync_error={err}"
+            )
+            raise TransientPaymentError(f"Remnawave sync failed: {err}")
+
         payment_id = result["payment_id"]
         expires_at = result.get("expires_at")
         is_balance_topup = result.get("is_balance_topup", False)
         is_traffic_pack = result.get("is_traffic_pack", False)
+        is_gift = result.get("is_gift", False)
 
-        # Notification failure must NOT fail the payment — DB is already committed
+        # Notification failure must NOT fail the payment — DB is already committed.
+        # add_bypass_traffic имеет self-heal → в 99% случаев первый заход успешен.
+        # Если всё-таки упало (сеть/panel outage) — админ увидит алерт и добавит
+        # GB вручную через Traffic Audit dashboard (retry опасен: add_bypass_traffic
+        # НЕ идемпотентен по purchase_id, ретрай = double-add).
         try:
-            if is_traffic_pack:
+            if is_gift:
+                # Подарочная подписка (внешняя оплата): finalize_purchase уже
+                # создал gift_code, здесь шлём покупателю share-ссылку.
+                await _handle_gift_confirmation(
+                    provider=provider,
+                    bot=bot,
+                    telegram_id=telegram_id,
+                    payment_id=payment_id,
+                    purchase_id=purchase_id,
+                    result=result,
+                )
+            elif is_traffic_pack:
                 await _handle_traffic_pack_confirmation(
                     provider=provider,
                     bot=bot,
@@ -143,6 +244,26 @@ async def process_confirmed_payment(
                     result=result,
                     expires_at=expires_at,
                 )
+        except TransientPaymentError as tpe:
+            # add_bypass_traffic / traffic_pack не смогли положить GB.
+            # Не ронять webhook: retry делает double-add (не идемпотентен).
+            # Алертнуть админа — он добавит через Traffic Audit dashboard.
+            logger.error(
+                f"BYPASS_GB_DELIVERY_STUCK: provider={provider} user={telegram_id} "
+                f"purchase_id={purchase_id} payment_id={payment_id} err={tpe} — "
+                f"нужен ручной add via Traffic Audit dashboard (retry опасен: double-add)"
+            )
+            try:
+                from app.services.admin_alerts import alert_payment_failure
+                await alert_payment_failure(
+                    bot, provider, telegram_id, purchase_id, tpe,
+                    is_transient=False,  # НЕ transient чтобы админ увидел и починил
+                    amount_rubles=amount_rubles,
+                    tariff=result.get("subscription_type") if isinstance(result, dict) else None,
+                    period_days=result.get("period_days") if isinstance(result, dict) else None,
+                )
+            except Exception as _ae:
+                logger.warning("BYPASS_GB_ALERT_FAIL: %s", _ae)
         except Exception as notif_err:
             logger.error(
                 f"PAYMENT_NOTIFICATION_FAILED: provider={provider}, user={telegram_id}, "
@@ -153,7 +274,7 @@ async def process_confirmed_payment(
         # Site sync (fire-and-forget — must not fail the payment)
         try:
             from app.services.site_sync import full_sync_after_payment, is_enabled as site_sync_enabled
-            if site_sync_enabled() and not is_balance_topup and not is_traffic_pack:
+            if site_sync_enabled() and not is_balance_topup and not is_traffic_pack and not is_gift:
                 period_days = result.get("period_days", 30)
                 tariff_type = result.get("tariff_type", "basic")
                 asyncio.ensure_future(full_sync_after_payment(
@@ -163,13 +284,109 @@ async def process_confirmed_payment(
             logger.warning("SITE_SYNC_FIRE_AND_FORGET_ERROR: %s", sync_err)
 
     except ValueError as e:
+        # finalize_purchase кидает ValueError для ДВУХ разных случаев:
+        #  1. "already processed" — идемпотентный дубль webhook'а
+        #  2. "PAYMENT_AMOUNT_MISMATCH" — реальная ошибка, платёж НЕ обработан
+        # До 2026-08 оба обрабатывались одинаково — mismatch тихо шёл в лог
+        # как "already processed" без алерта админу. Теперь разделяем.
+        err_str = str(e)
+        if "PAYMENT_AMOUNT_MISMATCH" in err_str or "amount mismatch" in err_str.lower():
+            logger.error(
+                "PAYMENT_MISMATCH_UNRECOVERABLE: provider=%s user=%s purchase_id=%s error=%s",
+                provider, telegram_id, purchase_id, err_str,
+            )
+            # Уведомить админа — юзер оплатил, но mismatch мешает финализации.
+            # Нужно вручную либо активировать подписку, либо вернуть деньги.
+            try:
+                import admin_notifications as _an
+                admin_text = (
+                    f"⚠️ <b>Payment amount mismatch (unrecovered)</b>\n\n"
+                    f"Provider: <code>{provider}</code>\n"
+                    f"User: <code>{telegram_id}</code>\n"
+                    f"Purchase: <code>{purchase_id}</code>\n"
+                    f"Webhook amount: <b>{amount_rubles:.2f} ₽</b>\n\n"
+                    f"<b>Error:</b>\n<code>{err_str[:400]}</code>\n\n"
+                    f"Юзер оплатил, но подписка не активировалась. "
+                    f"Нужно либо активировать вручную, либо вернуть деньги."
+                )
+                await _an.send_admin_notification(
+                    bot=bot, message=admin_text,
+                    notification_type="payment_amount_mismatch",
+                    parse_mode="HTML",
+                )
+            except Exception as notify_err:
+                logger.warning("PAYMENT_MISMATCH_ADMIN_NOTIFY_FAILED: %s", notify_err)
+            # Возвращаем error чтобы провайдер НЕ считал успешным
+            # (не ретраил зря, но и не забыл).
+            return {"status": "amount_mismatch", "error": err_str[:200]}
+
         logger.info(
             f"{provider} webhook: purchase already processed (ValueError): "
             f"purchase_id={purchase_id}, error={e}"
         )
+        # Provider retry path: the first webhook committed the DB, but the
+        # post-commit Remnawave sync may have failed. Re-run the idempotent
+        # provision so the user lands in sync. provision_subscription handles
+        # both create and renew, and adopts existing panel entities.
+        # Only run for an actually-active subscription whose row already has
+        # a future expires_at — never resync something we deliberately let
+        # expire.
+        try:
+            from app.services import purchase_flow
+            from datetime import datetime, timezone
+            sub = await database.get_subscription(telegram_id)
+            sub_expires = sub.get("expires_at") if sub else None
+            sub_tariff = sub.get("subscription_type") if sub else None
+            # ВАЖНО: bypass-only строки НЕ ресинкать через provision_subscription.
+            # У них subscription_type='basic' и expires_at=NOW+10y по дизайну
+            # ensure_bypass_only_subscription, но реальной премиум-подписки
+            # нет — ретрай webhook'а на traffic-pack раньше создавал
+            # фантомный `tg_<id>_premium` в панели с expireAt=+10y. Юзер,
+            # купивший только 15 ГБ трафика, получал безлимитный premium-
+            # доступ на 10 лет. Bypass-энтити создаётся отдельно в
+            # _handle_traffic_pack_confirmation — второй webhook просто
+            # ничего не делать не должен.
+            is_bypass_only = bool(sub.get("is_bypass_only")) if sub else False
+            still_active = bool(
+                sub_expires
+                and sub_tariff
+                and sub_expires > datetime.now(timezone.utc)
+                and not is_bypass_only
+            )
+            if still_active:
+                _pd = (pending.get("period_days") if pending else None) or 30
+                await purchase_flow.provision_subscription(
+                    telegram_id,
+                    tariff=sub_tariff,
+                    subscription_end=sub_expires,
+                    period_days=int(_pd),
+                    is_trial=False,
+                )
+                logger.info(
+                    f"WEBHOOK_REPLAY_RESYNCED: provider={provider}, user={telegram_id}, "
+                    f"purchase_id={purchase_id}"
+                )
+            elif is_bypass_only:
+                logger.info(
+                    "WEBHOOK_REPLAY_SKIPPED_BYPASS_ONLY: provider=%s, user=%s, "
+                    "purchase_id=%s — bypass-only row, no premium resync needed "
+                    "(traffic-pack handler already added the GB to Remnawave)",
+                    provider, telegram_id, purchase_id,
+                )
+        except Exception as resync_err:
+            logger.error(
+                f"WEBHOOK_REPLAY_RESYNC_FAILED: provider={provider}, user={telegram_id}, "
+                f"purchase_id={purchase_id}, error={resync_err}"
+            )
+            raise TransientPaymentError(
+                f"Replay resync to Remnawave failed: {resync_err}"
+            ) from resync_err
         return {"status": "already_processed"}
-    except (asyncpg.PostgresError, asyncio.TimeoutError, OSError) as e:
-        # Transient infrastructure error — provider MUST retry
+    except (asyncpg.PostgresError, asyncio.TimeoutError, OSError, RuntimeError) as e:
+        # Transient infrastructure error (DB / network / Remnawave provision
+        # raised RuntimeError) — provider MUST retry. provision_subscription
+        # raises RuntimeError when the panel responds non-2xx; treat as transient
+        # so the webhook returns 5xx and the payment provider replays it.
         logger.error(
             f"PAYMENT_TRANSIENT_ERROR: provider={provider}, user={telegram_id}, "
             f"purchase_id={purchase_id}, error={type(e).__name__}: {e}"
@@ -181,7 +398,7 @@ async def process_confirmed_payment(
             amount_rubles=amount_rubles, tariff=tariff, period_days=period_days,
         )
         raise TransientPaymentError(
-            f"Transient DB error during payment: {type(e).__name__}"
+            f"Transient error during payment: {type(e).__name__}: {e}"
         ) from e
     except Exception as e:
         logger.exception(
@@ -220,16 +437,22 @@ async def lookup_pending_purchase(
     """
     Look up pending purchase and validate status.
 
+    Fetches ANY status so we can distinguish an idempotent webhook retry
+    (row exists with status='paid') from a truly missing row (data loss
+    or an orphaned provider invoice pointing at a purchase_id we never
+    persisted — the latter needs manual admin attention).
+
     Returns:
         {"status": "ok", "purchase": dict, "telegram_id": int} on success
-        {"status": "not_found"|"already_processed"} on failure
+        {"status": "not_found"|"already_processed"|"invalid_status"} on failure
     """
-    pending_purchase = await database.get_pending_purchase_by_id(
-        purchase_id, check_expiry=False
-    )
+    pending_purchase = await database.get_pending_purchase_any_status(purchase_id)
 
     if not pending_purchase:
-        logger.warning(f"{provider} webhook: purchase not found: purchase_id={purchase_id}")
+        logger.error(
+            f"{provider} webhook: purchase not found in DB: purchase_id={purchase_id} — "
+            "row missing entirely, payment cannot be reconciled automatically"
+        )
         return {"status": "not_found"}
 
     telegram_id = pending_purchase["telegram_id"]
@@ -237,8 +460,8 @@ async def lookup_pending_purchase(
 
     if purchase_status == "paid":
         logger.info(
-            f"{provider} webhook: purchase already processed: "
-            f"purchase_id={purchase_id}, status={purchase_status}"
+            f"{provider} webhook: purchase already processed (idempotent retry): "
+            f"purchase_id={purchase_id}, user={telegram_id}"
         )
         return {"status": "already_processed"}
 
@@ -293,6 +516,39 @@ async def _send_confirmation(
 
     language = await resolve_user_language(telegram_id)
 
+    # Идемпотентность: mark-before-send через payment_notifications_sent.
+    # finalize_purchase уже гарантирует single-writer через FOR UPDATE
+    # SKIP LOCKED — но на нём защита СТАТУСА покупки, а не факта отправки
+    # уведомления. Если между finalize и send прилетит другой путь
+    # (fast-poll + webhook, reconciler + webhook, кнопка «Проверить» +
+    # webhook) — второй пропустится сразу. Даёт двойной страховщик поверх
+    # DB-lock и гасит любые оставшиеся гонки.
+    try:
+        sent = await database.mark_payment_notification_sent(payment_id)
+    except Exception as _flag_err:  # noqa: BLE001
+        logger.warning(
+            "notification_flag_check_failed provider=%s user=%s payment_id=%s err=%s — "
+            "продолжаем отправку (fail-open)",
+            provider, telegram_id, payment_id, _flag_err,
+        )
+        sent = True
+    if not sent:
+        logger.info(
+            "NOTIFICATION_IDEMPOTENT_SKIP: provider=%s user=%s payment_id=%s purchase_id=%s "
+            "— повторное подтверждение подавлено",
+            provider, telegram_id, payment_id, purchase_id,
+        )
+        return
+
+    # Убираем экран «Ждём платёж» перед отправкой подтверждения — иначе
+    # юзер видит одновременно устаревший invoice и «✅ Платёж успешно
+    # обработан».  Best-effort, никаких await на удаление.
+    try:
+        from app.handlers.callbacks.payments_callbacks import delete_invoice_message_for_purchase
+        await delete_invoice_message_for_purchase(bot, purchase_id)
+    except Exception as _e:  # noqa: BLE001
+        logger.debug("invoice_screen_cleanup skipped: %s", _e)
+
     if is_balance_topup:
         topup_amount = result.get("amount", amount_rubles)
         text = i18n_get_text(language, "main.balance_topup_success", amount=topup_amount)
@@ -344,43 +600,193 @@ async def _send_confirmation(
             f"purchase_id={purchase_id}, subscription_activated=True"
         )
 
-        # Fire-and-forget: create or renew Remnawave bypass user
-        # Skip for combo purchases — combo traffic is managed separately
+        # ── Bypass GB accumulation ─────────────────────────────────────
+        # Единая точка добавления bypass GB (combo и обычная подписка).
+        # sync_renewal_to_remnawave теперь ТОЛЬКО продлевает premium.expireAt
+        # (см. purchase_flow.py) — bypass GB кладём здесь, ровно сколько
+        # положено по тарифу, без дублей.
+        #
+        # Правила:
+        #   combo_basic / combo_plus   → COMBO_TARIFFS[key][period]["gb"] GB
+        #   basic / plus (обычные)     → TRAFFIC_LIMITS[tariff][period] bytes
+        #   trial / telegram_* / biz   → skip (не имеют bypass ГБ по ТЗ)
+        #
+        # ВАЖНО: если bypass entity ТОЛЬКО ЧТО создан (fresh) — provision уже
+        # выставил ему финальный лимит (75 GB combo или 10 GB basic 30d).
+        # Здесь пропускаем top-up, иначе double-add → 150 GB для fresh combo.
+        # Для renewal (entity уже был) — top-up здесь единственный источник GB.
         is_combo = result.get("is_combo", False)
-        try:
-            from app.services.remnawave_service import renew_remnawave_user_bg
-            if expires_at and subscription_type not in ("trial", "telegram_premium", "telegram_stars") + config.BIZ_TARIFFS and not is_combo:
-                _pd = result.get("period_days", 30) or 30
-                renew_remnawave_user_bg(telegram_id, subscription_type, expires_at, period_days=_pd)
-        except Exception as rmn_err:
-            logger.warning("REMNAWAVE_HOOK_FAIL: provider=%s tg=%s %s", provider, telegram_id, rmn_err)
-
-        # Combo: add bypass traffic (was missing for webhook payments!)
-        if is_combo:
-            try:
-                _pd = result.get("period_days", 30) or 30
+        bypass_created_fresh = result.get("bypass_created_fresh", False)
+        _skip_bypass = (
+            not expires_at
+            or subscription_type in ("trial", "telegram_premium", "telegram_stars")
+            or subscription_type in config.BIZ_TARIFFS
+            or bypass_created_fresh  # fresh entity → уже с финальным лимитом
+        )
+        if bypass_created_fresh and not _skip_bypass:
+            # Не должно случиться (fresh уже в _skip_bypass) — защита от рефакторингов.
+            _skip_bypass = True
+        if bypass_created_fresh:
+            logger.info(
+                "BYPASS_TOPUP_SKIPPED_FRESH_ENTITY: provider=%s user=%s tariff=%s "
+                "is_combo=%s — bypass entity создан с финальным лимитом в provision_subscription",
+                provider, telegram_id, subscription_type, is_combo,
+            )
+            # Для combo всё равно записываем в traffic_purchases (для Traffic Audit).
+            if is_combo:
+                try:
+                    _pd_combo = result.get("period_days", 30) or 30
+                    _combo_key = f"combo_{subscription_type}"
+                    _combo_info = config.COMBO_TARIFFS.get(_combo_key, {}).get(_pd_combo)
+                    if _combo_info:
+                        await database.record_traffic_purchase(
+                            telegram_id, int(_combo_info["gb"]), 0,
+                        )
+                except Exception as _rp_err:
+                    logger.warning(
+                        "record_traffic_purchase (fresh combo) failed user=%s: %s",
+                        telegram_id, _rp_err,
+                    )
+        if not _skip_bypass:
+            _pd = result.get("period_days", 30) or 30
+            gb_to_add = 0
+            tariff_label = subscription_type
+            if is_combo:
                 combo_key = f"combo_{subscription_type}"
                 combo_info = config.COMBO_TARIFFS.get(combo_key, {}).get(_pd)
-                if combo_info:
-                    combo_gb = combo_info["gb"]
-                    traffic_bytes = combo_gb * 1024**3
-                    from app.services.remnawave_service import add_bypass_traffic
-                    rmn_ok = await add_bypass_traffic(
-                        telegram_id,
-                        traffic_bytes,
-                        subscription_type=subscription_type,
-                        subscription_end=expires_at,
-                        period_days=_pd,
+                if not combo_info:
+                    logger.error(
+                        "COMBO_TARIFF_NOT_FOUND: provider=%s user=%s combo_key=%s period=%s",
+                        provider, telegram_id, combo_key, _pd,
                     )
-                    if rmn_ok:
-                        await database.record_traffic_purchase(telegram_id, combo_gb, 0)
-                        logger.info("COMBO_BYPASS_TRAFFIC_ADDED: provider=%s user=%s gb=%s", provider, telegram_id, combo_gb)
-                    else:
-                        logger.warning("COMBO_BYPASS_TRAFFIC_FAIL: provider=%s user=%s gb=%s", provider, telegram_id, combo_gb)
-                else:
-                    logger.warning("COMBO_TARIFF_NOT_FOUND: provider=%s user=%s combo_key=%s period=%s", provider, telegram_id, combo_key, _pd)
-            except Exception as combo_err:
-                logger.error("COMBO_BYPASS_TRAFFIC_ERROR: provider=%s user=%s error=%s", provider, telegram_id, combo_err)
+                    raise TransientPaymentError(
+                        f"combo tariff config missing: {combo_key}/{_pd}d"
+                    )
+                gb_to_add = int(combo_info["gb"])
+                tariff_label = combo_key
+            else:
+                # Обычная basic/plus подписка: TRAFFIC_LIMITS уже в bytes.
+                table = config.TRAFFIC_LIMITS.get(subscription_type, {})
+                if isinstance(table, dict) and _pd in table:
+                    gb_to_add = int(table[_pd]) // (1024 ** 3)
+                elif isinstance(table, dict) and table:
+                    # Ближайший период (для нестандартных pd).
+                    gb_to_add = int(table[max(k for k in table.keys() if k <= _pd)
+                                        if any(k <= _pd for k in table.keys())
+                                        else min(table.keys())]) // (1024 ** 3)
+            if gb_to_add > 0:
+                traffic_bytes = gb_to_add * (1024 ** 3)
+                baseline_bytes = await _get_current_bypass_bytes(telegram_id)
+                # Устойчивая доставка: top-up ИЛИ create-if-missing.
+                # На renewal активной premium-подписки без bypass entity
+                # старый top-up-only молча терял ГБ (срок продлевался, ГБ нет).
+                ok = await _deliver_bypass_gb(telegram_id, traffic_bytes)
+                if not ok:
+                    logger.error(
+                        "BYPASS_TRAFFIC_FAIL: provider=%s user=%s gb=%s is_combo=%s — retry",
+                        provider, telegram_id, gb_to_add, is_combo,
+                    )
+                    raise TransientPaymentError(
+                        f"bypass-traffic add failed: user={telegram_id} gb={gb_to_add} combo={is_combo}"
+                    )
+                if is_combo:
+                    # Combo → в traffic_purchases (для Traffic Audit sum).
+                    await database.record_traffic_purchase(telegram_id, gb_to_add, 0)
+                logger.info(
+                    "BYPASS_TRAFFIC_ADDED: provider=%s user=%s gb=%s tariff=%s is_combo=%s",
+                    provider, telegram_id, gb_to_add, tariff_label, is_combo,
+                )
+                # Verify реально ли долетело — fire-and-forget.
+                try:
+                    from app.services.payments.verify_delivery import (
+                        verify_bypass_delivery, verify_premium_delivery,
+                    )
+                    asyncio.create_task(verify_bypass_delivery(
+                        telegram_id=telegram_id, provider=provider,
+                        kind="combo" if is_combo else "renewal",
+                        expected_added_bytes=traffic_bytes,
+                        baseline_bytes=baseline_bytes,
+                        purchase_id=str(purchase_id), tariff=tariff_label,
+                        period_days=_pd,
+                    ))
+                    asyncio.create_task(verify_premium_delivery(
+                        telegram_id=telegram_id, provider=provider,
+                        expected_expire_at=expires_at,
+                        purchase_id=str(purchase_id), tariff=tariff_label,
+                        period_days=_pd,
+                    ))
+                except Exception:
+                    pass
+
+
+async def _handle_gift_confirmation(
+    provider: str,
+    bot: Bot,
+    telegram_id: int,
+    payment_id: int,
+    purchase_id: str,
+    result: dict,
+) -> None:
+    """Доставка подарочной подписки покупателю после ВНЕШНЕЙ оплаты.
+
+    finalize_purchase уже атомарно создал строку gift_subscriptions + gift_code
+    (result['is_gift']=True). Здесь идемпотентно отправляем покупателю экран с
+    share-ссылкой t.me/<bot>?start=gift_<code>, чтобы он переслал подарок.
+
+    Telegram-native путь (Stars/Payments) делает то же в
+    payments_messages.py::process_successful_payment — этот хелпер закрывает
+    внешних провайдеров (platega/lava/cryptobot/wata), для которых confirmation.py
+    раньше слал обычное «подписка активирована» и терял ссылку-подарок.
+
+    Идемпотентность: mark_payment_notification_sent (как в _send_confirmation) —
+    повторный вебхук не задваивает сообщение. Если отправка упадёт — код уже в
+    БД, покупатель достанет ссылку через «Мои подарки».
+    """
+    gift_code = result.get("gift_code")
+    if not gift_code:
+        logger.error(
+            "GIFT_CONFIRMATION_NO_CODE: provider=%s user=%s purchase_id=%s",
+            provider, telegram_id, purchase_id,
+        )
+        return
+
+    try:
+        sent = await database.mark_payment_notification_sent(payment_id)
+    except Exception as _flag_err:  # noqa: BLE001
+        logger.warning(
+            "GIFT_NOTIFICATION_FLAG_FAIL provider=%s user=%s payment_id=%s err=%s — fail-open",
+            provider, telegram_id, payment_id, _flag_err,
+        )
+        sent = True
+    if not sent:
+        logger.info(
+            "GIFT_NOTIFICATION_IDEMPOTENT_SKIP: provider=%s user=%s purchase_id=%s",
+            provider, telegram_id, purchase_id,
+        )
+        return
+
+    # Убрать экран «ждём оплату» перед отправкой подтверждения-подарка.
+    try:
+        from app.handlers.callbacks.payments_callbacks import delete_invoice_message_for_purchase
+        await delete_invoice_message_for_purchase(bot, purchase_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+    from app.services.language_service import resolve_user_language
+    language = await resolve_user_language(telegram_id)
+    from app.handlers.callbacks.gift import _send_gift_success
+    await _send_gift_success(
+        bot=bot,
+        telegram_id=telegram_id,
+        language=language,
+        gift_code=gift_code,
+        tariff=result.get("gift_tariff") or "basic",
+        period_days=int(result.get("gift_period_days") or 30),
+    )
+    logger.info(
+        "GIFT_PAYMENT_FINALIZED: provider=%s user=%s purchase_id=%s code=%s",
+        provider, telegram_id, purchase_id, gift_code,
+    )
 
 
 async def _handle_traffic_pack_confirmation(
@@ -403,40 +809,63 @@ async def _handle_traffic_pack_confirmation(
     if _is_bypass:
         await database.ensure_bypass_only_subscription(telegram_id)
 
-    # Add traffic via Remnawave (create user if stale/missing)
+    # Add traffic via Remnawave — clean primitive через numeric bypass id.
+    # Если entity нет вообще (первый bypass-buy без подписки) — создаём.
     rmn_success = False
     pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
     if pack:
         traffic_bytes = pack["bytes"]
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            try:
-                from app.services.remnawave_service import add_traffic
-                rmn_success = await add_traffic(telegram_id, traffic_bytes)
-            except Exception as rmn_err:
+        try:
+            baseline_bytes = await _get_current_bypass_bytes(telegram_id)
+            # Устойчивая доставка: top-up → self-heal → create-if-missing.
+            rmn_success = await _deliver_bypass_gb(telegram_id, traffic_bytes)
+            if rmn_success:
+                logger.info(
+                    "BYPASS_REMNAWAVE_TRAFFIC_ADDED provider=%s user=%s gb=%s",
+                    provider, telegram_id, traffic_gb,
+                )
+            else:
                 logger.error(
-                    "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
-                    provider, telegram_id, traffic_gb, rmn_err,
+                    "BYPASS_TRAFFIC_ADD_FAILED provider=%s user=%s gb=%s — "
+                    "все 3 ветки не помогли (top-up / self-heal / create)",
+                    provider, telegram_id, traffic_gb,
                 )
-        if not rmn_success:
-            # No UUID or stale (404) — clear and create fresh
-            if rmn_uuid:
-                await database.clear_remnawave_uuid(telegram_id)
+                raise TransientPaymentError(
+                    f"traffic_pack bypass add failed: user={telegram_id} gb={traffic_gb}"
+                )
+            # Verify реального применения в панели (fire-and-forget).
             try:
-                from app.services import remnawave_service
-                from datetime import datetime, timezone, timedelta
-                far_future = datetime.now(timezone.utc) + timedelta(days=3650)
-                await remnawave_service.create_remnawave_user(
-                    telegram_id, "basic", far_future,
-                    traffic_limit_override=traffic_bytes,
-                )
-                rmn_success = True
-                logger.info("BYPASS_REMNAWAVE_USER_CREATED provider=%s user=%s gb=%s", provider, telegram_id, traffic_gb)
-            except Exception as rmn_err:
-                logger.error(
-                    "TRAFFIC_PACK_REMNAWAVE_CREATE_ERROR: provider=%s tg=%s gb=%s error=%s",
-                    provider, telegram_id, traffic_gb, rmn_err,
-                )
+                from app.services.payments.verify_delivery import verify_bypass_delivery
+                asyncio.create_task(verify_bypass_delivery(
+                    telegram_id=telegram_id, provider=provider,
+                    kind="traffic_pack",
+                    expected_added_bytes=traffic_bytes,
+                    baseline_bytes=baseline_bytes,
+                    purchase_id=str(purchase_id),
+                    tariff=f"pack_{traffic_gb}gb",
+                ))
+            except Exception:
+                pass
+        except TransientPaymentError:
+            raise
+        except Exception as rmn_err:
+            logger.error(
+                "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
+                provider, telegram_id, traffic_gb, rmn_err,
+            )
+            try:
+                from app.services.payments.verify_delivery import _send_admin_alert
+                asyncio.create_task(_send_admin_alert(
+                    "Traffic pack: Remnawave EXCEPTION",
+                    (
+                        f"User: <code>tg:{telegram_id}</code>\n"
+                        f"Provider: <b>{provider}</b> · Pack: <b>{traffic_gb} GB</b>\n"
+                        f"Purchase: <code>{purchase_id}</code>\n"
+                        f"Error: <code>{type(rmn_err).__name__}: {str(rmn_err)[:150]}</code>"
+                    ),
+                ))
+            except Exception:
+                pass
     else:
         logger.error(
             "TRAFFIC_PACK_INVALID_GB: provider=%s tg=%s gb=%s purchase=%s — pack not found in config",

@@ -1,0 +1,829 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Image as ImageIcon,
+  Film,
+  Send,
+  Users as UsersIcon,
+  CheckCircle2,
+  X,
+  AlertCircle,
+} from "lucide-react";
+import {
+  ApiError, endpoints,
+  uploadBroadcastPhoto, uploadBroadcastAnimation,
+} from "@/lib/api";
+import { fmtNum } from "@/lib/format";
+import { toast } from "@/store/toast";
+import { Spinner } from "@/components/Spinner";
+
+type Step = 1 | 2 | 3 | 4;
+
+const BUTTON_OPTIONS = [
+  { key: "buy", label: "🛒 Купить" },
+  { key: "promo_buy", label: "🎁 Купить со скидкой (нужен %)" },
+  { key: "promo_traffic", label: "📊 Купить ГБ со скидкой (нужен %)" },
+  // gift_reveal — reveal-сценка (👀 → 2с → 🎁 → экран тарифов со
+  // скидкой). Процент админ выбирает в отдельном пикере ниже (20/25/
+  // 30/35/40), продолжительность 48ч зашита в коде callback'а.
+  { key: "gift_reveal", label: "👀 Посмотреть подарок (48ч, % ниже)" },
+  // Одноразовые «месячные» подарки: −30% на конкретный период,
+  // все 4 тарифа (Basic / Plus / Combo Basic / Combo Plus). Клик
+  // ведёт сразу к выбору тарифа + payment-method (без экрана выбора
+  // периода — период уже задан кнопкой).
+  { key: "gift_1m", label: "🎁 −30% на 1 месяц (все тарифы)" },
+  { key: "gift_3m", label: "🎁 −30% на 3 месяца (все тарифы)" },
+  // Открывает 2-шаговый flow (тариф → период). Скидка ТОЛЬКО на 365
+  // дней, остальные периоды по прайсу. Скидка одноразовая через FSM
+  // (не пишется в user_discounts) — реализация симметрична gift_3m.
+  { key: "gift_1y_40", label: "🎁 1 год со скидкой 40%" },
+  { key: "support", label: "💬 Поддержка" },
+  { key: "channel", label: "📢 Канал" },
+  { key: "referral", label: "👥 Пригласить друга" },
+  { key: "bypass", label: "🌐 Включить обход" },
+  { key: "buy_combo", label: "🏆 Купить Комбо" },
+  { key: "happ_ios", label: "📲 Happ iOS" },
+  { key: "happ_android", label: "📲 Happ Android" },
+  { key: "web_client", label: "🌐 Веб-клиент" },
+  // Для рассылок владельцам прокси (сегмент bought_proxy) —
+  // ведёт на delivery-экран «🧩 Ваш Telegram-прокси готов».
+  { key: "my_proxy", label: "🧩 Мой прокси" },
+  // Персональный подарок Combo Basic 1 мес со скидкой (% и часы
+  // — из полей discount_percent/discount_hours рассылки).
+  { key: "gift_combo", label: "🎁 Забрать подарок (Combo Basic 1м, нужен %)" },
+  // Получатель таппает → бот открывает экран «Подари другу скидку 30%».
+  // Внутри — кнопка share с его личной refd-ссылкой. Друг по ссылке
+  // получает 30%/24ч (lifetime-once). Без extra discount-параметров —
+  // и %, и продолжительность зашиты в коде (см. start.py refd_-handler).
+  { key: "share_discount", label: "🎁 Поделиться скидкой (друг = −30% / 24ч)" },
+  // Beta-testing: клик записывает юзера в beta_applications
+  // (UNIQUE tg_id+program), удаляет сообщение и шлёт подтверждение.
+  // Список заявок — /dashboard/beta-applications.
+  { key: "beta_apply", label: "🧪 Оставить заявку (VPN-Инноватор, бета-тест)" },
+  // «🎁 Получить пробный ключ»: клик выдаёт +1 день подписки и +1 ГБ обхода
+  // (один раз на рассылку). После выдачи — «Подарок активирован» + экран
+  // подключения устройства. Новому юзеру создаётся профиль в панели.
+  { key: "trial_key", label: "🎁 Получить пробный ключ (+1 день, +1 ГБ)" },
+];
+
+export function BroadcastCreate() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const cloneParam = searchParams.get("clone");
+  const cloneId = cloneParam && /^\d+$/.test(cloneParam) ? Number(cloneParam) : null;
+  const [step, setStep] = useState<Step>(1);
+
+  // Form state
+  const [title, setTitle] = useState("");
+  const [tag, setTag] = useState("");
+  const [tagColor, setTagColor] = useState<string>("gray");
+  const [message, setMessage] = useState("");
+  const [photoFileId, setPhotoFileId] = useState<string | null>(null);
+  const [animationFileId, setAnimationFileId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadingAnimation, setUploadingAnimation] = useState(false);
+  const [segment, setSegment] = useState<string>("");
+  const [buttons, setButtons] = useState<string[]>([]);
+  const [discountPercent, setDiscountPercent] = useState<number | "">("");
+  const [discountHours, setDiscountHours] = useState<number | "">(24);
+  // Пресеты для «Посмотреть подарок». Согласованы с backend
+  // (broadcasts.py:_GIFT_REVEAL_PERCENT_CHOICES). Дефолт 20% — если
+  // админ не выбрал явно, летит текущее значение.
+  const GIFT_REVEAL_PERCENT_CHOICES = [20, 25, 30, 35, 40] as const;
+  const [giftRevealPercent, setGiftRevealPercent] = useState<number>(20);
+
+  const segments = useQuery({
+    queryKey: ["broadcasts", "segments"],
+    queryFn: endpoints.broadcastSegments,
+  });
+
+  // Clone flow: если пришли с ?clone=N, подтягиваем прошлую рассылку и
+  // предзаполняем всю форму (title/message/photo/buttons/скидки).
+  // Сегмент НЕ подтягиваем — админ выбирает сам, чтобы не разослать
+  // клон на ту же аудиторию по ошибке. clonedOnceRef защищает от
+  // повторной установки при hot-reload / изменениях query.
+  const clonedOnceRef = useRef(false);
+  const cloneSrc = useQuery({
+    queryKey: ["broadcasts", "detail", cloneId],
+    queryFn: () => endpoints.broadcastDetail(cloneId as number),
+    enabled: cloneId != null,
+  });
+  useEffect(() => {
+    if (!cloneSrc.data || clonedOnceRef.current) return;
+    const src = cloneSrc.data as Record<string, unknown>;
+    const asStr = (v: unknown, fallback = "") =>
+      typeof v === "string" ? v : fallback;
+    const asNum = (v: unknown): number | null =>
+      typeof v === "number" ? v : typeof v === "string" && v ? Number(v) : null;
+    setTitle(asStr(src.title));
+    setMessage(asStr(src.message));
+    setPhotoFileId(asStr(src.photo_file_id) || null);
+    setAnimationFileId(asStr(src.animation_file_id) || null);
+    setTag(asStr(src.tag) || "");
+    setTagColor(asStr(src.tag_color) || "gray");
+    if (Array.isArray(src.buttons)) {
+      setButtons((src.buttons as unknown[]).map((x) => String(x)));
+    }
+    const dp = asNum(src.discount_percent);
+    if (dp !== null && dp > 0) setDiscountPercent(dp);
+    const dh = asNum(src.discount_hours);
+    if (dh !== null && dh > 0) setDiscountHours(dh);
+    const gr = asNum(src.gift_reveal_percent);
+    if (gr !== null && gr > 0) setGiftRevealPercent(gr);
+    clonedOnceRef.current = true;
+    toast.info(`Клон рассылки #${cloneId} — измени и отправь`);
+  }, [cloneSrc.data, cloneId]);
+
+  const create = useMutation({
+    mutationFn: () =>
+      endpoints.broadcastCreate({
+        title,
+        message,
+        segment,
+        photo_file_id: photoFileId ?? null,
+        animation_file_id: animationFileId ?? null,
+        buttons,
+        discount_percent:
+          typeof discountPercent === "number" ? discountPercent : null,
+        discount_hours: typeof discountHours === "number" ? discountHours : null,
+        gift_reveal_percent: buttons.includes("gift_reveal")
+          ? giftRevealPercent
+          : null,
+        tag: tag.trim() || null,
+        tag_color: tag.trim() ? tagColor : null,
+      }),
+    onSuccess: (data) => {
+      toast.success(
+        `Рассылка #${data.broadcast_id} запущена на ${fmtNum(data.audience)} получателей`,
+      );
+      navigate(`/broadcasts`);
+    },
+    onError: (e: unknown) =>
+      toast.error((e as ApiError)?.detail ?? "Не удалось запустить рассылку"),
+  });
+
+  // Тест на админе: те же поля, но сообщение уходит ТОЛЬКО админу.
+  // Никаких записей в БД, ничего получателям. Нужен чтобы проверить
+  // разметку, premium-эмодзи, фото и кнопки перед массовой отправкой.
+  const testSelf = useMutation({
+    mutationFn: () =>
+      endpoints.broadcastTestSelf({
+        title: title || "(тест)",
+        message,
+        segment: segment || "active_subscriptions",
+        photo_file_id: photoFileId ?? null,
+        animation_file_id: animationFileId ?? null,
+        buttons,
+        discount_percent:
+          typeof discountPercent === "number" ? discountPercent : null,
+        discount_hours: typeof discountHours === "number" ? discountHours : null,
+        gift_reveal_percent: buttons.includes("gift_reveal")
+          ? giftRevealPercent
+          : null,
+        tag: tag.trim() || null,
+        tag_color: tag.trim() ? tagColor : null,
+      }),
+    onSuccess: (data) => {
+      if (data.split) {
+        toast.success(
+          "Тест отправлен. Caption не влез — разбили на 2 сообщения (фото + текст). При массовой рассылке так же не влезет — сократи текст или убери фото.",
+        );
+      } else {
+        toast.success("Тест отправлен — проверь свой чат");
+      }
+    },
+    onError: (e: unknown) =>
+      toast.error((e as ApiError)?.detail ?? "Не удалось отправить тест"),
+  });
+
+  const audience = useMemo(() => {
+    if (!segments.data) return null;
+    const s = segments.data.find((x) => x.key === segment);
+    return s ? s.count : null;
+  }, [segments.data, segment]);
+
+  const canNext1 = title.trim().length > 0 && message.trim().length > 0;
+  const canNext2 = segment.length > 0;
+  const needsDiscountPercent =
+    buttons.includes("promo_buy") || buttons.includes("promo_traffic");
+  const canConfirm =
+    canNext1 &&
+    canNext2 &&
+    (needsDiscountPercent ? typeof discountPercent === "number" : true);
+
+  const onPickPhoto = async (file: File | undefined) => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const { file_id } = await uploadBroadcastPhoto(file);
+      setPhotoFileId(file_id);
+      // Фото и GIF взаимно-эксклюзивны — сбросим противоположное.
+      setAnimationFileId(null);
+      toast.success("Фото загружено");
+    } catch (e: unknown) {
+      toast.error((e as ApiError)?.detail ?? "Не удалось загрузить фото");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onPickAnimation = async (file: File | undefined) => {
+    if (!file) return;
+    setUploadingAnimation(true);
+    try {
+      const { file_id } = await uploadBroadcastAnimation(file);
+      setAnimationFileId(file_id);
+      // GIF и фото взаимно-эксклюзивны — сбросим противоположное.
+      setPhotoFileId(null);
+      toast.success("GIF загружен");
+    } catch (e: unknown) {
+      toast.error((e as ApiError)?.detail ?? "Не удалось загрузить GIF");
+    } finally {
+      setUploadingAnimation(false);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-6">
+      <header className="flex items-center justify-between">
+        <div>
+          <button
+            type="button"
+            onClick={() => navigate("/broadcasts")}
+            className="btn-ghost mb-2 -ml-2"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" /> К списку
+          </button>
+          <h1 className="text-2xl font-semibold tracking-tight text-fg md:text-3xl">
+            Новая рассылка
+          </h1>
+        </div>
+        <Steps current={step} />
+      </header>
+
+      {step === 1 && (
+        <StepCard title="Текст" subtitle="Заголовок виден только в админке. Сообщение — то, что увидит пользователь.">
+          <label className="block">
+            <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-fg-subtle">
+              Заголовок (внутренний)
+            </div>
+            <input
+              className="input"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              maxLength={200}
+              placeholder="Напр. «Скидка 30% на Plus / 02.06»"
+              autoFocus
+            />
+          </label>
+
+          <div>
+            <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-fg-subtle">
+              Тег / метка (необязательно)
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={tag}
+                onChange={(e) => setTag(e.target.value)}
+                maxLength={40}
+                placeholder="летняя акция / реактивация / A-B тест"
+                className="input flex-1 min-w-[180px]"
+              />
+              <div className="flex flex-wrap items-center gap-1">
+                {[
+                  { key: "gray", cls: "bg-fg/8 text-fg-muted" },
+                  { key: "red", cls: "bg-danger/15 text-danger" },
+                  { key: "orange", cls: "bg-warning/15 text-warning" },
+                  { key: "yellow", cls: "bg-[#F59E0B]/15 text-[#B45309]" },
+                  { key: "green", cls: "bg-success/15 text-success" },
+                  { key: "blue", cls: "bg-info/15 text-info" },
+                  { key: "purple", cls: "bg-special/15 text-special" },
+                ].map((c) => (
+                  <button
+                    type="button"
+                    key={c.key}
+                    onClick={() => setTagColor(c.key)}
+                    title={c.key}
+                    className={
+                      tagColor === c.key
+                        ? `rounded-md px-2 py-0.5 text-[10px] font-semibold ring-2 ring-accent/60 ${c.cls}`
+                        : `rounded-md px-2 py-0.5 text-[10px] font-medium opacity-60 hover:opacity-100 ${c.cls}`
+                    }
+                  >
+                    ●
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="mt-1 text-[11px] text-fg-subtle">
+              Метка отображается chip'ом рядом с заголовком в списке рассылок.
+              Помогает группировать по кампании/цели. Пусто = без тега.
+            </p>
+          </div>
+          <label className="block">
+            <div className="mb-1.5 flex items-center justify-between text-xs font-medium uppercase tracking-wider text-fg-subtle">
+              <span>Сообщение (HTML)</span>
+              <span
+                className={
+                  "font-normal normal-case " +
+                  (photoFileId && message.length > 1024
+                    ? "text-warning"
+                    : "text-fg-subtle")
+                }
+              >
+                {message.length} / {photoFileId ? 1024 : 4000}
+                {photoFileId ? " (caption фото)" : ""}
+              </span>
+            </div>
+            <textarea
+              className="input min-h-[200px] resize-y font-sans leading-relaxed"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              maxLength={4000}
+              placeholder="Поддерживается HTML: <b>жирный</b>, <i>курсив</i>, <a href=...>ссылки</a>, <blockquote>цитаты</blockquote>, <blockquote expandable>скрытая</blockquote>"
+            />
+            {photoFileId && message.length > 1024 && (
+              <p className="mt-1.5 text-xs text-warning">
+                ⚠️ Caption у фото лимит 1024 символа. У тебя {message.length}.
+                Массовая рассылка упадёт. Либо убери фото, либо сократи текст.
+                «Тест на админе» автоматически разделит на 2 сообщения, чтобы
+                ты увидел рендер blockquote/expandable.
+              </p>
+            )}
+          </label>
+
+          <div>
+            <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-fg-subtle">
+              Медиа (фото или GIF · необязательно)
+            </div>
+            {/* Attached state — единый блок для photo или animation */}
+            {(photoFileId || animationFileId) ? (
+              <div
+                className={
+                  photoFileId
+                    ? "flex items-center gap-3 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm"
+                    : "flex items-center gap-3 rounded-xl border border-info/30 bg-info/10 px-4 py-3 text-sm"
+                }
+              >
+                {photoFileId ? (
+                  <CheckCircle2 className="h-4 w-4 text-success" />
+                ) : (
+                  <Film className="h-4 w-4 text-info" />
+                )}
+                <div className="flex-1 truncate text-fg">
+                  {photoFileId ? "🖼 Фото прикреплено" : "🎬 GIF прикреплён"}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPhotoFileId(null);
+                    setAnimationFileId(null);
+                  }}
+                  className="btn-ghost"
+                  aria-label="Убрать медиа"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : (
+              // Два параллельных выбора: фото ИЛИ GIF.
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-border bg-bg-subtle/40 px-4 py-4 text-sm text-fg-muted transition hover:border-fg-subtle hover:bg-bg-elevated/60">
+                  {uploading ? <Spinner /> : <ImageIcon className="h-4 w-4" />}
+                  <span className="flex-1">
+                    {uploading ? "Загружаю..." : "🖼 Фото (≤10MB, jpg/png)"}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    disabled={uploading || uploadingAnimation}
+                    onChange={(e) => onPickPhoto(e.target.files?.[0])}
+                  />
+                </label>
+                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-border bg-bg-subtle/40 px-4 py-4 text-sm text-fg-muted transition hover:border-fg-subtle hover:bg-bg-elevated/60">
+                  {uploadingAnimation ? <Spinner /> : <Film className="h-4 w-4" />}
+                  <span className="flex-1">
+                    {uploadingAnimation ? "Загружаю..." : "🎬 GIF/MP4 (≤20MB)"}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/gif,video/mp4"
+                    className="hidden"
+                    disabled={uploading || uploadingAnimation}
+                    onChange={(e) => onPickAnimation(e.target.files?.[0])}
+                  />
+                </label>
+              </div>
+            )}
+            <p className="mt-1.5 text-[11px] text-fg-subtle">
+              Фото и GIF взаимно-эксклюзивные — при выборе одного второе
+              сбрасывается. При загрузке бот отправит копию файла в твой
+              Telegram — это нужно, чтобы получить <code>file_id</code>.
+            </p>
+          </div>
+
+          <Nav
+            onBack={() => navigate("/broadcasts")}
+            onNext={() => setStep(2)}
+            nextDisabled={!canNext1}
+          />
+        </StepCard>
+      )}
+
+      {step === 2 && (
+        <StepCard title="Аудитория" subtitle="Выбери сегмент. Счётчик обновляется в реальном времени.">
+          {segments.isLoading ? (
+            <div className="flex items-center gap-2 text-sm text-fg-muted">
+              <Spinner /> Считаю аудиторию...
+            </div>
+          ) : segments.isError ? (
+            <div className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
+              Не удалось загрузить сегменты.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {(() => {
+                const groups = new Map<string, typeof segments.data>();
+                for (const s of segments.data ?? []) {
+                  const g = s.group || "Прочее";
+                  if (!groups.has(g)) groups.set(g, []);
+                  (groups.get(g) as NonNullable<typeof segments.data>).push(s);
+                }
+                return Array.from(groups.entries()).map(([groupName, items]) => (
+                  <section key={groupName}>
+                    <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-fg-subtle">
+                      {groupName}
+                    </div>
+                    <ul className="space-y-1.5">
+                      {(items ?? []).map((s) => (
+                        <li key={s.key}>
+                          <label
+                            className={
+                              segment === s.key
+                                ? "flex cursor-pointer items-start justify-between gap-3 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm transition"
+                                : "flex cursor-pointer items-start justify-between gap-3 rounded-xl border border-border bg-bg-card px-4 py-3 text-sm transition hover:border-fg-subtle hover:bg-bg-elevated/60"
+                            }
+                          >
+                            <div className="flex items-start gap-3">
+                              <input
+                                type="radio"
+                                name="segment"
+                                value={s.key}
+                                checked={segment === s.key}
+                                onChange={() => setSegment(s.key)}
+                                className="mt-1 accent-accent"
+                              />
+                              <div className="min-w-0">
+                                <div className="font-medium text-fg">{s.label}</div>
+                                {s.description && (
+                                  <div className="mt-0.5 text-xs leading-snug text-fg-muted">
+                                    {s.description}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <span className="badge-muted shrink-0">
+                              <UsersIcon className="h-3 w-3" /> {fmtNum(s.count)}
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ));
+              })()}
+            </div>
+          )}
+          <Nav
+            onBack={() => setStep(1)}
+            onNext={() => setStep(3)}
+            nextDisabled={!canNext2}
+          />
+        </StepCard>
+      )}
+
+      {step === 3 && (
+        <StepCard
+          title="Кнопки"
+          subtitle="Появятся под сообщением. Можно ничего не выбирать — рассылка уйдёт без CTA."
+        >
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            {BUTTON_OPTIONS.map((b) => {
+              const checked = buttons.includes(b.key);
+              return (
+                <label
+                  key={b.key}
+                  className={
+                    checked
+                      ? "flex cursor-pointer items-center gap-3 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2.5 text-sm transition"
+                      : "flex cursor-pointer items-center gap-3 rounded-xl border border-border bg-bg-card px-3 py-2.5 text-sm transition hover:border-fg-subtle"
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => {
+                      if (e.target.checked) setButtons([...buttons, b.key]);
+                      else setButtons(buttons.filter((x) => x !== b.key));
+                    }}
+                    className="accent-accent"
+                  />
+                  <span className="text-fg">{b.label}</span>
+                </label>
+              );
+            })}
+          </div>
+
+          {needsDiscountPercent && (
+            <div className="rounded-xl border border-warning/30 bg-warning/10 p-4">
+              <div className="text-xs font-medium uppercase tracking-wider text-warning">
+                Параметры скидки {buttons.includes("promo_traffic")
+                  ? "(для «Купить ГБ со скидкой»)"
+                  : "(для «Купить со скидкой»)"}
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <label className="block">
+                  <div className="mb-1 text-xs text-fg-subtle">%</div>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={discountPercent}
+                    onChange={(e) =>
+                      setDiscountPercent(
+                        e.target.value === "" ? "" : Number(e.target.value),
+                      )
+                    }
+                    placeholder="напр. 30"
+                  />
+                </label>
+                <label className="block">
+                  <div className="mb-1 text-xs text-fg-subtle">часов действия</div>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    value={discountHours}
+                    onChange={(e) =>
+                      setDiscountHours(
+                        e.target.value === "" ? "" : Number(e.target.value),
+                      )
+                    }
+                    placeholder="24"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* Percent picker для «👀 Посмотреть подарок». Показывается
+              только если админ выбрал эту кнопку в списке выше.
+              Продолжительность 48ч зашита в коде callback'а. */}
+          {buttons.includes("gift_reveal") && (
+            <div className="rounded-xl border border-accent/40 bg-accent/10 p-4">
+              <div className="text-xs font-medium uppercase tracking-wider text-accent">
+                👀 Посмотреть подарок — скидка после reveal
+              </div>
+              <div className="mt-2 text-xs text-fg-muted">
+                Действует <b>48 часов</b> после клика. Выбери процент:
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {GIFT_REVEAL_PERCENT_CHOICES.map((p) => {
+                  const active = giftRevealPercent === p;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setGiftRevealPercent(p)}
+                      className={
+                        active
+                          ? "rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-bg shadow-glow-sm"
+                          : "rounded-full border border-border bg-bg-card px-4 py-1.5 text-sm text-fg-muted hover:border-accent/40 hover:text-fg"
+                      }
+                    >
+                      {p} %
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <Nav
+            onBack={() => setStep(2)}
+            onNext={() => setStep(4)}
+            nextDisabled={
+              needsDiscountPercent && typeof discountPercent !== "number"
+            }
+          />
+        </StepCard>
+      )}
+
+      {step === 4 && (
+        <StepCard
+          title="Подтверждение"
+          subtitle="Это уйдёт N юзерам прямо сейчас. Отменить нельзя."
+        >
+          <div className="rounded-xl border border-border bg-bg-subtle/40 p-4">
+            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+              Сегмент
+            </div>
+            <div className="mt-1 text-base font-semibold text-fg">
+              {segments.data?.find((x) => x.key === segment)?.label}
+            </div>
+            <div className="mt-1 text-sm text-fg-muted">
+              <UsersIcon className="mr-1 inline h-3.5 w-3.5" />
+              <b>{fmtNum(audience)}</b> получателей
+            </div>
+          </div>
+
+          <div className="card p-4">
+            <div className="mb-2 text-xs font-medium uppercase tracking-wider text-fg-subtle">
+              Текст сообщения
+            </div>
+            <div
+              className="whitespace-pre-wrap text-sm leading-relaxed text-fg"
+              dangerouslySetInnerHTML={{ __html: sanitize(message) }}
+            />
+            {photoFileId && (
+              <div className="mt-3 inline-flex items-center gap-1.5 text-xs text-success">
+                <ImageIcon className="h-3 w-3" /> С фото
+              </div>
+            )}
+            {animationFileId && (
+              <div className="mt-3 inline-flex items-center gap-1.5 text-xs text-info">
+                <Film className="h-3 w-3" /> С GIF
+              </div>
+            )}
+            {buttons.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                <div className="text-[11px] uppercase tracking-wider text-fg-subtle">
+                  Кнопки:
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {buttons.map((b) => {
+                    const label =
+                      BUTTON_OPTIONS.find((x) => x.key === b)?.label ?? b;
+                    return (
+                      <span key={b} className="badge-muted">
+                        {label}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {audience === 0 && (
+            <div className="flex items-center gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
+              <AlertCircle className="h-4 w-4" />
+              Аудитория пустая — отправлять некому.
+            </div>
+          )}
+
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setStep(3)}
+              className="btn-secondary"
+              disabled={create.isPending || testSelf.isPending}
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Назад
+            </button>
+            <button
+              type="button"
+              onClick={() => testSelf.mutate()}
+              disabled={
+                create.isPending ||
+                testSelf.isPending ||
+                message.trim().length === 0
+              }
+              className="btn-secondary"
+              title="Отправит это сообщение только тебе — проверь рендер и кнопки перед массовой рассылкой"
+            >
+              {testSelf.isPending ? <Spinner /> : <Send className="h-3.5 w-3.5" />}
+              Тест на админе
+            </button>
+            <button
+              type="button"
+              onClick={() => create.mutate()}
+              disabled={
+                create.isPending ||
+                testSelf.isPending ||
+                !canConfirm ||
+                audience === 0
+              }
+              className="btn-primary"
+            >
+              {create.isPending ? <Spinner /> : <Send className="h-3.5 w-3.5" />}
+              Запустить рассылку
+            </button>
+          </div>
+        </StepCard>
+      )}
+    </div>
+  );
+}
+
+function StepCard({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="card space-y-4 p-5 md:p-6 animate-slide-up">
+      <div>
+        <h2 className="text-lg font-semibold text-fg">{title}</h2>
+        {subtitle && <p className="mt-1 text-sm text-fg-muted">{subtitle}</p>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Steps({ current }: { current: Step }) {
+  const steps: { n: Step; label: string }[] = [
+    { n: 1, label: "Текст" },
+    { n: 2, label: "Аудитория" },
+    { n: 3, label: "Кнопки" },
+    { n: 4, label: "Запуск" },
+  ];
+  return (
+    <div className="hidden items-center gap-1.5 md:flex">
+      {steps.map((s, i) => (
+        <div key={s.n} className="flex items-center gap-1.5">
+          <div
+            className={
+              s.n === current
+                ? "grid h-6 w-6 place-items-center rounded-full bg-accent text-[11px] font-semibold text-white"
+                : s.n < current
+                ? "grid h-6 w-6 place-items-center rounded-full bg-success/15 text-[11px] font-semibold text-success ring-1 ring-success/30"
+                : "grid h-6 w-6 place-items-center rounded-full bg-bg-elevated text-[11px] font-semibold text-fg-subtle ring-1 ring-border"
+            }
+          >
+            {s.n}
+          </div>
+          <span
+            className={
+              s.n === current
+                ? "text-xs font-medium text-fg"
+                : "text-xs text-fg-subtle"
+            }
+          >
+            {s.label}
+          </span>
+          {i < steps.length - 1 && (
+            <div className="mx-1 h-px w-4 bg-border" />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Nav({
+  onBack,
+  onNext,
+  nextDisabled,
+  nextLabel = "Дальше",
+}: {
+  onBack: () => void;
+  onNext: () => void;
+  nextDisabled?: boolean;
+  nextLabel?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between pt-2">
+      <button type="button" onClick={onBack} className="btn-secondary">
+        <ArrowLeft className="h-3.5 w-3.5" /> Назад
+      </button>
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={nextDisabled}
+        className="btn-primary"
+      >
+        {nextLabel} <ArrowRight className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function sanitize(html: string): string {
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
+    .replace(/on\w+="[^"]*"/gi, "")
+    .replace(/javascript:/gi, "");
+}

@@ -105,8 +105,9 @@ def _gift_keyboard() -> InlineKeyboardMarkup:
     """Buy-with-20%-discount CTA attached to every gift notification."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="🛒 Купить со скидкой 20%",
+            text="Купить со скидкой 20%",
             callback_data="gift_offer:claim",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )],
     ])
 

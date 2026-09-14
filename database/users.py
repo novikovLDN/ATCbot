@@ -9,6 +9,8 @@ import base64
 import hashlib
 import json
 import logging
+import secrets
+import string
 import uuid as uuid_lib
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, List
@@ -603,14 +605,14 @@ async def reject_withdrawal_request(wid: int, processed_by: int) -> bool:
 
 async def find_user_by_id_or_username(telegram_id: Optional[int] = None, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Найти пользователя по Telegram ID или username
-    
+
     Args:
         telegram_id: Telegram ID пользователя (опционально)
         username: Username пользователя без @ (опционально)
-    
+
     Returns:
         Словарь с данными пользователя или None, если не найден
-    
+
     Note:
         Должен быть указан хотя бы один параметр. Если указаны оба, приоритет у telegram_id.
     """
@@ -630,6 +632,62 @@ async def find_user_by_id_or_username(telegram_id: Optional[int] = None, usernam
             return dict(row) if row else None
         else:
             return None
+
+
+async def search_users_dashboard(query: str, limit: int = 25) -> list:
+    """Substring search across all users for the admin dashboard.
+
+    Matches either telegram_id (treated as text, so prefix typing
+    works) or username (case-insensitive substring). Returns up to
+    `limit` rows ranked by relevance:
+        1. exact telegram_id  → top
+        2. exact username (case-insensitive)
+        3. telegram_id / username starting with `q`
+        4. anywhere-substring
+    Tie-break by newest first so freshly registered users surface
+    above stale ghosts.
+
+    Each row carries the minimum the UI needs to render a result
+    list: telegram_id, username, language, created_at, and a
+    has_active_sub flag so the admin sees "paying / not paying"
+    at a glance before opening the full card."""
+    pool = await get_pool()
+    if pool is None:
+        return []
+    q = (query or "").strip().lstrip("@")
+    if not q:
+        return []
+    pattern_any = f"%{q}%"
+    pattern_prefix = f"{q}%"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT
+                   u.telegram_id,
+                   u.username,
+                   u.language,
+                   u.created_at,
+                   EXISTS (
+                       SELECT 1 FROM subscriptions s
+                       WHERE s.telegram_id = u.telegram_id
+                         AND s.status = 'active'
+                         AND s.expires_at > NOW()
+                   ) AS has_active_sub
+               FROM users u
+               WHERE CAST(u.telegram_id AS TEXT) ILIKE $1
+                  OR u.username ILIKE $1
+               ORDER BY
+                   CASE
+                       WHEN CAST(u.telegram_id AS TEXT) = $2 THEN 0
+                       WHEN LOWER(u.username) = LOWER($2) THEN 1
+                       WHEN CAST(u.telegram_id AS TEXT) ILIKE $3 THEN 2
+                       WHEN u.username ILIKE $3 THEN 3
+                       ELSE 4
+                   END,
+                   u.created_at DESC NULLS LAST
+               LIMIT $4""",
+            pattern_any, q, pattern_prefix, limit,
+        )
+    return [dict(r) for r in rows]
 
 
 def generate_referral_code(telegram_id: int) -> str:
@@ -652,29 +710,99 @@ def generate_referral_code(telegram_id: int) -> str:
     
     # Берем первые 6 символов и приводим к верхнему регистру
     code = encoded[:6].upper()
-    
+
     return code
 
 
+_REFERRAL_ALPHABET = string.ascii_uppercase + string.digits
+
+
+def _random_referral_code(length: int = 8) -> str:
+    """Случайный referral_code (A-Z0-9) — для разрешения коллизий детерминированного кода."""
+    return "".join(secrets.choice(_REFERRAL_ALPHABET) for _ in range(length))
+
+
 async def create_user(telegram_id: int, username: Optional[str] = None, language: str = "ru"):
-    """Создать нового пользователя с автоматической генерацией referral_code"""
+    """Создать нового пользователя с автоматической генерацией referral_code.
+
+    referral_code уникален (idx_users_referral_code). Детерминированный
+    generate_referral_code() (6 симв. из sha256) у РАЗНЫХ telegram_id может
+    коллизиться — при этом ON CONFLICT (telegram_id) НЕ гасит конфликт по
+    referral_code, и INSERT падал UniqueViolationError, роняя /start
+    (прод-инцидент 2026-09). Теперь на коллизии referral_code регенерируем
+    код (случайный 8-симв.) и повторяем; при исчерпании попыток — вставляем
+    без кода (NULL), чтобы регистрация не падала.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         referral_code = generate_referral_code(telegram_id)
 
-        await conn.execute(
-            """INSERT INTO users (telegram_id, username, language, referral_code)
-               VALUES ($1, $2, $3, $4)
-               ON CONFLICT (telegram_id) DO NOTHING""",
-            telegram_id, username, language, referral_code
-        )
+        # RETURNING distinguishes a real INSERT from ON CONFLICT DO NOTHING —
+        # we only fire user:registered when a new row actually appeared, so
+        # the dashboard counter doesn't tick on a return-visit /start.
+        inserted_id = None
+        insert_ok = False
+        for _attempt in range(6):
+            try:
+                inserted_id = await conn.fetchval(
+                    """INSERT INTO users (telegram_id, username, language, referral_code)
+                       VALUES ($1, $2, $3, $4)
+                       ON CONFLICT (telegram_id) DO NOTHING
+                       RETURNING telegram_id""",
+                    telegram_id, username, language, referral_code
+                )
+                insert_ok = True
+                break
+            except asyncpg.UniqueViolationError as e:
+                # ON CONFLICT (telegram_id) уже гасит дубль по telegram_id —
+                # сюда попадаем ТОЛЬКО при коллизии referral_code с другим юзером.
+                if "referral_code" not in str(e).lower():
+                    raise
+                logger.warning(
+                    "CREATE_USER_REFCODE_COLLISION tg=%s code=%s attempt=%s — регенерирую",
+                    telegram_id, referral_code, _attempt,
+                )
+                referral_code = _random_referral_code()
+        if not insert_ok:
+            # Крайне маловероятно (6 коллизий случайного 8-симв. кода). Не роняем
+            # регистрацию — вставляем без referral_code, добэкфилл позже.
+            logger.error(
+                "CREATE_USER_REFCODE_EXHAUSTED tg=%s — вставляю без referral_code", telegram_id,
+            )
+            referral_code = None
+            inserted_id = await conn.fetchval(
+                """INSERT INTO users (telegram_id, username, language)
+                   VALUES ($1, $2, $3)
+                   ON CONFLICT (telegram_id) DO NOTHING
+                   RETURNING telegram_id""",
+                telegram_id, username, language
+            )
 
         # If user already existed (ON CONFLICT DO NOTHING), ensure referral_code is set.
-        # Reuse the same connection — no extra pool.acquire().
-        await conn.execute(
-            "UPDATE users SET referral_code = $1 WHERE telegram_id = $2 AND referral_code IS NULL",
-            referral_code, telegram_id
-        )
+        # Reuse the same connection — no extra pool.acquire(). На коллизии кода
+        # (гонка / чужой код) не падаем — оставляем NULL, добэкфилл позже.
+        if referral_code is not None:
+            try:
+                await conn.execute(
+                    "UPDATE users SET referral_code = $1 WHERE telegram_id = $2 AND referral_code IS NULL",
+                    referral_code, telegram_id
+                )
+            except asyncpg.UniqueViolationError:
+                logger.warning(
+                    "CREATE_USER_REFCODE_UPDATE_COLLISION tg=%s code=%s — оставляю NULL",
+                    telegram_id, referral_code,
+                )
+
+    if inserted_id is not None:
+        try:
+            from app.events import bus
+            bus.publish({
+                "type": "user:registered",
+                "telegram_id": telegram_id,
+                "username": username,
+            })
+        except Exception:
+            pass
 
 
 async def get_user_referral_code(telegram_id: int) -> Optional[str]:
@@ -1012,6 +1140,96 @@ async def get_referral_cashback_percent(partner_id: int) -> int:
         return 10
 
 
+async def get_cashback_fixed_percent(telegram_id: int) -> Optional[int]:
+    """Прочитать admin-managed fixed %.
+
+    Возвращает int 0..100 если фикс установлен, None если выключен
+    (обычная логика тир + floor).
+    """
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT cashback_fixed_percent FROM users WHERE telegram_id = $1",
+            telegram_id,
+        )
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return None
+
+
+async def set_cashback_fixed_percent(telegram_id: int, percent: int) -> bool:
+    """Установить/обновить admin-managed fixed %. 0..100."""
+    if not _core.DB_READY:
+        return False
+    if not (0 <= percent <= 100):
+        raise ValueError(f"percent must be in [0, 100], got {percent}")
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        res = await conn.execute(
+            "UPDATE users SET cashback_fixed_percent = $1 WHERE telegram_id = $2",
+            percent, telegram_id,
+        )
+        return res.startswith("UPDATE ") and res != "UPDATE 0"
+
+
+async def clear_cashback_fixed_percent(telegram_id: int) -> bool:
+    """Выключить фикс. После этого юзер возвращается к обычной
+    логике (тир + grandfather-floor)."""
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        res = await conn.execute(
+            "UPDATE users SET cashback_fixed_percent = NULL WHERE telegram_id = $1",
+            telegram_id,
+        )
+        return res.startswith("UPDATE ") and res != "UPDATE 0"
+
+
+async def get_effective_cashback_percent(telegram_id: int) -> int:
+    """ЭФФЕКТИВНЫЙ процент кешбэка — то, что реально применяется.
+
+    Приоритет:
+      1. cashback_fixed_percent (admin-managed override) — если NOT NULL,
+         жёстко замещает всё: и тир, и floor.
+      2. Иначе — max(тир по оплатившим рефералам, cashback_floor_percent).
+         Тир вычисляется через get_referral_cashback_percent.
+
+    Используется везде, где принимается решение о размере кешбэка
+    (начисление, отображение юзеру, ответы API).
+    """
+    fixed = await get_cashback_fixed_percent(telegram_id)
+    if fixed is not None:
+        return fixed
+    # Обычная логика: тир по оплатившим + floor
+    tier = await get_referral_cashback_percent(telegram_id)
+    pool = await get_pool()
+    if pool is None:
+        return tier
+    try:
+        async with pool.acquire() as conn:
+            floor = await conn.fetchval(
+                "SELECT cashback_floor_percent FROM users WHERE telegram_id = $1",
+                telegram_id,
+            )
+        if floor is not None and int(floor) > tier:
+            return int(floor)
+    except Exception as e:
+        logger.warning("get_effective_cashback_percent floor lookup failed: %s", e)
+    return tier
+
+
 def calculate_referral_percent(invited_count: int) -> int:
     """
     Рассчитать процент кешбэка на основе количества приглашённых рефералов
@@ -1240,47 +1458,50 @@ async def get_referral_metrics(user_id: int) -> Dict[str, int]:
 def calculate_referral_level(total_referrals: int) -> Dict[str, Any]:
     """
     Рассчитать уровень реферала СТРОГО на основе total_referrals.
-    
+
     ⚠️ ВАЖНО: Уровень определяется СТРОГО по total_referrals.
     НЕ используется active_paid_referrals, rewards, revenue.
-    
-    Пороги соответствуют существующим уровням из loyalty.py:
-    - 0-24: Silver Access (10%)
-    - 25-49: Gold Access (25%)
-    - 50+: Platinum Access (45%)
-    
+
+    Пороги «Круга Амбассадоров» (см. LOYALTY_TIERS в app/constants/loyalty.py):
+    - 0-24:   Проводник  (10%)
+    - 25-49:  Хранитель  (20%)
+    - 50-74:  Инсайдер   (30%)
+    - 75-99:  Лидер      (40%)
+    - 100+:   Амбассадор (45%, фиксируется навсегда)
+
     Args:
-        total_referrals: Общее количество приглашённых рефералов
-    
+        total_referrals: Общее количество оплативших рефералов
+
     Returns:
         {
-            "current_level_name": str,  # "Silver Access", "Gold Access", "Platinum Access"
-            "cashback_percent": int,  # 10, 25, 45
-            "next_level_name": Optional[str],  # Следующий уровень или None
-            "remaining_connections": int  # До следующего уровня (max(0, ...))
+            "current_level_name": str,
+            "cashback_percent": int,
+            "next_level_name": Optional[str],
+            "remaining_connections": int
         }
     """
     # Структура уровней: соответствует LOYALTY_TIERS из app/constants/loyalty.py
-    # Пороги: 0-24 → Silver, 25-49 → Gold, 50+ → Platinum
     REFERRAL_LEVELS = [
-        {"name": "Platinum Access", "threshold": 50, "cashback": 45},
-        {"name": "Gold Access", "threshold": 25, "cashback": 25},
-        {"name": "Silver Access", "threshold": 0, "cashback": 10},  # Базовый уровень
+        {"name": "Амбассадор", "threshold": 100, "cashback": 45},
+        {"name": "Лидер",      "threshold": 75,  "cashback": 40},
+        {"name": "Инсайдер",   "threshold": 50,  "cashback": 30},
+        {"name": "Хранитель",  "threshold": 25,  "cashback": 20},
+        {"name": "Проводник",  "threshold": 0,   "cashback": 10},
     ]
-    
+
     # Сортируем по threshold DESC (от большего к меньшему)
     levels_sorted = sorted(REFERRAL_LEVELS, key=lambda x: x["threshold"], reverse=True)
-    
+
     # Находим текущий уровень (максимальный, где total_referrals >= threshold)
     current_level = None
     for level in levels_sorted:
         if total_referrals >= level["threshold"]:
             current_level = level
             break
-    
+
     # Если не найден (не должно произойти, т.к. есть базовый уровень с threshold=0)
     if current_level is None:
-        current_level = {"name": "Silver Access", "threshold": 0, "cashback": 10}
+        current_level = {"name": "Проводник", "threshold": 0, "cashback": 10}
     
     # Находим следующий уровень (первый, где threshold > total_referrals)
     next_level = None
@@ -1318,8 +1539,8 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             "active_paid_referrals": int,  # Активных с подпиской
             "total_cashback_earned": float,  # Общий кешбэк в рублях
             "last_activity_at": Optional[datetime],  # Последняя активность реферала
-            "current_level_name": str,  # "Silver Access", "Gold Access", "Platinum Access"
-            "cashback_percent": int,  # 10, 25, 45
+            "current_level_name": str,  # "Проводник" / "Хранитель" / "Инсайдер" / "Лидер" / "Амбассадор"
+            "cashback_percent": int,  # 10, 20, 30, 40, 45
             "next_level_name": Optional[str],  # Следующий уровень или None
             "remaining_connections": int  # До следующего уровня
         }
@@ -1330,9 +1551,9 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "current_level_name": "Silver Access",
+            "current_level_name": "Проводник",
             "cashback_percent": 10,
-            "next_level_name": "Gold Access",
+            "next_level_name": "Хранитель",
             "remaining_connections": 5
         }
     
@@ -1343,9 +1564,9 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "current_level_name": "Silver Access",
+            "current_level_name": "Проводник",
             "cashback_percent": 10,
-            "next_level_name": "Gold Access",
+            "next_level_name": "Хранитель",
             "remaining_connections": 5
         }
     
@@ -1377,16 +1598,61 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             
             # Рассчитываем уровень СТРОГО по total_invited
             level_info = calculate_referral_level(total_invited)
-            
+
+            # Grandfather floor: пользователи со старой шкалой имеют
+            # cashback_floor_percent=45 — показываем их как «Амбассадор» с 45%
+            # и скрываем прогресс к следующему, иначе UI будет противоречить
+            # реальному проценту начисления.
+            floor_pct = await conn.fetchval(
+                "SELECT cashback_floor_percent FROM users WHERE telegram_id = $1",
+                partner_id,
+            )
+            if floor_pct is not None and floor_pct > level_info["cashback_percent"]:
+                # Маппим floor → тир: 45 = Амбассадор, 40 = Лидер, и т.д.
+                from app.constants.loyalty import LOYALTY_TIERS
+                bumped_tier = None
+                for lo, _hi, name, pct in LOYALTY_TIERS:
+                    if pct == floor_pct:
+                        bumped_tier = name
+                        break
+                if bumped_tier:
+                    level_info = {
+                        "current_level_name": bumped_tier,
+                        "cashback_percent": floor_pct,
+                        "next_level_name": None,
+                        "remaining_connections": 0,
+                    }
+
+            # ADMIN OVERRIDE: cashback_fixed_percent жёстко замещает всё
+            # (и тир, и floor). Если admin поставил fix, показываем этот %
+            # с пометкой (флаг is_fixed=True). Юзер видит именно этот
+            # процент — тот же, что реально начисляется в
+            # process_referral_reward. Название уровня не меняем — оно
+            # отражает реальный прогресс по рефералам.
+            fixed_pct = await conn.fetchval(
+                "SELECT cashback_fixed_percent FROM users WHERE telegram_id = $1",
+                partner_id,
+            )
+            is_fixed = False
+            if fixed_pct is not None:
+                level_info = {
+                    "current_level_name": level_info["current_level_name"],
+                    "cashback_percent": int(fixed_pct),
+                    "next_level_name": None,
+                    "remaining_connections": 0,
+                }
+                is_fixed = True
+
             # Debug логирование
             logger.info(
                 f"REF_STATS user={partner_id} "
                 f"total={total_invited} "
                 f"active_paid={active_paid_referrals} "
                 f"level={level_info['current_level_name']} "
-                f"remaining={level_info['remaining_connections']}"
+                f"remaining={level_info['remaining_connections']} "
+                f"floor={floor_pct}"
             )
-            
+
             return {
                 "total_invited": total_invited,
                 "active_paid_referrals": active_paid_referrals,
@@ -1395,7 +1661,8 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
                 "current_level_name": level_info["current_level_name"],
                 "cashback_percent": level_info["cashback_percent"],
                 "next_level_name": level_info["next_level_name"],
-                "remaining_connections": level_info["remaining_connections"]
+                "remaining_connections": level_info["remaining_connections"],
+                "is_fixed_percent": is_fixed,
             }
     except Exception as e:
         logger.exception(f"Error getting referral statistics for partner_id={partner_id}: {e}")
@@ -1404,10 +1671,11 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "current_level_name": "Silver Access",
+            "current_level_name": "Проводник",
             "cashback_percent": 10,
-            "next_level_name": "Gold Access",
-            "remaining_connections": 5
+            "next_level_name": "Хранитель",
+            "remaining_connections": 5,
+            "is_fixed_percent": False,
         }
 
 
@@ -1546,14 +1814,43 @@ async def process_referral_reward(
             referrer_id
         ) or 0
         
-        # Определяем процент по прогрессивной шкале
-        if paid_referrals_count >= 50:
+        # Определяем процент по прогрессивной шкале «Круга Амбассадоров»
+        if paid_referrals_count >= 100:
             percent = 45
+        elif paid_referrals_count >= 75:
+            percent = 40
+        elif paid_referrals_count >= 50:
+            percent = 30
         elif paid_referrals_count >= 25:
-            percent = 25
+            percent = 20
         else:
             percent = 10
-        
+
+        # 5a. Grandfather / admin-grant floor.
+        # Пользователи, попавшие под старую шкалу (Platinum=45% при 50+) при
+        # миграции 059, имеют cashback_floor_percent=45 — мы не снижаем им
+        # процент, даже если по новой шкале они меньше.
+        floor = await conn.fetchval(
+            "SELECT cashback_floor_percent FROM users WHERE telegram_id = $1",
+            referrer_id,
+        )
+        if floor is not None and floor > percent:
+            percent = floor
+
+        # 5a-fix. ADMIN OVERRIDE: cashback_fixed_percent жёстко замещает
+        # результат тира + floor. Не суммируется. Работает и в меньшую
+        # сторону (напр. штраф 5%) и в большую (напр. VIP 40%).
+        fixed = await conn.fetchval(
+            "SELECT cashback_fixed_percent FROM users WHERE telegram_id = $1",
+            referrer_id,
+        )
+        if fixed is not None:
+            percent = int(fixed)
+            logger.info(
+                f"REFERRAL_CASHBACK_FIXED_OVERRIDE referrer={referrer_id} "
+                f"tier_percent_would_be_after_floor=(overridden) fixed={percent}"
+            )
+
         # Вычисляем сколько осталось до следующего уровня
         if paid_referrals_count < 25:
             next_level_threshold = 25
@@ -1561,6 +1858,12 @@ async def process_referral_reward(
         elif paid_referrals_count < 50:
             next_level_threshold = 50
             referrals_needed = 50 - paid_referrals_count
+        elif paid_referrals_count < 75:
+            next_level_threshold = 75
+            referrals_needed = 75 - paid_referrals_count
+        elif paid_referrals_count < 100:
+            next_level_threshold = 100
+            referrals_needed = 100 - paid_referrals_count
         else:
             next_level_threshold = None
             referrals_needed = 0

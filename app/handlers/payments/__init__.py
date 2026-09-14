@@ -9,6 +9,7 @@ from .callbacks import payments_callbacks_router
 from .telegram_premium import premium_router
 from .telegram_stars_purchase import stars_purchase_router
 from .steam_purchase import steam_purchase_router
+from .spotify_purchase import spotify_purchase_router
 
 router = Router()
 
@@ -21,3 +22,4 @@ router.include_router(payments_callbacks_router)
 router.include_router(premium_router)
 router.include_router(stars_purchase_router)
 router.include_router(steam_purchase_router)
+router.include_router(spotify_purchase_router)

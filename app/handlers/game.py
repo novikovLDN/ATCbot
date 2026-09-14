@@ -22,33 +22,53 @@ from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.keyboards import get_back_keyboard
 from app.handlers.common.states import BomberState
 from app.handlers.common.utils import safe_edit_text
+from app.handlers.common.emoji import CE
 
 router = Router()
 logger = logging.getLogger(__name__)
 
 # Plant types for Farm game
+# 2026-06-08: rewards reduced to 75% (-25%) and ripening times
+# extended to ×1.5 of the original. Combined drop in farm passive
+# income is ~50% so 4-plot Oak no longer covers a basic VPN month.
+# Rewards in kopecks, always a multiple of 100 (no kopeck tails in UI).
 PLANT_TYPES = {
-    # Existing 6 cultures — untouched balance, classic line-up
-    "tomato":    {"emoji": "🍅", "name": "Томаты",      "days": 3,  "reward": 500},
-    "potato":    {"emoji": "🥔", "name": "Картофель",   "days": 5,  "reward": 1000},
-    "carrot":    {"emoji": "🥕", "name": "Морковь",     "days": 7,  "reward": 1000},
-    "cactus":    {"emoji": "🌵", "name": "Кактус",      "days": 10, "reward": 1500},
-    "apple":     {"emoji": "🍏", "name": "Яблоня",      "days": 8,  "reward": 1500},
-    "lavender":  {"emoji": "💜", "name": "Лаванда",     "days": 6,  "reward": 2000},
+    # Existing 6 cultures
+    "tomato":    {"emoji": "🍅", "name": "Томаты",      "days": 5,  "reward": 400},
+    "potato":    {"emoji": "🥔", "name": "Картофель",   "days": 8,  "reward": 800},
+    "carrot":    {"emoji": "🥕", "name": "Морковь",     "days": 11, "reward": 800},
+    "cactus":    {"emoji": "🌵", "name": "Кактус",      "days": 15, "reward": 1100},
+    "apple":     {"emoji": "🍏", "name": "Яблоня",      "days": 12, "reward": 1100},
+    "lavender":  {"emoji": "💜", "name": "Лаванда",     "days": 9,  "reward": 1500},
     # Fast cultures — daily/short cycle
-    "greens":    {"emoji": "🌱", "name": "Зелень",      "days": 1,  "reward": 200},
-    "pepper":    {"emoji": "🌶", "name": "Перчик",      "days": 4,  "reward": 800},
+    "greens":    {"emoji": "🌱", "name": "Зелень",      "days": 2,  "reward": 200},
+    "pepper":    {"emoji": "🌶", "name": "Перчик",      "days": 6,  "reward": 600},
     # Mid cultures
-    "cucumber":  {"emoji": "🥒", "name": "Огурец",      "days": 5,  "reward": 1200},
-    "sunflower": {"emoji": "🌻", "name": "Подсолнух",   "days": 6,  "reward": 1400},
-    "strawberry":{"emoji": "🍓", "name": "Клубника",    "days": 7,  "reward": 1800},
+    "cucumber":  {"emoji": "🥒", "name": "Огурец",      "days": 8,  "reward": 900},
+    "sunflower": {"emoji": "🌻", "name": "Подсолнух",   "days": 9,  "reward": 1100},
+    "strawberry":{"emoji": "🍓", "name": "Клубника",    "days": 11, "reward": 1400},
     # Trees — long cycle, premium reward
-    "grape":     {"emoji": "🍇", "name": "Виноград",    "days": 12, "reward": 3200},
-    "cherry":    {"emoji": "🍒", "name": "Вишня",       "days": 13, "reward": 3600},
-    "lemon":     {"emoji": "🍋", "name": "Лимонное дерево", "days": 16, "reward": 4800},
-    "oak":       {"emoji": "🌳", "name": "Дуб",         "days": 21, "reward": 7000},
+    "grape":     {"emoji": "🍇", "name": "Виноград",    "days": 18, "reward": 2400},
+    "cherry":    {"emoji": "🍒", "name": "Вишня",       "days": 20, "reward": 2700},
+    "lemon":     {"emoji": "🍋", "name": "Лимонное дерево", "days": 24, "reward": 3600},
+    "oak":       {"emoji": "🌳", "name": "Дуб",         "days": 32, "reward": 5300},
 }
-# reward is in kopecks (200 = 2 RUB, 7000 = 70 RUB)
+
+
+# Market commission on every harvest — player receives this fraction of the
+# plant's listed reward.  1.0 = full payout (legacy).  Lowered to curb farm
+# passive income: the farm should be an engagement toy, not an income source
+# or a real-cash faucet (balance is withdrawable from 500 ₽).  Single tunable
+# knob — applies to normal harvest, storm early-harvest, and storm offline
+# auto-harvest (pre-applied in the worker), so there is no dodge path.
+# Seeds are still free; this taxes the sale instead.  Set lower (e.g. 0.35)
+# for a harder nerf, or 1.0 to restore the old economy.
+FARM_HARVEST_PAYOUT_FACTOR = 0.5
+
+
+def farm_harvest_payout(reward_kopecks: int) -> int:
+    """Net kopecks credited for a FULL harvest after the market commission."""
+    return int(int(reward_kopecks) * FARM_HARVEST_PAYOUT_FACTOR)
 
 
 # Storm shield price tiers (kopecks) — by plant reward
@@ -72,23 +92,29 @@ def get_games_menu_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "games.button_bowling", "🎳 Боулинг"),
-            callback_data="game_bowling"
+            callback_data="game_bowling",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "games.button_dice", "🎲 Кубики"),
-            callback_data="game_dice"
+            callback_data="game_dice",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "games.button_bomber", "💣 Бомбер"),
-            callback_data="game_bomber"
+            callback_data="game_bomber",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "games.button_farm", "🌾 Ферма"),
-            callback_data="game_farm"
+            callback_data="game_farm",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
+            callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -98,7 +124,9 @@ def get_games_back_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "games.back_to_games", "🔙 К играм"),
-            callback_data="games_menu"
+            callback_data="games_menu",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -205,10 +233,14 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                     [InlineKeyboardButton(
                         text=i18n_get_text(language, "main.buy"),
                         callback_data="menu_buy_vpn",
+                        icon_custom_emoji_id=CE["buy"],
+                        style="success",
                     )],
                     [InlineKeyboardButton(
                         text=i18n_get_text(language, "common.back"),
                         callback_data="menu_main",
+                        icon_custom_emoji_id=CE["back"],
+                        style="primary",
                     )],
                 ])
                 await safe_edit_text(callback.message,paywall_text, reply_markup=keyboard, parse_mode="HTML")
@@ -340,10 +372,14 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                     [InlineKeyboardButton(
                         text=i18n_get_text(language, "main.buy"),
                         callback_data="menu_buy_vpn",
+                        icon_custom_emoji_id=CE["buy"],
+                        style="success",
                     )],
                     [InlineKeyboardButton(
                         text=i18n_get_text(language, "games.back_to_games", "🔙 К играм"),
                         callback_data="games_menu",
+                        icon_custom_emoji_id=CE["back"],
+                        style="primary",
                     )],
                 ])
                 await safe_edit_text(callback.message,paywall_text, reply_markup=keyboard, parse_mode="HTML")
@@ -422,14 +458,16 @@ def create_bomber_grid_keyboard(mines: Set[int], player_bombs: Set[int], languag
                     emoji = "⬜"
             row_buttons.append(InlineKeyboardButton(
                 text=emoji,
-                callback_data=f"bomber_cell:{cell_idx}"
+                callback_data=f"bomber_cell:{cell_idx}",
+                style="primary",
             ))
         buttons.append(row_buttons)
-    
+
     if not game_over:
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "games.bomber_finish", "🚩 Завершить"),
-            callback_data="bomber_exit"
+            callback_data="bomber_exit",
+            style="primary",
         )])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -662,12 +700,14 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             if storm_active:
                 buttons.append([InlineKeyboardButton(
                     text=f"🚫 Грядка {i+1}: посадка во время шторма недоступна",
-                    callback_data="farm_noop"
+                    callback_data="farm_noop",
+                    style="primary",
                 )])
             else:
                 buttons.append([InlineKeyboardButton(
                     text=f"🌱 Посадить на грядку {i+1}",
-                    callback_data=f"farm_choose_{i}"
+                    callback_data=f"farm_choose_{i}",
+                    style="primary",
                 )])
         elif status == "growing":
             # Storm controls — only during the 24h announcement window, only if not already shielded.
@@ -676,14 +716,16 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             if storm_active and not plot.get("storm_shielded"):
                 shield_cost_kopecks = storm_shield_price_kopecks(int(plant.get("reward", 0)))
                 shield_cost_rub = shield_cost_kopecks // 100
-                half_reward_rub = int(plant.get("reward", 0)) // 200  # half of reward, in RUB
+                half_reward_rub = farm_harvest_payout(int(plant.get("reward", 0))) // 200  # 50% of the commissioned payout, in RUB
                 buttons.append([InlineKeyboardButton(
                     text=f"🛡 Накрыть #{i+1} — {shield_cost_rub} ₽",
-                    callback_data=f"farm_shield:{i}"
+                    callback_data=f"farm_shield:{i}",
+                    style="primary",
                 )])
                 buttons.append([InlineKeyboardButton(
                     text=f"🚜 Собрать незрелым #{i+1} — +{half_reward_rub} ₽",
-                    callback_data=f"farm_early:{i}"
+                    callback_data=f"farm_early:{i}",
+                    style="primary",
                 )])
 
             # Water button
@@ -694,27 +736,30 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             can_fert = not fert_used or (now - datetime.fromisoformat(fert_used)).total_seconds() >= 86400
 
             if can_water:
-                row.append(InlineKeyboardButton(text=f"💧 Полить #{i+1}", callback_data=f"farm_water_{i}"))
+                row.append(InlineKeyboardButton(text=f"💧 Полить #{i+1}", callback_data=f"farm_water_{i}", style="primary"))
             if can_fert:
-                row.append(InlineKeyboardButton(text=f"🌿 Удобрить #{i+1}", callback_data=f"farm_fert_{i}"))
+                row.append(InlineKeyboardButton(text=f"🌿 Удобрить #{i+1}", callback_data=f"farm_fert_{i}", style="primary"))
             if row:
                 buttons.append(row)
             # Always show dig button for growing plots
             buttons.append([InlineKeyboardButton(
                 text=f"⛏ Выкопать #{i+1}",
-                callback_data=f"farm_dig_{i}"
+                callback_data=f"farm_dig_{i}",
+                style="primary",
             )])
         elif status == "ready":
             buttons.append([InlineKeyboardButton(
-                text=f"🌾 Собрать {plant.get('emoji','')} #{i+1} (+{plant.get('reward',0)//100} ₽)",
-                callback_data=f"farm_harvest_{i}"
+                text=f"🌾 Собрать {plant.get('emoji','')} #{i+1} (+{farm_harvest_payout(plant.get('reward',0))//100} ₽)",
+                callback_data=f"farm_harvest_{i}",
+                style="primary",
             )])
         elif status == "dead":
             buttons.append([InlineKeyboardButton(
                 text=f"☠️ Убрать #{i+1}",
-                callback_data=f"farm_remove_{i}"
+                callback_data=f"farm_remove_{i}",
+                style="primary",
             )])
-    
+
     # Buy plot button
     if plot_count < FARM_MAX_PLOTS:
         price = FARM_PLOT_PRICE_KOPECKS
@@ -723,19 +768,22 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         if balance >= price:
             buttons.append([InlineKeyboardButton(
                 text=f"➕ Купить грядку — {price_rub} ₽ (осталось мест: {remaining})",
-                callback_data="farm_buy_plot"
+                callback_data="farm_buy_plot",
+                icon_custom_emoji_id=CE["buy"],
+                style="success",
             )])
         else:
             buttons.append([InlineKeyboardButton(
                 text=f"➕ Грядка (нужно {price_rub} ₽, осталось мест: {remaining})",
-                callback_data="farm_noop"
+                callback_data="farm_noop",
+                style="primary",
             )])
-    
+
     buttons.append([InlineKeyboardButton(
         text="📖 Инструкция",
         url="https://telegra.ph/Instrukciya-Ferma-02-20"
     )])
-    buttons.append([InlineKeyboardButton(text="🔙 К играм", callback_data="games_menu")])
+    buttons.append([InlineKeyboardButton(text="🔙 К играм", callback_data="games_menu", icon_custom_emoji_id=CE["back"], style="primary")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     
     try:
@@ -792,10 +840,11 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
     buttons = []
     for key, plant in PLANT_TYPES.items():
         buttons.append([InlineKeyboardButton(
-            text=f"{plant['emoji']} {plant['name']} — {plant['days']} дн. → +{plant['reward']//100} ₽",
-            callback_data=f"farm_plant_{plot_id}_{key}"
+            text=f"{plant['emoji']} {plant['name']} — {plant['days']} дн. → +{farm_harvest_payout(plant['reward'])//100} ₽",
+            callback_data=f"farm_plant_{plot_id}_{key}",
+            style="primary",
         )])
-    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="game_farm")])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="game_farm", icon_custom_emoji_id=CE["back"], style="primary")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     
     await safe_edit_text(callback.message,
@@ -996,54 +1045,23 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
-    
-    plot = None
-    for p in farm_plots:
-        if p["plot_id"] == plot_id:
-            plot = p
-            break
-    
-    if not plot or plot["status"] != "ready":
-        await callback.answer("Растение не готово к сбору", show_alert=True)
-        return
-    
-    plant_type = plot.get("plant_type")
-    plant = PLANT_TYPES.get(plant_type, {})
-    reward_kopecks = plant.get("reward", 0)
-    reward_rubles = reward_kopecks / 100.0
-    
-    # Add reward to balance
-    success = await database.increase_balance(
-        telegram_id=telegram_id,
-        amount=reward_rubles,
-        source="farm_harvest",
-        description=f"Farm harvest: {plant.get('name', 'unknown')}"
+    # Atomic harvest under advisory lock — credits balance + resets plot in one
+    # transaction so a double-tap can't double-credit (see harvest_plot_atomic).
+    # Payout is commissioned by FARM_HARVEST_PAYOUT_FACTOR inside the atomic.
+    plant_rewards = {k: v["reward"] for k, v in PLANT_TYPES.items()}
+    ok, reason, payout_kopecks = await database.harvest_plot_atomic(
+        telegram_id, plot_id, plant_rewards, FARM_HARVEST_PAYOUT_FACTOR, mode="ready",
     )
-    
-    if not success:
-        await callback.answer("Ошибка при начислении награды", show_alert=True)
+    if not ok:
+        msg = "Растение не готово к сбору" if reason == "wrong_status" else "Не удалось собрать урожай"
+        await callback.answer(msg, show_alert=True)
+        farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
+        await _render_farm(callback, pool, farm_plots, plot_count, balance)
         return
-    
-    # Reset plot
-    plot["status"] = "empty"
-    plot["plant_type"] = None
-    plot["planted_at"] = None
-    plot["ready_at"] = None
-    plot["dead_at"] = None
-    plot["notified_ready"] = False
-    plot["notified_12h"] = False
-    plot["notified_dead"] = False
-    plot["water_used_at"] = None
-    plot["fertilizer_used_at"] = None
-    
-    await database.save_farm_plots(telegram_id, farm_plots)
-    
-    # Refresh balance
+
     farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
-    
-    await callback.answer(f"🌾 Урожай собран! +{reward_rubles:.0f} ₽", show_alert=True)
+    await callback.answer(f"🌾 Урожай собран! +{payout_kopecks/100:.0f} ₽", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("farm_remove_"))
@@ -1100,11 +1118,13 @@ async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="✅ Да, убрать",
-            callback_data=f"farm_remove_confirm_{plot_id}"
+            callback_data=f"farm_remove_confirm_{plot_id}",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="❌ Нет",
-            callback_data="farm_noop"
+            callback_data="farm_noop",
+            style="primary",
         )]
     ])
     
@@ -1220,11 +1240,13 @@ async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
         [
             InlineKeyboardButton(
                 text="⛏ Да, выкопать",
-                callback_data=f"farm_dig_confirm_{plot_id}"
+                callback_data=f"farm_dig_confirm_{plot_id}",
+                style="primary",
             ),
             InlineKeyboardButton(
                 text="❌ Нет",
-                callback_data="game_farm"
+                callback_data="game_farm",
+                style="primary",
             )
         ]
     ])
@@ -1367,9 +1389,9 @@ async def callback_farm_shield(callback: CallbackQuery):
         f"Выберите способ оплаты:"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Картой", callback_data=f"farm_shield_lava:{plot_id}")],
-        [InlineKeyboardButton(text="📲 СБП", callback_data=f"farm_shield_sbp:{plot_id}")],
-        [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+        [InlineKeyboardButton(text="💳 Картой", callback_data=f"farm_shield_lava:{plot_id}", style="primary")],
+        [InlineKeyboardButton(text="📲 СБП", callback_data=f"farm_shield_sbp:{plot_id}", style="primary")],
+        [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     try:
         await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
@@ -1428,7 +1450,7 @@ async def callback_farm_shield_lava(callback: CallbackQuery):
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💳 Перейти к оплате", url=payment_url)],
-            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
@@ -1486,7 +1508,7 @@ async def callback_farm_shield_sbp(callback: CallbackQuery):
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📲 Оплатить через СБП", url=tx["redirect_url"])],
-            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
@@ -1511,46 +1533,26 @@ async def callback_farm_early_harvest(callback: CallbackQuery):
     plot_id = _parse_plot_id(callback.data, "farm_early")
     if plot_id < 0:
         return
-    farm_plots, plot_count, balance, plot = await _find_growing_plot(telegram_id, plot_id)
-    if plot is None:
-        await callback.answer("Грядка больше не растёт.", show_alert=True)
-        return
 
-    plant = PLANT_TYPES.get(plot.get("plant_type"), {})
-    half_reward_kopecks = int(plant.get("reward", 0)) // 2
-    if half_reward_kopecks <= 0:
-        await callback.answer("Ранний сбор недоступен для этого растения.", show_alert=True)
-        return
-
-    # Credit balance and reset plot to empty (mirrors normal harvest cleanup).
-    ok = await database.increase_balance(
-        telegram_id=telegram_id,
-        amount=half_reward_kopecks / 100.0,
-        source="farm_early_harvest",
-        description=f"Early harvest plot {plot_id} ({plant.get('name','')})",
+    # Atomic early-harvest under advisory lock (mode="early" → 50% of the
+    # commissioned payout, requires status 'growing'). No double-credit.
+    plant_rewards = {k: v["reward"] for k, v in PLANT_TYPES.items()}
+    ok, reason, payout_kopecks = await database.harvest_plot_atomic(
+        telegram_id, plot_id, plant_rewards, FARM_HARVEST_PAYOUT_FACTOR, mode="early",
     )
     if not ok:
-        await callback.answer("Не удалось зачислить награду.", show_alert=True)
+        if reason == "no_reward":
+            await callback.answer("Ранний сбор недоступен для этого растения.", show_alert=True)
+        elif reason == "wrong_status":
+            await callback.answer("Грядка больше не растёт.", show_alert=True)
+        else:
+            await callback.answer("Не удалось зачислить награду.", show_alert=True)
+        pool = await database.get_pool()
+        await _render_farm(callback, pool)
         return
 
-    for p in farm_plots:
-        if int(p.get("plot_id", -1)) == plot_id:
-            p["status"] = "empty"
-            p["plant_type"] = None
-            p["planted_at"] = None
-            p["ready_at"] = None
-            p["dead_at"] = None
-            p["notified_ready"] = False
-            p["notified_12h"] = False
-            p["notified_dead"] = False
-            p["water_used_at"] = None
-            p["fertilizer_used_at"] = None
-            p["storm_shielded"] = False
-            break
-    await database.save_farm_plots(telegram_id, farm_plots)
-
     await callback.answer(
-        f"🚜 Собрано {plant.get('emoji','')} незрелым: +{half_reward_kopecks // 100} ₽",
+        f"🚜 Собрано незрелым: +{payout_kopecks // 100} ₽",
         show_alert=True,
     )
     pool = await database.get_pool()

@@ -7,6 +7,7 @@ from .support import user_router as support_router
 from .language_commands import user_router as language_router
 from .referrals import user_router as referrals_router
 from .bypass_gift_setup import bgift_setup_router
+from .devices import user_router as devices_router
 
 router = Router()
 
@@ -17,3 +18,4 @@ router.include_router(support_router)
 router.include_router(language_router)
 router.include_router(referrals_router)
 router.include_router(bgift_setup_router)
+router.include_router(devices_router)

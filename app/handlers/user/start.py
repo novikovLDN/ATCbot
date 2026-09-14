@@ -15,8 +15,9 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.utils.referral_middleware import process_referral_on_first_interaction
 from app.handlers.common.guards import ensure_db_ready_message
-from app.handlers.common.keyboards import get_language_keyboard, get_main_menu_keyboard
+from app.handlers.common.keyboards import get_main_menu_keyboard
 from app.handlers.common.utils import safe_resolve_username
+from app.handlers.common.emoji import CE
 
 user_router = Router()
 logger = logging.getLogger(__name__)
@@ -64,7 +65,17 @@ async def cmd_start(message: Message, state: FSMContext):
     # Single DB fetch — extract language directly (avoid duplicate get_user call)
     user = await database.get_user(telegram_id)
     is_new_user = user is None
-    start_language = (user.get("language") or "ru") if user else "ru"
+
+    # AUTO-DETECT LANGUAGE (2026-08):
+    # Атлас поддерживает ru/en. Для нового юзера берём язык клиента Telegram
+    # (message.from_user.language_code, ISO 639-1). Если это 'ru' — сохраняем
+    # ru, иначе en. Существующий юзер использует ранее сохранённый.
+    tg_lang = (getattr(message.from_user, "language_code", None) or "").lower()
+    detected_language = "ru" if tg_lang.startswith("ru") else "en"
+    if user:
+        start_language = (user.get("language") or detected_language)
+    else:
+        start_language = detected_language
 
     # STAGE GATE: новые пользователи в stage сначала выбирают «пользователь /
     # разработчик». Пользователь — редирект на prod-бот по реф-ссылке, разработчик —
@@ -141,8 +152,9 @@ async def cmd_start(message: Message, state: FSMContext):
                             await sync_referrals(telegram_id)
                             logger.info("SITE_LINK_FULL_SYNC user=%s", telegram_id)
 
+                            _lang = await resolve_user_language(telegram_id)
                             await message.answer(
-                                "✅ Сайт QoDev успешно привязан.\nТеперь синхронизация работает! ⚡️",
+                                i18n_get_text(_lang, "start.site_linked_success", "✅ Сайт QoDev успешно привязан.\nТеперь синхронизация работает! ⚡️"),
                                 parse_mode="HTML",
                             )
                         else:
@@ -166,8 +178,7 @@ async def cmd_start(message: Message, state: FSMContext):
                     status = result.get("status")
                     # Default keyboard for non-success outcomes (errors).
                     keyboard = (
-                        get_language_keyboard(language) if is_new_user
-                        else await get_main_menu_keyboard(language, telegram_id)
+                        await get_main_menu_keyboard(language, telegram_id)
                     )
 
                     if status == "success":
@@ -206,11 +217,12 @@ async def cmd_start(message: Message, state: FSMContext):
                             )
                             # Success keyboard: dedicated "Connect Bypass" button
                             # leading to the gift-only setup flow.
-                            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                                 [InlineKeyboardButton(
                                     text=i18n_get_text(language, "bypass_gift.connect_btn"),
                                     callback_data="bgift_setup",
+                                    icon_custom_emoji_id=CE["connect"],
+                                    style="primary",
                                 )],
                             ])
                             logger.info(
@@ -262,8 +274,7 @@ async def cmd_start(message: Message, state: FSMContext):
                     )
                     text = i18n_get_text(language, "bypass_gift.error_not_found")
                     keyboard = (
-                        get_language_keyboard(language) if is_new_user
-                        else await get_main_menu_keyboard(language, telegram_id)
+                        await get_main_menu_keyboard(language, telegram_id)
                     )
                     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                     return
@@ -287,14 +298,15 @@ async def cmd_start(message: Message, state: FSMContext):
                         tariff_name = "Basic" if tariff == "basic" else "Plus"
                         months = period_days // 30
                         if months == 1:
-                            period_text = "1 месяц"
+                            period_text = i18n_get_text(language, "buy.period_text_1", "1 месяц")
                         elif months in (2, 3, 4):
-                            period_text = f"{months} месяца"
+                            period_text = i18n_get_text(language, "buy.period_text_2_4", "{months} месяца", months=months)
                         else:
-                            period_text = f"{months} месяцев"
+                            period_text = i18n_get_text(language, "buy.period_text_5_plus", "{months} месяцев", months=months)
 
                         if is_new_user:
-                            # Новый пользователь: приветствие + активация + выбор языка
+                            # Новый пользователь: приветствие + активация
+                            # (без выбора языка — дефолт ru)
                             text = i18n_get_text(
                                 language, "gift.activated_welcome",
                                 tariff_name=tariff_name,
@@ -302,7 +314,7 @@ async def cmd_start(message: Message, state: FSMContext):
                             )
                             await message.answer(
                                 text,
-                                reply_markup=get_language_keyboard(language),
+                                reply_markup=await get_main_menu_keyboard(language, telegram_id),
                                 parse_mode="HTML",
                             )
                         else:
@@ -338,10 +350,7 @@ async def cmd_start(message: Message, state: FSMContext):
                         }
                         error_key = error_keys.get(error, "gift.error_invalid")
                         text = i18n_get_text(language, error_key)
-                        if is_new_user:
-                            keyboard = get_language_keyboard(language)
-                        else:
-                            keyboard = await get_main_menu_keyboard(language, telegram_id)
+                        keyboard = await get_main_menu_keyboard(language, telegram_id)
                         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                         logger.warning(f"GIFT_ACTIVATION_FAILED user={telegram_id} code={gift_code} error={error}")
                         return
@@ -349,12 +358,53 @@ async def cmd_start(message: Message, state: FSMContext):
                     logger.exception(f"Gift activation error: user={telegram_id}, code={gift_code}, error={e}")
                     language = await resolve_user_language(telegram_id)
                     text = i18n_get_text(language, "gift.error_invalid")
-                    if is_new_user:
-                        keyboard = get_language_keyboard(language)
-                    else:
-                        keyboard = await get_main_menu_keyboard(language, telegram_id)
+                    keyboard = await get_main_menu_keyboard(language, telegram_id)
                     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                     return
+
+    # STATS LINK: /start s-<slug> — attribution + click log.
+    # НЕ прерывает основной flow — просто пишет клик и (для новых юзеров)
+    # проставляет acquired_via_stat_link_id. Дальше юзер идёт по обычному
+    # пути (выбор языка / главное меню). Prefix `s-` короткий,
+    # непохожий на refd_/ref_.
+    if message.text:
+        _sp = message.text.strip().split(maxsplit=1)
+        if len(_sp) > 1 and _sp[1].startswith("s-"):
+            _slug = _sp[1][2:]
+            try:
+                await _handle_stats_link_click(telegram_id, _slug, is_new_user)
+            except Exception as e:
+                logger.warning("STATS_LINK_CLICK_FAIL user=%s slug=%s err=%s",
+                               telegram_id, _slug[:12], e)
+
+    # PROMO LINK: /start p-<slug> — выдача награды (подписка / скидка /
+    # ГБ). Рендерит финальный экран сам и возвращает True; если что-то
+    # пошло не так (лимиты, expired) — тоже рендерит понятную ошибку.
+    if message.text:
+        _sp = message.text.strip().split(maxsplit=1)
+        if len(_sp) > 1 and _sp[1].startswith("p-"):
+            _slug = _sp[1][2:]
+            handled = await _handle_promo_link_start(
+                message, state, telegram_id, _slug, is_new_user,
+            )
+            if handled:
+                return
+
+    # SHARE-DISCOUNT LINK: /start refd_<code> — recipient gets 30%/24h
+    # discount on basic/plus/combo. Lifetime-once per telegram_id (claim
+    # tracked in `referral_share_discount_claims`). For new users we ALSO
+    # set up the referral relationship (immutable), per product spec.
+    # Handled BEFORE the regular `ref_` branch — `refd_` doesn't match
+    # `ref_` via startswith, but order is also clearer this way.
+    if message.text:
+        start_parts = message.text.strip().split(maxsplit=1)
+        if len(start_parts) > 1 and start_parts[1].startswith("refd_"):
+            refd_code = start_parts[1][5:]  # strip "refd_"
+            handled = await _handle_share_discount_start(
+                message, state, telegram_id, refd_code, is_new_user,
+            )
+            if handled:
+                return  # Already rendered final screen — done.
 
     # 1. REFERRAL REGISTRATION: Process ONLY for new users
     # Protects against: self-referral and existing users clicking referral links later
@@ -376,13 +426,12 @@ async def cmd_start(message: Message, state: FSMContext):
         try:
             referrer_id = referral_result.get("referrer_id")
             if referrer_id:
-                referrer_language = await resolve_user_language(referrer_id)
+                # Текущий тир-процент реферрера для подстановки в пуш.
+                ref_stats = await database.get_referral_statistics(referrer_id)
+                ref_percent = int(ref_stats.get("cashback_percent", 10))
+                from app.services.notifications.loyalty_pushes import pick_signup_push
+                notification_text = pick_signup_push(ref_percent)
 
-                first_payment_msg = i18n_get_text(referrer_language, "referral.first_payment_notification")
-                title = i18n_get_text(referrer_language, "referral.registered_title")
-                date_line = i18n_get_text(referrer_language, "referral.registered_date", date=datetime.now(timezone.utc).strftime('%d.%m.%Y'))
-                notification_text = f"{title}\n\n{date_line}\n\n{first_payment_msg}"
-                
                 await message.bot.send_message(
                     chat_id=referrer_id,
                     text=notification_text,
@@ -405,9 +454,307 @@ async def cmd_start(message: Message, state: FSMContext):
                 }
             )
     
-    # Phase 4: ALWAYS show language selection first (pre-language-binding screen)
-    text = i18n_get_text(start_language, "lang.select_title")
-    await message.answer(text, reply_markup=get_language_keyboard(start_language), parse_mode="HTML")
+    # Anti-bot капча перед языком. Если юзер уже проходил её когда-либо
+    # (users.captcha_passed_at IS NOT NULL) — пропускаем сразу к языку.
+    # При активном лок-cooldown после N ошибок показываем "попробуй позже".
+    from app.services import captcha as _captcha
+    if not await _captcha.has_passed(telegram_id):
+        lock_left = await _captcha.is_locked(telegram_id)
+        if lock_left is not None:
+            minutes = max(1, (lock_left + 59) // 60)
+            await message.answer(
+                f"🚫 Слишком много ошибок в капче. Попробуй через {minutes} мин.",
+                parse_mode="HTML",
+            )
+            return
+        challenge = _captcha.build_challenge()
+        try:
+            await message.bot.send_photo(
+                chat_id=telegram_id,
+                photo=challenge.expected_photo_id,
+                caption=_captcha.render_prompt_text(challenge),
+                reply_markup=_captcha.render_keyboard(challenge),
+                parse_mode="HTML",
+            )
+        except Exception:
+            # Fallback: если photo_file_id не резолвится на этом боте
+            # (напр. клонирован из другого) — уходит текстом с подписью
+            # цели, чтобы юзер не остался без экрана.
+            await message.answer(
+                f"🤖 Выберите <b>{challenge.expected_name}</b> из списка ниже.",
+                reply_markup=_captcha.render_keyboard(challenge),
+                parse_mode="HTML",
+            )
+        return
+
+    # 2026-08: /start ВСЕГДА показывает язык-picker (ru/en), даже если
+    # мы уже auto-detect'нули язык. Отображение самого picker'а идёт
+    # на auto-detected языке — тексты кнопок и caption на понятном
+    # юзеру языке ещё до выбора. Callback start_lang_* сохраняет выбор
+    # в БД и переводит на главное меню.
+    await _show_language_picker(message, telegram_id)
+
+
+async def _show_language_picker(message_or_bot, telegram_id: int) -> None:
+    """Отрисовать язык-picker. Единая точка — вызывается из cmd_start и
+    из captcha-success callback после успешной проверки."""
+    from app.handlers.callbacks.language import START_LANG_PHOTO_FILE_ID
+    language = await resolve_user_language(telegram_id)
+    title = i18n_get_text(language, "start_lang.title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ru"),
+                                 callback_data="start_lang_ru",
+                                 style="primary"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_en"),
+                                 callback_data="start_lang_en",
+                                 style="primary"),
+        ],
+    ])
+    # Определяем bot для send_photo — если пришёл Message, берём его bot,
+    # если сам bot — используем как есть.
+    bot = getattr(message_or_bot, "bot", None) or message_or_bot
+    try:
+        await bot.send_photo(
+            chat_id=telegram_id,
+            photo=START_LANG_PHOTO_FILE_ID,
+            caption=title,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    except Exception:
+        # Fallback без фото если photo_file_id устарел на текущем боте
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=title,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+
+
+@user_router.callback_query(F.data.startswith("captcha:"))
+async def callback_captcha(callback: CallbackQuery, state: FSMContext):
+    """Проверка ответа на анти-бот капчу.
+
+    callback_data: `captcha:{expected}:{chosen}`. При совпадении
+    отмечаем captcha_passed_at, удаляем сообщение капчи, показываем
+    язык-picker. При ошибке — новая капча (новое сообщение), инкремент
+    счётчика; после 5 ошибок — лок на 5 минут.
+    """
+    from app.services import captcha as _captcha
+    telegram_id = callback.from_user.id
+    parsed = _captcha.parse_callback(callback.data or "")
+    if parsed is None:
+        await callback.answer()
+        return
+    expected, chosen = parsed
+
+    lock_left = await _captcha.is_locked(telegram_id)
+    if lock_left is not None:
+        minutes = max(1, (lock_left + 59) // 60)
+        await callback.answer(
+            f"Слишком много ошибок. Попробуй через {minutes} мин.",
+            show_alert=True,
+        )
+        return
+
+    if expected == chosen:
+        await _captcha.mark_passed(telegram_id)
+        await _captcha.reset_failures(telegram_id)
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.answer("✅ Готово")
+        await _show_language_picker(callback.bot, telegram_id)
+        return
+
+    # Неверно — новая капча + инкремент счётчика.
+    attempts, now_locked = await _captcha.register_failure(telegram_id)
+    if now_locked:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.answer(
+            f"🚫 {_captcha.MAX_ATTEMPTS} ошибок подряд. Попробуй через "
+            f"{_captcha.COOLDOWN_SEC // 60} мин.",
+            show_alert=True,
+        )
+        return
+
+    left = max(0, _captcha.MAX_ATTEMPTS - attempts)
+    await callback.answer(
+        f"❌ Не тот. Попыток осталось: {left}",
+        show_alert=False,
+    )
+    challenge = _captcha.build_challenge()
+    try:
+        await callback.bot.send_photo(
+            chat_id=telegram_id,
+            photo=challenge.expected_photo_id,
+            caption=_captcha.render_prompt_text(challenge),
+            reply_markup=_captcha.render_keyboard(challenge),
+            parse_mode="HTML",
+        )
+    except Exception:
+        # Fallback: если photo_file_id не резолвится — уходит текстом.
+        await callback.bot.send_message(
+            chat_id=telegram_id,
+            text=f"🤖 Выберите <b>{challenge.expected_name}</b> из списка ниже.",
+            reply_markup=_captcha.render_keyboard(challenge),
+            parse_mode="HTML",
+        )
+
+
+_SHARE_DISCOUNT_PERCENT = 30
+_SHARE_DISCOUNT_HOURS = 24
+
+
+async def _handle_share_discount_start(
+    message: Message,
+    state: FSMContext,
+    telegram_id: int,
+    refd_code: str,
+    is_new_user: bool,
+) -> bool:
+    """Process /start refd_<code> — share-discount activation.
+
+    Возвращает True, если экран отрендерен полностью и cmd_start должен
+    выйти. False — продолжаем стандартный flow (например, payload
+    оказался кривой и мы хотим показать обычное приветствие).
+
+    Семантика:
+      • self-referral → блок + main-меню (нечего здесь покупать)
+      • lifetime claim уже есть → notice + экран тарифов (юзер всё
+        равно мог прийти выбирать тариф; если активная скидка ещё
+        жива — увидит её на экране автоматически)
+      • новый юзер → закрепить referrer_id через стандартный pipeline
+        (process_referral_registration с конвертацией refd_→ref_)
+      • выдать 30% / 24ч personal discount (если нет более выгодной)
+      • записать в referral_share_discount_claims
+      • показать notice + экран тарифов (скидка автоматически
+        отрисуется в ценах — _open_buy_screen зовёт get_user_discount)
+    """
+    from datetime import timedelta
+    from app.services.referrals import process_referral_registration
+    from app.handlers.common.screens import show_tariffs_main_screen
+
+    # Sanity: код — alphanumeric, 4–12 символов (наш формат 6).
+    if not refd_code or len(refd_code) > 32 or not refd_code.replace("_", "").isalnum():
+        logger.warning(
+            "REFDC_INVALID_PAYLOAD user=%s code=%s",
+            telegram_id, refd_code[:30],
+        )
+        return False  # fall through to normal /start
+
+    language = await resolve_user_language(telegram_id)
+
+    # Найти владельца кода. Сначала opaque referral_code, затем legacy
+    # numeric telegram_id (та же логика, что в process_referral_registration).
+    referrer_user = await database.find_user_by_referral_code(refd_code)
+    referrer_id: int | None = None
+    if referrer_user:
+        referrer_id = referrer_user.get("telegram_id")
+    else:
+        try:
+            maybe = int(refd_code)
+            legacy = await database.get_user(maybe)
+            if legacy:
+                referrer_id = maybe
+        except (ValueError, TypeError):
+            pass
+
+    if referrer_id is None:
+        logger.warning(
+            "REFDC_UNKNOWN_CODE user=%s code=%s — falling back to normal /start",
+            telegram_id, refd_code[:30],
+        )
+        return False
+
+    # Self-referral block — main-меню, чтобы не подталкивать к покупке
+    # через манипуляцию собственной ссылкой.
+    if referrer_id == telegram_id:
+        logger.info("REFDC_SELF_BLOCKED user=%s", telegram_id)
+        text = i18n_get_text(language, "share_discount.self_blocked")
+        keyboard = await get_main_menu_keyboard(language, telegram_id)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        return True
+
+    # Lifetime-once guard. Покажем notice отдельным сообщением, потом
+    # отрисуем экран тарифов — юзер пришёл сюда явно за подпиской.
+    if await database.has_claimed_referral_share_discount(telegram_id):
+        logger.info("REFDC_ALREADY_CLAIMED user=%s", telegram_id)
+        await message.answer(
+            i18n_get_text(language, "share_discount.already_claimed"),
+            parse_mode="HTML",
+        )
+        await show_tariffs_main_screen(message, state)
+        return True
+
+    # Новый юзер → закрепить referrer_id через стандартный пайплайн.
+    # Конвертируем refd_<code> → ref_<code>, чтобы переиспользовать
+    # validation/loop-detection/audit, который уже отлажен.
+    if is_new_user:
+        try:
+            await process_referral_registration(telegram_id, f"ref_{refd_code}")
+        except Exception:
+            logger.exception("REFDC_REFERRAL_REGISTRATION_FAIL user=%s", telegram_id)
+
+    # Выдать personal-discount. Если у юзера уже есть скидка ≥30% —
+    # не перезаписываем, оставляем выгоднее. create_user_discount
+    # делает ON CONFLICT DO UPDATE безусловно, поэтому проверяем сами.
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=_SHARE_DISCOUNT_HOURS)
+    existing = await database.get_user_discount(telegram_id)
+    keep_existing = bool(
+        existing and existing.get("discount_percent", 0) >= _SHARE_DISCOUNT_PERCENT
+    )
+    if not keep_existing:
+        try:
+            await database.create_user_discount(
+                telegram_id=telegram_id,
+                discount_percent=_SHARE_DISCOUNT_PERCENT,
+                expires_at=expires_at,
+                created_by=referrer_id,
+            )
+        except Exception:
+            logger.exception("REFDC_DISCOUNT_CREATE_FAIL user=%s", telegram_id)
+            # Не критично — продолжаем, claim всё равно фиксируем чтобы
+            # юзер не мог попытаться снова и снова.
+
+    recorded = await database.record_referral_share_discount_claim(
+        telegram_id=telegram_id,
+        referrer_id=referrer_id,
+        discount_percent=_SHARE_DISCOUNT_PERCENT,
+        duration_hours=_SHARE_DISCOUNT_HOURS,
+        expires_at=expires_at,
+    )
+    if not recorded:
+        # Race-condition: между нашим has_claimed-чеком и INSERT'ом
+        # успели вставить параллельным процессом. Покажем notice +
+        # тарифы (скидка от первого «победителя» уже в DB).
+        logger.info("REFDC_RACE_LOST user=%s — claim insert returned 0", telegram_id)
+        await message.answer(
+            i18n_get_text(language, "share_discount.already_claimed"),
+            parse_mode="HTML",
+        )
+        await show_tariffs_main_screen(message, state)
+        return True
+
+    logger.info(
+        "REFDC_CLAIMED user=%s referrer=%s pct=%s hours=%s",
+        telegram_id, referrer_id, _SHARE_DISCOUNT_PERCENT, _SHARE_DISCOUNT_HOURS,
+    )
+
+    # Notice об активации + экран тарифов. _open_buy_screen внутри
+    # show_tariffs_main_screen сам подтянет get_user_discount и
+    # отрисует уже скидочные цены — двойной работы нет.
+    await message.answer(
+        i18n_get_text(language, "share_discount.activated"),
+        parse_mode="HTML",
+    )
+    await show_tariffs_main_screen(message, state)
+    return True
 
 
 # ── STAGE-only: new-user gate ──────────────────────────────────────────────
@@ -420,21 +767,24 @@ async def _show_stage_gate(message: Message) -> None:
     «Разработчик» button creates the user record locally and continues to
     the normal flow (see callback_stage_gate_dev).
     """
+    language = "ru"
+    try:
+        language = await resolve_user_language(message.from_user.id)
+    except Exception:
+        pass
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="👤 Пользователь",
+            text=i18n_get_text(language, "stage.role_user_btn", "👤 Пользователь"),
             url="https://t.me/atlassecure_bot?start=ref_RC26QG",
         )],
         [InlineKeyboardButton(
-            text="💻 Разработчик",
+            text=i18n_get_text(language, "stage.role_dev_btn", "💻 Разработчик"),
             callback_data="stage_gate:dev",
+            style="primary",
         )],
     ])
-    text = (
-        "Привет 👋\n\n"
-        "Ты разработчик Atlas Secure или пользователь?\n"
-        "Выбери вариант ниже 👇"
-    )
+    text = i18n_get_text(language, "stage.user_role_prompt",
+        "Привет 👋\n\nТы разработчик Atlas Secure или пользователь?\nВыбери вариант ниже 👇")
     await message.answer(text, reply_markup=keyboard)
 
 
@@ -478,3 +828,305 @@ async def callback_stage_gate_dev(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     await callback.bot.send_message(telegram_id, text, reply_markup=keyboard, parse_mode="HTML")
+
+
+# ────────────────────────────────────────────────────────────────────
+#  Marketing links: STATS + PROMO
+# ────────────────────────────────────────────────────────────────────
+
+async def _handle_stats_link_click(
+    telegram_id: int,
+    slug: str,
+    is_new_user: bool,
+) -> None:
+    """Записать клик по stat-ссылке. Не рендерит ничего — юзер идёт
+    дальше по обычному flow. Ошибки логируются, наверх не пробрасываются."""
+    if not slug or len(slug) > 32 or not slug.replace("-", "").isalnum():
+        return
+    try:
+        link = await database.get_stats_link_by_slug(slug)
+    except Exception as e:
+        logger.warning("STATS_LINK_LOOKUP_FAIL slug=%s err=%s", slug[:16], e)
+        return
+    if not link or not link.get("is_active"):
+        return
+    try:
+        await database.record_stats_link_click(
+            link_id=link["id"],
+            telegram_id=telegram_id,
+            is_new_user=is_new_user,
+        )
+        logger.info(
+            "STATS_LINK_CLICK slug=%s user=%s new=%s",
+            slug[:16], telegram_id, is_new_user,
+        )
+    except Exception as e:
+        logger.warning("STATS_LINK_CLICK_RECORD_FAIL slug=%s err=%s", slug[:16], e)
+
+
+async def _handle_promo_link_start(
+    message: Message,
+    state: FSMContext,
+    telegram_id: int,
+    slug: str,
+    is_new_user: bool,
+) -> bool:
+    """Обработать /start p-<slug>. Возвращает True если рендер прошёл
+    и внешний handler НЕ должен продолжать обычный flow.
+
+    Fail-safe: если что-то падает — возвращаем False, юзер получит
+    обычное меню, ошибок в чат не бросаем.
+    """
+    if not slug or len(slug) > 32 or not slug.replace("-", "").isalnum():
+        return False
+
+    language = await resolve_user_language(telegram_id)
+    try:
+        link = await database.get_promo_link_by_slug(slug)
+    except Exception as e:
+        logger.warning("PROMO_LINK_LOOKUP_FAIL slug=%s err=%s", slug[:16], e)
+        return False
+
+    async def _reply(text: str, keyboard=None):
+        kb = keyboard
+        if kb is None:
+            kb = await get_main_menu_keyboard(language, telegram_id)
+        try:
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("PROMO_LINK_REPLY_FAIL: %s", e)
+
+    if not link:
+        await _reply(
+            i18n_get_text(language, "promo_link.not_found",
+                "⚠️ <b>Ссылка не найдена</b>\n\nВозможно, она удалена или адрес введён неправильно."),
+        )
+        return True
+
+    try:
+        result = await database.try_redeem_promo_link(
+            link_id=link["id"],
+            telegram_id=telegram_id,
+        )
+    except Exception as e:
+        logger.exception("PROMO_LINK_REDEEM_FAIL slug=%s err=%s", slug[:16], e)
+        await _reply(i18n_get_text(language, "promo_link.activation_failed",
+            "⚠️ <b>Не получилось активировать ссылку</b>\n\nПопробуй ещё раз чуть позже."))
+        return True
+
+    if not result.get("ok"):
+        reason = result.get("reason", "unknown")
+        error_keys = {
+            "inactive": ("promo_link.error_inactive", "🚫 <b>Ссылка выключена</b>\n\nАдмин её деактивировал."),
+            "expired": ("promo_link.error_expired", "⏳ <b>Срок действия ссылки истёк</b>"),
+            "exhausted": ("promo_link.error_exhausted", "🚫 <b>Ссылка полностью использована</b>\n\nЛимит активаций исчерпан."),
+            "already_redeemed_by_user": ("promo_link.error_already_redeemed_by_user", "ℹ️ <b>Ты уже использовал эту ссылку</b>\n\nОдна активация на пользователя."),
+            "not_found": ("promo_link.error_not_found", "⚠️ <b>Ссылка не найдена</b>"),
+            "db_not_ready": ("promo_link.error_db_not_ready", "⚠️ <b>Сервис перезапускается</b>\n\nПопробуй через минуту."),
+        }
+        err_key, err_default = error_keys.get(reason, ("promo_link.error_generic", "⚠️ <b>Активация не прошла</b>"))
+        await _reply(i18n_get_text(language, err_key, err_default))
+        return True
+
+    # Всё ок — награда зарезервирована, применяем её.
+    reward_type = result["reward_type"]
+    reward_value = int(result["reward_value"])
+    reward_meta = result.get("reward_meta") or {}
+
+    try:
+        applied_ok, applied_text = await _apply_promo_reward(
+            telegram_id, reward_type, reward_value, reward_meta,
+        )
+    except Exception as e:
+        logger.exception(
+            "PROMO_LINK_APPLY_FAIL user=%s slug=%s type=%s err=%s",
+            telegram_id, slug[:16], reward_type, e,
+        )
+        applied_ok = False
+        applied_text = ""
+
+    if not applied_ok:
+        # Откатываем редемпцию, чтобы юзер не потерял слот навсегда:
+        # снимаем запись из promo_link_redemptions + декрементим
+        # used_count. Игнорируем ошибку rollback'а — если сюда упало,
+        # хуже уже не будет.
+        try:
+            await database.rollback_promo_link_redemption(link["id"], telegram_id)
+        except Exception as e:
+            logger.warning(
+                "PROMO_LINK_ROLLBACK_FAIL slug=%s user=%s err=%s",
+                slug[:16], telegram_id, e,
+            )
+        await _reply(
+            i18n_get_text(language, "promo_link.reward_not_applied",
+                "⚠️ <b>Награда пока не применилась</b>\n\nПопробуй ещё раз через минуту или напиши в поддержку — мы всё выдадим."),
+        )
+        return True
+
+    # Финализация. Для скидочных наград сразу открываем экран выбора
+    # тарифа (там уже применена скидка автоматически). Для остальных
+    # (subscription_days, bypass_gb) — просто главное меню, у юзера
+    # уже есть подписка/ГБ, ему нужен доступ к «Подключиться».
+    logger.info(
+        "PROMO_LINK_ACTIVATED user=%s slug=%s type=%s value=%s",
+        telegram_id, slug[:16], reward_type, reward_value,
+    )
+
+    goes_to_tariffs = reward_type in ("tariff_discount", "bypass_discount")
+
+    if goes_to_tariffs:
+        # Success-сообщение без клавиатуры — сразу под ним появится
+        # экран выбора тарифа с уже применённой скидкой.
+        try:
+            await message.answer(applied_text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("PROMO_LINK_SUCCESS_MSG_FAIL: %s", e)
+        try:
+            # from_broadcast=True: чтобы «Назад» с экрана периода вела
+            # обратно на экран тарифов, а не на «Управление подпиской».
+            # Тот же паттерн, что и в gift_reveal-handler'е.
+            await state.update_data(from_broadcast=True)
+            from app.handlers.common.screens import show_tariffs_main_screen
+            await show_tariffs_main_screen(message, state, force_new_message=True)
+        except Exception as e:
+            logger.exception("PROMO_LINK_OPEN_TARIFFS_FAIL: %s", e)
+            # Fallback — покажем главное меню, чтоб юзер не остался
+            # с висящим успехом без CTA.
+            fallback_kb = (
+                await get_main_menu_keyboard(language, telegram_id)
+            )
+            await _reply(
+                i18n_get_text(language, "promo_link.fallback_success_hint",
+                    "Открой «Купить подписку» — скидка применится автоматически."),
+                keyboard=fallback_kb,
+            )
+        return True
+
+    # Остальные типы (subscription_days, bypass_gb) — обычное меню.
+    keyboard = (
+        await get_main_menu_keyboard(language, telegram_id)
+    )
+    header = i18n_get_text(language, "promo_link.header_activated", "🎉 <b>Награда активирована!</b>\n\n")
+    await _reply(header + applied_text, keyboard=keyboard)
+    return True
+
+
+async def _apply_promo_reward(
+    telegram_id: int,
+    reward_type: str,
+    reward_value: int,
+    reward_meta: dict,
+) -> tuple[bool, str]:
+    """Применить награду. Возвращает (ok, user_facing_text).
+
+    Реализовано через существующие database helper'ы: grant_access,
+    create_user_discount, create_user_traffic_discount, add_bypass_traffic.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    language = await resolve_user_language(telegram_id)
+
+    if reward_type == "subscription_days":
+        days = int(reward_value)
+        tariff = str(reward_meta.get("tariff") or "basic").lower()
+        if tariff not in ("basic", "plus"):
+            tariff = "basic"
+        try:
+            # source="admin" — валидное значение, весь branch-код в
+            # grant_access его знает (avoiding нестандартный "promo_link",
+            # который мог бы пойти по неожиданной ветке в renewal-логике).
+            res = await database.grant_access(
+                telegram_id=telegram_id,
+                duration=timedelta(days=days),
+                source="admin",
+                admin_telegram_id=None,
+                admin_grant_days=days,
+                tariff=tariff,
+            )
+        except Exception as e:
+            logger.exception("PROMO_APPLY_SUBSCRIPTION_FAIL: %s", e)
+            return False, ""
+        end = res.get("subscription_end")
+        end_str = end.strftime("%d.%m.%Y") if end else "—"
+        return True, i18n_get_text(
+            language, "promo_link.reward_subscription",
+            "📦 <b>Подписка</b> · {tariff}\n⏳ <b>{days} дн.</b>\n📅 До: <b>{end}</b>",
+            tariff=tariff.capitalize(), days=days, end=end_str,
+        )
+
+    if reward_type == "tariff_discount":
+        hours = int(reward_meta.get("hours") or 24)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=hours)
+        try:
+            # created_by = 0 — маркер «promo-link / system», как для
+            # bypass ниже. Раньше стоял None → TypeError из int-annotation,
+            # скидка не создавалась, юзер видел «награда зарезервирована,
+            # но применить не получилось», при этом redemption уже
+            # инкрементилась (роллбэк добавлен в try_redeem_promo_link
+            # ниже).
+            ok = await database.create_user_discount(
+                telegram_id=telegram_id,
+                discount_percent=int(reward_value),
+                expires_at=expires_at,
+                created_by=0,
+            )
+        except Exception as e:
+            logger.exception("PROMO_APPLY_TARIFF_DISC_FAIL: %s", e)
+            return False, ""
+        if not ok:
+            return False, ""
+        return True, i18n_get_text(
+            language, "promo_link.reward_discount_subscription",
+            "🎁 <b>Твой подарок активирован</b>\n\n<blockquote>— Скидка <b>{percent}%</b> на любой тариф\n— Действует ещё <b>{hours} часов</b></blockquote>\n\nВыбери подходящий тариф ниже ↓",
+            percent=reward_value, hours=hours,
+        )
+
+    if reward_type == "bypass_discount":
+        hours = int(reward_meta.get("hours") or 24)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=hours)
+        try:
+            await database.create_user_traffic_discount(
+                telegram_id=telegram_id,
+                discount_percent=int(reward_value),
+                expires_at=expires_at,
+                created_by=0,
+            )
+        except Exception as e:
+            logger.exception("PROMO_APPLY_BYPASS_DISC_FAIL: %s", e)
+            return False, ""
+        return True, i18n_get_text(
+            language, "promo_link.reward_discount_traffic",
+            "🎁 <b>Твой подарок активирован</b>\n\n<blockquote>— Скидка <b>{percent}%</b> на пакеты ГБ обхода\n— Действует ещё <b>{hours} часов</b></blockquote>\n\nВыбери подходящий тариф ниже ↓",
+            percent=reward_value, hours=hours,
+        )
+
+    if reward_type == "bypass_gb":
+        gb = int(reward_value)
+        extra_bytes = gb * 1024 * 1024 * 1024
+        try:
+            existing = await database.get_subscription(telegram_id)
+            if not existing:
+                try:
+                    await database.ensure_bypass_only_subscription(telegram_id)
+                except Exception as e:
+                    logger.warning("PROMO_ENSURE_BYPASS_ONLY_FAIL: %s", e)
+            from app.services.remnawave_service import add_bypass_traffic
+            granted = await add_bypass_traffic(
+                telegram_id=telegram_id,
+                extra_bytes=extra_bytes,
+                subscription_type="basic",
+                subscription_end=None,
+                period_days=30,
+            )
+        except Exception as e:
+            logger.exception("PROMO_APPLY_BYPASS_GB_FAIL: %s", e)
+            return False, ""
+        if not granted:
+            return False, ""
+        return True, i18n_get_text(
+            language, "promo_link.reward_bypass_gb",
+            "📊 <b>+{gb} ГБ</b> обхода начислено\n\nПакет ГБ не сгорает — тратится только при работе на LTE-серверах.",
+            gb=gb,
+        )
+
+    return False, ""

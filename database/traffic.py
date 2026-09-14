@@ -26,7 +26,7 @@ async def get_remnawave_uuid(telegram_id: int) -> Optional[str]:
         return None
     async with pool.acquire() as conn:
         return await conn.fetchval(
-            "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
+            "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1",
             telegram_id,
         )
 
@@ -39,9 +39,70 @@ async def set_remnawave_uuid(telegram_id: int, uuid: str) -> None:
         return
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE subscriptions SET remnawave_uuid = $1 WHERE telegram_id = $2 AND status = 'active'",
+            "UPDATE subscriptions SET remnawave_uuid = $1 WHERE telegram_id = $2",
             uuid, telegram_id,
         )
+
+
+async def set_remnawave_id(telegram_id: int, numeric_id: int) -> None:
+    """Кеш numeric id панели 3.x (миграция 078) для bypass entity."""
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET remnawave_id = $1 "
+            "WHERE telegram_id = $2",
+            int(numeric_id), telegram_id,
+        )
+
+
+async def get_remnawave_id(telegram_id: int) -> Optional[int]:
+    """Return cached numeric id from panel 3.x, or None."""
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT remnawave_id FROM subscriptions "
+            "WHERE telegram_id = $1",
+            telegram_id,
+        )
+        return int(val) if val is not None else None
+
+
+async def set_remnawave_premium_id(telegram_id: int, numeric_id: int) -> None:
+    """Кеш numeric id для premium entity (3.x)."""
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET remnawave_premium_id = $1 "
+            "WHERE telegram_id = $2",
+            int(numeric_id), telegram_id,
+        )
+
+
+async def get_remnawave_premium_id(telegram_id: int) -> Optional[int]:
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT remnawave_premium_id FROM subscriptions "
+            "WHERE telegram_id = $1",
+            telegram_id,
+        )
+        return int(val) if val is not None else None
 
 
 async def clear_remnawave_uuid(telegram_id: int) -> None:
@@ -69,7 +130,7 @@ async def get_remnawave_premium_uuid(telegram_id: int) -> Optional[str]:
     async with pool.acquire() as conn:
         return await conn.fetchval(
             "SELECT remnawave_premium_uuid FROM subscriptions "
-            "WHERE telegram_id = $1 AND status = 'active'",
+            "WHERE telegram_id = $1",
             telegram_id,
         )
 
@@ -91,13 +152,13 @@ async def set_remnawave_premium_uuid(
             await conn.execute(
                 "UPDATE subscriptions "
                 "SET remnawave_premium_uuid = $1, samopis_migrated_at = NOW() "
-                "WHERE telegram_id = $2 AND status = 'active'",
+                "WHERE telegram_id = $2",
                 uuid, telegram_id,
             )
         else:
             await conn.execute(
                 "UPDATE subscriptions SET remnawave_premium_uuid = $1 "
-                "WHERE telegram_id = $2 AND status = 'active'",
+                "WHERE telegram_id = $2",
                 uuid, telegram_id,
             )
 
@@ -131,7 +192,7 @@ async def set_remnawave_premium_uuid_and_url(
                 "    remnawave_premium_sub_url = $2, "
                 "    remnawave_premium_short_uuid = $3, "
                 "    samopis_migrated_at = NOW() "
-                "WHERE telegram_id = $4 AND status = 'active'",
+                "WHERE telegram_id = $4",
                 uuid, sub_url, short_uuid, telegram_id,
             )
         else:
@@ -140,7 +201,7 @@ async def set_remnawave_premium_uuid_and_url(
                 "SET remnawave_premium_uuid = $1, "
                 "    remnawave_premium_sub_url = $2, "
                 "    remnawave_premium_short_uuid = $3 "
-                "WHERE telegram_id = $4 AND status = 'active'",
+                "WHERE telegram_id = $4",
                 uuid, sub_url, short_uuid, telegram_id,
             )
 
@@ -169,7 +230,7 @@ async def set_remnawave_bypass_cache(
             "SET remnawave_uuid = COALESCE($1, remnawave_uuid), "
             "    remnawave_bypass_sub_url = COALESCE($2, remnawave_bypass_sub_url), "
             "    remnawave_bypass_short_uuid = COALESCE($3, remnawave_bypass_short_uuid) "
-            "WHERE telegram_id = $4 AND status = 'active'",
+            "WHERE telegram_id = $4",
             uuid, sub_url, short_uuid, telegram_id,
         )
 
@@ -184,7 +245,7 @@ async def get_remnawave_bypass_cache(telegram_id: int) -> Optional[Dict[str, Any
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT remnawave_uuid, remnawave_bypass_sub_url, remnawave_bypass_short_uuid "
-            "FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
+            "FROM subscriptions WHERE telegram_id = $1",
             telegram_id,
         )
         return dict(row) if row else None
@@ -204,7 +265,7 @@ async def set_remnawave_premium_sub_url(telegram_id: int, sub_url: str) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE subscriptions SET remnawave_premium_sub_url = $1 "
-            "WHERE telegram_id = $2 AND status = 'active'",
+            "WHERE telegram_id = $2",
             sub_url, telegram_id,
         )
 
@@ -523,7 +584,12 @@ async def record_traffic_purchase(
 # ── Queries for traffic monitor worker ─────────────────────────────────
 
 async def get_active_remnawave_users() -> List[Dict[str, Any]]:
-    """Users with active subscription AND remnawave_uuid set."""
+    """Users with active subscription AND remnawave_uuid set.
+
+    Возвращает также remnawave_id (numeric, 3.x) — traffic_monitor
+    предпочитает id, чтобы избежать UUID→id resolve на каждый check
+    (5min × 10k юзеров = 2k stream-запросов в панель, лишний overhead).
+    """
     if not _core.DB_READY:
         return []
     pool = await get_pool()
@@ -531,7 +597,8 @@ async def get_active_remnawave_users() -> List[Dict[str, Any]]:
         return []
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT s.telegram_id, s.remnawave_uuid, s.subscription_type
+            """SELECT s.telegram_id, s.remnawave_uuid, s.remnawave_id,
+                      s.subscription_type
                FROM subscriptions s
                WHERE s.status = 'active'
                  AND s.remnawave_uuid IS NOT NULL

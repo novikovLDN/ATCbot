@@ -17,6 +17,45 @@ from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import config
 import vpn_utils
 import database.core as _core
+
+
+def _notify_watchdog_expires_at(
+    telegram_id: int,
+    *,
+    grant_action: str,
+    old_expires_at: Optional[datetime],
+    new_expires_at: datetime,
+    source: Optional[str] = None,
+    tariff: Optional[str] = None,
+    admin_telegram_id: Optional[int] = None,
+    admin_grant_days: Optional[int] = None,
+) -> None:
+    """Fire-and-forget bridge to app.services.subscription_watchdog.
+
+    Called after every UPDATE/INSERT that writes `subscriptions.expires_at`.
+    Never raises. If the new value is > NOW + 8 years for a PREMIUM row,
+    the watchdog logs it to `subscription_over_issuance_log` and sends a
+    Telegram admin alert. Bypass-only rows are filtered out here — the
+    watchdog also checks, but this is a fast early-out.
+    """
+    if not new_expires_at:
+        return
+    try:
+        from app.services.subscription_watchdog import notify_expires_at_write
+        notify_expires_at_write(
+            telegram_id,
+            old_expires_at=old_expires_at,
+            new_expires_at=new_expires_at,
+            grant_action=grant_action,
+            source=source,
+            tariff=tariff,
+            admin_telegram_id=admin_telegram_id,
+            admin_grant_days=admin_grant_days,
+            is_bypass_only=False,
+        )
+    except Exception:
+        # Watchdog must never break the grant flow.
+        pass
 from database.core import (
     get_pool,
     _to_db_utc, _from_db_utc, _ensure_utc,
@@ -321,12 +360,23 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     "EXPIRY_DB_UPDATE_SUCCESS",
                     extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
                 )
-                # Disable Remnawave bypass (fire-and-forget) — no remnawave_uuid means safe to disable
+                # Disable Remnawave — ОБА entity: bypass (по трафику) + premium.
+                # Panel-side auto-expiry по expireAt тоже сработал бы,
+                # но explicit disable гарантирует что subscriptionUrl
+                # немедленно инвалидируется даже если DB.expires_at
+                # разошёлся с panel.expireAt (см. audit bucket
+                # `panel_ahead_of_paid` в admin/audit_subs).
                 try:
                     from app.services.remnawave_service import disable_remnawave_user_bg
                     disable_remnawave_user_bg(telegram_id)
                 except Exception as rmn_err:
                     logger.warning("REMNAWAVE_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
+                try:
+                    import asyncio as _aio
+                    from app.services import remnawave_premium
+                    _aio.create_task(remnawave_premium.disable_premium_user(telegram_id))
+                except Exception as rmn_err:
+                    logger.warning("REMNAWAVE_PREMIUM_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
 
                 # Создаем спецпредложение -15% на 3 дня для пользователей с оплаченной подпиской
                 sub_source = subscription.get("source", "")
@@ -379,11 +429,26 @@ async def set_bypass_only_flag(telegram_id: int, is_bypass_only: bool = True):
 
 
 async def ensure_bypass_only_subscription(telegram_id: int) -> bool:
-    """Create a subscription row for bypass-only user if none exists.
+    """Создать bypass-only subscription row, если её нет.
 
-    Sets status='active', is_bypass_only=True, expires_at far in the future (10 years).
-    If subscription already exists, just sets is_bypass_only=True.
-    Returns True on success.
+    Поведение:
+      • Если subscription отсутствует — INSERT bypass_only row на 10 лет.
+      • Если существует и **истёкшая** ИЛИ уже bypass_only — UPDATE:
+        status='active', is_bypass_only=TRUE, expires_at=far_future,
+        source='bypass_only' (если истёкшая).
+      • Если существует и это **активная платная** подписка
+        (expires_at > NOW() AND NOT is_bypass_only) — **НЕ трогаем**.
+        Покупка bypass-трафика премиум-юзером — это просто +ГБ в
+        Remnawave; основная подписка остаётся как есть.
+
+    Раньше код безусловно делал `expires_at = GREATEST(expires_at,
+    +10y)` и `is_bypass_only=TRUE` для любого row — это **переводило
+    активную premium-подписку на 10 лет и помечало её как bypass**,
+    что и порождало баг «premium на 10 лет» у юзеров, докупивших
+    пакет трафика.
+
+    Returns:
+        True on success.
     """
     pool = await get_pool()
     if pool is None:
@@ -396,17 +461,34 @@ async def ensure_bypass_only_subscription(telegram_id: int) -> bool:
         except Exception:
             pass
         existing = await conn.fetchrow(
-            "SELECT telegram_id FROM subscriptions WHERE telegram_id = $1", telegram_id
+            """SELECT telegram_id, expires_at, is_bypass_only, status
+               FROM subscriptions WHERE telegram_id = $1""",
+            telegram_id,
         )
         far_future = datetime.now(timezone.utc) + timedelta(days=3650)
         if existing:
-            # Update existing: set bypass-only, ensure active status and far-future expiry
-            # (old expired subscription may have expires_at in the past)
+            is_active_paid = (
+                existing["expires_at"] is not None
+                and _from_db_utc(existing["expires_at"]) > datetime.now(timezone.utc)
+                and not bool(existing["is_bypass_only"])
+            )
+            if is_active_paid:
+                # Юзер с активной платной — bypass-пак добавляется
+                # только в Remnawave (трафик), subscription не трогаем.
+                logger.info(
+                    "ensure_bypass_only_subscription: SKIP active paid sub "
+                    "(user=%s expires=%s) — only Remnawave traffic top-up",
+                    telegram_id, existing["expires_at"],
+                )
+                return True
+            # Истёкшая или уже bypass_only — продлеваем на 10 лет и
+            # помечаем как bypass_only.
             await conn.execute(
                 """UPDATE subscriptions
                    SET is_bypass_only = TRUE, status = 'active',
-                       expires_at = GREATEST(expires_at, $2),
-                       source = CASE WHEN status = 'expired' OR expires_at < NOW() THEN 'bypass_only' ELSE source END
+                       expires_at = $2,
+                       source = CASE WHEN status = 'expired' OR expires_at < NOW()
+                                     THEN 'bypass_only' ELSE source END
                    WHERE telegram_id = $1""",
                 telegram_id, _to_db_utc(far_future),
             )
@@ -473,15 +555,15 @@ async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
 
 
 async def admin_switch_tariff(telegram_id: int, new_tariff: str, vpn_key_plus: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Заменить тариф подписки (Basic↔Plus) без изменения срока. Только для активной подписки.
+    """Flip subscription_type (Basic↔Plus) for the active subscription.
 
-    Args:
-        telegram_id: ID пользователя
-        new_tariff: 'basic' или 'plus'
-        vpn_key_plus: для plus — ссылка White List; для basic — None (очищается)
+    Tariffs are bot-side metadata only — Remnawave serves both tariffs
+    from the same entity, so this is a pure DB-side flag flip. We do
+    NOT touch vpn_key_plus: that column holds the bypass subscription
+    URL (tariff-agnostic) under the Remnawave model.
 
-    Returns:
-        Обновлённая строка подписки или None, если активной подписки нет.
+    `vpn_key_plus` parameter is kept only for backward signature
+    compatibility and ignored.
     """
     if not _core.DB_READY:
         logger.warning("DB not ready, admin_switch_tariff skipped")
@@ -493,18 +575,11 @@ async def admin_switch_tariff(telegram_id: int, new_tariff: str, vpn_key_plus: O
     if tariff not in config.VALID_SUBSCRIPTION_TYPES:
         tariff = "basic"
     async with pool.acquire() as conn:
-        if vpn_key_plus is not None:
-            await conn.execute(
-                """UPDATE subscriptions SET subscription_type = $1, vpn_key_plus = $2
-                   WHERE telegram_id = $3 AND status = 'active'""",
-                tariff, vpn_key_plus, telegram_id
-            )
-        else:
-            await conn.execute(
-                """UPDATE subscriptions SET subscription_type = $1, vpn_key_plus = NULL
-                   WHERE telegram_id = $2 AND status = 'active'""",
-                tariff, telegram_id
-            )
+        await conn.execute(
+            """UPDATE subscriptions SET subscription_type = $1
+               WHERE telegram_id = $2 AND status = 'active'""",
+            tariff, telegram_id
+        )
         row = await conn.fetchrow(
             "SELECT * FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
             telegram_id
@@ -888,31 +963,25 @@ async def reissue_subscription_key(subscription_id: int) -> "Tuple[str, str]":
         logger.error(f"reissue_subscription_key: {error_msg}")
         raise ValueError(error_msg)
     
+    # 3.x: samopis-мастер мёртв, vpn_utils.reissue_vpn_access — no-op
+    # (возвращает пустой vless_link → VPNAPIError). Делегируем в
+    # atomic-версию, которая работает через
+    # remnawave_premium.reissue_premium_user_entity.
     try:
-        new_uuid, vless_url = await vpn_utils.reissue_vpn_access(
-            old_uuid=old_uuid,
-            telegram_id=telegram_id,
-            subscription_end=expires_at
-        )
+        new_uuid, vless_url = await reissue_vpn_key_atomic(telegram_id)
     except Exception as e:
         logger.error(
-            f"reissue_subscription_key: VPN_API_FAILED [subscription_id={subscription_id}, "
-            f"telegram_id={telegram_id}, error={str(e)}]"
+            f"reissue_subscription_key: REMNAWAVE_REISSUE_FAILED "
+            f"[subscription_id={subscription_id}, telegram_id={telegram_id}, "
+            f"error={str(e)}]"
         )
         raise
+    if not new_uuid or not vless_url:
+        raise ValueError(
+            f"reissue_vpn_key_atomic returned empty result "
+            f"(new_uuid={new_uuid!r}, vless_url_present={bool(vless_url)})"
+        )
 
-    # 3. Обновляем UUID и vpn_key в БД (vless_url from API — single source of truth)
-    try:
-        await update_subscription_uuid(subscription_id, new_uuid, vpn_key=vless_url)
-    except Exception as e:
-        logger.error(
-            f"reissue_subscription_key: DB_UPDATE_FAILED [subscription_id={subscription_id}, "
-            f"telegram_id={telegram_id}, new_uuid={new_uuid[:8]}..., error={str(e)}]"
-        )
-        # КРИТИЧНО: UUID в VPN API уже обновлён, но БД не обновлена
-        # Это несоответствие, но мы не можем откатить VPN API
-        raise
-    
     new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
     logger.info(
         f"reissue_subscription_key: SUCCESS [subscription_id={subscription_id}, "
@@ -1428,17 +1497,19 @@ async def grant_access(
             current_sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
             incoming_tariff = (tariff.strip().lower() if tariff else None) or current_sub_type
 
-            # Basic→Plus upgrade: same UUID, call upgrade_vless_user, update vpn_key, vpn_key_plus, subscription_type, extend dates
+            # Basic→Plus upgrade: tariffs live only in subscription_type
+            # (Remnawave entity is identical for both tariffs).  Just flip
+            # the column, extend dates, and let the standard renewal sync
+            # update Remnawave premium expireAt + top-up bypass with the
+            # plus-tier traffic limits.  NO legacy Xray call — the
+            # upgrade_vless_user path 404s after the Remnawave cut-over
+            # and was the root cause of "Basic→Plus upgrade failed:
+            # User not found for upgrade" alerts.
             if source == "payment" and incoming_tariff == "plus" and current_sub_type == "basic":
                 logger.info(
                     f"grant_access: BASIC_TO_PLUS_UPGRADE [user={telegram_id}, uuid={uuid[:8]}..., source={source}]"
                 )
                 try:
-                    upgrade_result = await vpn_utils.upgrade_vless_user(uuid)
-                    new_vpn_key = upgrade_result.get("vless_url")
-                    new_vpn_key_plus = upgrade_result.get("vless_url_plus")
-                    if not new_vpn_key:
-                        raise Exception("upgrade_vless_user did not return vless_url (basic_link)")
                     old_expires_at = expires_at
                     subscription_end = max(expires_at, now) + duration
                     _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
@@ -1447,72 +1518,130 @@ async def grant_access(
                         raise Exception(f"Invalid upgrade: new_end={subscription_end} <= old_end={old_expires_at}")
                     await conn.execute(
                         """UPDATE subscriptions
-                           SET expires_at = $1, vpn_key = $2, vpn_key_plus = $3, subscription_type = 'plus',
-                               status = 'active', source = $4,
+                           SET expires_at = $1, subscription_type = 'plus',
+                               status = 'active', source = $2,
                                reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE,
                                reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, activation_status = 'active'
-                           WHERE telegram_id = $5""",
-                        _to_db_utc(subscription_end), new_vpn_key, new_vpn_key_plus, source, telegram_id
+                           WHERE telegram_id = $3""",
+                        _to_db_utc(subscription_end), source, telegram_id
                     )
-                    await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, subscription_start, subscription_end, "renewal")
+                    _notify_watchdog_expires_at(
+                        telegram_id,
+                        grant_action="basic_to_plus_upgrade",
+                        old_expires_at=old_expires_at,
+                        new_expires_at=subscription_end,
+                        source=source, tariff="plus",
+                        admin_telegram_id=admin_telegram_id,
+                        admin_grant_days=admin_grant_days,
+                    )
+                    vpn_key_existing = subscription.get("vpn_key")
+                    vpn_key_plus_existing = subscription.get("vpn_key_plus")
+                    await _log_subscription_history_atomic(conn, telegram_id, vpn_key_existing or uuid, subscription_start, subscription_end, "renewal")
                     logger.info(
                         f"grant_access: BASIC_TO_PLUS_UPGRADE_SUCCESS [user={telegram_id}, uuid={uuid[:8]}..., "
                         f"new_expires={subscription_end.isoformat()}]"
                     )
-                    return {
+                    result_dict = {
                         "uuid": uuid,
-                        "vless_url": new_vpn_key,
-                        "vpn_key": new_vpn_key,
-                        "vpn_key_plus": new_vpn_key_plus,
+                        "vless_url": vpn_key_existing,
+                        "vpn_key": vpn_key_existing,
+                        "vpn_key_plus": vpn_key_plus_existing,
                         "subscription_end": subscription_end,
                         "action": "renewal",
                         "subscription_type": "plus",
                         "is_basic_to_plus_upgrade": True,
                     }
+                    # Same post-commit / inline Remnawave sync pattern as
+                    # the normal renewal branch below — passes the NEW
+                    # tariff so bypass top-up uses plus-tier limits.
+                    _upgrade_period_days = max(1, int(duration.total_seconds() // 86400))
+                    if _caller_holds_transaction:
+                        result_dict["renewal_xray_sync_after_commit"] = {
+                            "telegram_id": telegram_id,
+                            "uuid": uuid,
+                            "subscription_end": subscription_end,
+                            "tariff": "plus",
+                            "period_days": _upgrade_period_days,
+                        }
+                        return result_dict
+                    from app.services import purchase_flow
+                    await purchase_flow.sync_renewal_to_remnawave({
+                        "telegram_id": telegram_id,
+                        "uuid": uuid,
+                        "subscription_end": subscription_end,
+                        "tariff": "plus",
+                        "period_days": _upgrade_period_days,
+                    })
+                    return result_dict
                 except Exception as e:
                     logger.error(f"grant_access: BASIC_TO_PLUS_UPGRADE_FAILED [user={telegram_id}, error={e}]")
                     raise Exception(f"Basic→Plus upgrade failed: {e}") from e
 
-            # Plus→Basic downgrade: remove from plus inbound, set vpn_key_plus=NULL, subscription_type=basic, extend dates
+            # Plus→Basic downgrade: symmetric — bot-side tariff flip only,
+            # no panel-side change.  Remnawave entity stays identical.
             if source == "payment" and incoming_tariff == "basic" and current_sub_type == "plus":
                 logger.info(
                     f"grant_access: PLUS_TO_BASIC_DOWNGRADE [user={telegram_id}, uuid={uuid[:8]}..., source={source}]"
                 )
-                try:
-                    await vpn_utils.remove_plus_inbound(uuid)
-                except Exception as e:
-                    logger.error(f"grant_access: PLUS_TO_BASIC_DOWNGRADE remove_plus_inbound failed [user={telegram_id}, error={e}]")
-                    raise Exception(f"Plus→Basic downgrade (remove plus) failed: {e}") from e
                 old_expires_at = expires_at
                 subscription_end = max(expires_at, now) + duration
                 _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
                 subscription_start = _ensure_utc(_start_raw) if _start_raw else now
                 if subscription_end <= old_expires_at:
                     raise Exception(f"Invalid downgrade: new_end={subscription_end} <= old_end={old_expires_at}")
-                vpn_key_basic = subscription.get("vpn_key")
+                vpn_key_existing = subscription.get("vpn_key")
+                vpn_key_plus_existing = subscription.get("vpn_key_plus")
                 await conn.execute(
                     """UPDATE subscriptions
-                       SET expires_at = $1, vpn_key_plus = NULL, subscription_type = 'basic',
+                       SET expires_at = $1, subscription_type = 'basic',
                            status = 'active', source = $2,
                            reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE,
                            reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, activation_status = 'active'
                        WHERE telegram_id = $3""",
                     _to_db_utc(subscription_end), source, telegram_id
                 )
-                await _log_subscription_history_atomic(conn, telegram_id, vpn_key_basic or uuid, subscription_start, subscription_end, "renewal")
+                _notify_watchdog_expires_at(
+                    telegram_id,
+                    grant_action="plus_to_basic_downgrade",
+                    old_expires_at=old_expires_at,
+                    new_expires_at=subscription_end,
+                    source=source, tariff="basic",
+                    admin_telegram_id=admin_telegram_id,
+                    admin_grant_days=admin_grant_days,
+                )
+                await _log_subscription_history_atomic(conn, telegram_id, vpn_key_existing or uuid, subscription_start, subscription_end, "renewal")
                 logger.info(
                     f"grant_access: PLUS_TO_BASIC_DOWNGRADE_SUCCESS [user={telegram_id}, uuid={uuid[:8]}..., "
                     f"new_expires={subscription_end.isoformat()}]"
                 )
-                return {
+                result_dict = {
                     "uuid": uuid,
-                    "vless_url": vpn_key_basic,
-                    "vpn_key": vpn_key_basic,
-                    "vpn_key_plus": None,
+                    "vless_url": vpn_key_existing,
+                    "vpn_key": vpn_key_existing,
+                    "vpn_key_plus": vpn_key_plus_existing,
                     "subscription_end": subscription_end,
                     "action": "renewal",
                     "subscription_type": "basic",
                 }
+                _downgrade_period_days = max(1, int(duration.total_seconds() // 86400))
+                if _caller_holds_transaction:
+                    result_dict["renewal_xray_sync_after_commit"] = {
+                        "telegram_id": telegram_id,
+                        "uuid": uuid,
+                        "subscription_end": subscription_end,
+                        "tariff": "basic",
+                        "period_days": _downgrade_period_days,
+                    }
+                    return result_dict
+                from app.services import purchase_flow
+                await purchase_flow.sync_renewal_to_remnawave({
+                    "telegram_id": telegram_id,
+                    "uuid": uuid,
+                    "subscription_end": subscription_end,
+                    "tariff": "basic",
+                    "period_days": _downgrade_period_days,
+                })
+                return result_dict
 
             # UUID СТАБИЛЕН - продлеваем подписку БЕЗ вызова VPN API (renewal same tariff)
             logger.info(
@@ -1591,6 +1720,16 @@ async def grant_access(
                         error_msg = f"Failed to verify subscription renewal for user {telegram_id}"
                         logger.error(f"grant_access: ERROR_RENEWAL_VERIFICATION [user={telegram_id}, error={error_msg}]")
                         raise Exception(error_msg)
+
+                    _notify_watchdog_expires_at(
+                        telegram_id,
+                        grant_action="renewal",
+                        old_expires_at=old_expires_at,
+                        new_expires_at=subscription_end,
+                        source=source, tariff=incoming_tariff,
+                        admin_telegram_id=admin_telegram_id,
+                        admin_grant_days=admin_grant_days,
+                    )
                     
                     logger.info(
                         f"grant_access: RENEWAL_SYNC_SUCCESS [telegram_id={telegram_id}, uuid={uuid[:8]}..., "
@@ -1797,7 +1936,16 @@ async def grant_access(
                            country = COALESCE($6, subscriptions.country),
                            subscription_type = COALESCE($7, subscriptions.subscription_type),
                            is_bypass_only = FALSE""",
-                    telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), country, pending_sub_type
+                    telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), country, pending_sub_type,
+                )
+                _notify_watchdog_expires_at(
+                    telegram_id,
+                    grant_action="new_issuance_pending",
+                    old_expires_at=None,
+                    new_expires_at=subscription_end,
+                    source=source, tariff=pending_sub_type,
+                    admin_telegram_id=admin_telegram_id,
+                    admin_grant_days=admin_grant_days,
                 )
                 
                 # ВАЛИДАЦИЯ: Проверяем что запись действительно сохранена
@@ -2103,7 +2251,16 @@ async def grant_access(
                        is_bypass_only = FALSE""",
                 *args
             )
-            
+            _notify_watchdog_expires_at(
+                telegram_id,
+                grant_action="new_issuance",
+                old_expires_at=None,
+                new_expires_at=subscription_end,
+                source=source, tariff=subscription_type_value,
+                admin_telegram_id=admin_telegram_id,
+                admin_grant_days=admin_grant_days,
+            )
+
             # ВАЛИДАЦИЯ: Проверяем что запись действительно сохранена
             saved_subscription = await conn.fetchrow(
                 "SELECT uuid, expires_at, status FROM subscriptions WHERE telegram_id = $1",
@@ -2442,10 +2599,25 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 from app.services import purchase_flow
                 await purchase_flow.sync_renewal_to_remnawave(sync_info)
             except Exception as e:
+                # approve_payment_atomic returns a tuple, not a dict — no
+                # `remnawave_sync_failed` flag to set. This is an admin manual
+                # approval path; admin sees the CRITICAL log entry and can re-run.
                 logger.critical(
-                    "RENEWAL_REMNAWAVE_SYNC_FAILED",
+                    "RENEWAL_REMNAWAVE_SYNC_FAILED in approve_payment_atomic",
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
+        if ret_val and ret_val[0] is not None:
+            try:
+                from app.events import bus
+                bus.publish({
+                    "type": "payment:approved",
+                    "payment_id": payment_id,
+                    "telegram_id": telegram_id,
+                    "is_renewal": ret_val[1],
+                    "expires_at": ret_val[0].isoformat() if hasattr(ret_val[0], "isoformat") else None,
+                })
+            except Exception:
+                pass
         return ret_val
 
 
@@ -2822,6 +2994,49 @@ async def create_promocode_atomic(
             except Exception as e:
                 logger.exception(f"Error creating promocode {code_normalized}: {e}")
                 return None
+
+
+async def reactivate_promocode(promo_id: Optional[int] = None, code: Optional[str] = None) -> bool:
+    """Re-enable a previously deactivated promocode: UPDATE is_active=true,
+    deleted_at=NULL. Counterpart of deactivate_promocode."""
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        has_deleted_at = await conn.fetchval(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'promo_codes' AND column_name = 'deleted_at'"
+        )
+        if promo_id is not None:
+            if has_deleted_at:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = true, deleted_at = NULL WHERE id = $1 RETURNING code",
+                    promo_id,
+                )
+            else:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = true WHERE id = $1 RETURNING code",
+                    promo_id,
+                )
+        elif code:
+            code_n = code.upper().strip()
+            if has_deleted_at:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = true, deleted_at = NULL WHERE UPPER(code) = UPPER($1) RETURNING code",
+                    code_n,
+                )
+            else:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = true WHERE UPPER(code) = UPPER($1) RETURNING code",
+                    code_n,
+                )
+        else:
+            return False
+        if row:
+            logger.info("PROMO_REACTIVATED code=%s", row.get("code"))
+            return True
+        return False
 
 
 async def deactivate_promocode(promo_id: Optional[int] = None, code: Optional[str] = None) -> bool:
@@ -3233,11 +3448,12 @@ async def get_admin_referral_stats(
             # Базовый запрос для агрегированной статистики
             # Используем подзапросы для корректной агрегации
             base_query = """
-            SELECT 
+            SELECT
                 u.telegram_id AS referrer_id,
                 u.username,
                 COALESCE(ref_stats.invited_count, 0) AS invited_count,
                 COALESCE(paid_stats.paid_count, 0) AS paid_count,
+                COALESCE(trial_stats.trial_count, 0) AS trial_count,
                 COALESCE(MIN(r.created_at), NULL) AS first_referral_date,
                 COALESCE(revenue_stats.total_revenue_kopecks, 0) AS total_invited_revenue_kopecks,
                 COALESCE(cashback_stats.total_cashback_kopecks, 0) AS total_cashback_paid_kopecks
@@ -3254,6 +3470,16 @@ async def get_admin_referral_stats(
                 INNER JOIN payments p ON r.referred_user_id = p.telegram_id AND p.status = 'approved'
                 GROUP BY r.referrer_user_id
             ) paid_stats ON u.telegram_id = paid_stats.referrer_user_id
+            LEFT JOIN (
+                -- Скольким из приглашённых он же (реферер) активировал триал.
+                -- Триал считаем активированным если users.trial_used_at IS NOT NULL
+                -- (значение проставляется в момент /trial даже если сам триал уже истёк).
+                SELECT r.referrer_user_id, COUNT(DISTINCT r.referred_user_id) AS trial_count
+                FROM referrals r
+                INNER JOIN users u2 ON r.referred_user_id = u2.telegram_id
+                WHERE u2.trial_used_at IS NOT NULL
+                GROUP BY r.referrer_user_id
+            ) trial_stats ON u.telegram_id = trial_stats.referrer_user_id
             LEFT JOIN (
                 SELECT r.referrer_user_id, SUM(p.amount) AS total_revenue_kopecks
                 FROM referrals r
@@ -3290,7 +3516,7 @@ async def get_admin_referral_stats(
             where_clauses.append(f"ref_stats.invited_count > 0 OR EXISTS (SELECT 1 FROM referrals r2 WHERE r2.referrer_user_id = u.telegram_id)")
             
             # Группировка по рефереру
-            group_by = "GROUP BY u.telegram_id, u.username, ref_stats.invited_count, paid_stats.paid_count, revenue_stats.total_revenue_kopecks, cashback_stats.total_cashback_kopecks"
+            group_by = "GROUP BY u.telegram_id, u.username, ref_stats.invited_count, paid_stats.paid_count, trial_stats.trial_count, revenue_stats.total_revenue_kopecks, cashback_stats.total_cashback_kopecks"
             
             # Сортировка
             sort_column_map = {
@@ -3333,9 +3559,11 @@ async def get_admin_referral_stats(
                 # Безопасное извлечение значений с обработкой NULL
                 invited_count = safe_int(row_data.get("invited_count"))
                 paid_count = safe_int(row_data.get("paid_count"))
-                
+                trial_count = safe_int(row_data.get("trial_count"))
+
                 # Вычисляем процент конверсии (защита от деления на 0)
                 conversion_percent = (paid_count / invited_count * 100) if invited_count > 0 else 0.0
+                trial_percent = (trial_count / invited_count * 100) if invited_count > 0 else 0.0
                 
                 # Конвертируем из копеек в рубли с безопасной обработкой NULL
                 total_invited_revenue_kopecks = safe_int(row_data.get("total_invited_revenue_kopecks"))
@@ -3356,6 +3584,8 @@ async def get_admin_referral_stats(
                     "referrer_id": referrer_id,
                     "username": row_data.get("username") or f"ID{referrer_id}",
                     "invited_count": invited_count,
+                    "trial_count": trial_count,
+                    "trial_percent": round(trial_percent, 2),
                     "paid_count": paid_count,
                     "conversion_percent": round(conversion_percent, 2),
                     "total_invited_revenue": round(total_invited_revenue, 2),
@@ -3958,12 +4188,12 @@ async def create_pending_purchase(
                 await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_purchase_type_check")
                 await conn.execute(
                     "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_purchase_type_check "
-                    "CHECK (purchase_type IN ('subscription', 'balance_topup', 'gift', 'telegram_premium', 'telegram_stars', 'traffic_pack', 'apple_id'))"
+                    "CHECK (purchase_type IN ('subscription', 'balance_topup', 'gift', 'telegram_premium', 'telegram_stars', 'traffic_pack', 'apple_id', 'spotify'))"
                 )
                 await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_tariff_check")
                 await conn.execute(
                     "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_tariff_check "
-                    "CHECK (tariff IS NULL OR tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate', 'telegram_premium', 'telegram_stars') OR tariff LIKE 'traffic_%' OR tariff LIKE 'apple_id_%' OR tariff LIKE 'bypass_%')"
+                    "CHECK (tariff IS NULL OR tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate', 'telegram_premium', 'telegram_stars') OR tariff LIKE 'traffic_%' OR tariff LIKE 'apple_id_%' OR tariff LIKE 'bypass_%' OR tariff LIKE 'spotify_%')"
                 )
                 await conn.execute(_insert_sql, *_insert_args)
             else:
@@ -4020,11 +4250,11 @@ async def get_pending_purchase(purchase_id: str, telegram_id: int, check_expiry:
 async def get_pending_purchase_by_id(purchase_id: str, check_expiry: bool = False) -> Optional[Dict[str, Any]]:
     """
     Get pending purchase by purchase_id only (for webhook when payload is "purchase:{id}").
-    
+
     Args:
         purchase_id: ID покупки
         check_expiry: Проверять ли срок действия (по умолчанию False для webhook)
-    
+
     Returns:
         Словарь с данными покупки или None
     """
@@ -4048,6 +4278,26 @@ async def get_pending_purchase_by_id(purchase_id: str, check_expiry: bool = Fals
                    WHERE purchase_id = $1 AND status IN ('pending', 'expired')""",
                 purchase_id
             )
+        return dict(row) if row else None
+
+
+async def get_pending_purchase_any_status(purchase_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a purchase by purchase_id REGARDLESS of status.
+
+    Used by webhook handlers to distinguish "already processed" (row exists
+    with status='paid') from "truly missing" (no row at all — data loss or
+    orphaned Wata invoice pointing at a purchase_id we never persisted).
+    """
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM pending_purchases WHERE purchase_id = $1",
+            purchase_id,
+        )
         return dict(row) if row else None
 
 
@@ -4248,11 +4498,27 @@ async def finalize_purchase(
         is_traffic_pack = (purchase_type == "traffic_pack")
         is_apple_id = (purchase_type == "apple_id")
         is_farm_effect = (purchase_type == "farm_effect")
-        amount_diff = abs(amount_rubles - expected_amount_rubles)
-        # SECURITY: Percentage-based tolerance (0.5%) instead of fixed ±1₽
-        # For 149₽ → max diff 0.75₽, for 1199₽ → max diff 6₽, minimum floor 0.50₽
-        max_tolerance = max(0.50, expected_amount_rubles * 0.005)
-        if amount_diff > max_tolerance:
+        # SECURITY: асимметричный tolerance.
+        #
+        # Overpayment (юзер заплатил БОЛЬШЕ ожидаемого) — принимаем всегда.
+        # Обычно это комиссия эквайринга customer-pays-fee (Wata ~2%,
+        # Lava ~1.5%, Platega ~1%). Деньги дошли, ничего не теряем.
+        # Не важно 2% или 20% — если провайдер решил накинуть больше,
+        # это его дело, наша логика видит подтверждённый платёж.
+        #
+        # Underpayment (юзер заплатил МЕНЬШЕ) — отклоняем строго (±0.5%
+        # или минимум 0.5₽). Реалистично разница может возникнуть только
+        # из-за rounding (₽.копейки), НЕ должно быть больше нескольких копеек.
+        # Всё что больше — потенциальная подмена суммы: атакующий пытается
+        # активировать дорогую подписку за копейки.
+        #
+        # Раньше проверка была симметричная 0.5% → при 199₽ комиссия
+        # Wata 4.06₽ ломала легитимные оплаты.
+        payment_delta = amount_rubles - expected_amount_rubles  # >0 если overpay
+        underpayment_tolerance = max(0.50, expected_amount_rubles * 0.005)
+        if payment_delta < -underpayment_tolerance:
+            amount_diff = abs(payment_delta)
+            max_tolerance = underpayment_tolerance
             error_msg = (
                 f"Payment amount mismatch: purchase_id={purchase_id}, user={telegram_id}, "
                 f"expected={expected_amount_rubles:.2f} RUB, actual={amount_rubles:.2f} RUB, "
@@ -4296,12 +4562,17 @@ async def finalize_purchase(
                         subscription_end=subscription_end_pre,
                         period_days=period_days,
                         is_trial=False,  # finalize_purchase is paid flow only
+                        is_combo=is_combo_purchase,  # 🆕 fresh combo → bypass с 75 GB
                     )
                     pre_provisioned_uuid = {
                         "uuid": vless_result["uuid"].strip(),
                         "vless_url": vless_result["vless_url"],
                         "vless_url_plus": vless_result.get("vless_url_plus"),
                         "subscription_type": vless_result.get("subscription_type") or tariff_type or "basic",
+                        # 🆕 True if we just created the bypass entity — confirmation
+                        # SHOULD NOT top-up again (иначе double-add: 75+75=150 для combo,
+                        # 10+10=20 для обычной basic 30d).
+                        "bypass_created_fresh": bool(vless_result.get("bypass_created_fresh", False)),
                     }
                     uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                     logger.info(
@@ -4333,11 +4604,28 @@ async def finalize_purchase(
                     f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, amount_match=True, purchase_status={status}"
                 )
 
-                # STEP 3: Обновляем pending_purchase → paid
-                result = await conn.execute(
-                    "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status IN ('pending', 'expired')",
-                    purchase_id
-                )
+                # STEP 3: Обновляем pending_purchase → paid + payment_provider
+                # payment_provider added for analytics (migration 054). The
+                # column may be missing on freshly-deployed-but-not-migrated
+                # boxes; we ignore the error in that case so the payment
+                # still settles.
+                try:
+                    result = await conn.execute(
+                        """UPDATE pending_purchases
+                           SET status = 'paid', payment_provider = $2
+                           WHERE purchase_id = $1
+                             AND status IN ('pending', 'expired')""",
+                        purchase_id, payment_provider,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "finalize_purchase: provider write skipped (%s) — "
+                        "falling back to status-only update", e,
+                    )
+                    result = await conn.execute(
+                        "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status IN ('pending', 'expired')",
+                        purchase_id,
+                    )
             
                 if result != "UPDATE 1":
                     error_msg = f"Failed to mark pending purchase as paid: purchase_id={purchase_id}"
@@ -4692,6 +4980,7 @@ async def finalize_purchase(
                         "is_renewal": False,
                         "is_combo": is_combo_purchase,
                         "period_days": period_days,
+                        "bypass_created_fresh": bool(pre_provisioned_uuid.get("bypass_created_fresh")) if pre_provisioned_uuid else False,
                     }
                 else:
                     # Получаем VPN ключ для нормальной активации
@@ -4813,6 +5102,9 @@ async def finalize_purchase(
                         "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
                         "is_combo": is_combo_purchase,
                         "period_days": period_days,
+                        # 🆕 Fresh bypass — уже создан с ФИНАЛЬНЫМ лимитом (75 GB для combo,
+                        # 10 GB для basic). confirmation.py: skip top-up → no double-add.
+                        "bypass_created_fresh": bool(pre_provisioned_uuid.get("bypass_created_fresh")) if pre_provisioned_uuid else False,
                     }
         except Exception as tx_err:
             # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray
@@ -4848,9 +5140,11 @@ async def finalize_purchase(
                 await purchase_flow.sync_renewal_to_remnawave(sync_info)
             except Exception as e:
                 logger.critical(
-                    "RENEWAL_REMNAWAVE_SYNC_FAILED",
+                    "RENEWAL_REMNAWAVE_SYNC_FAILED — webhook will return 5xx for retry",
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
+                ret_val["remnawave_sync_failed"] = True
+                ret_val["remnawave_sync_error"] = str(e)[:200]
         if ret_val is not None:
             # Set or clear combo flag reliably from pending_purchase data (not FSM)
             try:

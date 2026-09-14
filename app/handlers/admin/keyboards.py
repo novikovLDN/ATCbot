@@ -48,7 +48,10 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
         ],
         [InlineKeyboardButton(text="💬 Написать пользователю", callback_data="admin:chat")],
         [InlineKeyboardButton(text="🎁 Гифт-ссылки на ГБ", callback_data="admin:bgift")],
-        [InlineKeyboardButton(text="🔄 Сверка с Remnawave", callback_data="admin:rmn_reconcile")],
+        [InlineKeyboardButton(text="🩹 Откат premium ×10y", callback_data="admin:premium_recovery")],
+        [InlineKeyboardButton(text="🔍 Аудит активных подписок", callback_data="admin:audit_subs")],
+        [InlineKeyboardButton(text="🗃 Аудит БД дат (+10y)", callback_data="admin:audit_db_dates")],
+        [InlineKeyboardButton(text="🎁 Trial → промо −30%", callback_data="admin:promo_trial")],
         [InlineKeyboardButton(text="🌪 Шторм (Ферма)", callback_data="admin:storm")],
     ])
     if config.IS_STAGE:
@@ -303,6 +306,7 @@ def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
         ("🎁 Купить со скидкой", "promo_buy"),
         ("📊 Купить трафик промо", "promo_traffic"),
         ("🎁 Скидка 30% на 3 месяца", "gift_3m"),
+        ("🎁 1 год со скидкой 40%", "gift_1y_40"),
         ("🌐 Включить обход", "bypass"),
         ("📢 Наш канал", "channel"),
         ("💬 Поддержка", "support"),
@@ -312,6 +316,9 @@ def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
         ("🌐 Веб-клиент QoDev", "web_client"),
         ("🏆 Купить Комбо", "buy_combo"),
         ("🌐 MT Прокси", "proxy"),
+        ("🧩 Мой прокси", "my_proxy"),
+        ("🎁 Забрать подарок (Combo Basic 1м)", "gift_combo"),
+        ("🎁 Поделиться скидкой", "share_discount"),
     ]
     rows = []
     for label, key in buttons:
@@ -329,6 +336,11 @@ def get_broadcast_segment_keyboard(language: str = "ru"):
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_all"), callback_data="broadcast_segment:all_users")],
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_active"), callback_data="broadcast_segment:active_subscriptions")],
         [InlineKeyboardButton(text="🚫 Без подписки", callback_data="broadcast_segment:no_subscription")],
+        [InlineKeyboardButton(text="🆕 Никогда не подключались", callback_data="broadcast_segment:no_remnawave")],
+        [InlineKeyboardButton(text="❄️ Холодные за 7 дней", callback_data="broadcast_segment:started_7d_cold")],
+        [InlineKeyboardButton(text="📅 Истёк 1 день назад", callback_data="broadcast_segment:expired_1d")],
+        [InlineKeyboardButton(text="📅 Истёк 2 дня назад", callback_data="broadcast_segment:expired_2d")],
+        [InlineKeyboardButton(text="📅 Истёк 3 дня назад", callback_data="broadcast_segment:expired_3d")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
     ])
     return keyboard

@@ -4,6 +4,7 @@ Simple navigation callbacks: menu_main, back_to_main, settings, about, support, 
 import asyncio
 import io
 import logging
+import os
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
@@ -18,13 +19,19 @@ from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID as _MAIN_PHOTO_ID
 from app.handlers.common.utils import format_text_with_incident, safe_edit_text
-from app.handlers.common.screens import show_profile, _open_help_screen
+from app.handlers.common.screens import (
+    show_profile,
+    _open_help_screen,
+    _open_my_subscription_screen,
+    _open_legal_screen,
+)
 from app.handlers.common.keyboards import (
     get_main_menu_keyboard,
     get_about_keyboard,
     get_service_status_keyboard,
     get_connect_keyboard,
 )
+from app.handlers.common.emoji import CE
 router = Router()
 logger = logging.getLogger(__name__)
 
@@ -72,36 +79,12 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "back_to_main")
-async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
-    """Возврат в главное меню с экрана выдачи ключа"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    await state.clear()
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    text = await _get_main_text(telegram_id, language)
-    keyboard = await get_main_menu_keyboard(language, telegram_id)
-
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await callback.bot.send_photo(
-        chat_id=callback.message.chat.id,
-        photo=_MAIN_PHOTO_ID,
-        caption=text,
-        parse_mode="HTML",
-        reply_markup=keyboard,
-    )
-
-
 async def _get_main_text(telegram_id: int, language: str) -> str:
-    """Определяет текст главного экрана: обычный, бизнес, bypass-only или без подписки."""
+    """Определяет текст главного экрана: обычный, бизнес, bypass-only или без подписки.
+
+    Legal footer больше не приклеивается — ссылки на политику и соглашение
+    живут в отдельном экране «Правила» (Мой профиль → Правила).
+    """
     try:
         sub = await database.get_subscription(telegram_id)
         sub_type = (sub.get("subscription_type") or "basic").strip().lower() if sub else None
@@ -138,9 +121,9 @@ async def callback_ecosystem(callback: CallbackQuery):
     text = i18n_get_text(language, "main.ecosystem_text", "main.ecosystem_text")
     full_text = f"{title}\n\n{text}"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "main.about"), callback_data="menu_about")],
-        [InlineKeyboardButton(text="✍️ Трекер Only", url="https://t.me/ItsOnlyWbot")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "main.about"), callback_data="menu_about", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "main.tracker_only_btn", "✍️ Трекер Only"), url="https://t.me/ItsOnlyWbot")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
 
@@ -168,7 +151,7 @@ async def callback_biz_ecosystem(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "biz.ecosystem_text")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
 
@@ -189,7 +172,7 @@ async def callback_biz_control_panel(callback: CallbackQuery):
     sub = await database.get_subscription(telegram_id)
     vpn_key = sub.get("vpn_key", "") if sub else ""
     if vpn_key:
-        text += f"\n\n🔗 Ваша ссылка подключения готова."
+        text += i18n_get_text(language, "biz.link_ready_suffix", "\n\n🔗 Ваша ссылка подключения готова.")
 
     from app.handlers.common.keyboards import get_biz_control_panel_keyboard
     keyboard = get_biz_control_panel_keyboard(language)
@@ -200,26 +183,28 @@ async def callback_biz_control_panel(callback: CallbackQuery):
 async def callback_biz_copy_login(callback: CallbackQuery):
     """📋 Скопировать логин (VPN ключ)"""
     telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
     sub = await database.get_subscription(telegram_id)
     vpn_key = sub.get("vpn_key", "") if sub else ""
     if vpn_key:
         await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-        await callback.answer("Скопируйте ссылку выше")
+        await callback.answer(i18n_get_text(language, "biz.copy_link_alert", "Скопируйте ссылку выше"))
     else:
-        await callback.answer("Ключ не найден", show_alert=True)
+        await callback.answer(i18n_get_text(language, "biz.no_key_alert", "Ключ не найден"), show_alert=True)
 
 
 @router.callback_query(F.data == "biz_copy_password")
 async def callback_biz_copy_password(callback: CallbackQuery):
     """🔑 Скопировать пароль (VPN ключ Plus)"""
     telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
     sub = await database.get_subscription(telegram_id)
     vpn_key = sub.get("vpn_key", "") if sub else ""
     if vpn_key:
         await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-        await callback.answer("Скопируйте ссылку выше")
+        await callback.answer(i18n_get_text(language, "biz.copy_link_alert", "Скопируйте ссылку выше"))
     else:
-        await callback.answer("Ключ не найден", show_alert=True)
+        await callback.answer(i18n_get_text(language, "biz.no_key_alert", "Ключ не найден"), show_alert=True)
 
 
 @router.callback_query(F.data == "menu_settings")
@@ -233,13 +218,14 @@ async def callback_settings(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     title = i18n_get_text(language, "main.settings_title", "⚙️ Настройки")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗣 Изменить язык", callback_data="change_language")],
-        [InlineKeyboardButton(text="🔐 Политика конфиденциальности", callback_data="about_privacy")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "main.settings_change_language_btn", "🗣 Изменить язык"), callback_data="change_language", icon_custom_emoji_id=CE["language"], style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "main.settings_privacy_btn", "🔐 Политика конфиденциальности"), callback_data="about_privacy", style="primary")],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.ecosystem", "⚪️ Наша экосистема"),
-            callback_data="menu_ecosystem"
+            callback_data="menu_ecosystem",
+            style="primary",
         )],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
     if has_photo:
@@ -261,28 +247,6 @@ async def callback_about(callback: CallbackQuery):
     await _open_about_screen(callback, callback.bot)
 
 
-@router.callback_query(F.data == "menu_service_status")
-async def callback_service_status(callback: CallbackQuery):
-    """Статус сервиса"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    text = i18n_get_text(language, "main.service_status_text", "service_status_text")
-
-    incident = await database.get_incident_settings()
-    if incident["is_active"]:
-        incident_text = incident.get("incident_text") or i18n_get_text(language, "main.incident_banner", "incident_banner")
-        warning = i18n_get_text(language, "main.incident_status_warning", incident_text=incident_text)
-        text = text + warning
-
-    await safe_edit_text(callback.message, text, reply_markup=get_service_status_keyboard(language), bot=callback.bot)
-
-
 @router.callback_query(F.data == "about_privacy")
 async def callback_privacy(callback: CallbackQuery):
     """Политика конфиденциальности"""
@@ -296,6 +260,20 @@ async def callback_privacy(callback: CallbackQuery):
 
     text = i18n_get_text(language, "main.privacy_policy_text", "privacy_policy_text")
     await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=callback.bot)
+
+
+@router.callback_query(F.data == "menu_my_subscription")
+async def callback_my_subscription(callback: CallbackQuery):
+    """Экран «Моя подписка» — краткое инфо + быстрые действия."""
+    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
+        return
+    await _open_my_subscription_screen(callback, callback.bot)
+
+
+@router.callback_query(F.data == "menu_legal")
+async def callback_legal(callback: CallbackQuery):
+    """Экран «Правила» — выбор правового документа."""
+    await _open_legal_screen(callback, callback.bot)
 
 
 @router.callback_query(F.data == "special_offer_buy")
@@ -316,7 +294,7 @@ async def callback_special_offer_buy(callback: CallbackQuery, state: FSMContext)
     if not special_offer:
         language = await resolve_user_language(telegram_id)
         await callback.message.answer(
-            "⏰ Срок спецпредложения истёк. Вы можете приобрести подписку по обычной цене.",
+            i18n_get_text(language, "errors.special_offer_expired", "⏰ Срок спецпредложения истёк. Вы можете приобрести подписку по обычной цене."),
             parse_mode="HTML",
         )
         return
@@ -346,8 +324,9 @@ async def callback_trial_discount_15(callback: CallbackQuery, state: FSMContext)
             expires_at=expires_at,
             created_by=0,  # system
         )
+        language = await resolve_user_language(telegram_id)
         await callback.message.answer(
-            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:",
+            i18n_get_text(language, "main.discount_applied_choose_tariff", "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"),
             parse_mode="HTML",
         )
     except Exception as e:
@@ -377,8 +356,9 @@ async def callback_paid_discount_15(callback: CallbackQuery, state: FSMContext):
             expires_at=expires_at,
             created_by=0,  # system
         )
+        language = await resolve_user_language(telegram_id)
         await callback.message.answer(
-            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:",
+            i18n_get_text(language, "main.discount_applied_choose_tariff", "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"),
             parse_mode="HTML",
         )
     except Exception as e:
@@ -395,44 +375,6 @@ async def callback_instruction(callback: CallbackQuery):
     from app.handlers.common.screens import _open_instruction_screen
     await _open_instruction_screen(callback, callback.bot)
 
-
-
-@router.callback_query(F.data == "go_profile", StateFilter(default_state))
-@router.callback_query(F.data == "go_profile")
-async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
-    """Переход в профиль с экрана выдачи ключа - работает независимо от FSM состояния"""
-    telegram_id = callback.from_user.id
-    
-    # Немедленная обратная связь пользователю
-    await callback.answer()
-    
-    # Очищаем FSM состояние, если пользователь был в каком-то процессе
-    try:
-        current_state = await state.get_state()
-        if current_state is not None:
-            await state.clear()
-            logger.debug(f"Cleared FSM state for user {telegram_id}, was: {current_state}")
-    except Exception as e:
-        logger.debug(f"FSM state clear failed (may be already clear): {e}")
-    
-    try:
-        logger.info(f"Opening profile via go_profile for user {telegram_id}")
-        
-        language = await resolve_user_language(telegram_id)
-        
-        await show_profile(callback, language)
-        
-        logger.info(f"Profile opened successfully via go_profile for user {telegram_id}")
-    except Exception as e:
-        logger.exception(f"Error opening profile via go_profile for user {telegram_id}: {e}")
-        # Пытаемся отправить сообщение об ошибке
-        try:
-            user = await database.get_user(telegram_id)
-            language = await resolve_user_language(callback.from_user.id)
-            error_text = i18n_get_text(language, "errors.profile_load")
-            await callback.message.answer(error_text, parse_mode="HTML")
-        except Exception as e2:
-            logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
 
 
 @router.callback_query(F.data.in_({"copy_key_menu", "copy_key", "copy_key_plus", "copy_vpn_key"}))
@@ -453,58 +395,16 @@ async def callback_connect_instead_of_copy(callback: CallbackQuery):
     )
 
 
-@router.callback_query(F.data == "get_sub_key")
-async def callback_get_sub_key(callback: CallbackQuery):
-    """Отправить ключ подписки с инструкцией по подключению."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
-        return
-
-    telegram_id = callback.from_user.id
-    subscription = await database.get_subscription(telegram_id)
-    if not subscription:
-        language = await resolve_user_language(telegram_id)
-        await callback.message.answer(
-            i18n_get_text(language, "get_key.no_subscription", "❌ У вас нет активной подписки."),
-            parse_mode="HTML",
-        )
-        return
-
-    language = await resolve_user_language(telegram_id)
-    from app.services.user_subscription_links import get_user_primary_subscription_url
-    sub_url = await get_user_primary_subscription_url(telegram_id)
-
-    text = i18n_get_text(language, "get_key.instruction_text",
-        "📖 <b>Инструкция по подключению</b>\n\n"
-        "<b>Happ</b> — откройте приложение → внизу нажмите на буфер обмена 🗒️ → ключ добавится автоматически\n\n"
-        "<b>V2RayTun</b> — откройте приложение → в правом верхнем углу нажмите <b>+</b> → «Импорт из буфера обмена»\n\n"
-        "⸻\n\n"
-        "👇 Скопируйте ключ одним нажатием:")
-
-    full_text = f"{text}\n\n<code>{sub_url}</code>"
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.device_button"),
-            callback_data="setup_device",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
-        )],
-    ])
-
-    await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
-
-
 # ── Connect instruction ──────────────────────────────────────────
 
+# Альтернативный ключ (сырые premium/bypass ссылки) на экране ручной установки —
+# ВРЕМЕННО СКРЫТ. Вернуть = True.
+_SETUP_ALT_KEY_ENABLED = False
+
 _DEVICE_SELECT_PHOTO = {
-    "prod": "AgACAgQAAxkBAAFU07NqGqUXEmVZ5SivuY0gwUhd7TBCeAACXw9rGxA30FCkvieRMzznwwEAAwIAA3kAAzsE",
+    # prod: ОБЫЧНОЕ фото (модерация перенесена). Модерационный file_id —
+    # в docs/MODERATION_VPN_BYPASS_CHANGESET.md (ставить при возобновлении).
+    "prod": "AgACAgQAAxkBAAGILwVqmR0AATCd8V0czJQwFMVtbGWP97IAAncQaxsxNshQ3NkHkfgoXUwBAAMCAAN5AAM9BA",
     "stage": "AgACAgQAAxkBAAIhc2oZ_tiD1jsG8eB-9HrSgTTiyjEUAAJfD2sbEDfQUDPuD983y47VAQADAgADeQADOwQ",
 }
 
@@ -520,33 +420,16 @@ async def callback_connect_instruction(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    # Auto-provision Remnawave user for existing subscribers + ensure squad (fire-and-forget)
+    # Existing Remnawave юзер → ensure squad + продлить bypass expiry.
+    # Для юзеров без remnawave_uuid НИЧЕГО тут не форсим: setup_step1
+    # ниже позовёт get_user_bypass_url → _try_lazy_provision_entities,
+    # который сам создаст bypass с правильным TRIAL_BYPASS_MB / 10 GB.
+    # Раньше здесь были bogus overrides (2 GB для trial и 1 GB для paid),
+    # которые перетирали накопленный трафик — убрано.
     if config.REMNAWAVE_ENABLED:
         from app.services import remnawave_service
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if not rmn_uuid:
-            subscription = await database.get_subscription(telegram_id)
-            if subscription:
-                sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-                expires_at = subscription.get("expires_at")
-                if expires_at and sub_type == "trial":
-                    override = 2 * 1024**3  # Trial: 2 GB bypass
-                    remnawave_service._fire_and_forget(
-                        remnawave_service.create_remnawave_user(
-                            telegram_id, sub_type, expires_at,
-                            traffic_limit_override=override,
-                        )
-                    )
-                elif expires_at and sub_type != "trial":
-                    override = 1 * 1024**3  # 1 GB starter pack
-                    remnawave_service._fire_and_forget(
-                        remnawave_service.create_remnawave_user(
-                            telegram_id, sub_type, expires_at,
-                            traffic_limit_override=override,
-                        )
-                    )
-        else:
-            # Existing Remnawave user — ensure expiry is far future (bypass works by GB, not date)
+        if rmn_uuid:
             remnawave_service._fire_and_forget(
                 remnawave_service.extend_remnawave_for_bypass(telegram_id)
             )
@@ -558,16 +441,18 @@ async def callback_connect_instruction(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
-            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios", style="primary"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android", style="primary"),
         ],
         [
-            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
-            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos", style="primary"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows", style="primary"),
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -607,49 +492,63 @@ async def callback_setup_step1(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
 
     text = i18n_get_text(language, "setup.install_app")
-    if platform not in ("windows",):
-        text += i18n_get_text(language, "setup.install_app_v2ray_hint")
 
     buttons = []
 
     if platform in ("ios", "macos"):
+        # Incy — на первом месте (по запросу). Для iOS и macOS одна и
+        # та же App Store ссылка (Apple Silicon Mac умеет ставить iOS-
+        # приложения).
+        incy_url = _DOWNLOAD_LINKS.get(platform, {}).get("incy")
+        if incy_url:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.install_incy_btn", "📲 Скачать Incy"),
+                url=incy_url,
+                style="primary",
+            )])
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "setup.install_happ_ru"),
             url=_IOS_HAPP_LINKS["ru"],
+            style="primary",
         )])
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "setup.install_happ_global"),
             url=_IOS_HAPP_LINKS["global"],
+            style="primary",
         )])
     elif platform == "android":
         links = _DOWNLOAD_LINKS.get("android", {})
         if "happ" in links:
             buttons.append([InlineKeyboardButton(
-                text="📲 Установить Happ",
+                text=i18n_get_text(language, "setup.install_happ_btn", "📲 Установить Happ"),
                 url=links["happ"],
+                style="primary",
             )])
-        if "v2raytun" in links:
+        # Incy для Android — Play Market ссылка
+        incy_url = links.get("incy")
+        if incy_url:
             buttons.append([InlineKeyboardButton(
-                text="📲 Установить V2RayTun",
-                url=links["v2raytun"],
+                text=i18n_get_text(language, "setup.install_incy_btn", "📲 Скачать Incy"),
+                url=incy_url,
+                style="primary",
             )])
     elif platform == "windows":
         buttons.append([InlineKeyboardButton(
-            text="📲 Скачать Happ",
+            text=i18n_get_text(language, "setup.download_happ_btn", "📲 Скачать Happ"),
             url="https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
-        )])
-        buttons.append([InlineKeyboardButton(
-            text="📲 Скачать V2RayTun",
-            url="https://github.com/mdf45/v2raytun/releases/tag/v3.7.10",
+            style="primary",
         )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.next_step"),
         callback_data=f"setup_step2:{platform}",
+        style="success",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="connect_instruction",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -703,24 +602,117 @@ async def callback_setup_step2(callback: CallbackQuery):
     sub_url = ""
     bypass_url = ""
     if subscription:
-        from app.services.user_subscription_links import get_user_primary_subscription_url
+        from app.services.user_subscription_links import (
+            get_user_primary_subscription_url,
+            get_user_bypass_url,
+        )
         sub_url = await get_user_primary_subscription_url(telegram_id)
+        # ⚠️ ВАЖНО: bypass URL берём через helper, который применяет
+        # _rewrite_sub_host (sub.atlassecure.ru → subscription.vps-cloud.uk).
+        # Раньше здесь был прямой get_user_traffic — Happ получал raw
+        # panel URL с sub.atlassecure.ru и падал в "сертификат недействителен",
+        # т.к. cert на этом хосте отсутствует/невалиден.
+        if config.REMNAWAVE_ENABLED:
+            bypass_url = await get_user_bypass_url(telegram_id) or ""
 
-    # Bypass key: available independently of main subscription
-    if config.REMNAWAVE_ENABLED:
-        from app.services import remnawave_api
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-            if traffic:
-                bypass_url = traffic.get("subscriptionUrl", "") or ""
+    # ── Aggregator-branch (пока admin-only, потом флип на всех) ────
+    # Если юзер под гейтом sub_aggregator — отдаём ЕДИНЫЙ ключ (склеенная
+    # подписка) с двумя кнопками Happ/Incy. Никаких "VPN vs Обход" — теперь
+    # это одна ссылка, комбинирующая оба типа серверов внутри.
+    from app.services import sub_aggregator
+    agg_url = None
+    if sub_aggregator.is_enabled_for(telegram_id):
+        try:
+            agg_url = await sub_aggregator.ensure_pair(telegram_id)
+        except Exception as e:
+            logger.warning("SETUP_STEP2 aggregator ensure_pair failed tg=%s: %s", telegram_id, e)
+
+    if agg_url:
+        from urllib.parse import quote, urlparse
+        if config.PUBLIC_BASE_URL:
+            base_url = config.PUBLIC_BASE_URL
+        else:
+            parsed = urlparse(config.WEBHOOK_URL)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+        q = quote(agg_url, safe='')
+        show_incy = platform in ("ios", "android", "macos")
+
+        text = i18n_get_text(language, "setup.key_install_title_agg")
+        buttons = [[InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.btn_add_happ", "📥 Добавить ключ в Happ"),
+            url=f"{base_url}/open/happ?url={q}",
+            style="primary",
+        )]]
+        if show_incy:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.btn_add_incy", "💚 Добавить ключ в Incy"),
+                url=f"{base_url}/open/incy?url={q}",
+                style="success",
+            )])
+        # V2RayTun — только iOS/Android (десктоп-схема нестабильна).
+        if platform in ("ios", "android"):
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.btn_add_v2raytun", "🚀 Добавить ключ в V2RayTun"),
+                url=f"{base_url}/open/v2raytun?url={q}",
+                style="primary",
+            )])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.btn_done"),
+            callback_data="setup_done",
+            style="danger",
+        )])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.btn_manual_setup", "⚙️ Настроить вручную"),
+            callback_data=f"setup_manual:{platform}",
+            style="primary",
+        )])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.btn_need_help"),
+            url="https://t.me/atlas_suppbot",
+        )])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"setup_step1:{platform}",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
+        )])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        # Отправляем фото + подпись (как legacy-экран), а не edit-text.
+        photo_id = _get_photo_id("install_keys_agg")
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        if photo_id:
+            await callback.bot.send_photo(
+                chat_id=telegram_id, photo=photo_id, caption=text,
+                reply_markup=keyboard, parse_mode="HTML",
+            )
+        else:
+            await callback.bot.send_message(
+                chat_id=telegram_id, text=text,
+                reply_markup=keyboard, parse_mode="HTML",
+            )
+        return
 
     text = i18n_get_text(language, "setup.key_install_title")
 
     buttons = []
 
-    # === Auto-setup deeplinks ===
-    if sub_url:
+    # === Auto-setup deeplinks (legacy dual-key) ===
+    # Layout:
+    #   [Happ VPN]       [Incy VPN]       — primary | success
+    #   [Happ Обход]     [Incy Обход]     — primary | success
+    #   [Готово]                           — danger
+    #   [Установить вручную]               — primary
+    #   [Нужна помощь]
+    #   [Назад]
+    # Incy-кнопки — на iOS/Android/macOS. Windows не показываем: у Incy
+    # нет Windows-клиента, deeplink incy://crypt1/... там не откроется.
+    # Bypass-only юзер (только трафик обхода, без основной подписки) —
+    # sub_url пуст, показываем только ряд «Обход». Раньше `if sub_url`
+    # прятал ОБА ряда → bypass-only оставался без единой кнопки-ключа.
+    if sub_url or bypass_url:
         from urllib.parse import quote, urlparse
         if config.PUBLIC_BASE_URL:
             base_url = config.PUBLIC_BASE_URL
@@ -728,34 +720,58 @@ async def callback_setup_step2(callback: CallbackQuery):
             parsed = urlparse(config.WEBHOOK_URL)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        # VPN key buttons
-        buttons.append([InlineKeyboardButton(
-            text="🔑 Добавить VPN ключ",
-            url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
-        )])
-        # Bypass key buttons
+        show_incy = platform in ("ios", "android", "macos")
+
+        # Ряд 1: VPN-ключ (Happ + Incy) — только если есть основная подписка.
+        if sub_url:
+            row_vpn = [InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.happ_vpn_label", "Happ VPN"),
+                url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
+                style="primary",
+            )]
+            if show_incy:
+                row_vpn.append(InlineKeyboardButton(
+                    text=i18n_get_text(language, "setup.incy_vpn_label", "Incy VPN"),
+                    url=f"{base_url}/open/incy?url={quote(sub_url, safe='')}",
+                    style="success",
+                ))
+            buttons.append(row_vpn)
+
+        # Ряд 2: Обход (Happ + Incy) — только если есть bypass_url
         if bypass_url:
-            buttons.append([InlineKeyboardButton(
-                text="🌐 Добавить обход ключ",
+            row_bypass = [InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.happ_bypass_label", "Happ Обход"),
                 url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
-            )])
+                style="primary",
+            )]
+            if show_incy:
+                row_bypass.append(InlineKeyboardButton(
+                    text=i18n_get_text(language, "setup.incy_bypass_label", "Incy Обход"),
+                    url=f"{base_url}/open/incy?url={quote(bypass_url, safe='')}",
+                    style="success",
+                ))
+            buttons.append(row_bypass)
 
     # === Bottom buttons ===
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_done"),
         callback_data="setup_done",
+        style="danger",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_manual"),
         callback_data=f"setup_manual:{platform}",
+        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_need_help"),
-        url="https://t.me/Atlas_SupportSecurity",
+        url="https://t.me/atlas_suppbot",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data=f"setup_step1:{platform}",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -799,34 +815,58 @@ _SETUP_PHOTOS = {
         "prod": "AgACAgQAAxkBAAEsTzVp2LGqLrhvY1TRSdQdmp_vmS_tEwAC7AxrG6gtyVLmvPzPSqNEwAEAAwIAA3cAAzsE",
         "stage": "AgACAgQAAxkBAAIeumnZWPxaNMkJApJ3JerkNYLX_kJbAALsDGsbqC3JUlRy7JVisnaVAQADAgADdwADOwQ",
     },
+    # Экран единого ключа (aggregator-ветка). Aggregator admin-only на
+    # проде → важен prod file_id; stage пусто → упадёт на текст без фото.
+    "install_keys_agg": {
+        "prod": "AgACAgQAAxkBAAGEhSxqiUQ8DQABFD7v3AABNHucV2UyK_njAAIXEGsbmPNJUM160ezW1tu9AQADAgADdwADPQQ",
+        "stage": "",
+    },
 }
 
 _IOS_HAPP_LINKS = {
-    "ru": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
+    # 2026-XX: старая ссылка happ-proxy-utility/id6783623643 перестала
+    # быть актуальной — App Store переехал на «Happ Proxy Utility Plus»
+    # id6788279553. Единая точка правды для iOS-инсталляции и всех
+    # broadcast-кнопок «Happ iOS».
+    "ru": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6788279553?l=en-GB",
     "global": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215",
 }
 
+_INCY_IOS_URL = "https://apps.apple.com/ru/app/incy/id6756943388?l=en-GB"
+_INCY_ANDROID_URL = "https://play.google.com/store/apps/details?id=llc.itdev.incy&hl=en_IE"
+
 _DOWNLOAD_LINKS = {
+    # 2026-06-08: V2RayTun снят со всех платформ, Hiddify тоже снят.
+    # 2026-07-07: Incy добавлен для Android и macOS — раньше был
+    # только iOS. macOS использует ту же App Store ссылку что и iOS
+    # (Mac с Apple Silicon умеет ставить iOS-приложения из App Store).
     "ios": {
         "happ": _IOS_HAPP_LINKS["ru"],
-        "v2raytun": "https://apps.apple.com/tr/app/v2raytun/id6476628951",
-        "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
+        "incy": _INCY_IOS_URL,
     },
     "android": {
         "happ": "https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
-        "v2raytun": "https://play.google.com/store/apps/details?id=com.v2raytun.android&hl=ru",
-        "hiddify": "https://play.google.com/store/apps/details?id=app.hiddify.com&hl=ru",
+        "incy": _INCY_ANDROID_URL,
     },
     "macos": {
+        # macOS ставит iOS-приложение Incy через App Store — та же ссылка.
         "happ": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
-        "v2raytun": "https://apps.apple.com/tr/app/v2raytun/id6476628951",
-        "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
+        "incy": _INCY_IOS_URL,
     },
     "windows": {
-        "hiddify": "https://github.com/hiddify/hiddify-app/releases/latest",
-        "v2rayn": "https://github.com/2dust/v2rayN/releases/latest",
+        "happ": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
     },
 }
+
+# Допускаем override через env — чтобы не пересобирать образ ради смены
+# App Store ссылки.
+_incy_ios_env = os.getenv("INCY_IOS_APP_URL")
+if _incy_ios_env:
+    _DOWNLOAD_LINKS["ios"]["incy"] = _incy_ios_env
+    _DOWNLOAD_LINKS["macos"]["incy"] = _incy_ios_env
+_incy_android_env = os.getenv("INCY_ANDROID_APP_URL")
+if _incy_android_env:
+    _DOWNLOAD_LINKS["android"]["incy"] = _incy_android_env
 
 
 @router.callback_query(F.data == "setup_device")
@@ -843,16 +883,18 @@ async def callback_setup_device(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
-            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios", style="primary"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android", style="primary"),
         ],
         [
-            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
-            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos", style="primary"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows", style="primary"),
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
 
@@ -911,20 +953,12 @@ async def callback_setup_platform(callback: CallbackQuery):
                 text=i18n_get_text(language, "setup.download_happ"),
                 url=links["happ"],
             )])
-        # Hiddify + V2RayTun — в одной строке
-        second_row = []
-        if "hiddify" in links:
-            second_row.append(InlineKeyboardButton(
-                text=i18n_get_text(language, "setup.download_hiddify"),
-                url=links["hiddify"],
-            ))
-        if "v2raytun" in links:
-            second_row.append(InlineKeyboardButton(
-                text=i18n_get_text(language, "setup.download_v2raytun"),
-                url=links["v2raytun"],
-            ))
-        if second_row:
-            buttons.append(second_row)
+        # Incy — отдельной строкой (iOS / Android / macOS).
+        if "incy" in links:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.install_incy_btn", "📲 Скачать Incy"),
+                url=links["incy"],
+            )])
     else:
         # Windows: download buttons in pairs
         download_row = []
@@ -946,25 +980,33 @@ async def callback_setup_platform(callback: CallbackQuery):
             parsed = urlparse(config.WEBHOOK_URL)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
+        # Incy на iOS показывается только если Node-сайдкар жив. Сразу
+        # пробрасываем флаг сюда, чтобы не плодить нерабочих кнопок.
+        from app.services import incy_crypto
+        ios_clients = ["happ"]
+        if incy_crypto.is_available():
+            ios_clients.append("incy")
+
         _platform_clients = {
-            "ios": ["happ", "v2raytun", "hiddify"],
-            "android": ["happ", "v2raytun", "hiddify"],
-            "macos": ["happ", "v2raytun", "hiddify"],
-            "windows": ["hiddify", "v2rayn"],
+            "ios": ios_clients,
+            "android": ["happ"],
+            "macos": ["happ"],
+            "windows": ["happ"],
         }
         _client_deeplink = {
-            "happ": "happ", "v2raytun": "v2raytun",
-            "hiddify": "hiddify", "v2rayn": "hiddify",
+            "happ": "happ",
+            "incy": "incy",
         }
         _client_names = {
-            "happ": "Happ", "v2raytun": "V2RayTun",
-            "hiddify": "Hiddify", "v2rayn": "v2rayN",
+            "happ": "Happ",
+            "incy": "Incy",
         }
 
         # Decorative separator
         buttons.append([InlineKeyboardButton(
-            text="Установка ключа в одно нажатие 👇",
+            text=i18n_get_text(language, "setup.key_hint_press", "Установка ключа в одно нажатие 👇"),
             callback_data="noop",
+            style="primary",
         )])
 
         clients = _platform_clients.get(platform, [])
@@ -987,37 +1029,29 @@ async def callback_setup_platform(callback: CallbackQuery):
         InlineKeyboardButton(
             text=i18n_get_text(language, "setup.manual_button"),
             callback_data=f"setup_manual:{platform}",
+            style="primary",
         ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "setup.qr_button"),
             callback_data=f"setup_qr:{platform}",
+            style="primary",
         ),
     ])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.done_button"),
         callback_data="setup_done",
+        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="connect_instruction",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
-
-
-@router.callback_query(F.data.startswith("setup_key:"))
-async def callback_setup_key(callback: CallbackQuery):
-    """Legacy redirect — перенаправляем на объединённый экран."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-    platform = callback.data.split(":")[1]
-    # Rewrite callback data and redirect
-    callback.data = f"setup_platform:{platform}"
-    await callback_setup_platform(callback)
 
 
 @router.callback_query(F.data.startswith("setup_manual:"))
@@ -1031,6 +1065,55 @@ async def callback_setup_manual(callback: CallbackQuery):
     platform = callback.data.split(":")[1]
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
+
+    # ── Aggregator-branch: один ключ (склеенная подписка) → 2 encrypted ссылки
+    from app.services import sub_aggregator
+    agg_url = None
+    if sub_aggregator.is_enabled_for(telegram_id):
+        try:
+            agg_url = await sub_aggregator.ensure_pair(telegram_id)
+        except Exception as e:
+            logger.warning("SETUP_MANUAL aggregator ensure_pair failed tg=%s: %s", telegram_id, e)
+
+    from app.services import happ_crypto, incy_crypto
+    connect_text = i18n_get_text(language, f"setup.connect_{platform}")
+
+    if agg_url:
+        # 1 ссылка агрегатора → 2 encrypted формы (Happ + Incy).
+        # Никаких "VPN vs Обход" — теперь всё в одном ключе.
+        happ_link = happ_crypto.format_for_user(agg_url)
+        keys_section = (
+            "\n" + i18n_get_text(language, "setup.key_happ_label", "🔑 <b>Ключ Happ</b>:") + "\n"
+            f"<blockquote expandable><code>{happ_link}</code></blockquote>"
+        )
+        if platform in ("ios", "android", "macos"):
+            try:
+                incy_link = await incy_crypto.to_incy_link(agg_url)
+                if incy_link:
+                    keys_section += (
+                        "\n" + i18n_get_text(language, "setup.key_incy_label", "💚 <b>Ключ Incy</b>:") + "\n"
+                        f"<blockquote expandable><code>{incy_link}</code></blockquote>"
+                    )
+            except Exception:
+                logger.exception("SETUP_MANUAL incy_crypto failed for agg_url")
+        text = f"{connect_text}\n{keys_section}"
+
+        buttons = [
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.done_button"),
+                callback_data="setup_done",
+                style="primary",
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data=f"setup_step2:{platform}",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )],
+        ]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+        return
 
     subscription = await database.get_subscription(telegram_id)
     sub_url = None
@@ -1047,28 +1130,93 @@ async def callback_setup_manual(callback: CallbackQuery):
         from app.services.user_subscription_links import get_user_bypass_url
         bypass_url = await get_user_bypass_url(telegram_id)
 
-    connect_text = i18n_get_text(language, f"setup.connect_{platform}")
+    # Build keys section (legacy dual-key).
+    # — Happ-ключи (sealed crypt4) для всех платформ;
+    # — Incy-ключи (crypt1) для iOS/Android/macOS. Windows не показываем:
+    #   Incy-клиента под Windows нет, incy://crypt1/... deep-link
+    #   там некому обрабатывать.
+    # Все ключи в свёрнутой цитате (blockquote expandable) — экран
+    # компактный по умолчанию, юзер раскрывает только нужный ключ.
+    def _happ_key_block(label_key: str, raw_url: str) -> str:
+        happ_link = happ_crypto.format_for_user(raw_url)
+        return (
+            "\n" + i18n_get_text(language, label_key) + "\n"
+            f"<blockquote expandable><code>{happ_link}</code></blockquote>"
+        )
 
-    # Build keys section
+    async def _incy_key_block(label_key: str, raw_url: str) -> str:
+        incy_link = await incy_crypto.to_incy_link(raw_url)
+        # Если sidecar не вернул даже fallback — пропускаем блок.
+        if not incy_link:
+            return ""
+        return (
+            "\n" + i18n_get_text(language, label_key) + "\n"
+            f"<blockquote expandable><code>{incy_link}</code></blockquote>"
+        )
+
     keys_section = ""
     if sub_url:
-        keys_section += i18n_get_text(language, "setup.key_vpn_label") + "\n<blockquote><code>" + sub_url + "</code></blockquote>"
+        keys_section += _happ_key_block("setup.key_vpn_label", sub_url)
     if bypass_url:
-        keys_section += "\n" + i18n_get_text(language, "setup.key_bypass_label") + "\n<blockquote><code>" + bypass_url + "</code></blockquote>"
+        keys_section += _happ_key_block("setup.key_bypass_label", bypass_url)
+    if platform in ("ios", "android", "macos"):
+        if sub_url:
+            keys_section += await _incy_key_block("setup.key_vpn_incy_label", sub_url)
+        if bypass_url:
+            keys_section += await _incy_key_block("setup.key_bypass_incy_label", bypass_url)
 
     if keys_section:
-        text = f"{connect_text}\n\n{keys_section}"
+        text = f"{connect_text}\n{keys_section}"
     else:
         text = connect_text
+
+    # Альтернативный ключ (премиум + обход) — ВРЕМЕННО СКРЫТ
+    # (_SETUP_ALT_KEY_ENABLED). Реальные сырые ссылки подписки с панели, без
+    # подмен хоста; премиум по username `tg_{id}_premium`, обход по `str(id)`.
+    if _SETUP_ALT_KEY_ENABLED:
+        from app.services import remnawave_api
+        alt_premium = None
+        try:
+            from app.services.remnawave_premium import build_premium_username
+            _pent = await remnawave_api.find_user_by_username(build_premium_username(telegram_id))
+            alt_premium = ((_pent or {}).get("subscriptionUrl") or "").strip() or None
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("SETUP_MANUAL alt-premium fetch failed tg=%s: %s", telegram_id, _e)
+        alt_premium = alt_premium or sub_url
+
+        alt_bypass = None
+        try:
+            _bent = await remnawave_api.get_bypass_entity_safe(telegram_id)
+            alt_bypass = ((_bent or {}).get("subscriptionUrl") or "").strip() or None
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("SETUP_MANUAL alt-bypass fetch failed tg=%s: %s", telegram_id, _e)
+        alt_bypass = alt_bypass or bypass_url
+
+        alt_section = ""
+        if alt_premium:
+            alt_section += (
+                "\n" + i18n_get_text(language, "setup.alt_key_premium")
+                + f"\n<blockquote expandable><code>{alt_premium}</code></blockquote>"
+            )
+        if alt_bypass:
+            alt_section += (
+                "\n" + i18n_get_text(language, "setup.alt_key_bypass")
+                + f"\n<blockquote expandable><code>{alt_bypass}</code></blockquote>"
+            )
+        if alt_section:
+            text += "\n\n" + i18n_get_text(language, "setup.manual_alt_hint") + alt_section
 
     buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "setup.done_button"),
             callback_data="setup_done",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data=f"setup_step2:{platform}",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ]
 
@@ -1093,7 +1241,14 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
         pass
 
     # 2. Отправляем 🎉
-    msg = await callback.bot.send_message(chat_id=telegram_id, text="🎉", parse_mode="HTML")
+    msg = await callback.bot.send_message(
+        chat_id=telegram_id,
+        # parse_mode=HTML обязателен — иначе Telegram отдаст
+        # текст вместо premium-эмодзи. Fallback внутри тега
+        # (⚡️) увидят non-premium юзеры и старые клиенты.
+        text='<tg-emoji emoji-id="5456140674028019486">⚡️</tg-emoji>',
+        parse_mode="HTML",
+    )
 
     # 3. Ждём 2 секунды
     await asyncio.sleep(2)
@@ -1136,6 +1291,8 @@ async def callback_setup_qr(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data=f"setup_platform:{platform}",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )]])
         await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
         return
@@ -1157,16 +1314,20 @@ async def callback_setup_qr(callback: CallbackQuery):
         [InlineKeyboardButton(
             text="🌐 " + i18n_get_text(language, "setup.qr_standard_btn"),
             callback_data=f"setup_qr_standard:{platform}",
+            style="primary",
         )],
     ]
     if has_bypass:
         buttons.append([InlineKeyboardButton(
             text="🤍 " + i18n_get_text(language, "setup.qr_bypass_btn"),
             callback_data=f"setup_qr_bypass:{platform}",
+            style="primary",
         )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data=f"setup_platform:{platform}",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1175,76 +1336,172 @@ async def callback_setup_qr(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("setup_qr_standard:"))
 async def callback_setup_qr_standard(callback: CallbackQuery):
-    """QR-код обычных серверов."""
+    """Выбор приложения (Happ / Incy) для обычных серверов."""
     try:
         await callback.answer()
     except Exception:
         pass
 
     platform = callback.data.split(":")[1]
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    subscription = await database.get_subscription(telegram_id)
-    if subscription:
-        from app.services.user_subscription_links import get_user_primary_subscription_url
-        sub_url = await get_user_primary_subscription_url(telegram_id)
-    else:
-        sub_url = None
-
-    if not sub_url:
-        text = i18n_get_text(language, "get_key.no_subscription")
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_qr:{platform}",
-        )]])
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-        return
-
-    await _send_qr_screen(callback, platform, sub_url, language, label_key="setup.key_vpn_label")
+    language = await resolve_user_language(callback.from_user.id)
+    await _show_qr_app_choice(callback, platform, "standard", language)
 
 
 @router.callback_query(F.data.startswith("setup_qr_bypass:"))
 async def callback_setup_qr_bypass(callback: CallbackQuery):
-    """QR-код обхода белых списков."""
+    """Выбор приложения (Happ / Incy) для обхода белых списков."""
     try:
         await callback.answer()
     except Exception:
         pass
 
     platform = callback.data.split(":")[1]
+    language = await resolve_user_language(callback.from_user.id)
+    await _show_qr_app_choice(callback, platform, "bypass", language)
+
+
+async def _show_qr_app_choice(callback: CallbackQuery, platform: str, kind: str, language: str):
+    """Экран «Выберите приложение» — Incy / Happ.
+
+    kind: 'standard' (обычные сервера) либо 'bypass' (обход).
+    Кнопки ведут на единый хендлер setup_qr_app:{client}:{kind}:{platform},
+    который уже забирает URL подписки и рендерит QR через _send_qr_screen."""
+    text = i18n_get_text(language, "setup.qr_choose_app")
+
+    buttons = [
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.qr_app_btn_incy"),
+            callback_data=f"setup_qr_app:incy:{kind}:{platform}",
+            style="success",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.qr_app_btn_happ"),
+            callback_data=f"setup_qr_app:happ:{kind}:{platform}",
+            style="primary",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"setup_qr:{platform}",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
+        )],
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("setup_qr_app:"))
+async def callback_setup_qr_app(callback: CallbackQuery):
+    """QR-код подписки для выбранного приложения (Happ / Incy).
+
+    Формат callback'а: setup_qr_app:{client}:{kind}:{platform}
+      client  — 'happ' | 'incy'
+      kind    — 'standard' (обычные сервера) | 'bypass' (обход)
+      platform — ios/android/macos/windows (для back-навигации)
+    """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        return
+    _, client, kind, platform = parts
+    if client not in ("happ", "incy") or kind not in ("standard", "bypass"):
+        return
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    # Bypass key: available independently of main subscription
-    bypass_url = None
-    if config.REMNAWAVE_ENABLED:
-        from app.services import remnawave_api
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-            if traffic:
-                bypass_url = traffic.get("subscriptionUrl", "") or None
+    if kind == "standard":
+        subscription = await database.get_subscription(telegram_id)
+        if subscription:
+            from app.services.user_subscription_links import get_user_primary_subscription_url
+            url = await get_user_primary_subscription_url(telegram_id)
+        else:
+            url = None
 
-    if not bypass_url:
-        text = i18n_get_text(language, "setup.qr_bypass_unavailable")
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_qr:{platform}",
-        )]])
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
-        return
+        if not url:
+            text = i18n_get_text(language, "get_key.no_subscription")
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data=f"setup_qr_standard:{platform}",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )]])
+            await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+            return
 
-    await _send_qr_screen(callback, platform, bypass_url, language, label_key="setup.key_bypass_label")
+        label_key = "setup.key_vpn_incy_label" if client == "incy" else "setup.key_vpn_label"
+    else:
+        url = None
+        if config.REMNAWAVE_ENABLED:
+            from app.services import remnawave_api
+            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+            if rmn_uuid:
+                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+                if traffic:
+                    url = traffic.get("subscriptionUrl", "") or None
+
+        if not url:
+            text = i18n_get_text(language, "setup.qr_bypass_unavailable")
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data=f"setup_qr_bypass:{platform}",
+                icon_custom_emoji_id=CE["back"],
+                style="primary",
+            )]])
+            await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+            return
+
+        label_key = "setup.key_bypass_incy_label" if client == "incy" else "setup.key_bypass_label"
+
+    await _send_qr_screen(
+        callback, platform, url, language,
+        label_key=label_key, client=client, kind=kind,
+    )
 
 
-async def _send_qr_screen(callback: CallbackQuery, platform: str, url: str, language: str, label_key: str):
-    """Генерация QR-кода и отправка экрана с инструкцией."""
+async def _send_qr_screen(
+    callback: CallbackQuery,
+    platform: str,
+    url: str,
+    language: str,
+    label_key: str,
+    client: str = "happ",
+    kind: str = "standard",
+):
+    """Генерация QR-кода и отправка экрана с инструкцией.
+
+    Happ → `happ://crypt4/<base64>` (pure-Python RSA-4096 sealing).
+    Incy → `incy://crypt1/<payload>` (AES-256-GCM через Node sidecar;
+    при недоступности sidecar'а incy_crypto само деградирует до
+    `incy://add/<plain_url>` — экран всё равно живой)."""
     telegram_id = callback.from_user.id
+
+    if client == "incy":
+        # incy_crypto.to_incy_link сам кэширует, делает graceful
+        # fallback и ловит исключения от sidecar'а. На совсем редкий
+        # случай (например, наша обёртка кинула TypeError) — ловим
+        # тут, чтобы экран всё равно отрендерился с сырой ссылкой.
+        from app.services import incy_crypto
+        try:
+            wrapped = await incy_crypto.to_incy_link(url)
+        except Exception:
+            wrapped = None
+        crypt_url = wrapped or url
+        instruction_key = "setup.qr_instruction_incy"
+    else:
+        # format_for_user сам падает в raw URL при ошибке шифрования,
+        # экран всегда отдаст рабочую ссылку.
+        from app.services import happ_crypto
+        crypt_url = happ_crypto.format_for_user(url) or url
+        instruction_key = "setup.qr_instruction"
 
     import qrcode
     qr = qrcode.QRCode(version=1, box_size=10, border=2)
-    qr.add_data(url)
+    qr.add_data(crypt_url)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
 
@@ -1252,17 +1509,29 @@ async def _send_qr_screen(callback: CallbackQuery, platform: str, url: str, lang
     img.save(buf, format="PNG")
     buf.seek(0)
 
-    qr_text = i18n_get_text(language, "setup.qr_instruction")
-    qr_text += "\n\n" + i18n_get_text(language, label_key) + "\n<blockquote><code>" + url + "</code></blockquote>"
+    qr_text = i18n_get_text(language, instruction_key)
+    # <blockquote expandable> сворачивает длинную (~700 char) ссылку
+    # до одной строки с «Show more» — тап по <code> копирует.
+    qr_text += (
+        "\n\n" + i18n_get_text(language, label_key) + "\n"
+        f"<blockquote expandable><code>{crypt_url}</code></blockquote>"
+    )
+
+    # Back → возвращаемся на экран выбора приложения (тот же handler
+    # setup_qr_standard/bypass, что теперь рендерит app-picker).
+    back_cb = f"setup_qr_{kind}:{platform}"
 
     buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "setup.done_button"),
             callback_data="setup_done",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_qr:{platform}",
+            callback_data=back_cb,
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1301,14 +1570,18 @@ async def callback_buy_combo(callback: CallbackQuery):
         [InlineKeyboardButton(
             text=i18n_get_text(language, "combo.select_basic"),
             callback_data="combo_tariff:combo_basic",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "combo.select_plus"),
             callback_data="combo_tariff:combo_plus",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_buy_vpn",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1347,9 +1620,9 @@ async def callback_combo_tariff(callback: CallbackQuery, state: FSMContext):
     discount_pct = promo_session.get("discount_percent", 0) if promo_session else 0
 
     if discount_pct > 0:
-        text += f"\n\n🎁 Промокод: скидка {discount_pct}%\nВыберите период:"
+        text += i18n_get_text(language, "combo.promo_period_prompt", "\n\n🎁 Промокод: скидка {discount_pct}%\nВыберите период:", discount_pct=discount_pct)
     else:
-        text += "\n\nВыберите период:"
+        text += i18n_get_text(language, "combo.choose_period_prompt", "\n\nВыберите период:")
 
     from app.handlers.payments.callbacks import _period_badge
     from app.services.subscriptions import service as subscription_service
@@ -1376,11 +1649,14 @@ async def callback_combo_tariff(callback: CallbackQuery, state: FSMContext):
         buttons.append([InlineKeyboardButton(
             text=btn_text,
             callback_data=f"combo_period:{combo_type}:{period_days}",
+            style="primary",
         )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="buy_combo",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1446,102 +1722,6 @@ async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
     await show_payment_method_selection(callback, base_tariff, period_days, price_kopecks)
 
 
-@router.callback_query(F.data.startswith("combo_pay_balance:"))
-async def callback_combo_pay_balance(callback: CallbackQuery):
-    """Оплата комбо с баланса: активация подписки + начисление трафика обхода."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    parts = callback.data.split(":")
-    if len(parts) != 3:
-        return
-    combo_type = parts[1]
-    try:
-        period_days = int(parts[2])
-    except (ValueError, IndexError):
-        return
-
-    if combo_type not in config.COMBO_TARIFFS:
-        return
-    info = config.COMBO_TARIFFS[combo_type].get(period_days)
-    if not info:
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    price = info["price"]
-    gb = info["gb"]
-    base_tariff = info["base_tariff"]
-
-    balance = await database.get_user_balance(telegram_id)
-    if balance < price:
-        text = i18n_get_text(language, "traffic.insufficient_balance")
-        buttons = [[InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"combo_period:{combo_type}:{period_days}",
-        )]]
-        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
-        return
-
-    # 1. Create pending purchase with base tariff
-    from app.services.subscriptions import service as subscription_service
-    price_kopecks = price * 100
-    try:
-        purchase_id = await subscription_service.create_subscription_purchase(
-            telegram_id=telegram_id,
-            tariff=base_tariff,
-            period_days=period_days,
-            price_kopecks=price_kopecks,
-            is_combo=True,
-        )
-    except Exception as e:
-        logger.error(f"Combo purchase creation failed: {e}")
-        text = "❌ Ошибка создания покупки. Попробуйте позже."
-        buttons = [[InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_combo")]]
-        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
-        return
-
-    # 2. Deduct balance
-    await database.decrease_balance(telegram_id, price, source="combo_purchase", description=f"Combo {base_tariff} {period_days}d + {gb}GB bypass")
-
-    # 3. Finalize purchase (activates subscription, creates VPN key, etc.)
-    try:
-        result = await subscription_service.finalize_purchase(
-            purchase_id=purchase_id,
-            payment_provider="balance",
-            amount_rubles=float(price),
-        )
-        if not result.get("success"):
-            logger.error(f"Combo finalize failed: {result}")
-    except Exception as e:
-        logger.error(f"Combo finalize error: {e}")
-
-    # 4. Add bypass traffic
-    from app.services import remnawave_service
-    traffic_bytes = gb * 1024**3
-    try:
-        rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
-        if not rmn_success:
-            logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_FAIL user={telegram_id} gb={gb}")
-    except Exception as traffic_err:
-        logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_ERROR user={telegram_id}: {traffic_err}")
-
-    # 5. Record traffic purchase + mark as combo
-    await database.record_traffic_purchase(telegram_id, gb, 0)
-    await database.set_combo_flag(telegram_id, True)
-
-    months = period_days // 30
-    text = i18n_get_text(language, "combo.purchase_success",
-                         tariff=base_tariff.capitalize(), months=months, gb=gb)
-    buttons = [
-        [InlineKeyboardButton(text="📲 Подключиться", callback_data="connect_instruction")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
-    ]
-    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
-
-
 # ── Mini Shop ────────────────────────────────────────────────────
 
 _APPLE_USD_RATE = 101   # RUB per 1 USD
@@ -1549,11 +1729,59 @@ _APPLE_TRY_RATE = 2.9   # RUB per 1 TRY
 
 _APPLE_NOMINALS = {
     "usa": [2, 5, 10, 15, 20, 25, 50, 60, 70],
-    "turkey": [100, 150, 200, 300, 500, 600],
+    "turkey": [100, 200, 300, 500, 600],
+    "russia": [500, 800, 1000, 1500, 2000, 2500, 3000],
+    "india": [100, 200, 250, 500, 1000],
 }
-_APPLE_CURRENCIES = {"usa": "$", "turkey": "TL"}
+_APPLE_CURRENCIES = {"usa": "$", "turkey": "TL", "russia": "₽", "india": "INR"}
 _APPLE_RATES = {"usa": _APPLE_USD_RATE, "turkey": _APPLE_TRY_RATE}
-_APPLE_REGIONS = {"usa": "🇺🇸 USA", "turkey": "🇹🇷 Turkey"}
+_APPLE_REGIONS = {
+    "usa": "🇺🇸 USA",
+    "turkey": "🇹🇷 Turkey",
+    "russia": "🇷🇺 Russia",
+    "india": "🇮🇳 India",
+}
+
+# Явные price-точки для регионов, где нет линейного rate-конвертирования.
+# Ключ — nominal региона, значение — цена в рублях к оплате.
+# usa/turkey тоже держим тут (а не через rate), чтобы цены оставались
+# ЦЕЛЫМИ рублями после наценки — иначе в оплате (price_kopecks) полезли бы
+# копейки. usa = базовая (nominal×101) ×1.15; turkey = (nominal×2.9) ×1.20.
+_APPLE_PRICES_EXPLICIT: dict[str, dict[int, int]] = {
+    "usa": {
+        2: 232, 5: 581, 10: 1162, 15: 1742, 20: 2323,
+        25: 2904, 50: 5808, 60: 6969, 70: 8131,
+    },
+    "turkey": {
+        100: 348, 200: 696, 300: 1044, 500: 1740, 600: 2088,
+    },
+    "russia": {
+        500: 1400, 800: 2200, 1000: 2600, 1500: 3900,
+        2000: 5200, 2500: 6400, 3000: 7700,
+    },
+    "india": {
+        100: 149, 200: 249, 250: 299, 500: 599, 1000: 1099,
+    },
+}
+
+
+def _apple_price_rub(region: str, nominal: int) -> float:
+    """RUB-цена номинала для региона. Explicit-таблица приоритетнее rate."""
+    table = _APPLE_PRICES_EXPLICIT.get(region)
+    if table and nominal in table:
+        return float(table[nominal])
+    rate = _APPLE_RATES.get(region, 93)
+    return round(nominal * rate, 2)
+
+
+def _apple_nominal_label(region: str, nominal: int) -> str:
+    """5$ / 500 TL / 500₽ / 100 INR — как показать номинал юзеру."""
+    cur = _APPLE_CURRENCIES.get(region, "$")
+    if cur == "$":
+        return f"{nominal}$"
+    if cur == "₽":
+        return f"{nominal}₽"
+    return f"{nominal} {cur}"
 
 
 @router.callback_query(F.data == "mini_shop")
@@ -1565,13 +1793,17 @@ async def callback_mini_shop(callback: CallbackQuery):
         pass
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "shop.title")
+    # Telegram Stars временно скрыт (по запросу). Callback stars_buy и
+    # обвязка i18n оставлены на месте — вернуть кнопку = раскомментировать
+    # строку ниже.
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚡️ Telegram Premium", callback_data="premium_buy")],
-        [InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="stars_buy")],
-        [InlineKeyboardButton(text="🍎 Пополнить Apple ID", callback_data="apple_region")],
-        [InlineKeyboardButton(text="🎮 Пополнить Steam", callback_data="steam:disclaimer")],
-        [InlineKeyboardButton(text="🧠 Claude Pro/Max (скоро)", callback_data="claude_coming_soon")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "shop.premium_button", "⚡️ Telegram Premium"), callback_data="premium_buy", style="primary")],
+        # [InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="stars_buy")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "shop.apple_id_button", "🍎 Пополнить Apple ID"), callback_data="apple_region", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "shop.steam_top_up_button", "🎮 Пополнить Steam"), callback_data="steam:disclaimer", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "shop.spotify_button", "🎧 Spotify Premium"), callback_data="spotify:start", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "shop.claude_coming_soon_button", "🧠 Claude Pro/Max (скоро)"), callback_data="claude_coming_soon", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
 
     # Delete the previous message (be it text or photo) and send a fresh
@@ -1602,6 +1834,29 @@ async def callback_menu_help(callback: CallbackQuery):
     await _open_help_screen(callback, callback.bot)
 
 
+@router.callback_query(F.data == "help_contacts")
+async def callback_help_contacts(callback: CallbackQuery):
+    """Contacts — support and sales emails (photo screen)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    from app.handlers.common.screens import _send_screen_photo, CONTACTS_PHOTO_FILE_ID
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "help.contacts_title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_help", icon_custom_emoji_id=CE["back"], style="primary")],
+    ])
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await _send_screen_photo(
+        callback.bot, callback.message.chat.id, CONTACTS_PHOTO_FILE_ID, text,
+        reply_markup=keyboard, parse_mode="HTML",
+    )
+
+
 @router.callback_query(F.data == "faq")
 async def callback_faq(callback: CallbackQuery):
     """FAQ — top questions."""
@@ -1612,10 +1867,10 @@ async def callback_faq(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "help.faq_title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, f"help.faq_q{n}"), callback_data=f"faq:{n}")]
-        for n in range(1, 9)
+        [InlineKeyboardButton(text=i18n_get_text(language, f"help.faq_q{n}"), callback_data=f"faq:{n}", style="primary")]
+        for n in range(1, 10)
     ] + [
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_help")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_help", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
@@ -1629,15 +1884,15 @@ async def callback_faq_answer(callback: CallbackQuery):
         pass
     try:
         n = int(callback.data.split(":", 1)[1])
-        if n < 1 or n > 8:
+        if n < 1 or n > 9:
             return
     except (ValueError, IndexError):
         return
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, f"help.faq_a{n}")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/Atlas_SupportSecurity")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="faq")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.help_button", "💬 Помощь"), url="https://t.me/atlas_suppbot")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="faq", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
@@ -1652,9 +1907,11 @@ async def callback_apple_region(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "shop.apple_title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🇺🇸 USA", callback_data="apple_amount:usa")],
-        [InlineKeyboardButton(text="🇹🇷 Turkey", callback_data="apple_amount:turkey")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+        [InlineKeyboardButton(text="🇺🇸 USA", callback_data="apple_amount:usa", style="primary")],
+        [InlineKeyboardButton(text="🇹🇷 Turkey", callback_data="apple_amount:turkey", style="primary")],
+        [InlineKeyboardButton(text="🇷🇺 Russia", callback_data="apple_amount:russia", style="primary")],
+        [InlineKeyboardButton(text="🇮🇳 India", callback_data="apple_amount:india", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
@@ -1669,8 +1926,6 @@ async def callback_apple_amount(callback: CallbackQuery):
     region = callback.data.split(":")[1]
     language = await resolve_user_language(callback.from_user.id)
     nominals = _APPLE_NOMINALS.get(region, [])
-    currency = _APPLE_CURRENCIES.get(region, "$")
-    rate = _APPLE_RATES.get(region, 93)
     region_label = _APPLE_REGIONS.get(region, region)
 
     text = i18n_get_text(language, "shop.apple_amount_title", region=region_label)
@@ -1678,10 +1933,11 @@ async def callback_apple_amount(callback: CallbackQuery):
     buttons = []
     row = []
     for nom in nominals:
-        price_rub = round(nom * rate)
+        price_rub = round(_apple_price_rub(region, nom))
         row.append(InlineKeyboardButton(
-            text=f"{nom}{currency} — {price_rub}₽",
+            text=f"{_apple_nominal_label(region, nom)} — {price_rub}₽",
             callback_data=f"apple_confirm:{region}:{nom}",
+            style="primary",
         ))
         if len(row) == 2:
             buttons.append(row)
@@ -1690,6 +1946,7 @@ async def callback_apple_amount(callback: CallbackQuery):
         buttons.append(row)
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"), callback_data="apple_region",
+        icon_custom_emoji_id=CE["back"], style="primary",
     )])
 
     await safe_edit_text(
@@ -1709,25 +1966,34 @@ async def callback_apple_confirm(callback: CallbackQuery):
     parts = callback.data.split(":")
     region = parts[1]
     nominal = int(parts[2])
-    language = await resolve_user_language(callback.from_user.id)
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
 
-    currency = _APPLE_CURRENCIES.get(region, "$")
-    rate = _APPLE_RATES.get(region, 93)
+    # Валидируем номинал против актуального списка региона: снятые с продажи
+    # номиналы (напр. Turkey 150 TL) не должны покупаться даже crafted-callback'ом.
+    if nominal not in _APPLE_NOMINALS.get(region, []):
+        await callback.answer("Этот номинал недоступен.", show_alert=True)
+        return
+
     region_label = _APPLE_REGIONS.get(region, region)
-    price_rub = round(nominal * rate, 2)
-    nominal_str = f"{nominal}{currency}"
+    price_rub = _apple_price_rub(region, nominal)
+    nominal_str = _apple_nominal_label(region, nominal)
 
     text = i18n_get_text(language, "shop.apple_confirm",
                          region=region_label, nominal=nominal_str, price=price_rub)
 
+    # СБП в shop-магазине (Apple ID) оставляем Platega. Lava-кнопка
+    # подменена на Wata (apple_pay_lava → apple_pay_wata) — код Lava
+    # не удаляем, только UI-роутинг.
     buttons = [
-        [InlineKeyboardButton(text="💳 Банковская карта", callback_data=f"apple_pay_card:{region}:{nominal}")],
-        [InlineKeyboardButton(text="📱 СБП 3%", callback_data=f"apple_pay_lava:{region}:{nominal}")],
-        [InlineKeyboardButton(text="📱 СБП", callback_data=f"apple_pay_sbp:{region}:{nominal}")],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"), callback_data=f"apple_amount:{region}",
-        )],
+        [InlineKeyboardButton(text=i18n_get_text(language, "payment.card_pl_pay_button", "💳 Оплатить картой"), callback_data=f"apple_pay_card:{region}:{nominal}", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button", "📱 Оплатить по СБП") + " 3%", callback_data=f"apple_pay_wata:{region}:{nominal}", style="primary")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp_pay_button", "🏦 Оплатить через СБП"), callback_data=f"apple_pay_sbp:{region}:{nominal}", style="primary")],
     ]
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"), callback_data=f"apple_amount:{region}",
+        icon_custom_emoji_id=CE["back"], style="primary",
+    )])
 
     await safe_edit_text(
         callback.message, text,
@@ -1752,16 +2018,15 @@ async def callback_apple_pay_lava(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    rate = _APPLE_RATES.get(region, 93)
-    price_rub = round(nominal * rate, 2)
+    price_rub = _apple_price_rub(region, nominal)
 
     import lava_service
     if not lava_service.is_enabled():
-        await callback.answer("Оплата картой временно недоступна", show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.card_payment_unavailable", "Оплата картой временно недоступна"), show_alert=True)
         return
 
-    currency = _APPLE_CURRENCIES.get(region, "$")
     region_label = _APPLE_REGIONS.get(region, region)
+    nominal_label = _apple_nominal_label(region, nominal)
 
     purchase_id = await database.create_pending_purchase(
         telegram_id=telegram_id,
@@ -1774,7 +2039,7 @@ async def callback_apple_pay_lava(callback: CallbackQuery):
     invoice_data = await lava_service.create_invoice(
         amount_rubles=price_rub,
         purchase_id=purchase_id,
-        comment=f"Apple ID {region_label} {nominal}{currency}",
+        comment=f"Apple ID {region_label} {nominal_label}",
     )
 
     payment_url = invoice_data["payment_url"]
@@ -1787,7 +2052,7 @@ async def callback_apple_pay_lava(callback: CallbackQuery):
     text = i18n_get_text(language, "payment.lava_waiting", amount=price_rub)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button"), url=payment_url)],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
 
     lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
@@ -1801,14 +2066,73 @@ async def callback_apple_pay_lava(callback: CallbackQuery):
     asyncio.create_task(_del(callback.bot, telegram_id, lava_msg))
 
 
+@router.callback_query(F.data.startswith("apple_pay_wata:"))
+async def callback_apple_pay_wata(callback: CallbackQuery):
+    """Apple ID — pay via Wata (admin-only beta)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    parts = callback.data.split(":")
+    region = parts[1]
+    nominal = int(parts[2])
+    telegram_id = callback.from_user.id
+
+    import wata_service
+    if not wata_service.is_visible_to(telegram_id):
+        await callback.answer("Wata пока в закрытой бете", show_alert=True)
+        return
+
+    price_rub = _apple_price_rub(region, nominal)
+    region_label = _APPLE_REGIONS.get(region, region)
+    nominal_label = _apple_nominal_label(region, nominal)
+
+    purchase_id = await database.create_pending_purchase(
+        telegram_id=telegram_id,
+        tariff=f"apple_id_{region}_{nominal}",
+        period_days=0,
+        price_kopecks=round(price_rub * 100),
+        purchase_type="apple_id",
+    )
+    try:
+        invoice = await wata_service.create_invoice(
+            amount_rubles=price_rub,
+            purchase_id=purchase_id,
+            comment=f"Apple ID {region_label} {nominal_label}",
+            user_id=telegram_id,
+        )
+    except Exception as e:
+        logger.exception("APPLE_WATA_INVOICE_ERROR user=%s: %s", telegram_id, e)
+        await callback.answer("Ошибка создания платежа Wata", show_alert=True)
+        return
+    try:
+        await database.update_pending_purchase_invoice_id(purchase_id, str(invoice["invoice_id"]))
+    except Exception:
+        pass
+
+    text = f"💳 <b>Оплата через СБП 2</b>\n\nApple ID {region_label} · {nominal_label}\nК оплате: <b>{price_rub:.2f} ₽</b>"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"💳 Оплатить {price_rub:.0f} ₽", url=invoice["payment_url"])],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
+    ])
+    msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+    async def _del(bot, cid, m):
+        try:
+            await asyncio.sleep(15 * 60)
+            await bot.delete_message(chat_id=cid, message_id=m.message_id)
+        except Exception:
+            pass
+    asyncio.create_task(_del(callback.bot, telegram_id, msg))
+
+
 async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int, price_rub: float):
     """Send user confirmation + admin notification for Apple ID purchase."""
     from datetime import datetime, timezone
 
     language = await resolve_user_language(telegram_id)
-    currency = _APPLE_CURRENCIES.get(region, "$")
     region_label = _APPLE_REGIONS.get(region, region)
-    nominal_str = f"{nominal}{currency}"
+    nominal_str = _apple_nominal_label(region, nominal)
     price_str = f"{price_rub:.2f}"
 
     # User notification
@@ -1817,8 +2141,8 @@ async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int
         region=region_label, nominal=nominal_str, price=price_str,
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/Atlas_SupportSecurity")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="menu_main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.support_short", "💬 Поддержка"), url="https://t.me/atlas_suppbot")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back_arrow", "🔙 Назад"), callback_data="menu_main", icon_custom_emoji_id=CE["back"], style="primary")],
     ])
     try:
         await bot.send_message(telegram_id, text, reply_markup=kb, parse_mode="HTML")
@@ -1837,9 +2161,8 @@ async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int
         price=price_str, date=now_str,
     )
     try:
-        admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Написать пользователю", callback_data="admin:chat")],
-        ])
+        from app.handlers.admin.apple_id_delivery import build_apple_admin_keyboard
+        admin_kb = build_apple_admin_keyboard(telegram_id, region, nominal)
         await bot.send_message(config.ADMIN_TELEGRAM_ID, admin_text, reply_markup=admin_kb, parse_mode="HTML")
     except Exception as e:
         logger.error("APPLE_ADMIN_NOTIFY_FAILED error=%s", e)
@@ -1859,19 +2182,18 @@ async def callback_apple_pay_card(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    rate = _APPLE_RATES.get(region, 93)
-    price_rub = round(nominal * rate, 2)
+    price_rub = _apple_price_rub(region, nominal)
     price_kopecks = round(price_rub * 100)
-    currency = _APPLE_CURRENCIES.get(region, "$")
+    nominal_label = _apple_nominal_label(region, nominal)
     region_label = _APPLE_REGIONS.get(region, region)
 
     if not config.TG_PROVIDER_TOKEN:
-        await callback.answer("Оплата картой временно недоступна", show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.card_payment_unavailable", "Оплата картой временно недоступна"), show_alert=True)
         return
 
     MIN_PAYMENT_KOPECKS = 6400
     if price_kopecks < MIN_PAYMENT_KOPECKS:
-        await callback.answer("Сумма ниже минимальной для оплаты картой (64₽)", show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.min_card_amount", "Сумма ниже минимальной для оплаты картой (64₽)"), show_alert=True)
         return
 
     purchase_id = await database.create_pending_purchase(
@@ -1888,12 +2210,12 @@ async def callback_apple_pay_card(callback: CallbackQuery):
     try:
         invoice_msg = await callback.bot.send_invoice(
             chat_id=telegram_id,
-            title=f"Apple ID {region_label} {nominal}{currency}",
-            description=f"Пополнение Apple ID {region_label} на {nominal}{currency}",
+            title=f"Apple ID {region_label} {nominal_label}",
+            description=f"Пополнение Apple ID {region_label} на {nominal_label}",
             payload=payload,
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
-            prices=[LabeledPrice(label=f"Apple ID {nominal}{currency}", amount=price_kopecks)],
+            prices=[LabeledPrice(label=f"Apple ID {nominal_label}", amount=price_kopecks)],
         )
         await callback.bot.send_message(
             chat_id=telegram_id,
@@ -1911,7 +2233,7 @@ async def callback_apple_pay_card(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.exception("APPLE_CARD_INVOICE_ERROR user=%s: %s", telegram_id, e)
-        await callback.answer("Ошибка создания платежа", show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.payment_creation", "Ошибка создания платежа"), show_alert=True)
 
 
 @router.callback_query(F.data.startswith("apple_pay_sbp:"))
@@ -1928,15 +2250,14 @@ async def callback_apple_pay_sbp(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    rate = _APPLE_RATES.get(region, 93)
-    price_rub = round(nominal * rate, 2)
+    price_rub = _apple_price_rub(region, nominal)
     price_kopecks = round(price_rub * 100)
-    currency = _APPLE_CURRENCIES.get(region, "$")
+    nominal_label = _apple_nominal_label(region, nominal)
     region_label = _APPLE_REGIONS.get(region, region)
 
     import platega_service
     if not platega_service.is_enabled():
-        await callback.answer("СБП временно недоступен", show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.sbp_unavailable_toast", "СБП временно недоступен"), show_alert=True)
         return
 
     try:
@@ -1953,7 +2274,7 @@ async def callback_apple_pay_sbp(callback: CallbackQuery):
 
         tx_data = await platega_service.create_transaction(
             amount_rubles=sbp_price_rubles,
-            description=f"Apple ID {region_label} {nominal}{currency}",
+            description=f"Apple ID {region_label} {nominal_label}",
             purchase_id=purchase_id,
         )
 
@@ -1971,10 +2292,10 @@ async def callback_apple_pay_sbp(callback: CallbackQuery):
                 text=i18n_get_text(language, "payment.sbp_pay_button"),
                 url=redirect_url,
             )],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
     except Exception as e:
         logger.exception("APPLE_SBP_ERROR user=%s: %s", telegram_id, e)
-        await callback.answer("Ошибка создания платежа СБП", show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.sbp_creation", "Ошибка создания платежа СБП"), show_alert=True)

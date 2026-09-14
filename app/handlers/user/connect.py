@@ -11,6 +11,7 @@ from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID as _MAIN_PHOTO_ID
 import config
 import database
 from app.handlers.common.keyboards import get_main_menu_keyboard
+from app.handlers.common.emoji import CE
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 
@@ -27,16 +28,18 @@ async def cmd_connect(message: Message):
     text = i18n_get_text(language, "setup.select_device")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
-            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios", style="primary"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android", style="primary"),
         ],
         [
-            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
-            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos", style="primary"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows", style="primary"),
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )],
     ])
     from app.handlers.callbacks.navigation import _DEVICE_SELECT_PHOTO
@@ -74,6 +77,8 @@ async def cmd_hwadd(message: Message):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
+            icon_custom_emoji_id=CE["back"],
+            style="primary",
         )]])
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         return
@@ -94,16 +99,20 @@ async def cmd_hwadd(message: Message):
         [InlineKeyboardButton(
             text="🌐 " + i18n_get_text(language, "setup.qr_standard_btn"),
             callback_data="setup_qr_standard:ios",
+            style="primary",
         )],
     ]
     if has_bypass:
         buttons.append([InlineKeyboardButton(
             text="🤍 " + i18n_get_text(language, "setup.qr_bypass_btn"),
             callback_data="setup_qr_bypass:ios",
+            style="primary",
         )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="menu_main",
+        icon_custom_emoji_id=CE["back"],
+        style="primary",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -129,3 +138,18 @@ async def cmd_main(message: Message):
         parse_mode="HTML",
         reply_markup=keyboard,
     )
+
+
+@user_router.message(Command("docs"))
+async def cmd_docs(message: Message):
+    """Экран «Правила» — правовые документы (соглашение + политика).
+
+    Ведёт на тот же экран, что и кнопка callback_data="menu_legal"
+    (_open_legal_screen в app/handlers/common/screens.py). Раньше открывал
+    старый экран приватности (about_privacy) — заменено на «Правила».
+    """
+    if message.chat.type != "private":
+        return
+
+    from app.handlers.common.screens import _open_legal_screen
+    await _open_legal_screen(message, message.bot)

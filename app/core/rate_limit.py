@@ -44,6 +44,7 @@ DEFAULT_RATE_LIMITS = {
     "admin_action": RateLimitConfig("admin_action", max_requests=10, window_seconds=60),
     "payment_init": RateLimitConfig("payment_init", max_requests=5, window_seconds=60),
     "trial_activate": RateLimitConfig("trial_activate", max_requests=1, window_seconds=3600),  # Once per hour
+    "trial_key_gift": RateLimitConfig("trial_key_gift", max_requests=3, window_seconds=60),  # broadcast gift — burst guard (DB даёт идемпотентность)
     "vpn_reissue": RateLimitConfig("vpn_reissue", max_requests=3, window_seconds=300),  # 3 per 5 minutes
     "vpn_regenerate": RateLimitConfig("vpn_regenerate", max_requests=2, window_seconds=300),  # 2 per 5 minutes
 }
