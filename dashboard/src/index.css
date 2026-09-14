@@ -2,140 +2,155 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Dashboard v3 design tokens ─────────────────────────────────────────
-   A monochrome bento: charcoal and graphite tiles on a warm light-gray
-   device, which itself floats on a lit wall. Tiles are told apart by
-   shade, never by borders. One warm note — cream — marks what is active
-   or most important, and nothing else carries colour except small,
-   desaturated status dots.
+/* ── Dashboard v5 design tokens: iOS "grouped inset" ───────────────────
+   The panel is used mostly as an installed PWA on an iPhone, so it looks
+   like a native iOS app: a gray grouped background, white (light) or
+   #1C1C1E (dark) cards, hairline separators, system font, one calm blue
+   for everything you can tap. Status colours (green / orange / red) are
+   only ever small dots or short labels, never large fills.
 
-   Colours are "R G B" triplets so Tailwind opacity modifiers work and the
-   theme / brand can be swapped by redefining variables:
-     --c-brand   set at runtime from GET /api/branding (BRAND_PRIMARY_COLOR)
-     data-theme  "dark" (charcoal tiles, the primary look) | "light"      */
+   Colours are "R G B" triplets so Tailwind opacity modifiers work
+   (bg-accent/15 → rgb(var(--c-accent) / .15)) and a theme swaps by
+   redefining variables on <html>:
+     no data-theme  → follows prefers-color-scheme (before JS runs)
+     data-theme     → "light" | "dark", set by store/prefs.ts
+   The v3 token names (tile-*, wall, shell, steel, fog …) are kept as
+   aliases so every screen inherits the new palette untouched.          */
 @layer base {
-  :root,
-  [data-theme="dark"] {
-    color-scheme: dark;
-    --c-brand: 242 232 201;
+  :root {
+    color-scheme: light;
+    --c-brand: 0 122 255;
 
-    --c-wall: 216 215 211;
-    --c-wall-2: 186 185 181;
-    --c-shell: 207 206 202;
-    --c-shell-ink: 28 28 28;
-    --c-shell-mute: 92 91 88;
+    /* iOS system colours, light */
+    --c-bg: 242 242 247;       /* systemGroupedBackground  #F2F2F7 */
+    --c-card: 255 255 255;     /* secondarySystemGroupedBackground */
+    --c-elev: 242 242 247;     /* nested block inside a card */
+    --c-elev-2: 229 229 234;   /* systemGray5 #E5E5EA */
+    --c-sep: 229 229 234;      /* separator #E5E5EA */
+    --c-fill: 118 118 128;     /* systemFill, used with --a-fill */
+    --a-fill: 0.12;
+    --c-bar: 249 249 249;      /* bar material (tab bar, nav bar) */
+    --c-seg-on: 255 255 255;   /* selected segment */
 
-    --c-tile-1: 30 30 30;
-    --c-tile-2: 38 38 38;
-    --c-tile-3: 47 47 47;
-    --c-tile-4: 60 60 60;
-    --c-steel: 74 74 74;
-    --c-on-steel: 236 236 236;
-    --c-fog: 140 140 140;
-    --c-on-fog: 22 22 22;
-    --c-mist: 166 166 166;
-    --c-on-mist: 22 22 22;
+    --c-ink: 0 0 0;            /* label */
+    --c-body: 60 60 67;        /* #3C3C43 — prose */
+    --c-mute: 109 109 114;     /* secondary label, AA on white (#8E8E93 is 3.3:1) */
+    --c-ash: 142 142 147;      /* #8E8E93 — tertiary, idle tab icons */
 
-    --c-ink: 234 234 232;
-    --c-body: 190 190 188;
-    --c-mute: 150 150 147;
-    --c-ash: 112 112 110;
+    --c-accent: 0 122 255;     /* systemBlue #007AFF */
+    --c-accent-hi: 0 108 230;
+    --c-accent-lo: 0 96 204;
+    --c-on-accent: 255 255 255;
 
-    --c-line: 56 56 56;
-    --c-line-soft: 46 46 46;
-    --c-line-strong: 76 76 76;
+    --c-ok: 52 199 89;         /* #34C759 */
+    --c-warn: 255 149 0;       /* #FF9500 */
+    --c-err: 255 59 48;        /* #FF3B30 */
+    --c-info: 50 173 230;      /* systemCyan */
+    --c-special: 88 86 214;    /* systemIndigo */
 
-    --c-accent: var(--c-brand);
-    --c-accent-hi: 250 244 226;
-    --c-accent-lo: 222 209 172;
-    --c-on-accent: 28 28 28;
-
-    --c-ok: 143 179 154;
-    --c-warn: 205 184 128;
-    --c-err: 204 141 132;
-    --c-info: 146 170 192;
-    --c-special: 172 158 192;
-
-    --shadow-shell: 0 40px 80px -30px rgb(0 0 0 / 0.35), 0 12px 24px -12px rgb(0 0 0 / 0.18);
+    --shadow-pop: 0 12px 40px -8px rgb(0 0 0 / 0.18), 0 0 0 0.5px rgb(0 0 0 / 0.06);
   }
 
-  /* Light variant: shades inverted — dark wall and device, light tiles.
-     The accent role flips to a charcoal pill carrying the brand colour as
-     its text, because cream on near-white would disappear. */
-  [data-theme="light"] {
-    color-scheme: light;
-    --c-wall: 44 44 43;
-    --c-wall-2: 24 24 23;
-    --c-shell: 36 36 35;
-    --c-shell-ink: 236 236 234;
-    --c-shell-mute: 170 170 166;
-
-    --c-tile-1: 246 245 242;
-    --c-tile-2: 238 237 233;
-    --c-tile-3: 228 227 223;
-    --c-tile-4: 214 213 209;
-    --c-steel: 196 196 194;
-    --c-on-steel: 24 24 24;
-    --c-fog: 120 120 118;
-    --c-on-fog: 246 246 244;
-    --c-mist: 90 90 88;
-    --c-on-mist: 246 246 244;
-
-    --c-ink: 26 26 26;
-    --c-body: 64 64 62;
-    --c-mute: 102 102 99;
-    --c-ash: 140 140 137;
-
-    --c-line: 222 221 217;
-    --c-line-soft: 232 231 227;
-    --c-line-strong: 200 199 195;
-
-    --c-accent: 30 30 30;
-    --c-accent-hi: 50 50 50;
-    --c-accent-lo: 16 16 16;
-    --c-on-accent: var(--c-brand);
-
-    --c-ok: 70 120 88;
-    --c-warn: 150 118 50;
-    --c-err: 160 80 70;
-    --c-info: 70 100 130;
-    --c-special: 110 90 140;
-
-    --shadow-shell: 0 40px 80px -30px rgb(0 0 0 / 0.6), 0 12px 24px -12px rgb(0 0 0 / 0.4);
+  /* Dark: pure black ground (OLED), #1C1C1E cards, #2C2C2E elevated. */
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --c-bg: 0 0 0;
+    --c-card: 28 28 30;
+    --c-elev: 44 44 46;
+    --c-elev-2: 58 58 60;
+    --c-sep: 56 56 58;
+    --c-fill: 118 118 128;
+    --a-fill: 0.24;
+    --c-bar: 22 22 23;
+    --c-seg-on: 99 99 102;
+    --c-ink: 255 255 255;
+    --c-body: 222 222 230;     /* #EBEBF5 at ~85 % */
+    --c-mute: 142 142 147;
+    --c-ash: 99 99 102;
+    --c-accent: 10 132 255;    /* #0A84FF */
+    --c-accent-hi: 64 156 255;
+    --c-accent-lo: 0 113 227;
+    --c-ok: 48 209 88;
+    --c-warn: 255 159 10;
+    --c-err: 255 69 58;
+    --c-info: 100 210 255;
+    --c-special: 94 92 230;
+    --shadow-pop: 0 12px 40px -8px rgb(0 0 0 / 0.7), 0 0 0 0.5px rgb(255 255 255 / 0.08);
+  }
+  /* Before prefs.ts runs (first paint), follow the system. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      color-scheme: dark;
+      --c-bg: 0 0 0;
+      --c-card: 28 28 30;
+      --c-elev: 44 44 46;
+      --c-elev-2: 58 58 60;
+      --c-sep: 56 56 58;
+      --a-fill: 0.24;
+      --c-bar: 22 22 23;
+      --c-seg-on: 99 99 102;
+      --c-ink: 255 255 255;
+      --c-body: 222 222 230;
+      --c-mute: 142 142 147;
+      --c-ash: 99 99 102;
+      --c-accent: 10 132 255;
+      --c-ok: 48 209 88;
+      --c-warn: 255 159 10;
+      --c-err: 255 69 58;
+    }
   }
 
   :root {
-    /* Geometry. Tiles 24px, rows 16px, the device 30px; the notch bite is
-       sized to hold a 40px circular control with an 8px moat. */
-    --r-shell: 30px;
-    --r-tile: 24px;
-    --r-row: 16px;
-    --gap: 12px;
-    --notch: 56px;
+    /* v3 aliases → v5 roles (resolved per theme on <html>). */
+    --c-wall: var(--c-bg);
+    --c-wall-2: var(--c-bg);
+    --c-shell: var(--c-bg);
+    --c-shell-ink: var(--c-ink);
+    --c-shell-mute: var(--c-mute);
+    --c-tile-1: var(--c-card);
+    --c-tile-2: var(--c-card);
+    --c-tile-3: var(--c-elev);
+    --c-tile-4: var(--c-elev-2);
+    --c-steel: var(--c-card);
+    --c-on-steel: var(--c-ink);
+    --c-fog: var(--c-card);
+    --c-on-fog: var(--c-ink);
+    --c-mist: var(--c-card);
+    --c-on-mist: var(--c-ink);
+    --c-line: var(--c-sep);
+    --c-line-soft: var(--c-sep);
+    --c-line-strong: var(--c-elev-2);
 
-    /* Motion: 150–220ms, ease, nothing bouncy. */
-    --dur-instant: 120ms;
+    /* Geometry: moderate radii, 44pt targets, compact spacing. */
+    --r-shell: 0px;
+    --r-tile: 14px;
+    --r-row: 10px;
+    --gap: 12px;
+    --tabbar-h: 50px;
+    --navbar-h: 44px;
+
+    --dur-instant: 100ms;
     --dur-fast: 160ms;
     --dur-base: 200ms;
-    --dur-slow: 220ms;
+    --dur-slow: 240ms;
     --ease-standard: cubic-bezier(0.2, 0, 0.2, 1);
-    --ease-entrance: cubic-bezier(0, 0, 0.2, 1);
+    --ease-entrance: cubic-bezier(0.32, 0.72, 0, 1);
     --ease-exit: cubic-bezier(0.4, 0, 1, 1);
     --ease: var(--ease-standard);
 
-    --row-h: 40px;
+    --row-h: 44px;
     --row-pad-y: 8px;
-    --cell-text: 13px;
+    --cell-text: 14px;
 
-    /* Legacy variable names used by v2 components — resolve to v3. */
-    --canvas: rgb(var(--c-tile-1));
-    --surface-1: rgb(var(--c-tile-2));
-    --surface-2: rgb(var(--c-tile-3));
-    --surface-3: rgb(var(--c-tile-4));
-    --surface-4: rgb(var(--c-steel));
-    --hairline: rgb(var(--c-line));
-    --hairline-hi: rgb(var(--c-line-strong));
-    --hairline-soft: rgb(var(--c-line-soft));
+    /* Legacy variable names used by v2 components. */
+    --canvas: rgb(var(--c-bg));
+    --surface-1: rgb(var(--c-card));
+    --surface-2: rgb(var(--c-elev));
+    --surface-3: rgb(var(--c-elev-2));
+    --surface-4: rgb(var(--c-elev-2));
+    --hairline: rgb(var(--c-sep));
+    --hairline-hi: rgb(var(--c-elev-2));
+    --hairline-soft: rgb(var(--c-sep));
     --border-subtle: var(--hairline-soft);
     --border-default: var(--hairline);
     --border-strong: var(--hairline-hi);
@@ -149,8 +164,8 @@
     --text-disabled: var(--ash);
     --accent: rgb(var(--c-accent));
     --accent-hover: rgb(var(--c-accent-hi));
-    --accent-dim: rgb(var(--c-accent) / 0.14);
-    --accent-ring: rgb(var(--c-accent) / 0.45);
+    --accent-dim: rgb(var(--c-accent) / 0.12);
+    --accent-ring: rgb(var(--c-accent) / 0.4);
     --on-accent: rgb(var(--c-on-accent));
     --ok: rgb(var(--c-ok));
     --warn: rgb(var(--c-warn));
@@ -158,8 +173,8 @@
     --info: rgb(var(--c-info));
     --special: rgb(var(--c-special));
     --radius-sm: 8px;
-    --radius-md: 12px;
-    --radius-lg: 16px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
     --space-1: 4px;
     --space-2: 8px;
     --space-3: 12px;
@@ -167,9 +182,12 @@
     --space-6: 24px;
     --space-8: 32px;
   }
+  @media (min-width: 1024px) {
+    :root { --gap: 16px; }
+  }
 
-  [data-density="compact"] { --row-h: 32px; --row-pad-y: 4px; --cell-text: 12px; }
-  [data-density="spacious"] { --row-h: 52px; --row-pad-y: 14px; --cell-text: 14px; }
+  [data-density="compact"] { --row-h: 34px; --row-pad-y: 4px; --cell-text: 13px; }
+  [data-density="spacious"] { --row-h: 52px; --row-pad-y: 14px; --cell-text: 15px; }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -186,277 +204,230 @@
   }
 
   html, body, #root { min-height: 100%; }
-  html, body { overscroll-behavior: none; }
-
   html {
-    /* The lit wall: light falls from the upper left. On <html> so it
-       covers the whole canvas, not just the body box. */
-    background-color: rgb(var(--c-wall-2));
-    background-image: radial-gradient(120% 90% at 0% 0%, rgb(var(--c-wall)) 0%, rgb(var(--c-wall-2)) 100%);
-    background-attachment: fixed;
+    background-color: rgb(var(--c-bg));
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
-
   body {
-    font-family: Onest, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-optical-sizing: auto;
+    background-color: rgb(var(--c-bg));
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", "Segoe UI", Roboto, system-ui, sans-serif;
     color: rgb(var(--c-ink));
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior-y: none;
   }
-
-  /* Paper grain on the wall only, never on tiles (it would stack at seams). */
-  body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 0;
-    opacity: 0.05;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
-  }
-  #root { position: relative; z-index: 1; }
 
   .nums, .tabular { font-variant-numeric: tabular-nums; }
   * { -webkit-tap-highlight-color: transparent; }
-  h1, h2, h3 { letter-spacing: -0.02em; }
-  ::selection { background-color: rgb(var(--c-accent) / 0.35); color: rgb(var(--c-ink)); }
-
+  h1, h2, h3 { letter-spacing: -0.01em; }
+  ::selection { background-color: rgb(var(--c-accent) / 0.25); }
   :focus-visible { outline: 2px solid rgb(var(--c-accent)); outline-offset: 2px; }
 
-  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb {
-    background: rgb(var(--c-tile-4));
-    border-radius: 8px;
-    border: 2px solid transparent;
-    background-clip: padding-box;
-  }
+  ::-webkit-scrollbar-thumb { background: rgb(var(--c-fill) / 0.35); border-radius: 8px; }
 
-  .track-hero { letter-spacing: -0.035em; }
-  .track-metric { letter-spacing: -0.02em; }
+  .track-hero { letter-spacing: -0.02em; }
+  .track-metric { letter-spacing: -0.01em; }
   .track-body { letter-spacing: 0; }
   .track-label { letter-spacing: 0.02em; }
 }
 
 @layer components {
-  /* ── Device shell ─────────────────────────────────────────────────── */
-  .device {
-    position: relative;
-    background: rgb(var(--c-shell));
-    border-radius: var(--r-shell);
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.35),
-      inset 0 0 0 1px rgb(255 255 255 / 0.12),
-      var(--shadow-shell);
-  }
-  [data-theme="light"] .device {
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08), inset 0 0 0 1px rgb(255 255 255 / 0.05), var(--shadow-shell);
-  }
-  .on-shell { color: rgb(var(--c-shell-ink)); }
-  .on-shell-mute { color: rgb(var(--c-shell-mute)); }
+  /* ── Screen chrome ────────────────────────────────────────────────── */
+  .device { position: relative; background: transparent; }
+  .on-shell { color: rgb(var(--c-ink)); }
+  .on-shell-mute { color: rgb(var(--c-mute)); }
 
-  /* ── Tiles ─────────────────────────────────────────────────────────── */
+  /* Large title (34/41 bold) and the section header above a group. */
+  .large-title { font-size: 34px; line-height: 41px; font-weight: 700; letter-spacing: 0.005em; }
+  .section-h {
+    font-size: 13px;
+    line-height: 18px;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: rgb(var(--c-mute));
+  }
+  .card-title { font-size: 15px; line-height: 20px; font-weight: 600; color: rgb(var(--c-ink)); letter-spacing: -0.01em; }
+
+  /* ── Cards (the v3 "tile" API) ────────────────────────────────────── */
   .tile {
     position: relative;
     border-radius: var(--r-tile);
-    background: rgb(var(--c-tile-1));
+    background: rgb(var(--c-card));
     color: rgb(var(--c-ink));
   }
-  .tile-raised { background: rgb(var(--c-tile-2)); }
-  .tile-steel { background: rgb(var(--c-steel)); color: rgb(var(--c-on-steel)); }
-  .tile-fog { background: rgb(var(--c-fog)); color: rgb(var(--c-on-fog)); }
-  .tile-mist { background: rgb(var(--c-mist)); color: rgb(var(--c-on-mist)); }
-  .tile-accent { background: rgb(var(--c-accent)); color: rgb(var(--c-on-accent)); }
-  /* Secondary text on light-coloured tiles follows the tile's own ink. */
-  .tile-fog .t-mute, .tile-mist .t-mute, .tile-accent .t-mute, .tile-steel .t-mute { color: currentColor; opacity: 0.68; }
+  /* v3 variants told tiles apart by shade; on iOS every card is the same. */
+  .tile-raised, .tile-steel, .tile-fog, .tile-mist, .tile-accent {
+    background: rgb(var(--c-card));
+    color: rgb(var(--c-ink));
+  }
   .t-mute { color: rgb(var(--c-mute)); }
   .t-body { color: rgb(var(--c-body)); }
+  .notch, .corner-slot { display: none; }
 
-  /* Notch: a bite out of one tile corner, painted in the shell colour, with
-     a concave inner curve and two convex fillets so the tile edge flows
-     around whatever sits in the bite (a ↗ badge or a neighbouring tile).
-     Geometry is authored for the top-right corner; the other corners are
-     the same element mirrored. */
-  .notch {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    border-radius: inherit;
-  }
-  .notch[data-corner="tl"] { transform: scaleX(-1); }
-  .notch[data-corner="br"] { transform: scaleY(-1); }
-  .notch[data-corner="bl"] { transform: scale(-1, -1); }
-  .notch > i {
-    position: absolute;
-    display: block;
-    background: rgb(var(--c-shell));
-  }
-  .notch > i:nth-child(1) {
-    top: -1px;
-    right: -1px;
-    width: calc(var(--notch) + 1px);
-    height: calc(var(--notch) + 1px);
-    border-bottom-left-radius: var(--r-tile);
-  }
-  .notch > i:nth-child(2),
-  .notch > i:nth-child(3) {
-    width: var(--r-tile);
-    height: var(--r-tile);
-    background: radial-gradient(circle at 0 100%, transparent calc(var(--r-tile) - 0.5px), rgb(var(--c-shell)) var(--r-tile));
-  }
-  /* Each fillet overlaps the bite by 1px so no sub-pixel seam shows. */
-  .notch > i:nth-child(2) { top: -1px; right: calc(var(--notch) - 1px); width: calc(var(--r-tile) + 1px); }
-  .notch > i:nth-child(3) { top: calc(var(--notch) - 1px); right: -1px; height: calc(var(--r-tile) + 1px); }
-
-  .corner-slot {
-    position: absolute;
-    display: grid;
-    place-items: center;
-    width: var(--notch);
-    height: var(--notch);
-    z-index: 2;
-  }
-  .corner-slot[data-corner="tr"] { top: 0; right: 0; }
-  .corner-slot[data-corner="tl"] { top: 0; left: 0; }
-  .corner-slot[data-corner="br"] { bottom: 0; right: 0; }
-  .corner-slot[data-corner="bl"] { bottom: 0; left: 0; }
-
-  /* ── Capsules ─────────────────────────────────────────────────────── */
-  .capsule-nav {
+  /* ── Segmented control (UISegmentedControl) ───────────────────────── */
+  .capsule-nav, .pill-tabs {
     display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 4px;
-    border-radius: 999px;
-    background: rgb(var(--c-tile-1));
+    align-items: stretch;
+    gap: 0;
+    padding: 2px;
+    border-radius: 9px;
+    background: rgb(var(--c-fill) / var(--a-fill));
+    max-width: 100%;
   }
-  .capsule-tab {
+  .capsule-tab, .pill-tab, .pill-tab-active {
+    position: relative;
     display: inline-flex;
+    flex: 1 1 auto;
     align-items: center;
+    justify-content: center;
     gap: 6px;
-    height: 36px;
-    padding: 0 14px;
-    border-radius: 999px;
+    min-height: 30px;
+    padding: 0 12px;
+    border-radius: 7px;
     font-size: 13px;
     font-weight: 500;
     white-space: nowrap;
-    color: rgb(var(--c-mute));
-    transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+    color: rgb(var(--c-ink));
+    transition: background-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
   }
-  .capsule-tab:hover { color: rgb(var(--c-ink)); background: rgb(var(--c-tile-3)); }
-  .capsule-tab[aria-current="page"], .capsule-tab[aria-pressed="true"] {
-    background: rgb(var(--c-accent));
-    color: rgb(var(--c-on-accent));
+  .capsule-tab:active { opacity: 0.6; }
+  .capsule-tab[aria-current="page"], .capsule-tab[aria-pressed="true"], .pill-tab-active {
+    background: rgb(var(--c-seg-on));
+    font-weight: 600;
+    box-shadow: 0 3px 8px rgb(0 0 0 / 0.12), 0 3px 1px rgb(0 0 0 / 0.04);
   }
+  .seg-full { display: flex; width: 100%; }
+  .seg-full > .capsule-tab { flex: 1 1 0; min-width: 0; padding: 0 6px; }
+
   .capsule-label {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: 24px;
-    padding: 0 10px;
-    border-radius: 999px;
-    background: rgb(var(--c-ink) / 0.07);
+    gap: 5px;
+    min-height: 22px;
+    padding: 0 8px;
+    border-radius: 6px;
+    background: rgb(var(--c-fill) / var(--a-fill));
     font-size: 12px;
     font-weight: 500;
     color: rgb(var(--c-body));
   }
-  .tile-fog .capsule-label, .tile-mist .capsule-label, .tile-accent .capsule-label, .tile-steel .capsule-label {
-    background: rgb(0 0 0 / 0.08);
-    color: currentColor;
-  }
 
+  /* ── Buttons ──────────────────────────────────────────────────────── */
   .icon-btn {
     position: relative;
     display: inline-grid;
     place-items: center;
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
     flex: none;
     border-radius: 999px;
-    background: rgb(var(--c-tile-1));
-    color: rgb(var(--c-ink));
-    transition: background-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+    background: rgb(var(--c-fill) / var(--a-fill));
+    color: rgb(var(--c-accent));
+    transition: opacity var(--dur-instant) var(--ease);
   }
-  .icon-btn:hover { background: rgb(var(--c-tile-3)); }
-  .icon-btn:active { transform: scale(0.96); }
-  .icon-btn-sm { width: 32px; height: 32px; }
+  .icon-btn:active { opacity: 0.55; }
+  .icon-btn-sm { width: 28px; height: 28px; }
   .icon-btn-accent { background: rgb(var(--c-accent)); color: rgb(var(--c-on-accent)); }
-  .icon-btn-accent:hover { background: rgb(var(--c-accent-hi)); }
   .icon-btn-dot, .icon-btn-dot-accent {
-    position: absolute; right: 6px; top: 6px; width: 8px; height: 8px; border-radius: 999px;
-    pointer-events: none; box-shadow: 0 0 0 2px rgb(var(--c-tile-1));
+    position: absolute; right: 4px; top: 4px; width: 8px; height: 8px; border-radius: 999px;
+    pointer-events: none; box-shadow: 0 0 0 2px rgb(var(--c-card));
   }
   .icon-btn-dot { background: rgb(var(--c-err)); }
   .icon-btn-dot-accent { background: rgb(var(--c-accent)); }
 
+  /* ── Rows (UITableViewCell in an inset group) ─────────────────────── */
   .list-row {
     display: flex;
     align-items: center;
     gap: 12px;
-    min-height: 52px;
-    padding: 8px 8px 8px 16px;
-    border-radius: var(--r-row);
-    background: rgb(var(--c-tile-3));
+    min-height: 48px;
+    padding: 10px 0;
+    border-radius: 0;
+    background: transparent;
     color: rgb(var(--c-ink));
-    transition: background-color var(--dur-fast) var(--ease);
+    transition: opacity var(--dur-instant) var(--ease);
   }
-  a.list-row:hover, button.list-row:hover { background: rgb(var(--c-tile-4)); }
-
+  a.list-row:active, button.list-row:active { opacity: 0.5; }
+  .row-chevron { flex: none; color: rgb(var(--c-ash)); }
 
   .pill-track {
     position: relative;
-    height: 12px;
+    height: 6px;
     border-radius: 999px;
-    background: rgb(var(--c-ink) / 0.09);
+    background: rgb(var(--c-fill) / calc(var(--a-fill) + 0.04));
+    overflow: hidden;
   }
   .pill-fill {
     position: absolute; inset: 0 auto 0 0; border-radius: 999px;
     background: rgb(var(--c-ink) / 0.5);
     transition: width var(--dur-slow) var(--ease);
   }
-  .pill-knob {
-    position: absolute; top: 50%; width: 20px; height: 20px; margin-left: -10px; margin-top: -10px;
-    border-radius: 999px; background: rgb(var(--c-accent));
-    box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
-    transition: left var(--dur-slow) var(--ease);
-  }
+  .pill-knob { display: none; }
 
-  /* ── Legacy component classes, restyled on v3 tokens ──────────────── */
-  .hairline { border: 1px solid rgb(var(--c-line)); }
-  .hairline-t { border-top: 1px solid rgb(var(--c-line)); }
-  .hairline-b { border-bottom: 1px solid rgb(var(--c-line)); }
-  .card { @apply rounded-[16px] bg-tile-2; }
+  /* ── Legacy component classes on v5 tokens ────────────────────────── */
+  .hairline { border: 0.5px solid rgb(var(--c-sep)); }
+  .hairline-t { border-top: 0.5px solid rgb(var(--c-sep)); }
+  .hairline-b { border-bottom: 0.5px solid rgb(var(--c-sep)); }
+  .card { border-radius: var(--r-tile); background: rgb(var(--c-card)); }
   .card-hover { transition: background-color var(--dur-fast) var(--ease); }
-  .card-hover:hover { background: rgb(var(--c-tile-3)); }
   .row-hover { transition: background-color var(--dur-instant) var(--ease); }
-  .row-hover:hover { background: rgb(var(--c-tile-3)); }
-  .focus-ring { @apply outline-none focus-visible:ring-2 focus-visible:ring-accent/45; }
+  @media (hover: hover) and (pointer: fine) {
+    .card-hover:hover, .row-hover:hover, .hover-lift:hover { background: rgb(var(--c-elev)); }
+    .icon-btn:hover { background: rgb(var(--c-fill) / calc(var(--a-fill) + 0.08)); }
+    a.list-row:hover .row-chevron, button.list-row:hover .row-chevron { color: rgb(var(--c-mute)); }
+  }
+  .focus-ring { @apply outline-none focus-visible:ring-2 focus-visible:ring-accent/40; }
   .link-accent { @apply text-accent underline-offset-2 hover:underline; }
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium
-           outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/45
-           disabled:cursor-not-allowed disabled:opacity-50;
-    transition-duration: var(--dur-instant);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 8px 16px;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 20px;
+    outline: none;
+    transition: opacity var(--dur-instant) var(--ease), background-color var(--dur-instant) var(--ease);
   }
-  .btn-primary { @apply btn bg-accent font-semibold text-onaccent hover:bg-accent-hover; }
-  .btn-secondary { @apply btn bg-tile-3 text-ink hover:bg-tile-4; }
-  .btn-danger { @apply btn bg-danger/15 text-danger hover:bg-danger/25; }
-  .btn-ghost { @apply btn text-mute hover:bg-tile-3 hover:text-ink; }
-  .btn-info { @apply btn bg-info/15 text-info hover:bg-info/25; }
+  .btn:active:not(:disabled) { opacity: 0.6; }
+  .btn:disabled { cursor: not-allowed; opacity: 0.4; }
+  .btn:focus-visible { box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.4); }
+  .btn-primary { @apply btn; background: rgb(var(--c-accent)); color: rgb(var(--c-on-accent)); }
+  .btn-secondary { @apply btn; background: rgb(var(--c-accent) / 0.12); color: rgb(var(--c-accent)); }
+  .btn-danger { @apply btn; background: rgb(var(--c-err) / 0.12); color: rgb(var(--c-err)); }
+  .btn-ghost { @apply btn; background: transparent; color: rgb(var(--c-accent)); }
+  .btn-info { @apply btn; background: rgb(var(--c-accent) / 0.12); color: rgb(var(--c-accent)); }
 
   .input {
-    @apply w-full rounded-[14px] border border-transparent bg-tile-3 px-4 py-2.5 text-sm text-ink outline-none
-           transition-colors placeholder:text-ash focus:border-accent/60 focus:ring-2 focus:ring-accent/25;
-    transition-duration: var(--dur-instant);
+    width: 100%;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    background: rgb(var(--c-fill) / var(--a-fill));
+    padding: 10px 12px;
+    font-size: 15px;
+    line-height: 20px;
+    color: rgb(var(--c-ink));
+    outline: none;
+    transition: box-shadow var(--dur-instant) var(--ease);
   }
+  .input::placeholder { color: rgb(var(--c-ash)); }
+  .input:focus { box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.3); }
   .light-input { @apply input; }
 
-  .badge { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium; }
+  .badge { @apply inline-flex items-center gap-1 rounded-[6px] px-2 py-0.5 text-[12px] font-medium; }
   .badge-success { @apply badge bg-success/15 text-success; }
   .badge-danger { @apply badge bg-danger/15 text-danger; }
   .badge-warning { @apply badge bg-warning/15 text-warning; }
   .badge-muted { @apply badge bg-tile-3 text-mute; }
-  .badge-accent { @apply badge bg-accent text-onaccent; }
+  .badge-accent { @apply badge bg-accent/12 text-accent; }
   .badge-info, .badge-live { @apply badge bg-info/15 text-info; }
   .badge-special { @apply badge bg-special/15 text-special; }
   .tag-purple { @apply badge-special; }
@@ -465,48 +436,46 @@
   .tag-amber { @apply badge-warning; }
   .tag-rose { @apply badge-danger; }
 
-  .stat-num { @apply text-2xl font-semibold tracking-[-0.03em] text-ink md:text-3xl; }
-  .stat-pill { @apply inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[11px] font-semibold text-onaccent; }
-  .pill-tabs { @apply inline-flex items-center gap-0.5 rounded-full bg-tile-2 p-1 text-xs font-medium; }
-  .pill-tab { @apply rounded-full px-3 py-1.5 text-mute transition-colors hover:text-ink; }
-  .pill-tab-active { @apply rounded-full bg-accent px-3 py-1.5 font-semibold text-onaccent; }
-  .card-accent { @apply rounded-[16px] bg-accent text-onaccent; }
+  .stat-num { @apply text-[28px] font-bold tracking-[-0.01em] text-ink md:text-[32px]; }
+  .stat-pill { @apply inline-flex items-center gap-1 rounded-[6px] bg-accent/12 px-2 py-0.5 text-[11px] font-semibold text-accent; }
+  .card-accent { border-radius: var(--r-tile); background: rgb(var(--c-card)); color: rgb(var(--c-ink)); }
 
   .skeleton {
-    @apply rounded-[10px] bg-tile-3;
+    @apply rounded-[8px];
+    background-color: rgb(var(--c-elev));
     background-image: linear-gradient(90deg, transparent 0%, rgb(var(--c-ink) / 0.05) 50%, transparent 100%);
     background-size: 200% 100%;
     @apply animate-shimmer;
   }
   .hover-lift { transition: background-color var(--dur-fast) var(--ease); }
-  .hover-lift:hover { background: rgb(var(--c-tile-3)); }
-  .glass-panel { @apply rounded-[16px] bg-tile-2; }
+  .glass-panel { border-radius: var(--r-tile); background: rgb(var(--c-card)); }
 
-  .alert-ring { @apply relative overflow-hidden rounded-[16px] p-px; }
+  .alert-ring { @apply relative overflow-hidden rounded-[14px] p-px; }
   .alert-ring::before {
     content: ""; position: absolute; inset: -60%;
     background: conic-gradient(from var(--angle), transparent 0deg, rgb(var(--c-warn)) 40deg, transparent 90deg);
     animation: spin-angle 4s linear infinite; z-index: 0;
   }
-  .alert-ring > * { position: relative; z-index: 1; border-radius: 15px; }
+  .alert-ring > * { position: relative; z-index: 1; border-radius: 13px; }
 
-  .pulse-live { @apply inline-block h-2 w-2 rounded-full bg-info; animation: pulse-live 2.2s ease-in-out infinite; }
+  .pulse-live { @apply inline-block h-2 w-2 rounded-full bg-success; animation: pulse-live 2.2s ease-in-out infinite; }
   .pulse-live-danger { @apply inline-block h-2 w-2 rounded-full bg-danger; animation: pulse-live 1.8s ease-in-out infinite; }
-  .route-in { animation: route-in var(--dur-slow) var(--ease-entrance); }
+  .route-in { animation: route-in var(--dur-base) var(--ease-entrance); }
   .num-tick { animation: num-tick var(--dur-base) var(--ease-standard); }
   .stagger-children > * { animation: none; }
 
-  .tap-scale { @apply transition-transform duration-100 active:scale-[0.98]; }
+  .tap-scale { transition: opacity 100ms var(--ease); }
+  .tap-scale:active { opacity: 0.6; }
   .collapsible { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-slow) var(--ease); }
   .collapsible[data-open="true"] { grid-template-rows: 1fr; }
   .collapsible > .collapsible-inner { overflow: hidden; min-height: 0; }
   .hint-dot {
     @apply relative inline-flex h-4 w-4 shrink-0 cursor-help items-center justify-center rounded-full
-           bg-tile-3 text-[10px] font-bold text-mute transition-colors hover:text-ink;
+           text-[10px] font-bold text-accent;
   }
   .no-tap-highlight { -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
 
-  /* ── Metric definitions ("?" popover, components/ui/Hint.tsx) ─────── */
+  /* ── Info button (ⓘ) → definition sheet (components/ui/Hint.tsx) ─── */
   .hint-btn {
     display: inline-grid;
     place-items: center;
@@ -514,34 +483,46 @@
     height: 20px;
     flex: none;
     border-radius: 999px;
-    background: rgb(var(--c-ink) / 0.09);
-    color: rgb(var(--c-mute));
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 1;
-    transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+    color: rgb(var(--c-accent));
+    transition: opacity var(--dur-instant) var(--ease);
   }
-  .hint-btn:hover, .hint-btn[aria-expanded="true"] { background: rgb(var(--c-ink) / 0.16); color: rgb(var(--c-ink)); }
-  .tile-fog .hint-btn, .tile-mist .hint-btn, .tile-accent .hint-btn, .tile-steel .hint-btn {
-    background: rgb(0 0 0 / 0.1);
-    color: currentColor;
-  }
-  .hint-on-shell { background: rgb(var(--c-shell-ink) / 0.1); color: rgb(var(--c-shell-mute)); }
+  .hint-btn:active, .hint-btn[aria-expanded="true"] { opacity: 0.5; }
+  .hint-on-shell { color: rgb(var(--c-accent)); }
   .hint-pop {
     position: fixed;
     z-index: 60;
     padding: 12px 14px;
-    border-radius: 16px;
-    background: rgb(var(--c-tile-1));
+    border-radius: 14px;
+    background: rgb(var(--c-card));
     color: rgb(var(--c-ink));
-    font-size: 13px;
-    font-weight: 400;
+    font-size: 14px;
     line-height: 1.45;
     text-align: left;
     white-space: normal;
-    box-shadow: 0 16px 40px -12px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(var(--c-line));
+    box-shadow: var(--shadow-pop);
     animation: route-in var(--dur-fast) var(--ease-entrance);
   }
+
+  /* Bottom sheet (UISheetPresentationController, medium detent). */
+  .sheet-backdrop {
+    position: fixed; inset: 0; z-index: 70;
+    background: rgb(0 0 0 / 0.35);
+    animation: route-in var(--dur-base) var(--ease-standard);
+  }
+  .sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 71;
+    max-height: 85dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 14px 14px 0 0;
+    background: rgb(var(--c-card));
+    color: rgb(var(--c-ink));
+    padding: 8px 20px max(20px, calc(env(safe-area-inset-bottom) + 12px));
+    box-shadow: 0 -8px 40px rgb(0 0 0 / 0.2);
+    animation: sheet-up 320ms var(--ease-entrance);
+  }
+  [data-theme="dark"] .sheet { background: rgb(var(--c-elev)); }
+  .sheet-grabber { width: 36px; height: 5px; border-radius: 3px; margin: 0 auto 14px; background: rgb(var(--c-fill) / 0.45); }
 
   /* Invisible 44×44 hit area around a visually small control. */
   .tap-target { position: relative; }
@@ -555,7 +536,86 @@
     transform: translate(-50%, -50%);
   }
 
-  /* ── Data tables on v3 tiles ──────────────────────────────────────── */
+  /* ── Tab bar and navigation bar ───────────────────────────────────── */
+  .bar-material {
+    background: rgb(var(--c-bar) / 0.9);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
+  .tabbar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+    display: flex;
+    padding: 0 max(4px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(4px, env(safe-area-inset-left));
+    border-top: 0.5px solid rgb(var(--c-sep));
+  }
+  .tab {
+    flex: 1 1 0;
+    min-width: 0;
+    height: var(--tabbar-h);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    font-size: 10px;
+    line-height: 12px;
+    font-weight: 500;
+    color: rgb(142 142 147);
+    transition: opacity var(--dur-instant) var(--ease);
+  }
+  .tab:active { opacity: 0.5; }
+  .tab[data-active="true"], .tab[aria-current="page"] { color: rgb(var(--c-accent)); }
+  .tab > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .navbar {
+    position: sticky; top: 0; z-index: 30;
+    padding-top: env(safe-area-inset-top);
+    border-bottom: 0.5px solid transparent;
+    transition: background-color var(--dur-base) var(--ease), border-color var(--dur-base) var(--ease);
+  }
+  .navbar[data-scrolled="true"] { border-bottom-color: rgb(var(--c-sep)); }
+  .navbar:not([data-scrolled="true"]) { background: rgb(var(--c-bg)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .navbar-title {
+    font-size: 17px; line-height: 22px; font-weight: 600;
+    opacity: 0; transform: translateY(4px);
+    transition: opacity var(--dur-base) var(--ease), transform var(--dur-base) var(--ease);
+  }
+  .navbar[data-scrolled="true"] .navbar-title { opacity: 1; transform: none; }
+  .nav-back {
+    display: inline-flex; align-items: center; gap: 2px;
+    min-height: 44px; padding: 0 8px 0 2px;
+    font-size: 17px; color: rgb(var(--c-accent));
+  }
+  .nav-back:active { opacity: 0.5; }
+
+  /* Grouped list rows for navigation (the «Ещё» screen, sidebar). */
+  .nav-row {
+    display: flex; align-items: center; gap: 12px;
+    min-height: 44px; padding: 0 16px;
+    font-size: 17px; line-height: 22px;
+    color: rgb(var(--c-ink));
+    transition: background-color var(--dur-instant) var(--ease);
+  }
+  .nav-row:active { background: rgb(var(--c-fill) / 0.2); }
+  .nav-row .nav-row-label { flex: 1; min-width: 0; padding: 11px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-group > li + li > .nav-row > .nav-row-label,
+  .nav-group > li + li > .nav-row > .nav-row-body { box-shadow: inset 0 0.5px 0 rgb(var(--c-sep)); }
+  .nav-row > .nav-row-body { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; align-self: stretch; }
+  .nav-icon {
+    display: grid; place-items: center; flex: none;
+    width: 29px; height: 29px; border-radius: 7px;
+    background: rgb(var(--c-accent) / 0.12);
+    color: rgb(var(--c-accent));
+  }
+  .sidebar .nav-row { font-size: 15px; min-height: 40px; border-radius: 10px; padding: 0 10px; }
+  .sidebar .nav-row > .nav-row-label { padding: 9px 0; }
+  .sidebar .nav-row[aria-current="page"] { background: rgb(var(--c-accent)); color: rgb(var(--c-on-accent)); }
+  .sidebar .nav-row[aria-current="page"] .nav-icon { background: rgb(255 255 255 / 0.2); color: #fff; }
+  @media (hover: hover) and (pointer: fine) {
+    .nav-row:hover:not([aria-current="page"]) { background: rgb(var(--c-fill) / 0.1); }
+  }
+
+  /* ── Data tables inside cards ─────────────────────────────────────── */
   .dtable { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--cell-text); }
   .dtable th {
     padding: 0 12px 8px;
@@ -568,13 +628,15 @@
   .dtable td {
     padding: var(--row-pad-y) 12px;
     height: var(--row-h);
-    border-top: 1px solid rgb(var(--c-line-soft));
+    border-top: 0.5px solid rgb(var(--c-sep));
     vertical-align: middle;
   }
   .dtable tbody tr { transition: background-color var(--dur-instant) var(--ease); }
-  .dtable tbody tr:hover td { background: rgb(var(--c-tile-3) / 0.6); }
-  .dtable td:first-child, .dtable th:first-child { padding-left: 4px; }
-  .dtable td:last-child, .dtable th:last-child { padding-right: 4px; }
+  @media (hover: hover) and (pointer: fine) {
+    .dtable tbody tr:hover td { background: rgb(var(--c-elev) / 0.6); }
+  }
+  .dtable td:first-child, .dtable th:first-child { padding-left: 0; }
+  .dtable td:last-child, .dtable th:last-child { padding-right: 0; }
   .dtable .num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 
@@ -584,10 +646,18 @@
   .scrollbar-none::-webkit-scrollbar { display: none; }
 }
 
-/* ── iOS / touch ────────────────────────────────────────────────────────
-   Outside @layer so they beat utility classes (text-sm, text-xs …).
-   Safari zooms the page when a focused field is under 16px; on touch
-   screens every field is therefore 16px. */
+/* ── Unlayered overrides (beat utility classes) ─────────────────────── */
+
+/* Rows inside a card form one inset group: no gaps, hairline separators
+   between them (UITableView .insetGrouped). */
+.tile :is(ul, ol, div):has(> li > .list-row, > .list-row) { row-gap: 0; }
+.tile .list-row + .list-row,
+.tile li + li > .list-row { box-shadow: inset 0 0.5px 0 rgb(var(--c-sep)); }
+/* A row given its own fill (v3 "bg-tile-4" highlight) keeps it rounded. */
+.list-row[class*="bg-tile"] { border-radius: var(--r-row); padding-inline: 12px; }
+
+/* iOS / touch. Safari zooms the page when a focused field is under 16px;
+   on touch screens every field is therefore 16px. */
 @media (pointer: coarse) {
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
   select,
@@ -596,10 +666,10 @@
   }
 }
 /* Finger-sized targets (Apple HIG: 44pt). Visually small controls keep
-   their size and get an invisible 44px hit area instead, so dense rows
-   (tables, list-row trailing buttons) do not reflow on a phone. */
+   their size and get an invisible 44px hit area instead. */
 @media (pointer: coarse) {
-  .capsule-tab { height: 44px; }
+  .capsule-tab { min-height: 32px; }
+  .capsule-tab::after { content: ""; position: absolute; inset: -6px 0; }
   .icon-btn:not(.icon-btn-sm) { width: 44px; height: 44px; }
   .icon-btn-sm { position: relative; }
   .icon-btn-sm::after {
@@ -628,6 +698,7 @@
   align-items: start;
   padding-top: max(1rem, env(safe-area-inset-top));
   padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  z-index: 60;
 }
 @media (min-height: 700px) and (min-width: 640px) {
   .fixed.inset-0.grid { align-items: center; }
@@ -648,11 +719,12 @@
 @property --angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
 @keyframes spin-angle { to { --angle: 360deg; } }
 @keyframes route-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
 @keyframes num-tick { 0% { opacity: 1; } 40% { opacity: 0.55; } 100% { opacity: 1; } }
 @keyframes pulse-live { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
 
-::view-transition-group(*) { animation-duration: 180ms; animation-timing-function: cubic-bezier(0.2, 0, 0.2, 1); }
+::view-transition-group(*) { animation-duration: 200ms; animation-timing-function: cubic-bezier(0.2, 0, 0.2, 1); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 160ms; }
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }

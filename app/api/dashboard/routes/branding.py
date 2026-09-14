@@ -18,10 +18,10 @@ from app.services import admin_auth
 
 router = APIRouter()
 
-# Light-grey wall of the default v3 look (index.css --c-wall-2 / prefs.ts
-# theme-color), so the iOS/Android launch splash matches the first frame
-# instead of flashing charcoal. The accent is the brand's.
-_SHELL_COLOR = "#CFCECA"
+# iOS grouped background of the v5 look (index.css --c-bg, light), so the
+# launch splash matches the first frame. A manifest has one colour; the
+# page's own theme-color metas switch it for dark mode after launch.
+_SHELL_COLOR = "#F2F2F7"
 
 
 @router.get("")
