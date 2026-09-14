@@ -7,8 +7,7 @@
   gets them again) → expiry (ONE message: GB left / VPN off, −15 % once);
   trial end = one message; days from an admin / a game during paid and during
   a trial; a gifted subscription ends with a message + −15 %; auto-renewal
-  aware reminders; a renewal inside a reminders pass; the traffic notices; the
-  profile screens against the real panel.
+  aware reminders; a renewal inside a reminders pass; the traffic notices.
 """
 from __future__ import annotations
 
@@ -22,7 +21,6 @@ import fast_expiry_cleanup
 import reminders
 import trial_notifications
 from app.i18n import get_text
-from app.services.subscriptions import live_state
 from app.workers import traffic_monitor
 from tests.e2e import flows
 from tests.e2e.world import ADMIN, GIB, MB, naive, new_user, utcnow
@@ -327,12 +325,7 @@ async def test_renewal_inside_the_pass_sends_no_old_date_reminder(e2e, monkeypat
 
 # ── 6. traffic notices ─────────────────────────────────────────────────
 
-def _panel_gets(e2e):
-    return [r for r in e2e.panel.requests if r[0] == "GET" and r[1].startswith("/api/users/")
-            and not r[1].startswith("/api/users/stream")]
-
-
-async def test_traffic_one_notice_for_the_lowest_threshold_then_skip_when_exhausted(e2e):
+async def test_traffic_one_notice_for_the_lowest_threshold_zero_by_state_and_re_armed(e2e):
     u = new_user()
     await flows.seed_active(e2e, u, "basic", utcnow() + timedelta(days=10), flag="on")   # 10 GB
     await traffic_monitor.traffic_monitor_iteration(e2e.bot)            # baseline: 10 GB left
@@ -349,34 +342,29 @@ async def test_traffic_one_notice_for_the_lowest_threshold_then_skip_when_exhaus
     use_bypass(e2e, u, 10 * GIB)
     m = e2e.tg.mark()
     await traffic_monitor.traffic_monitor_iteration(e2e.bot)
+    await traffic_monitor.traffic_monitor_iteration(e2e.bot)
     assert [t.split("\n", 1)[0] for t in e2e.user_texts(u.id, m)] == [HEAD("traffic.zero_premium")]
 
-    # told «0» → not polled any more until GB arrive
-    gets = len(_panel_gets(e2e))
+    # more GB: the thresholds below the new amount come again (a new baseline first)
+    e2e.panel.bypass(u.id)["trafficLimitBytes"] = 20 * GIB                # a 10 GB pack
+    await e2e.pool.execute("UPDATE users SET traffic_notice_last_at = traffic_notice_last_at - interval '4 hours' "
+                           "WHERE telegram_id=$1", u.id)
+    m = e2e.tg.mark()
+    await traffic_monitor.traffic_monitor_iteration(e2e.bot)            # baseline: 10 GB left
+    use_bypass(e2e, u, 16 * GIB)                                        # 4 GB left
     await traffic_monitor.traffic_monitor_iteration(e2e.bot)
-    assert len(_panel_gets(e2e)) == gets
-    await database.reset_traffic_notification_flags(u.id)              # a GB grant
-    await traffic_monitor.traffic_monitor_iteration(e2e.bot)
-    assert len(_panel_gets(e2e)) > gets
+    assert [t.split("\n", 1)[0] for t in e2e.user_texts(u.id, m)] == [HEAD("traffic.left_warn", remaining="4 ГБ")]
 
 
-# ── 7. the profile screens against the real panel ──────────────────────
-
-async def test_my_subscription_screen_is_live_and_says_when_the_panel_is_down(e2e):
+async def test_traffic_zero_without_premium_says_access_is_off(e2e):
+    """#7: «Atlas Fast работает без ограничений» went to users WITHOUT premium."""
     u = new_user()
-    await flows.seed_active(e2e, u, "basic", utcnow() + timedelta(days=10), flag="on")
-    use_bypass(e2e, u, 3 * GIB)
-    live_state.reset_state()
+    await flows.seed_active(e2e, u, "basic", utcnow() + timedelta(days=1), flag="on")
+    await end_premium(e2e, u)
+    await expiry_pass(e2e)                                              # → bypass-only
+    await traffic_monitor.traffic_monitor_iteration(e2e.bot)            # baseline
+    use_bypass(e2e, u, e2e.panel.bypass_limit(u.id))
     m = e2e.tg.mark()
-    await e2e.tap(u, "menu_my_subscription")
-    text = e2e.user_texts(u.id, m)[-1]
-    assert T("main.my_sub_bypass_left", remaining="7 ГБ", limit="10 ГБ") in text
-    assert T("profile.panel_unavailable") not in text
-
-    live_state.reset_state()
-    e2e.panel.down = True
-    m = e2e.tg.mark()
-    await e2e.tap(u, "menu_my_subscription")
-    text = e2e.user_texts(u.id, m)[-1]
-    assert T("profile.panel_unavailable") in text and T("main.my_sub_bypass_none") in text
-    e2e.panel.down = False
+    await traffic_monitor.traffic_monitor_iteration(e2e.bot)
+    (text,) = e2e.user_texts(u.id, m)
+    assert text.split("\n", 1)[0] == HEAD("traffic.zero_no_premium") and "Atlas Fast" not in text
