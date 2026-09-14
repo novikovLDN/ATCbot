@@ -14,16 +14,14 @@ Owner rules (2026-09-14):
   * 0 GB: premium active → «обход исчерпан, основные серверы работают»; no
     premium → «доступ отключён, купите ГБ или подписку».
 
-Panel load is never above what it was: the same per-user GET with the same
-pacing, for a SUBSET of the old rows (database.get_traffic_watch_users: users
-already told «трафик закончился» are skipped until GB arrive). A screen that
-has just read the panel (profile / «Моя подписка») runs the same check on that
-data — check_live, no extra request.
+Panel polling is exactly as on production (owner: «keep it as it was»): the
+same rows (database.get_active_remnawave_users), one get_user_traffic per row,
+the same 0.2 s pacing. Only the notice rules changed.
 
 State lives in users (migration 084): traffic_notice_floor_bytes (NULL = not
 observed since the last grant; else thresholds >= floor are done) and
 traffic_notice_last_at. Every change is a compare-and-set, claimed before the
-send: the worker and a screen never tell the same threshold twice.
+send: two passes never tell the same threshold twice.
 """
 from __future__ import annotations
 
@@ -110,40 +108,30 @@ async def apply_check(bot: Bot, telegram_id: int, *, used: int, limit: int, prem
         return False
 
 
-async def check_live(bot: Bot, telegram_id: int, *, used: int, limit: int, premium: bool) -> bool:
-    """The same check for a screen that has just read the panel — no extra
-    panel request (the numbers are the screen's). Never raises."""
-    try:
-        state = await database.get_traffic_notice_state(telegram_id)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("TRAFFIC_LIVE_STATE_FAILED: tg=%s %s", telegram_id, type(e).__name__)
-        return False
-    if state is None:
-        return False
-    return await apply_check(bot, telegram_id, used=used, limit=limit, premium=premium, state=state)
-
-
 async def _check_user_traffic(bot: Bot, row: Dict[str, Any], now: datetime) -> None:
-    """One background check: one panel GET (as before), then apply_check."""
+    """One check: one panel GET (as on production), the user's notice state
+    (one short DB read — production read the flags here), then apply_check."""
     telegram_id = row["telegram_id"]
     # Prefer numeric id (3.x fast-path без UUID→id auto-resolve).
     # Fallback на uuid для legacy юзеров без забэкфильнутого id.
     panel_ref = row.get("remnawave_id") or row["remnawave_uuid"]
     try:
         traffic = await remnawave_api.get_user_traffic(panel_ref)
+        if not traffic:
+            logger.warning("TRAFFIC_CHECK_NO_DATA: tg=%s", telegram_id)
+            return
+        limit = int(traffic.get("trafficLimitBytes") or 0)
+        if limit <= 0:
+            return                                         # unlimited: nothing to count down
+        state = await database.get_traffic_notice_state(telegram_id)
+        if state is None:
+            return
     except Exception as e:  # noqa: BLE001
         logger.warning("TRAFFIC_CHECK_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
         return
-    if not traffic:
-        logger.warning("TRAFFIC_CHECK_NO_DATA: tg=%s", telegram_id)
-        return
     await apply_check(
-        bot, telegram_id,
-        used=int(traffic.get("usedTrafficBytes") or 0), limit=int(traffic.get("trafficLimitBytes") or 0),
-        premium=premium_active(row, now),
-        state={"floor": row.get("traffic_notice_floor_bytes"), "last_at": row.get("traffic_notice_last_at"),
-               "legacy_zero_told": row.get("legacy_zero_told")},
-        now=now,
+        bot, telegram_id, used=int(traffic.get("usedTrafficBytes") or 0), limit=limit,
+        premium=premium_active(row, now), state=state, now=now,
     )
 
 
@@ -187,8 +175,8 @@ async def _send_traffic_notification(bot: Bot, telegram_id: int, remaining_bytes
 
 
 async def traffic_monitor_iteration(bot: Bot) -> None:
-    """Single iteration: one panel GET per watched user, paced as before."""
-    users = await database.get_traffic_watch_users()
+    """Single iteration: check all active Remnawave users (as on production)."""
+    users = await database.get_active_remnawave_users()
     if not users:
         return
     now = datetime.now(timezone.utc)
@@ -201,7 +189,7 @@ async def traffic_monitor_task(bot: Bot) -> None:
     """Main loop — runs every INTERVAL_SECONDS."""
     logger.info("TRAFFIC_MONITOR: starting (interval=%ds)", INTERVAL_SECONDS)
     from app.core import runtime_health  # dashboard liveness (in-memory)
-    # One iteration walks every watched user at 0.2 s per call,
+    # One iteration walks every user with a panel UUID at 0.2 s per call,
     # so it can run long: a generous interval keeps "stale" meaningful.
     runtime_health.register("traffic_monitor", interval_s=INTERVAL_SECONDS + 1800, initial_delay_s=30)
     await asyncio.sleep(30)  # Initial delay

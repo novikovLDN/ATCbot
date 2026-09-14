@@ -8,8 +8,8 @@
 --
 -- traffic_notice_floor_bytes: NULL = not observed since the last GB grant (the
 --   next check records the amount left as the baseline, no message); otherwise
---   thresholds >= floor are done. 0 = told «трафик закончился» — the background
---   check skips the user until GB arrive.
+--   thresholds >= floor are done (0 = told «трафик закончился»; more GB than
+--   the floor = a top-up → a new baseline).
 -- traffic_notice_last_at: the last traffic message (naive UTC).
 --
 -- Additive and nullable, no backfill (every existing row starts at NULL: the

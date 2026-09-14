@@ -142,21 +142,26 @@ def world(monkeypatch):
     return st
 
 
-async def test_one_get_per_watched_user_and_one_message_each(world, monkeypatch):
-    rows = [_row(1, floor=20 * GB), _row(2, floor=None), _row(3, floor=10 * GB, is_bypass_only=True,
-                                                               source="bypass_only")]
-    world["traffic"] = {1: (18 * GB, 20 * GB), 2: (0, 30 * GB), 3: (10 * GB, 10 * GB)}
-    world["state"] = {1: (20 * GB, None), 2: (None, None), 3: (10 * GB, None)}
-    monkeypatch.setattr(database, "get_traffic_watch_users", AsyncMock(return_value=rows), raising=False)
+async def test_one_get_per_production_row_and_one_message_each(world, monkeypatch):
+    rows = [_row(1), _row(2), _row(3, is_bypass_only=True, source="bypass_only"), _row(4)]
+    world["traffic"] = {1: (18 * GB, 20 * GB), 2: (0, 30 * GB), 3: (10 * GB, 10 * GB), 4: (5 * GB, 0)}
+    world["state"] = {1: (20 * GB, None), 2: (None, None), 3: (10 * GB, None), 4: (None, None)}
+
+    async def state(tg):
+        floor, last = world["state"][tg]
+        return {"floor": floor, "last_at": last, "legacy_zero_told": False}
+    monkeypatch.setattr(database, "get_active_remnawave_users", AsyncMock(return_value=rows))
+    monkeypatch.setattr(database, "get_traffic_notice_state", state, raising=False)
 
     await tm.traffic_monitor_iteration(MagicMock())
 
-    assert world["gets"] == [1, 2, 3], "one panel GET per watched user — never more than before"
+    assert world["gets"] == [1, 2, 3, 4], "one panel GET per row — exactly production's polling"
     assert world["sent"] == [(1, 3 * GB, True), (3, 0, False)]
     assert world["state"][2] == (30 * GB, None), "baseline recorded, nothing sent"
+    assert world["state"][4] == (None, None), "unlimited bypass: no state, no message"
 
 
-async def test_the_worker_and_a_screen_never_send_the_same_notice_twice(world, monkeypatch):
+async def test_two_passes_never_send_the_same_notice_twice(world, monkeypatch):
     world["state"] = {7: (20 * GB, None)}
     state = {"floor": 20 * GB, "last_at": None}
     first = await tm.apply_check(MagicMock(), 7, used=17 * GB, limit=20 * GB, premium=True, state=state, now=NOW)
@@ -164,16 +169,12 @@ async def test_the_worker_and_a_screen_never_send_the_same_notice_twice(world, m
     assert (first, second) == (True, False) and len(world["sent"]) == 1
 
 
-async def test_screen_check_uses_the_screens_numbers_and_respects_the_gap(world, monkeypatch):
-    recent = datetime.now(timezone.utc) - timedelta(hours=1)
+async def test_the_3h_gap_holds_the_next_notice(world, monkeypatch):
+    recent = NOW - timedelta(hours=1)
     world["state"] = {9: (5 * GB, recent)}
-    state = AsyncMock(return_value={"floor": 5 * GB, "last_at": recent, "legacy_zero_told": False})
-    monkeypatch.setattr(database, "get_traffic_notice_state", state, raising=False)
-    assert await tm.check_live(MagicMock(), 9, used=9 * GB, limit=10 * GB, premium=False) is False
-    assert world["gets"] == [] and world["sent"] == [], "no extra panel request, no message inside 3 h"
-
-    old = datetime.now(timezone.utc) - timedelta(hours=4)
-    world["state"] = {9: (5 * GB, old)}
-    state.return_value = {"floor": 5 * GB, "last_at": old, "legacy_zero_told": False}
-    assert await tm.check_live(MagicMock(), 9, used=9 * GB, limit=10 * GB, premium=False) is True
-    assert world["gets"] == [] and world["sent"] == [(9, GB, False)], "one message: the lowest crossed (1 GB)"
+    state = {"floor": 5 * GB, "last_at": recent}
+    assert await tm.apply_check(MagicMock(), 9, used=9 * GB, limit=10 * GB, premium=False, state=state, now=NOW) is False
+    later = NOW + timedelta(hours=2, minutes=1)
+    assert await tm.apply_check(MagicMock(), 9, used=9 * GB, limit=10 * GB, premium=False, state=state,
+                                now=later) is True
+    assert world["sent"] == [(9, GB, False)], "one message: the lowest crossed (1 GB)"

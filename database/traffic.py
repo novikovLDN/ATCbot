@@ -341,49 +341,6 @@ async def reset_traffic_notification_flags(telegram_id: int) -> None:
 
 # ── Bypass traffic notices (owner 2026-09-14, migration 084) ───────────
 
-# Background check = a SUBSET of the old selection (active row with a panel
-# pointer): a user already told «трафик закончился» (floor 0) is skipped until
-# GB arrive — a grant resets the floor (reset_traffic_notification_flags), a
-# bought pack after that message shows in traffic_purchases.
-_WATCH_SQL = """
-    SELECT s.telegram_id, s.remnawave_uuid, s.remnawave_id, s.subscription_type,
-           COALESCE(s.is_bypass_only, FALSE) AS is_bypass_only, s.source, s.expires_at,
-           u.traffic_notice_floor_bytes, u.traffic_notice_last_at,
-           COALESCE(u.traffic_notified_0, FALSE) AS legacy_zero_told
-    FROM subscriptions s
-    JOIN users u ON u.telegram_id = s.telegram_id
-    WHERE s.status = 'active'
-      AND s.remnawave_uuid IS NOT NULL
-      AND s.remnawave_uuid != ''
-      AND (u.traffic_notice_floor_bytes IS DISTINCT FROM 0
-           OR EXISTS (SELECT 1 FROM traffic_purchases tp
-                      WHERE tp.telegram_id = s.telegram_id
-                        AND tp.created_at > (u.traffic_notice_last_at AT TIME ZONE 'UTC')))
-"""
-
-
-async def get_traffic_watch_users() -> List[Dict[str, Any]]:
-    """Rows the background traffic check polls (see _WATCH_SQL). [] while
-    migration 084 is missing (the pass is skipped, nothing is guessed)."""
-    if not _core.DB_READY:
-        return []
-    pool = await get_pool()
-    if pool is None:
-        return []
-    async with pool.acquire() as conn:
-        try:
-            rows = await conn.fetch(_WATCH_SQL)
-        except asyncpg.UndefinedColumnError as e:
-            logger.warning("TRAFFIC_WATCH_SCHEMA_OUTDATED: %s — pass skipped", e)
-            return []
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["traffic_notice_last_at"] = _core._from_db_utc(d["traffic_notice_last_at"]) if d["traffic_notice_last_at"] else None
-        d["expires_at"] = _core._from_db_utc(d["expires_at"]) if d["expires_at"] else None
-        out.append(d)
-    return out
-
 
 async def get_traffic_notice_state(telegram_id: int) -> Optional[Dict[str, Any]]:
     """{floor, last_at, legacy_zero_told} of one user, or None (no row / schema)."""
@@ -483,7 +440,8 @@ async def get_active_remnawave_users() -> List[Dict[str, Any]]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT s.telegram_id, s.remnawave_uuid, s.remnawave_id,
-                      s.subscription_type
+                      s.subscription_type,
+                      COALESCE(s.is_bypass_only, FALSE) AS is_bypass_only, s.source, s.expires_at
                FROM subscriptions s
                WHERE s.status = 'active'
                  AND s.remnawave_uuid IS NOT NULL

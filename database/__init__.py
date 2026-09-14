@@ -186,7 +186,6 @@ from database.traffic import (  # noqa: F401
     get_traffic_notification_flags,
     set_traffic_notification_flag,
     reset_traffic_notification_flags,
-    get_traffic_watch_users,
     get_traffic_notice_state,
     claim_traffic_notice_state,
     record_traffic_purchase,
