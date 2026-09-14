@@ -154,12 +154,50 @@ async def test_notice_without_a_window_has_no_offer(monkeypatch):
     assert [b.callback_data for row in kb.inline_keyboard for b in row] == ["menu_buy_vpn"]
 
 
+def _bypass(monkeypatch, info):
+    from app.services.subscriptions import live_state
+    read = AsyncMock(return_value=info)
+    monkeypatch.setattr(live_state, "read_bypass", read)
+    return read
+
+
 async def test_bypass_notice_keeps_its_buttons_and_gets_the_offer(monkeypatch):
+    from app.services.subscriptions.live_state import BypassInfo
     monkeypatch.setattr(database, "get_special_offer_info", AsyncMock(return_value={"expires_at": OFFER_END}))
+    _bypass(monkeypatch, BypassInfo("present", used=3 * 1024 ** 3, limit=10 * 1024 ** 3, status="ACTIVE"))
     text, kb = await so.expired_notice("ru", TG, has_bypass=True)
-    assert text.startswith(get_text("ru", "traffic.subscription_expired_bypass_active"))
+    assert text.startswith(get_text("ru", "subscription.expired_gb_left", remaining="7 ГБ"))
     assert [b.callback_data for row in kb.inline_keyboard for b in row] == [
         "special_offer_buy", "buy_traffic", "menu_buy_vpn"]
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+@pytest.mark.parametrize("info,key,gb_named", [
+    (("present", 2 * 1024 ** 3, 10 * 1024 ** 3, "ACTIVE"), "subscription.expired_gb_left", "8"),
+    (("present", 10 * 1024 ** 3, 10 * 1024 ** 3, "ACTIVE"), "subscription.expired_gb_spent", None),
+    (("present", 12 * 1024 ** 3, 10 * 1024 ** 3, "LIMITED"), "subscription.expired_gb_spent", None),
+    (("absent", 0, 0, ""), "subscription.expired_gb_spent", None),
+    (("unavailable", 0, 0, ""), "subscription.expired_gb_works", None),
+], ids=["gb_left", "gb_zero", "limited", "no_entity", "panel_down"])
+async def test_ended_premium_notice_follows_the_gb_actually_left(monkeypatch, lang, info, key, gb_named):
+    """#2: «обход работает» only when the panel shows GB left; at 0 GB — VPN off."""
+    from app.services.subscriptions.live_state import BypassInfo
+    state, used, limit, status = info
+    monkeypatch.setattr(database, "get_special_offer_info", AsyncMock(return_value=None))
+    _bypass(monkeypatch, BypassInfo(state, used=used, limit=limit, status=status))
+    text, kb = await so.expired_notice(lang, TG, has_bypass=True)
+    head = get_text(lang, key, remaining="X").split("\n", 1)[0]
+    assert text.startswith(head), text
+    if gb_named:
+        assert f"{gb_named} {get_text(lang, 'common.unit_gb')}" in text
+    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+    if key == "subscription.expired_gb_spent":
+        assert callbacks == ["menu_buy_vpn", "buy_traffic"]
+        assert "продолжает работать" not in text and "keeps working" not in text
+    else:
+        assert callbacks == ["buy_traffic", "menu_buy_vpn"]
+    if lang == "en":
+        assert not (set(text.lower()) & CYRILLIC)
 
 
 # ── expiry paths: after the commit, once ───────────────────────────────

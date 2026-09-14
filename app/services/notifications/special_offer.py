@@ -38,6 +38,23 @@ def format_deadline(language: str, dt: datetime) -> str:
     return f"{dt.astimezone(MSK):%d.%m.%Y %H:%M} {_t(language, 'common.msk')}"
 
 
+async def _bypass_text(language: str, telegram_id: int) -> tuple[str, bool]:
+    """(text, gb_left) for a premium that ended while a bypass entity exists.
+
+    Read AFTER the expiry committed, with no DB connection held: «обход работает»
+    only when the panel shows GB left (#2, docs/notifications/matrix.md) — at
+    0 GB the VPN is off and the user is told so. Panel unavailable → the GB are
+    not named (never a stale or guessed amount)."""
+    from app.services.subscriptions import live_state
+    bypass = await live_state.read_bypass(telegram_id)
+    if bypass.works is False:
+        return _t(language, "subscription.expired_gb_spent"), False
+    if bypass.works and not bypass.unlimited:
+        return _t(language, "subscription.expired_gb_left",
+                  remaining=live_state.format_bytes(language, bypass.remaining)), True
+    return _t(language, "subscription.expired_gb_works"), True
+
+
 async def expired_notice(language: str, telegram_id: int, *, has_bypass: bool) -> tuple[str, InlineKeyboardMarkup]:
     """(text, keyboard) for «your subscription ended» — with the −15 % line and
     button while the period's window is open."""
@@ -46,7 +63,11 @@ async def expired_notice(language: str, telegram_id: int, *, has_bypass: bool) -
         offer = await database.get_special_offer_info(telegram_id)
     except Exception:  # noqa: BLE001 — the notice still goes out, without the offer
         offer = None
-    text = _t(language, "traffic.subscription_expired_bypass_active" if has_bypass else "subscription.expired_paid")
+    gb_left = False
+    if has_bypass:
+        text, gb_left = await _bypass_text(language, telegram_id)
+    else:
+        text = _t(language, "subscription.expired_paid")
     rows = []
     if offer:
         text += _t(language, "subscription.expired_offer_line",
@@ -56,9 +77,13 @@ async def expired_notice(language: str, telegram_id: int, *, has_bypass: bool) -
             callback_data="special_offer_buy",
             style="success",
         )])
-    if has_bypass:
+    if gb_left:
         rows.append([InlineKeyboardButton(text=_t(language, "traffic.buy_traffic_btn"), callback_data="buy_traffic")])
         rows.append([InlineKeyboardButton(text=_t(language, "traffic.buy_subscription"), callback_data="menu_buy_vpn")])
+    elif has_bypass:
+        # 0 GB left: the VPN is off — renew, or buy GB to get the bypass back
+        rows.append([InlineKeyboardButton(text=_t(language, "traffic.buy_subscription"), callback_data="menu_buy_vpn")])
+        rows.append([InlineKeyboardButton(text=_t(language, "traffic.buy_traffic_btn"), callback_data="buy_traffic")])
     else:
         rows.append([InlineKeyboardButton(text=_t(language, "main.buy"), callback_data="menu_buy_vpn")])
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
