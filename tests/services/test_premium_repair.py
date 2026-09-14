@@ -319,7 +319,24 @@ async def test_panel_unavailable_plans_nothing(w, monkeypatch):
 @pytest.fixture
 def script(monkeypatch):
     import scripts.fix_premium_over_issuance as mod
-    monkeypatch.setattr(database.core, "init_db", AsyncMock(return_value=True))
+
+    class _Conn:
+        async def fetchval(self, sql):
+            return 1
+
+    class _Pool:
+        def acquire(self):
+            class _Ctx:
+                async def __aenter__(self):
+                    return _Conn()
+
+                async def __aexit__(self, *exc):
+                    return False
+            return _Ctx()
+
+    monkeypatch.setattr(database.core, "get_pool", AsyncMock(return_value=_Pool()))
+    # Run from outside, the CLI must never re-run migrations / inline DDL on prod.
+    monkeypatch.setattr(database.core, "init_db", AsyncMock(side_effect=AssertionError("init_db called")))
     monkeypatch.setattr(mod, "_make_bot", lambda: object())
     return mod
 
