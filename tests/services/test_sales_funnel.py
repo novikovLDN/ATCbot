@@ -466,6 +466,7 @@ async def test_old_base_segments_route_to_sql_bounded_by_the_funnel_start(monkey
     assert "is_bypass_only" in captured[1] and "is_bypass_only" in captured[2]
 
     from app.api.dashboard.routes import broadcasts
+    broadcasts.reset_segment_counts_cache()
     monkeypatch.setattr(broadcasts.database, "get_users_by_segment", lambda key: _const([1, 2]))
     listed = {s["key"]: s for s in await broadcasts.segments_list()}
     for seg in ("funnel_start_no_trial", "funnel_trial_ended_no_purchase", "funnel_paid_ended_no_renewal"):

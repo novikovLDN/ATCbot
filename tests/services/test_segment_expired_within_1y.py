@@ -72,6 +72,7 @@ async def test_expired_within_1y_listed_in_dashboard_segments():
     async def _fake_count(key):
         return [1, 2, 3]
 
+    br.reset_segment_counts_cache()
     with patch.object(br.database, "get_users_by_segment", AsyncMock(side_effect=_fake_count)):
         # GET /segments handler is `segments_list` (b2a90f44); the name
         # `broadcast_segments` never existed in this module.

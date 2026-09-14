@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -60,6 +61,18 @@ async def broadcasts_recent(limit: int = Query(20, gt=0, le=500)):
     except Exception as e:
         raise server_error("broadcasts_failed") from e
     return [_serialize(r) for r in rows]
+
+
+# GET /segments counted every segment (full table scans) on every open of the
+# broadcast wizard / the notification editor. Counts are cached server-side for
+# this long (a failed count is not cached, it is retried on the next open).
+SEGMENT_COUNTS_TTL_SECONDS = 60.0
+_clock = time.monotonic
+_segment_counts: dict = {}          # key → (counted at, count)
+
+
+def reset_segment_counts_cache() -> None:
+    _segment_counts.clear()
 
 
 @router.get("/segments")
@@ -270,13 +283,19 @@ async def segments_list():
          "Апселл / особые"),
     ]
     out = []
+    now = _clock()
     for key, label, description, group in segments:
-        try:
-            ids = await database.get_users_by_segment(key)
-            count = len(ids)
-        except Exception as e:
-            logger.warning("SEGMENT_COUNT_FAIL key=%s err=%s", key, e)
-            count = -1
+        cached = _segment_counts.get(key)
+        if cached is not None and now - cached[0] < SEGMENT_COUNTS_TTL_SECONDS:
+            count = cached[1]
+        else:
+            try:
+                ids = await database.get_users_by_segment(key)
+                count = len(ids)
+                _segment_counts[key] = (now, count)
+            except Exception as e:
+                logger.warning("SEGMENT_COUNT_FAIL key=%s err=%s", key, e)
+                count = -1
         out.append({
             "key": key,
             "label": label,
