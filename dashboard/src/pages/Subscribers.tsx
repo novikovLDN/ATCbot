@@ -49,7 +49,7 @@ function Titled({ children, hint }: { children: ReactNode; hint: string }) {
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5">
       <span className="truncate">{children}</span>
-      <Hint text={hint} />
+      <Hint text={hint} label={typeof children === "string" ? `Как считается: ${children}` : undefined} />
     </span>
   );
 }
