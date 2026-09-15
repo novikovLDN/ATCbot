@@ -89,6 +89,26 @@ class PIISanitizingFilter(logging.Filter):
         return text
 
 
+class PanelUserPollFilter(logging.Filter):
+    """Drop httpx's line for a successful per-user panel read
+    (`GET …/api/users/<numeric panel id> "HTTP/1.1 200 OK"`).
+
+    traffic_monitor polls every active user each pass, so these lines flooded
+    the log with panel ids nobody can map to a user; the worker logs one
+    TRAFFIC_MONITOR_PASS summary instead. Failed reads and every other request
+    are kept."""
+
+    _PANEL_USER_GET_OK = re.compile(r'^HTTP Request: GET \S+/api/users/\d+ "HTTP/[\d.]+ 200 ')
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno != logging.INFO:
+            return True
+        try:
+            return not self._PANEL_USER_GET_OK.match(record.getMessage())
+        except Exception:  # noqa: BLE001 — a log filter never breaks logging
+            return True
+
+
 class JSONFormatter(logging.Formatter):
     """Structured JSON log formatter for production log aggregators."""
 
@@ -150,6 +170,10 @@ def setup_logging():
     pii_filter = PIISanitizingFilter()
     stdout_handler.addFilter(pii_filter)
     stderr_handler.addFilter(pii_filter)
+
+    httpx_logger = logging.getLogger("httpx")
+    if not any(isinstance(f, PanelUserPollFilter) for f in httpx_logger.filters):
+        httpx_logger.addFilter(PanelUserPollFilter())
 
     log_queue = queue.Queue()
     root_logger.addHandler(QueueHandler(log_queue))

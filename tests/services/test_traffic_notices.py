@@ -142,7 +142,7 @@ def world(monkeypatch):
     return st
 
 
-async def test_one_get_per_production_row_and_one_message_each(world, monkeypatch):
+async def test_one_get_per_production_row_and_one_message_each(world, monkeypatch, caplog):
     rows = [_row(1), _row(2), _row(3, is_bypass_only=True, source="bypass_only"), _row(4)]
     world["traffic"] = {1: (18 * GB, 20 * GB), 2: (0, 30 * GB), 3: (10 * GB, 10 * GB), 4: (5 * GB, 0)}
     world["state"] = {1: (20 * GB, None), 2: (None, None), 3: (10 * GB, None), 4: (None, None)}
@@ -153,8 +153,13 @@ async def test_one_get_per_production_row_and_one_message_each(world, monkeypatc
     monkeypatch.setattr(database, "get_active_remnawave_users", AsyncMock(return_value=rows))
     monkeypatch.setattr(database, "get_traffic_notice_state", state, raising=False)
 
-    await tm.traffic_monitor_iteration(MagicMock())
+    with caplog.at_level("INFO", logger=tm.logger.name):
+        await tm.traffic_monitor_iteration(MagicMock())
 
+    # one summary line per pass, with telegram ids (the per-user panel GETs are not logged)
+    (summary,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("TRAFFIC_MONITOR_PASS")]
+    assert "users=4 sent=2 checked=1 skipped=1 no_data=0 errors=0" in summary
+    assert summary.endswith("notified_tg=1,3")
     assert world["gets"] == [1, 2, 3, 4], "one panel GET per row — exactly production's polling"
     assert world["sent"] == [(1, 3 * GB, True), (3, 0, False)]
     assert world["state"][2] == (30 * GB, None), "baseline recorded, nothing sent"
