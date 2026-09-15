@@ -500,7 +500,8 @@ _TRIAL_STATE_SQL = """
 _MARK_TRIAL_USED_SQL = """
     UPDATE users
     SET trial_used_at = CURRENT_TIMESTAMP,
-        trial_expires_at = $1
+        trial_expires_at = $1,
+        trial_completed_sent = FALSE
     WHERE telegram_id = $2 AND trial_used_at IS NULL
 """
 

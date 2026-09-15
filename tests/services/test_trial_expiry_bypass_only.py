@@ -194,12 +194,18 @@ async def test_bypass_only_row_already_told_gets_nothing(env):
     assert conn.sub_writes == []
 
 
-async def test_real_paid_subscription_is_still_skipped(env):
+async def test_real_paid_subscription_is_skipped_and_the_trial_marked_completed(env):
+    """Nothing expired, no notice — and the trial is marked completed so the
+    worker does not re-select this user on every pass (production 2026-09-15)."""
     conn = Conn(dict(PAID))
     await tn._process_single_trial_expiration(MagicMock(), Pool(conn), _row(), NOW)
     env["sent"].assert_not_awaited()
     env["disable"].assert_not_awaited()
-    assert conn.sub_writes == [] and conn.completed_sent is False
+    assert conn.sub_writes == [] and conn.completed_sent is True
+
+    await tn._process_single_trial_expiration(MagicMock(), Pool(conn), _row(), NOW)
+    env["sent"].assert_not_awaited()
+    assert conn.sub_writes == [], "the paid row is never touched"
 
 
 @pytest.mark.parametrize("sub,paid", [

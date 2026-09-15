@@ -112,7 +112,22 @@ async def test_row_turned_bypass_only_by_gb_bought_right_after_the_end(e2e, flag
     await assert_told_once_bypass_kept(e2e, u, mark, limit=500 * MB + 15 * GIB)
 
 
-async def test_real_paid_subscriber_whose_trial_just_ended_is_skipped(e2e):
+def count_paid_closes(monkeypatch) -> list:
+    """Calls of the worker's «trial ended under a paid subscription» close."""
+    calls = []
+    real = trial_notifications._close_trial_for_paid
+
+    async def spy(conn, telegram_id, *a, **kw):
+        calls.append(telegram_id)
+        return await real(conn, telegram_id, *a, **kw)
+    monkeypatch.setattr(trial_notifications, "_close_trial_for_paid", spy)
+    return calls
+
+
+async def test_real_paid_subscriber_whose_trial_just_ended_is_skipped(e2e, monkeypatch):
+    """Nothing expired, no notice — the trial is marked completed once and the
+    worker never selects the user again (production 2026-09-15: ~12 such users
+    re-checked and logged on every pass for 24 h)."""
     u = new_user()
     await flows.seed_active(e2e, u, "basic", utcnow() + timedelta(days=20))
     await e2e.pool.execute(
@@ -121,13 +136,46 @@ async def test_real_paid_subscriber_whose_trial_just_ended_is_skipped(e2e):
         "trial_completed_sent = FALSE WHERE telegram_id=$1", u.id)
     before = await e2e.sub(u.id)
     premium = e2e.panel.premium_expire(u.id)
+    closes = count_paid_closes(monkeypatch)
     mark = e2e.tg.mark()
 
     await run_workers(e2e)
 
     assert e2e.user_texts(u.id, mark) == []
-    assert await completed_sent(e2e, u) is False
+    assert await completed_sent(e2e, u) is True
+    assert closes == [u.id]
     after = await e2e.sub(u.id)
     assert (after["expires_at"], after["source"], after["is_bypass_only"], after["uuid"]) == \
         (before["expires_at"], "payment", False, before["uuid"])
     assert e2e.panel.premium_expire(u.id) == premium and e2e.panel.premium(u.id)["status"] == "ACTIVE"
+
+    await run_workers(e2e)                             # next passes: not selected any more
+    assert closes == [u.id]
+    assert e2e.user_texts(u.id, mark) == []
+
+
+async def test_purchase_during_the_trial_is_never_selected_by_the_trial_worker(e2e, monkeypatch):
+    """A purchase during the trial already closed and completed it: the worker
+    has nothing to do for this user — no re-check, no notice."""
+    u = await trial_user(e2e, "on")
+    await flows.seed_active(e2e, u, "basic", utcnow() + timedelta(days=30))
+    await e2e.pool.execute(
+        "UPDATE users SET trial_expires_at = (NOW() AT TIME ZONE 'UTC') - interval '1 hour', "
+        "trial_completed_sent = TRUE WHERE telegram_id=$1", u.id)
+    closes = count_paid_closes(monkeypatch)
+    mark = e2e.tg.mark()
+    await run_workers(e2e)
+    assert closes == [] and e2e.user_texts(u.id, mark) == []
+
+
+async def test_a_new_trial_starts_with_a_fresh_completed_flag(e2e):
+    """A stale trial_completed_sent (e.g. a trial reset by hand) must not hide
+    the new trial's end: starting a trial resets the flag."""
+    u = new_user()
+    await e2e.start_user(u)
+    await e2e.pool.execute("UPDATE users SET trial_completed_sent = TRUE WHERE telegram_id=$1", u.id)
+    e2e.provisioning("on")
+    await e2e.tap(u, "activate_trial")
+    await e2e.provisioning_tick()
+    assert (await e2e.sub(u.id))["source"] == "trial"
+    assert await completed_sent(e2e, u) is False
