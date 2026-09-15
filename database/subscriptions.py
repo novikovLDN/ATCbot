@@ -4069,25 +4069,11 @@ async def create_pending_purchase(
         _insert_sql = """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country, is_combo, farm_plot_id)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"""
         _insert_args = (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country, is_combo, farm_plot_id)
-        try:
-            await conn.execute(_insert_sql, *_insert_args)
-        except Exception as e:
-            if "purchase_type_check" in str(e) or "tariff_check" in str(e):
-                # Auto-fix CHECK constraints for traffic_pack support
-                logger.warning("create_pending_purchase: fixing CHECK constraints")
-                await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_purchase_type_check")
-                await conn.execute(
-                    "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_purchase_type_check "
-                    "CHECK (purchase_type IN ('subscription', 'balance_topup', 'gift', 'telegram_premium', 'telegram_stars', 'traffic_pack', 'apple_id', 'spotify'))"
-                )
-                await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_tariff_check")
-                await conn.execute(
-                    "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_tariff_check "
-                    "CHECK (tariff IS NULL OR tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate', 'telegram_premium', 'telegram_stars') OR tariff LIKE 'traffic_%' OR tariff LIKE 'apple_id_%' OR tariff LIKE 'bypass_%' OR tariff LIKE 'spotify_%')"
-                )
-                await conn.execute(_insert_sql, *_insert_args)
-            else:
-                raise
+        # No purchase_type / tariff CHECK on pending_purchases (migration 094,
+        # as on production). The old "auto-fix" here re-created narrow lists
+        # without steam / proxy / farm_effect on a violation — it could only
+        # break other products, never help.
+        await conn.execute(_insert_sql, *_insert_args)
 
         logger.info(f"Pending purchase created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff}, period_days={period_days}, price={price_kopecks} kopecks, country={country}")
 
