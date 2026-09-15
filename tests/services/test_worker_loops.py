@@ -148,6 +148,24 @@ async def test_reminders_loop_survives_a_failed_iteration(monkeypatch, alerts):
     assert alerts == ["reminders"]
 
 
+async def test_reminders_query_timeout_reaches_the_loop_and_alerts(monkeypatch, alerts):
+    """Production 2026-09-15: the reminders query hit the DB statement timeout;
+    send_smart_reminders swallowed the TimeoutError, the pass was logged as
+    success and nobody was told. It must reach the loop and alert the admin."""
+    import reminders
+    calls = []
+
+    async def get_subscriptions_for_reminders():
+        calls.append(1)
+        if len(calls) == 1:
+            raise TimeoutError()
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(database, "get_subscriptions_for_reminders", get_subscriptions_for_reminders)
+    await _run(reminders, reminders.reminders_task, monkeypatch)
+    assert len(calls) == 2, "the loop stopped after the timed-out query"
+    assert alerts == ["reminders"]
+
+
 async def test_trial_scheduler_survives_a_failed_iteration(monkeypatch, alerts):
     import trial_notifications as tn
     monkeypatch.setattr(tn, "_TRIAL_SCHEDULER_STARTED", False)
