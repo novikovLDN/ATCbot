@@ -24,6 +24,8 @@ import { Spinner } from "@/components/Spinner";
 import { PageHeader, Surface } from "@/components/ui/Surface";
 import { IconButton, Segmented, StatusDot } from "@/components/ui/controls";
 import { ErrorState, Skeleton } from "@/components/ui/states";
+import { SegmentWindowPicker, useSegmentCount } from "@/components/segments/SegmentWindowPicker";
+import { defaultKeyOf, isSegmentKeyValid, splitSegmentKey } from "@/lib/segments";
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -232,14 +234,23 @@ export function BroadcastCreate() {
       toast.error((e as ApiError)?.detail ?? "Не удалось отправить тест"),
   });
 
-  const audience = useMemo(() => {
-    if (!segments.data) return null;
-    const s = segments.data.find((x) => x.key === segment);
-    return s ? s.count : null;
-  }, [segments.data, segment]);
+  // `segment` is the full key: "paid_lapsed_any" or "paid_ended:6m".
+  const segmentBase = splitSegmentKey(segment).base;
+  const segSpec = useMemo(
+    () => segments.data?.find((x) => x.key === segmentBase),
+    [segments.data, segmentBase],
+  );
+  const segmentValid = isSegmentKeyValid(segment, segments.data);
+  const live = useSegmentCount(segSpec?.parametric && segmentValid ? segment : null);
+  const audience = segSpec ? (segSpec.parametric ? live.count : segSpec.count) : null;
+  const segmentLabel = segSpec
+    ? segSpec.parametric
+      ? live.label ?? segSpec.label
+      : segSpec.label
+    : "";
 
   const canNext1 = title.trim().length > 0 && message.trim().length > 0;
-  const canNext2 = segment.length > 0;
+  const canNext2 = segmentValid;
   const needsDiscountPercent =
     buttons.includes("promo_buy") || buttons.includes("promo_traffic");
   const canConfirm =
@@ -479,43 +490,53 @@ export function BroadcastCreate() {
                   <section key={groupName}>
                     <h3 className="t-mute mb-2 text-[13px] font-medium">{groupName}</h3>
                     <ul className="flex flex-col gap-2">
-                      {(items ?? []).map((s) => (
-                        <li key={s.key}>
-                          <label
-                            className={cn(
-                              optionRow(segment === s.key),
-                              "items-start justify-between gap-3 px-4 py-3",
-                            )}
-                          >
-                            <div className="flex min-w-0 items-start gap-3">
-                              <input
-                                type="radio"
-                                name="segment"
-                                value={s.key}
-                                checked={segment === s.key}
-                                onChange={() => setSegment(s.key)}
-                                className="mt-1 accent-accent"
-                              />
-                              <div className="min-w-0">
-                                <div className="font-medium">{s.label}</div>
-                                {s.description && (
-                                  <div className="t-mute mt-0.5 text-[12px] leading-snug">
-                                    {s.description}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                            <span
+                      {(items ?? []).map((s) => {
+                        const active = segmentBase === s.key;
+                        return (
+                          <li key={s.key} className="flex flex-col gap-2">
+                            <label
                               className={cn(
-                                "tabular shrink-0",
-                                segment === s.key ? "badge-accent" : CHIP,
+                                optionRow(active),
+                                "items-start justify-between gap-3 px-4 py-3",
                               )}
                             >
-                              <UsersIcon className="h-3 w-3" /> {fmtNum(s.count)}
-                            </span>
-                          </label>
-                        </li>
-                      ))}
+                              <div className="flex min-w-0 items-start gap-3">
+                                <input
+                                  type="radio"
+                                  name="segment"
+                                  value={s.key}
+                                  checked={active}
+                                  onChange={() => setSegment(defaultKeyOf(s))}
+                                  className="mt-1 accent-accent"
+                                />
+                                <div className="min-w-0">
+                                  <div className="font-medium">
+                                    {s.label}
+                                    {s.parametric && (
+                                      <span className="t-mute font-normal"> · за период</span>
+                                    )}
+                                  </div>
+                                  {s.description && (
+                                    <div className="t-mute mt-0.5 text-[12px] leading-snug">
+                                      {s.description}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              <span
+                                className={cn("tabular shrink-0", active ? "badge-accent" : CHIP)}
+                                title={s.parametric ? s.default_label : undefined}
+                              >
+                                <UsersIcon className="h-3 w-3" />{" "}
+                                {fmtNum(active && s.parametric ? live.count : s.count)}
+                              </span>
+                            </label>
+                            {active && s.parametric && (
+                              <SegmentWindowPicker spec={s} value={segment} onChange={setSegment} />
+                            )}
+                          </li>
+                        );
+                      })}
                     </ul>
                   </section>
                 ));
@@ -649,9 +670,7 @@ export function BroadcastCreate() {
         >
           <div className="rounded-row bg-tile-3 p-4">
             <div className="t-mute text-[13px]">Сегмент</div>
-            <div className="mt-1 text-[15px] font-semibold">
-              {segments.data?.find((x) => x.key === segment)?.label}
-            </div>
+            <div className="mt-1 text-[15px] font-semibold">{segmentLabel}</div>
             <div className="mt-3 flex flex-wrap items-baseline gap-x-2">
               <span className="tabular track-metric text-[30px] font-semibold leading-9">
                 {fmtNum(audience)}
@@ -733,7 +752,8 @@ export function BroadcastCreate() {
                 create.isPending ||
                 testSelf.isPending ||
                 !canConfirm ||
-                audience === 0
+                audience === 0 ||
+                audience === null
               }
               className="btn-primary"
             >

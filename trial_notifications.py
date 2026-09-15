@@ -868,12 +868,18 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
             logger.info(f"trial_completed: user={telegram_id}, completed_at={now.isoformat()}")
 
 
-def _log_paid_skip(telegram_id: int, trial_expires_at, active_paid) -> None:
+async def _close_trial_for_paid(conn, telegram_id: int, trial_expires_at, active_paid) -> None:
+    """The trial ended while a paid subscription is active: nothing to expire and
+    no «пробный завершён» (the user is a paying customer). Mark the trial
+    completed — the same users.trial_completed_sent flag a purchase during the
+    trial sets — so the worker does not select this user again on every pass
+    for the next 24 h (production 2026-09-15: ~12 users re-checked every pass)."""
+    await trial_service.mark_trial_completed(telegram_id=telegram_id, conn=conn)
     paid_expires_at = active_paid["expires_at"]
     logger.info(
-        "Trial cleanup skipped: user has active paid subscription; "
+        "TRIAL_CLOSED_BY_PAID_SUBSCRIPTION: "
         f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-        f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}"
+        f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None} — trial marked completed, no notice"
     )
 
 
@@ -894,7 +900,7 @@ async def _expire_single_trial(bot: Bot, pool, row: dict, now: datetime) -> bool
             # PRODUCTION HOTFIX: Trial must NEVER revoke VPN or modify subscription if user has active paid.
             active_paid = await database.get_active_paid_subscription(conn, telegram_id, now)
             if active_paid:
-                _log_paid_skip(telegram_id, trial_expires_at, active_paid)
+                await _close_trial_for_paid(conn, telegram_id, trial_expires_at, active_paid)
                 return False
             should_expire, reason = await trial_service.should_expire_trial(
                 telegram_id=telegram_id,
@@ -935,7 +941,8 @@ async def _expire_single_trial(bot: Bot, pool, row: dict, now: datetime) -> bool
             async with conn.transaction():
                 active_paid = await database.get_active_paid_subscription(conn, telegram_id, now)
                 if active_paid:
-                    _log_paid_skip(telegram_id, trial_expires_at, active_paid)
+                    # bought while the panel call ran: same close, same transaction
+                    await _close_trial_for_paid(conn, telegram_id, trial_expires_at, active_paid)
                     return False
                 # Check if user has Remnawave bypass traffic — keep it active
                 has_remnawave = await conn.fetchval(
@@ -1007,6 +1014,7 @@ async def expire_trial_subscriptions(bot: Bot):
               AND u.trial_expires_at IS NOT NULL
               AND u.trial_expires_at <= $1
               AND u.trial_expires_at > $1 - INTERVAL '24 hours'
+              AND COALESCE(u.trial_completed_sent, FALSE) = FALSE
               AND COALESCE(u.is_reachable, TRUE) = TRUE
               AND u.telegram_id > $2
             ORDER BY u.telegram_id ASC
@@ -1021,6 +1029,7 @@ async def expire_trial_subscriptions(bot: Bot):
               AND u.trial_expires_at IS NOT NULL
               AND u.trial_expires_at <= $1
               AND u.trial_expires_at > $1 - INTERVAL '24 hours'
+              AND COALESCE(u.trial_completed_sent, FALSE) = FALSE
               AND u.telegram_id > $2
             ORDER BY u.telegram_id ASC
             LIMIT $3

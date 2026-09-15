@@ -405,16 +405,29 @@ export const endpoints = {
       conversion_rate_7d: number;
       blocked_estimate: number;
     }>(`/broadcasts/${id}/analytics`),
-  broadcastSegments: () =>
-    api.get<
-      Array<{
-        key: string;
-        label: string;
-        description?: string;
-        group?: string;
-        count: number;
-      }>
-    >("/broadcasts/segments"),
+  broadcastSegments: () => api.get<BroadcastSegment[]>("/broadcasts/segments"),
+  /** Audience + human label of one full key ("paid_ended:6m", "trial_ended:any"…). */
+  broadcastSegmentCount: (key: string) =>
+    api.get<{ key: string; label: string; count: number }>(
+      `/broadcasts/segments/count?key=${encodeURIComponent(key)}`,
+    ),
+  // Overview quick action «Предложить продление со скидкой».
+  renewalOfferInfo: () => api.get<RenewalOfferInfo>("/broadcasts/renewal-offer"),
+  renewalOfferSend: (
+    body: {
+      message: string;
+      discount_percent: number;
+      discount_hours: number;
+      exclude_auto_renew: boolean;
+      confirm: boolean;
+    },
+    opts?: RequestOptions,
+  ) =>
+    api.post<{ ok: boolean; broadcast_id: number; audience: number }>(
+      "/broadcasts/renewal-offer",
+      body,
+      opts,
+    ),
   broadcastDeleteFromUsers: (id: number) =>
     api.post<{ ok: boolean; broadcast_id: number; total_messages: number }>(
       `/broadcasts/${id}/delete-from-users`,
@@ -949,6 +962,45 @@ export const endpoints = {
   premiumRepairCsv: () =>
     downloadCsv("/premium-repair/report.csv", `premium_over_5y_${new Date().toISOString().slice(0, 10)}.csv`),
 };
+
+/** GET /broadcasts/segments item (catalog: database/segments.py). A
+    parametric one is sent as "<key>:<window>"; its count is for
+    `default_window`. */
+export interface BroadcastSegment {
+  key: string;
+  label: string;
+  description?: string;
+  group?: string;
+  count: number;
+  parametric?: boolean;
+  default_window?: string;
+  default_label?: string;
+  direction?: "past" | "future" | "idle";
+  allow_any?: boolean;
+  units?: ("d" | "m")[];
+  max_days?: number;
+  max_months?: number;
+}
+
+export interface RenewalOfferTemplate {
+  id: string;
+  title: string;
+  /** Telegram HTML with {discount} / {hours} placeholders. */
+  text: string;
+}
+
+export interface RenewalOfferInfo {
+  templates: RenewalOfferTemplate[];
+  discount_choices: number[];
+  default_discount: number;
+  default_hours: number;
+  max_hours: number;
+  window: string;
+  segments: { all: string; manual: string };
+  labels: { all: string; manual: string };
+  /** -1 = the count failed */
+  audience: { all: number; manual: number };
+}
 
 export type PremiumRepairState = RemnawaveTagsState;
 

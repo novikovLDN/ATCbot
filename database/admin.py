@@ -1545,6 +1545,26 @@ async def get_users_by_segment(segment: str) -> list:
     return [tg for tg in ids if tg not in unreachable]
 
 
+async def count_users_by_segment(segment: str) -> int:
+    """Size of get_users_by_segment(segment) without fetching the list.
+
+    Segments of database/segments.py are counted with COUNT(*) in SQL under the
+    same reachability rule (is_reachable = FALSE dropped); legacy keys — and an
+    old schema without is_reachable — fall back to len(the list).
+    """
+    from database import segments as _segments
+
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            n = await _segments.count(conn, segment)
+    except asyncpg.UndefinedColumnError:
+        n = None
+    if n is not None:
+        return n
+    return len(await get_users_by_segment(segment))
+
+
 async def _segment_user_ids(segment: str) -> list:
     """Получить список Telegram ID пользователей по сегменту
 
@@ -1581,8 +1601,16 @@ async def _segment_user_ids(segment: str) -> list:
     Returns:
         Список Telegram ID пользователей
     """
+    from database import segments as _segments
+
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # Parametric keys (`base:window`) and the 2026-09 DB-only fixed keys
+        # live in database/segments.py; a bad parametric key raises
+        # SegmentKeyError (ValueError) — unknown legacy keys still give [].
+        owned = await _segments.fetch_ids(conn, segment)
+        if owned is not None:
+            return owned
         if segment == "all_users":
             rows = await conn.fetch("SELECT telegram_id FROM users")
             return [row["telegram_id"] for row in rows]
@@ -2005,10 +2033,12 @@ async def _segment_user_ids(segment: str) -> list:
             )
             return [row["telegram_id"] for row in rows]
         elif segment == "has_balance_50plus":
-            # На балансе > 50₽. Напомнить использовать балансовый чекаут.
+            # На балансе ≥ 50₽. Напомнить использовать балансовый чекаут.
+            # users.balance — копейки (колонки balance_kopecks нет: раньше
+            # запрос падал и сегмент показывал -1).
             rows = await conn.fetch(
                 """SELECT telegram_id FROM users
-                   WHERE COALESCE(balance_kopecks, 0) >= 5000"""
+                   WHERE COALESCE(balance, 0) >= 5000"""
             )
             return [row["telegram_id"] for row in rows]
         elif segment == "expires_in_3d":

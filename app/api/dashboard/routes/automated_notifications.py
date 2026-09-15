@@ -194,6 +194,11 @@ async def patch_notification(
                     raise HTTPException(
                         400, "segment_filter must be a short string key",
                     )
+                from database.segments import SegmentKeyError, validate_segment_key
+                try:
+                    validate_segment_key(seg)
+                except SegmentKeyError as e:
+                    raise HTTPException(400, f"invalid_segment: {e}")
     ok = await update_notification(
         key,
         custom_text_ru=payload.custom_text_ru,

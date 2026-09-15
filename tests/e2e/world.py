@@ -177,6 +177,8 @@ class World:
         admin_alerts._last_alert_at.clear()
         admin_alerts._digest_failures.clear()
         dashboard_cache.clear()
+        from app.api.dashboard.routes import broadcasts as broadcasts_route
+        broadcasts_route.reset_segment_counts_cache()      # 60 s segment counts
         purchase_flow._forced_alert_times.clear()
         from app.services.payments import verify_delivery
         verify_delivery._alerted.clear()

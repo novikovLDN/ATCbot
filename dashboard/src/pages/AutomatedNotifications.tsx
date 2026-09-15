@@ -23,6 +23,7 @@ import { Bento, PageHeader, Surface } from "@/components/ui/Surface";
 import { KpiTile } from "@/components/ui/KpiTile";
 import { IconButton, StatusDot, type Tone } from "@/components/ui/controls";
 import { ErrorState, Skeleton } from "@/components/ui/states";
+import { SegmentSelect } from "@/components/segments/SegmentSelect";
 
 interface NotifRow {
   key: string;
@@ -699,28 +700,22 @@ function EditModal({ row, onClose }: { row: NotifRow; onClose: () => void }) {
                 пропустить (если worker опоздает). 1ч по умолчанию — надёжный баланс.
               </p>
 
-              <label className="block">
+              <div className="block">
                 <span className={FIELD_LABEL}>Дополнительный фильтр аудитории (опционально)</span>
-                <select
+                <SegmentSelect
+                  segments={segments.data}
+                  loading={segments.isLoading}
                   value={segmentFilter}
-                  onChange={(e) => setSegmentFilter(e.target.value)}
-                  className="input"
-                  disabled={segments.isLoading}
-                >
-                  <option value="">— Без фильтра (шлём всем кто попал в окно) —</option>
-                  {(segments.data ?? []).map((s) => (
-                    <option key={s.key} value={s.key}>
-                      {s.group ? `[${s.group}] ` : ""}
-                      {s.label} · {s.count} чел
-                    </option>
-                  ))}
-                </select>
+                  onChange={setSegmentFilter}
+                  emptyLabel="— Без фильтра (шлём всем кто попал в окно) —"
+                  ariaLabel="Дополнительный фильтр аудитории"
+                />
                 <span className={cn(FIELD_HELP, "block")}>
                   Если задан — reminder уйдёт только тем, кто ЕЩЁ и входит в этот сегмент на момент срабатывания
                   триггера. Полезно, например, для «7д до конца, но только тем, кто никогда не покупал» — узкий
-                  таргет.
+                  таргет. Сегмент «за период» считается от момента срабатывания.
                 </span>
-              </label>
+              </div>
             </section>
           )}
 

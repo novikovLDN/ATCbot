@@ -883,6 +883,96 @@ function mockEngagement(days: number) {
   };
 }
 
+/** A sample of GET /broadcasts/segments (catalog: database/segments.py). */
+type MockDir = "past" | "future" | "idle";
+const MOCK_PARAM_SEGMENTS: [string, string, string, string, MockDir, boolean][] = [
+  ["paid_ended", "Платная истекла, не продлил", "Платная", "30d", "past", true],
+  ["paid_expiring", "Платная заканчивается", "Платная", "7d", "future", false],
+  ["paid_expiring_manual", "Платная заканчивается, автопродление выключено", "Платная", "7d", "future", false],
+  ["trial_ended", "Пробный закончился, не купил", "Триал", "30d", "past", true],
+  ["any_ended", "Любая подписка истекла", "Истёкшие (любые)", "12m", "past", true],
+  ["cold_start", "Нажал /start и ничего", "Cold-start", "7d", "past", true],
+  ["bought_sub", "Купил подписку", "Недавно купили", "30d", "past", true],
+  ["premium_ended_bypass", "Premium закончился, остался обход", "Обход", "30d", "past", true],
+  ["grant_ended", "Подарок / дни от админа закончились, не платил", "Подарки и дни от админа", "30d", "past", true],
+  ["inactive", "Не заходил в бот", "Активность", "30d", "idle", false],
+];
+const MOCK_FIXED_SEGMENTS: [string, string, string][] = [
+  ["all_users", "Все юзеры", "Базовые"],
+  ["active_subscriptions", "Активные подписки", "Базовые"],
+  ["paid_lapsed_any", "Платная — когда-либо платил, сейчас не активен", "Платная"],
+  ["bypass_only_now", "Только обход — premium закончился", "Обход"],
+  ["gift_active", "Подарок — сейчас активен", "Подарки и дни от админа"],
+  ["paid_loyal", "Лояльные — платил 2+ раз", "Лояльность"],
+  ["autorenew_off", "Активная платная, автопродление выключено", "Лояльность"],
+  ["referrers_paid", "Пригласил друга, который оплатил", "Рефералы"],
+];
+
+function mockHash(s: string): number {
+  let h = 7;
+  for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 100_003;
+  return h;
+}
+
+function mockSegmentCount(key: string): { key: string; label: string; count: number } | null {
+  const fixed = MOCK_FIXED_SEGMENTS.find((x) => x[0] === key);
+  if (fixed) return { key, label: fixed[1], count: 200 + (mockHash(key) % 9_000) };
+  const [base, win] = key.split(":");
+  const p = MOCK_PARAM_SEGMENTS.find((x) => x[0] === base);
+  if (!p || !win || !/^(?:[1-9][0-9]{0,3}[dm]|any)$/.test(win) || (win === "any" && !p[5])) return null;
+  const n = win.slice(0, -1);
+  const unit = win.endsWith("d") ? "дн." : "мес.";
+  const phrase =
+    win === "any" ? "за всё время"
+      : p[4] === "future" ? `в ближайшие ${n} ${unit}`
+      : p[4] === "idle" ? `${n} ${unit} и дольше`
+      : `за последние ${n} ${unit}`;
+  return { key, label: `${p[1]} ${phrase}`, count: 100 + (mockHash(key) % 20_000) };
+}
+
+function mockSegments() {
+  return [
+    ...MOCK_PARAM_SEGMENTS.map(([key, label, group, def, direction, allow_any]) => {
+      const c = mockSegmentCount(`${key}:${def}`)!;
+      return {
+        key, label, group, description: "Демо-описание сегмента (mock).", count: c.count,
+        parametric: true, default_window: def, default_label: c.label, direction, allow_any,
+        units: ["d", "m"], max_days: 3650, max_months: 120,
+      };
+    }),
+    ...MOCK_FIXED_SEGMENTS.map(([key, label, group]) => ({
+      key, label, group, description: "Демо-описание сегмента (mock).", parametric: false,
+      count: mockSegmentCount(key)!.count,
+    })),
+  ];
+}
+
+/** Shape of GET /broadcasts/renewal-offer (app/services/renewal_offer/service.py). */
+function mockRenewalOffer() {
+  const e = (id: string, ch: string) => `<tg-emoji emoji-id="${id}">${ch}</tg-emoji>`;
+  return {
+    templates: [
+      { id: "early", title: "Продлите заранее",
+        text: `${e("5454415424319931791", "📅")} Подписка Atlas Secure скоро заканчивается. Продлите сейчас со скидкой <b>{discount}%</b> — доступ не прервётся ни на секунду 🤍\n\nСкидка действует {hours} ч.` },
+      { id: "long", title: "Выгоднее на длинный срок",
+        text: `${e("5449800250032143374", "🎁")} Продлите подписку со скидкой <b>{discount}%</b> — на 3, 6 или 12 месяцев выгоднее всего.\n\nПредложение действует {hours} ч.` },
+      { id: "keep", title: "Не потеряйте доступ",
+        text: `${e("5190806721286657692", "🔴")} В ближайшие дни подписка закончится — основные серверы отключатся (обход продолжит работать, пока есть ГБ).\n\nПродлите со скидкой <b>{discount}%</b> — действует {hours} ч.` },
+    ],
+    discount_choices: [10, 15, 20],
+    default_discount: 15,
+    default_hours: 72,
+    max_hours: 168,
+    window: "7d",
+    segments: { all: "paid_expiring:7d", manual: "paid_expiring_manual:7d" },
+    labels: {
+      all: "Платная заканчивается в ближайшие 7 дней",
+      manual: "Платная заканчивается, автопродление выключено в ближайшие 7 дней",
+    },
+    audience: { all: 214, manual: 142 },
+  };
+}
+
 /** Shape of GET /pricing/tariffs (app/api/dashboard/routes/pricing.py). */
 function mockTariffs() {
   const base: Record<string, number> = { basic: 199, plus: 349, combo_basic: 299, combo_plus: 449 };
@@ -1091,6 +1181,16 @@ export function mockApi(): Plugin {
         if (path === "/panel/nodes") return send(mockNodes());
         if (path === "/panel/bandwidth") return send(mockBandwidth(Number(q.get("days")) || 14));
         if (path === "/pricing/tariffs") return send(mockTariffs());
+        // Broadcast segments (catalog: database/segments.py — a sample of it).
+        if (path === "/broadcasts/segments") return send(mockSegments());
+        if (path === "/broadcasts/segments/count") {
+          const r = mockSegmentCount(q.get("key") || "");
+          return r ? send(r) : send({ detail: "invalid_segment" }, 400);
+        }
+        if (path === "/broadcasts/renewal-offer") {
+          if (req.method === "POST") return send({ ok: true, broadcast_id: 901, audience: 142 });
+          return send(mockRenewalOffer());
+        }
         // Shape of GET /payments/recent (routes/payments.py → get_recent_payments_feed).
         if (path === "/payments/recent") {
           const limit = Number(q.get("limit")) || 20;

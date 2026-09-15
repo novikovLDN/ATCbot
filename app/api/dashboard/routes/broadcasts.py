@@ -44,6 +44,9 @@ import database
 from app.api.dashboard.deps import require_admin
 from app.api.dashboard.errors import server_error
 from app.api.dashboard.idempotency import IdempotentRoute
+from app.services.renewal_offer import service as renewal_offer
+from app.utils.telegram_html import TEXT_LIMIT, telegram_html_errors
+from database import segments as seg
 from app.events import bus
 
 logger = logging.getLogger(__name__)
@@ -60,7 +63,7 @@ async def broadcasts_recent(limit: int = Query(20, gt=0, le=500)):
         rows = await database.get_recent_broadcasts(limit)
     except Exception as e:
         raise server_error("broadcasts_failed") from e
-    return [_serialize(r) for r in rows]
+    return [_with_segment_label(_serialize(r)) for r in rows]
 
 
 # GET /segments counted every segment (full table scans) on every open of the
@@ -75,235 +78,129 @@ def reset_segment_counts_cache() -> None:
     _segment_counts.clear()
 
 
+async def _segment_count(key: str) -> int:
+    """Audience size of a full key (the send list: unreachable users dropped),
+    cached per key for SEGMENT_COUNTS_TTL_SECONDS. -1 when the count failed
+    (not cached, retried next time)."""
+    now = _clock()
+    cached = _segment_counts.get(key)
+    if cached is not None and now - cached[0] < SEGMENT_COUNTS_TTL_SECONDS:
+        return cached[1]
+    try:
+        n = await database.count_users_by_segment(key)
+    except Exception as e:
+        logger.warning("SEGMENT_COUNT_FAIL key=%s err=%s", key, e)
+        return -1
+    _segment_counts[key] = (now, n)
+    return n
+
+
+# /segments counts every listed segment; a few at a time instead of one by one.
+_SEGMENT_COUNT_CONCURRENCY = 4
+
+
+def _require_valid_segment(key: Optional[str]) -> str:
+    try:
+        return seg.validate_segment_key(key or "")
+    except seg.SegmentKeyError as e:
+        raise HTTPException(400, f"invalid_segment: {e}")
+
+
 @router.get("/segments")
 async def segments_list():
     """Available segments with current member counts + tooltip descriptions.
 
-    Counts are computed eagerly so the wizard can show an audience size
-    before the admin commits. `group` группирует сегменты в UI, чтобы
-    админу было проще ориентироваться среди 25+ ключей.
+    Catalog: database/segments.py. Parametric entries (`parametric: true`)
+    carry `default_window` / `direction` / `allow_any` and the count of
+    `<key>:<default_window>`; the wizard composes the full key and asks
+    GET /segments/count for other windows.
     """
-    # (key, label, description, group) — description показывается в
-    # tooltip рядом с каждым сегментом в дашборде.
-    segments = [
-        # ── Базовые ──────────────────────────────────────────────────
-        ("all_users", "Все юзеры",
-         "Все записи в таблице users — включая тех, кто нажал /start и ушёл.",
-         "Базовые"),
-        ("active_subscriptions", "Активные подписки",
-         "У пользователя есть подписка с expires_at > NOW (любого типа: триал, платная, gift, admin_grant).",
-         "Базовые"),
-        ("no_subscription", "Без активной подписки",
-         "Нет строки в subscriptions с expires_at > NOW. Включает и тех, кто никогда не подписывался, и тех, у кого истекла.",
-         "Базовые"),
-        ("no_remnawave", "Без Remnawave",
-         "Никогда не было entity в панели Remnawave — ни premium, ни bypass. То есть не завёл ни одного ключа.",
-         "Базовые"),
+    items = seg.catalog()
+    sem = asyncio.Semaphore(_SEGMENT_COUNT_CONCURRENCY)
 
-        # ── Воронка: старая база (одна рассылка, SCOPE «Воронка продаж») ─
-        # Только события ДО запуска воронки (app_settings.sales_funnel_started_at):
-        # всё, что позже, воронка ведёт сама — сюда не попадает.
-        ("funnel_start_no_trial", "Нажали /start, без пробного и подписки",
-         "Старая база: нажал /start до запуска воронки, пробный не включал, подписки и оплат не было ни разу. Для разовой рассылки со скидкой (кнопка «Купить со скидкой»).",
-         "Воронка — старая база"),
-        ("funnel_trial_ended_no_purchase", "Пробный закончился без покупки",
-         "Старая база: пробный закончился до запуска воронки, после начала пробного не было ни одной оплаты, сейчас нет активной подписки (ГБ обхода не в счёт).",
-         "Воронка — старая база"),
-        ("funnel_paid_ended_no_renewal", "Платная закончилась без продления",
-         "Старая база: хотя бы раз платил (покупка / продление / автопродление), последний период закончился до запуска воронки, сейчас нет активной подписки (ГБ обхода не в счёт) и после окончания не платил.",
-         "Воронка — старая база"),
+    async def one(item: dict) -> dict:
+        full = f"{item['key']}:{item['default_window']}" if item.get("parametric") else item["key"]
+        async with sem:
+            count = await _segment_count(full)
+        out = dict(item)
+        out["count"] = count
+        if item.get("parametric"):
+            out["default_label"] = seg.segment_label(full)
+        return out
 
-        # ── Cold-start (новые молчуны) ───────────────────────────────
-        ("started_1d_cold", "Cold — старт за 24ч, ничего",
-         "Нажал /start за последние 24 часа И до сих пор не активировал триал, не купил, не завёл ключ. Свежий молчун, самое время догреть.",
-         "Cold-start"),
-        ("started_3d_cold", "Cold — старт за 3 дня, ничего",
-         "Нажал /start за последние 3 дня И до сих пор ничего. Ещё помнит про бот.",
-         "Cold-start"),
-        ("started_7d_cold", "Cold — старт за 7 дней, ничего",
-         "Нажал /start за последние 7 дней И до сих пор ничего.",
-         "Cold-start"),
-        ("started_14d_cold", "Cold — старт за 14 дней, ничего",
-         "Нажал /start за последние 14 дней И до сих пор ничего. Уже подзабыл, нужен сильный оффер.",
-         "Cold-start"),
-        ("started_30d_cold", "Cold — старт за 30 дней, ничего",
-         "Нажал /start за последние 30 дней И до сих пор ничего. Крайний край — «уходящий».",
-         "Cold-start"),
+    return list(await asyncio.gather(*(one(i) for i in items)))
 
-        # ── Триальная воронка (кто активировал триал) ────────────────
-        ("trial_active_any", "Триал — сейчас идёт (любой)",
-         "У всех, у кого сейчас активен пробный период (не истёк, платной ещё нет). Годится для мидл-триал коммуникаций «второй день с нами», FAQ, кейсы.",
-         "Триал"),
-        ("trial_activated_today", "Триал — активирован за 24ч",
-         "Юзеры, которые активировали пробный период за последние 24 часа. Свежая аудитория для welcome-серии и объяснения фич.",
-         "Триал"),
-        ("trial_active_day1", "Триал — 1-й день (0–24ч)",
-         "Активировали триал в последние 24ч, триал ещё идёт. Welcome / первый месседж.",
-         "Триал"),
-        ("trial_active_day2", "Триал — 2-й день (24–48ч)",
-         "Второй день триала, триал ещё идёт. «Уже 2 дня с нами, что успели попробовать?»",
-         "Триал"),
-        ("trial_active_day3", "Триал — 3-й день (48–72ч)",
-         "Последний день триала (обычно ~72ч). «Завтра истечёт — оформи сейчас».",
-         "Триал"),
-        ("trial_ends_in_1d", "Триал — заканчивается через 24ч",
-         "Триал ещё идёт, но истечёт в ближайшие 24 часа. Ключевой момент конверсии — «оформи, чтобы не потерять».",
-         "Триал"),
-        ("trial_expired_6h", "Триал — истёк 6ч назад",
-         "Триал закончился ~6 часов назад, платной подписки не оформлено. Свежий «упавший» триал.",
-         "Триал"),
-        ("trial_expired_1d", "Триал — истёк 1 день назад",
-         "Триал закончился ~1 день назад, платной нет. Первое напоминание после разрыва.",
-         "Триал"),
-        ("trial_expired_2d", "Триал — истёк 2 дня назад",
-         "Триал закончился ~2 дня назад, платной нет.",
-         "Триал"),
-        ("trial_expired_3d", "Триал — истёк 3 дня назад",
-         "Триал закончился ~3 дня назад, платной нет.",
-         "Триал"),
-        ("trial_expired_7d", "Триал — истёк 7 дней назад (не купил)",
-         "Триал закончился ~7 дней назад И НИКОГДА не покупал подписку. Холодная реактивация недельной давности.",
-         "Триал"),
-        ("trial_expired_14d", "Триал — истёк 14 дней назад (не купил)",
-         "Триал закончился ~14 дней назад И никогда не покупал. Двухнедельная реактивация.",
-         "Триал"),
-        ("trial_expired_30d", "Триал — истёк 30 дней назад (не купил)",
-         "Триал закончился ~30 дней назад И никогда не покупал. Месячная реактивация.",
-         "Триал"),
-        ("trial_expired_60d", "Триал — истёк 60 дней назад (не купил)",
-         "Триал закончился ~60 дней назад И никогда не покупал. Двухмесячная реактивация.",
-         "Триал"),
-        ("trial_expired_90d", "Триал — истёк 3 мес назад (не купил)",
-         "Триал закончился ~90 дней назад И никогда не покупал. «Последний шанс» — сильный оффер обязателен.",
-         "Триал"),
-        ("trial_expired_180d", "Триал — истёк полгода назад (не купил)",
-         "Триал закончился ~180 дней назад И никогда не покупал. Крайняя точка реактивации.",
-         "Триал"),
-        ("trial_expired_365d", "Триал — истёк год назад (не купил)",
-         "Триал закончился ~365 дней назад И никогда не покупал. Год без активности — либо забыл, либо ушёл к конкуренту.",
-         "Триал"),
-        ("trial_expired_within_6m", "Триал — истёк за последние 6 мес (не купил)",
-         "Кумулятивное окно: триал закончился в любой момент за последние 180 дней И юзер никогда не покупал, сейчас без подписки. Массовая реактивация всех отвалившихся за полгода — один раскат по большой аудитории.",
-         "Триал"),
 
-        # ── Платные churn / реактивация ──────────────────────────────
-        ("paid_expires_in_1d", "Платная — заканчивается за 1 день",
-         "Платная подписка ещё активна, истечёт в ближайшие 24 часа. Финальное напоминание — «продли сейчас, чтобы не отключилось».",
-         "Платная"),
-        ("paid_expires_in_3d", "Платная — заканчивается за 3 дня",
-         "Платная активна, истечёт за 72 часа. Мягкий пре-напоминающий пуш «пора продлить».",
-         "Платная"),
-        ("paid_expires_in_7d", "Платная — заканчивается за 7 дней",
-         "Платная активна, истечёт за неделю. Хорошо ложится оффер «продли заранее — фиксируешь цену».",
-         "Платная"),
-        ("paid_expires_in_14d", "Платная — заканчивается за 14 дней",
-         "Платная активна, истечёт за 2 недели. Ранний пуш для тех, кто планирует бюджет заранее.",
-         "Платная"),
-        ("expires_in_3d", "Любая — заканчивается за 3 дня (legacy)",
-         "То же что paid_expires_in_3d — оставлено для совместимости с ранее созданными рассылками.",
-         "Платная"),
-        ("paid_expired_1d", "Платная — истекла 1 день назад",
-         "Платная истекла ~1 день назад, сейчас платной нет. Свежий churn — первое напоминание.",
-         "Платная"),
-        ("paid_expired_7d", "Платная — истекла 7 дней назад",
-         "Платная истекла ~7 дней назад, сейчас платной нет. Недельная реактивация.",
-         "Платная"),
-        ("paid_expired_14d", "Платная — истекла 14 дней назад",
-         "Платная истекла ~14 дней назад, сейчас нет.",
-         "Платная"),
-        ("paid_expired_30d", "Платная — истекла за последние 30 дней",
-         "По истории подписок последняя платная закончилась в окне 1–30 дней назад и сейчас неактивна.",
-         "Платная"),
-        ("paid_expired_60d", "Платная — истекла 60 дней назад",
-         "Платная истекла ~60 дней назад. Двухмесячный churn.",
-         "Платная"),
-        ("paid_expired_90d", "Платная — истекла 3 мес назад",
-         "Платная истекла ~90 дней назад. Крайний край реактивации.",
-         "Платная"),
-        ("paid_expired_180d", "Платная — истекла полгода назад",
-         "Платная истекла ~180 дней назад. Полугодовой churn — «мы соскучились».",
-         "Платная"),
-        ("paid_expired_365d", "Платная — истекла год назад",
-         "Платная истекла ~365 дней назад. Год без подписки — реактивация «с чистого листа».",
-         "Платная"),
-        ("paid_expired_730d", "Платная — истекла 2 года назад",
-         "Платная истекла ~730 дней назад. Максимально дальний churn — редкая, но всё же аудитория.",
-         "Платная"),
-        ("paid_lapsed_any", "Платная — когда-либо платил, сейчас не активен",
-         "Когда-либо оплачивал (purchase / renewal / auto_renew) и сейчас без активной подписки. Максимальная реактивационная аудитория — всех «ушедших».",
-         "Платная"),
+@router.get("/segments/count")
+async def segment_count(key: str = Query(..., min_length=1, max_length=60)):
+    """Audience of one full key (`paid_ended:6m`, `trial_ended:any`, a fixed
+    key…) + its human label. 400 on an unknown key / bad window."""
+    _require_valid_segment(key)
+    return {"key": key, "label": seg.segment_label(key), "count": await _segment_count(key)}
 
-        # ── Недавно купившие — cross-sell / thanks / upsell ──────────
-        ("paid_bought_within_7d", "Купил платную за 7 дней",
-         "Оформил успешную оплату (payments.status='paid'|'approved') в течение последних 7 дней. Целевая для благодарности, upsell-оффера, feedback-опроса.",
-         "Недавно купили"),
-        ("paid_bought_within_14d", "Купил платную за 14 дней",
-         "Оформил успешную оплату в течение последних 14 дней. Двухнедельное окно — свежая активная аудитория, есть с чем работать.",
-         "Недавно купили"),
-        ("paid_bought_within_30d", "Купил платную за 30 дней",
-         "Оформил успешную оплату в течение последних 30 дней. Месячная когорта — большая, годится для широких кампаний по «активным».",
-         "Недавно купили"),
 
-        # ── Любая (комбинированные) ──────────────────────────────────
-        ("expired_1d", "Истекла (любая) 1 день назад",
-         "Любая подписка (триал ∪ платная) истекла ~1 день назад.",
-         "Истёкшие (любые)"),
-        ("expired_2d", "Истекла (любая) 2 дня назад",
-         "Любая подписка истекла ~2 дня назад.",
-         "Истёкшие (любые)"),
-        ("expired_3d", "Истекла (любая) 3 дня назад",
-         "Любая подписка истекла ~3 дня назад.",
-         "Истёкшие (любые)"),
-        ("expired_within_1y", "Истекла (любая) за последний год",
-         "Любая подписка (триал ∪ платная ∪ gift ∪ admin) была и истекла в "
-         "течение последних 365 дней. Сейчас активной подписки НЕТ. "
-         "Максимальная годовая реактивационная аудитория «всех, кто был с нами "
-         "за год и ушёл».",
-         "Истёкшие (любые)"),
+class RenewalOfferRequest(BaseModel):
+    """Overview quick action «Предложить продление со скидкой»
+    (app/services/renewal_offer/service.py). `message` may keep {discount} /
+    {hours}; they are substituted here. `confirm` must be true — the sheet
+    asks «Отправить N пользователям?» first."""
+    message: str = Field(..., min_length=1, max_length=4000)
+    discount_percent: int = renewal_offer.DEFAULT_DISCOUNT
+    discount_hours: int = renewal_offer.DEFAULT_HOURS
+    exclude_auto_renew: bool = True
+    confirm: bool = False
 
-        # ── Апселл / балансовый ──────────────────────────────────────
-        ("basic_active", "Активные Basic",
-         "Сейчас активна подписка Basic. Целевая для upsell на Plus / Combo.",
-         "Апселл / особые"),
-        ("plus_active", "Активные Plus",
-         "Сейчас активна подписка Plus. Целевая для upsell на Combo или продление на 1 год.",
-         "Апселл / особые"),
-        ("combo_active", "Активные Combo",
-         "Сейчас активная подписка типа Combo (Basic/Plus). Целевая для апселла на большие GB-паки обхода / доп. устройств.",
-         "Апселл / особые"),
-        ("discount_active", "Активная персональная скидка",
-         "У пользователя действует скидка в user_discounts (не broadcast). Напомнить: «у тебя действует скидка N% — воспользуйся».",
-         "Апселл / особые"),
-        ("has_balance_50plus", "Баланс ≥ 50₽",
-         "На балансе не меньше 50₽. Напоминание использовать балансовый чекаут.",
-         "Апселл / особые"),
-        ("bought_proxy", "Купил прокси",
-         "Юзер купил отдельный товар «Telegram MT Прокси» (users.proxy_purchased_at IS NOT NULL). "
-         "Целевая для допродажи VPN-подписки, апдейтов по прокси или лояльных предложений.",
-         "Апселл / особые"),
-    ]
-    out = []
-    now = _clock()
-    for key, label, description, group in segments:
-        cached = _segment_counts.get(key)
-        if cached is not None and now - cached[0] < SEGMENT_COUNTS_TTL_SECONDS:
-            count = cached[1]
-        else:
-            try:
-                ids = await database.get_users_by_segment(key)
-                count = len(ids)
-                _segment_counts[key] = (now, count)
-            except Exception as e:
-                logger.warning("SEGMENT_COUNT_FAIL key=%s err=%s", key, e)
-                count = -1
-        out.append({
-            "key": key,
-            "label": label,
-            "description": description,
-            "group": group,
-            "count": count,
-        })
-    return out
+
+@router.get("/renewal-offer")
+async def renewal_offer_info():
+    """Templates, discount choices and the audience of both variants (with /
+    without the auto-renew ones) for the Overview sheet."""
+    keys = {"all": renewal_offer.segment_key(False), "manual": renewal_offer.segment_key(True)}
+    return {
+        "templates": list(renewal_offer.TEMPLATES),
+        "discount_choices": list(renewal_offer.DISCOUNT_CHOICES),
+        "default_discount": renewal_offer.DEFAULT_DISCOUNT,
+        "default_hours": renewal_offer.DEFAULT_HOURS,
+        "max_hours": renewal_offer.MAX_HOURS,
+        "window": renewal_offer.WINDOW,
+        "segments": keys,
+        "labels": {k: seg.segment_label(v) for k, v in keys.items()},
+        "audience": {k: await _segment_count(v) for k, v in keys.items()},
+    }
+
+
+@router.post("/renewal-offer")
+async def renewal_offer_send(
+    body: RenewalOfferRequest,
+    admin: dict = Depends(require_admin),
+):
+    """A normal broadcast to active paid subscriptions ending within 7 days
+    with the existing promo_buy discount button."""
+    err = renewal_offer.validate(body.discount_percent, body.discount_hours)
+    if err:
+        raise HTTPException(400, err)
+    if not body.confirm:
+        raise HTTPException(400, "confirm_required")
+    message = normalize_premium_emoji(
+        renewal_offer.render(body.message, body.discount_percent, body.discount_hours))
+    problems = telegram_html_errors(message)
+    if problems:
+        raise HTTPException(400, f"invalid_html: {problems[0]}")
+    if len(message) > TEXT_LIMIT:
+        raise HTTPException(400, f"message_too_long: {len(message)} > {TEXT_LIMIT}")
+    segment = renewal_offer.segment_key(body.exclude_auto_renew)
+    request = BroadcastCreateRequest(
+        title=renewal_offer.title(body.discount_percent, body.exclude_auto_renew),
+        message=message,
+        segment=segment,
+        buttons=[renewal_offer.BUTTON],
+        discount_percent=body.discount_percent,
+        discount_hours=body.discount_hours,
+        discount_label=renewal_offer.discount_label(body.discount_hours),
+        tag="продление",
+        tag_color="orange",
+    )
+    return await _launch_broadcast(request, admin)
 
 
 # Declared before /{broadcast_id}: otherwise GET /scheduled matches the
@@ -321,7 +218,7 @@ async def broadcast_schedule_list(
         )
     except Exception as e:
         raise server_error("scheduled_list_failed") from e
-    return [_serialize(r) for r in rows]
+    return [_with_segment_label(_serialize(r)) for r in rows]
 
 
 @router.get("/scheduled/{sched_id}")
@@ -332,7 +229,7 @@ async def broadcast_schedule_get(sched_id: int = Path(..., gt=0)):
         raise server_error("scheduled_get_failed") from e
     if not row:
         raise HTTPException(404, "scheduled broadcast not found")
-    return _serialize(row)
+    return _with_segment_label(_serialize(row))
 
 
 @router.delete("/scheduled/{sched_id}")
@@ -368,7 +265,7 @@ async def broadcast_detail(broadcast_id: int = Path(..., gt=0)):
         raise server_error("broadcast_detail_failed") from e
     if not row:
         raise HTTPException(404, "Broadcast not found")
-    out = _serialize(row)
+    out = _with_segment_label(_serialize(row))
     # Присоединяем скидочные поля — они хранятся в broadcast_discounts,
     # а не в broadcasts. Fail-safe: если строки нет — пустые значения.
     try:
@@ -786,7 +683,14 @@ async def broadcast_create(
     body: BroadcastCreateRequest,
     admin: dict = Depends(require_admin),
 ):
+    return await _launch_broadcast(body, admin)
+
+
+async def _launch_broadcast(body: BroadcastCreateRequest, admin: dict) -> dict:
+    """Resolve the segment, create the broadcasts row (+ discount metadata),
+    send in the background. Shared by POST / and POST /renewal-offer."""
     bot = _get_bot()
+    _require_valid_segment(body.segment)
 
     # Нормализуем premium-эмодзи (Markdown → HTML) — см. normalize_premium_emoji.
     message_html = normalize_premium_emoji(body.message)
@@ -794,7 +698,7 @@ async def broadcast_create(
     try:
         user_ids = await database.get_users_by_segment(body.segment)
     except Exception as e:
-        raise HTTPException(400, f"invalid_segment: {e}")
+        raise server_error("segment_resolve_failed") from e
     if not user_ids:
         raise HTTPException(400, "empty_audience")
 
@@ -1024,6 +928,14 @@ def _build_reply_markup(
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
+def _with_segment_label(out: dict) -> dict:
+    """Adds `segment_label` — the human name of a stored key («Платная истекла,
+    не продлил за последние 6 месяцев»); unknown keys come back as they are."""
+    if "segment" in out:
+        out["segment_label"] = seg.segment_label(out.get("segment"))
+    return out
+
+
 def _serialize(row) -> dict:
     if not isinstance(row, dict):
         return {}
@@ -1115,6 +1027,9 @@ async def broadcast_schedule_create(
         end_utc = _parse_msk(body.recurrence_end_at_msk)
         if end_utc <= scheduled_utc:
             raise HTTPException(400, "recurrence_end_at must be after scheduled_at")
+
+    if body.segment:
+        _require_valid_segment(body.segment)
 
     # 2. Достаём исходную рассылку — из неё делаем снапшот.
     try:

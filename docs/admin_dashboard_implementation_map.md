@@ -234,8 +234,37 @@ admin-хендлере. Для дашборда — JWT (PyJWT) с тем же `
 | `GET /api/broadcasts/{id}` | `get_broadcast(id)` |
 | `GET /api/broadcasts/{id}/stats` | `get_broadcast_stats(id)` |
 | `GET /api/broadcasts/ab-tests` | `get_ab_test_broadcasts()` |
-| `GET /api/segments/{name}/count` | `get_users_by_segment(name)` (счёт юзеров) |
-| `POST /api/broadcasts` body `{title, message, type, segment, ab?}` | `create_broadcast(...)` + `save_broadcast_discount(...)` |
+| `GET /api/broadcasts/segments` | каталог `database/segments.py` + счётчики (`count_users_by_segment`, кеш 60 с на полный ключ, по 4 параллельно) |
+| `GET /api/broadcasts/segments/count?key=` | `count_users_by_segment(key)` + человеческая подпись ключа; 400 на неизвестный ключ / плохое окно |
+| `POST /api/broadcasts` body `{title, message, segment, buttons, discount_*…}` | `get_users_by_segment` → `create_broadcast(...)` + `save_broadcast_discount(...)`; сегмент проверяется до БД (400) |
+| `GET/POST /api/broadcasts/renewal-offer` | быстрое действие Overview «Предложить продление со скидкой» (`app/services/renewal_offer/service.py`) |
+
+**Сегменты рассылок (2026-09).** Ключ — фиксированный (`paid_lapsed_any`,
+`bypass_only_now`, …) или параметрический `<база>:<окно>`: окно `Nd`
+(1–3650 дней), `Nm` (1–120 календарных месяцев) или `any` (без нижней
+границы). Прошедшее событие попадает в (now − окно, now], `paid_expiring*` —
+окончание в (now, now + окно], `inactive` — «не заходил ≥ окна». Один
+парсер `database/segments.parse_segment_key` на всех потребителей: резолвер
+`_segment_user_ids`, создание / планирование рассылки, `/segments/count`,
+фильтр `segment_filter` автоуведомлений (PATCH → 400 на плохой ключ). Окно
+превращается в провалидированные int → naive-UTC граница параметром запроса,
+в SQL ничего не форматируется. Старые фиксированные ключи не менялись.
+Истории / запланированные отдают `segment_label` («Платная истекла, не продлил
+за последние 6 месяцев», «… за всё время»). В визарде (`BroadcastCreate.tsx`),
+окне планирования и фильтре уведомлений (`components/segments/`) выбор
+параметрического сегмента открывает число + [дней | месяцев] + «За всё время»
+и живой счётчик (debounce 400 мс). Счёт на 550k юзеров — ≤ 0.51 с на ключ
+(замеры в отчёте ветки `feat/broadcast-segment-periods`), новых индексов не
+понадобилось.
+
+**Быстрое действие «Предложить продление со скидкой»** (Overview, блок
+«Истекают за 7 дней»): лист с тремя шаблонами, скидкой 10/15/20 %, сроком
+(по умолчанию 72 ч), тумблером «Не отправлять тем, у кого включено
+автопродление» (по умолчанию вкл.), счётчиком и превью → «Отправить N
+пользователям?» → обычная рассылка на `paid_expiring_manual:7d` (или
+`paid_expiring:7d`) с кнопкой `promo_buy` + `broadcast_discounts`. Скидка
+применяется тем же `callback_broadcast_promo_buy` (`keep_max`), цена берёт
+наибольшую из скидок (`pick_largest_discount`).
 
 **Важно:** create_broadcast только создаёт запись. Бот отдельно её
 читает и шлёт через broadcast worker. Дашборд **не должен** сам

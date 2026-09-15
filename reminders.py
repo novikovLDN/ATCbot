@@ -421,6 +421,11 @@ async def send_smart_reminders(bot: Bot):
 
     except Exception as e:
         logger.exception(f"Error in send_smart_reminders: {e}")
+        # Re-raise: the task loop marks the pass failed (runtime health) and
+        # alerts the admin. Swallowed here, a TimeoutError of the reminders
+        # query (production 2026-09-15) was logged as outcome=success and no
+        # paid reminder went out, unnoticed.
+        raise
 
 
 async def reminders_task(bot: Bot):
@@ -451,12 +456,20 @@ async def reminders_task(bot: Bot):
             
             try:
                 await asyncio.wait_for(_run_iteration(), timeout=120.0)
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as e:
+                # Also a DB statement timeout of the reminders query (asyncpg
+                # raises TimeoutError, the same class since Python 3.11): the
+                # admin must hear about it, not only the log.
                 logger.error(
-                    "WORKER_TIMEOUT worker=reminders exceeded 120s — iteration cancelled"
+                    "WORKER_TIMEOUT worker=reminders: iteration timed out (hang > 120s or DB statement timeout)"
                 )
                 iteration_outcome = "timeout"
                 iteration_error_type = "timeout"
+                try:
+                    from app.services.admin_alerts import alert_worker_failure
+                    await alert_worker_failure(bot, "reminders", e, iteration=iteration_number)
+                except Exception:
+                    pass
         except asyncio.CancelledError:
             logger.info("Reminders task cancelled")
             iteration_outcome = "cancelled"

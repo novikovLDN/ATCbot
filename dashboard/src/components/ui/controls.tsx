@@ -211,3 +211,38 @@ export function DeltaPill({
     </span>
   );
 }
+
+/** iOS switch (role="switch"). */
+export function Switch({
+  checked,
+  onChange,
+  disabled,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  label?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      disabled={disabled}
+      className={cn(
+        "tap-target relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors disabled:opacity-50",
+        checked ? "bg-accent" : "bg-tile-4",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-5 w-5 transform rounded-full transition-transform",
+          checked ? "translate-x-5 bg-onaccent" : "translate-x-0.5 bg-ink",
+        )}
+      />
+    </button>
+  );
+}

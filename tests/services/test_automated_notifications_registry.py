@@ -88,20 +88,20 @@ async def test_update_notification_merges_trigger_config_fields(monkeypatch):
             return _A()
 
     monkeypatch.setattr(helper, "get_pool", AsyncMock(return_value=_Pool()))
-    await helper.update_notification("trial.reminder_24h", trigger_config={"segment_filter": "paid"})
+    await helper.update_notification("trial.reminder_24h", trigger_config={"segment_filter": "paid_lapsed_any"})
     (sql, args), = [(s, a) for s, a in conn.executed if s.lstrip().startswith("UPDATE automated_notifications")]
     assert "trigger_config = COALESCE(trigger_config, '{}'::jsonb) || $2::jsonb" in " ".join(sql.split())
 
 
 @pytest.mark.parametrize("key,kept", [
-    ("subscription.reminder_7d", {"segment_filter": "paid"}),
-    ("trial.reminder_24h", {"segment_filter": "paid", "before_expiry_hours": 20, "tolerance_hours": 1}),
+    ("subscription.reminder_7d", {"segment_filter": "paid_lapsed_any"}),
+    ("trial.reminder_24h", {"segment_filter": "paid_lapsed_any", "before_expiry_hours": 20, "tolerance_hours": 1}),
 ])
 async def test_dashboard_patch_drops_windows_of_paid_reminders(monkeypatch, key, kept):
     from app.api.dashboard.routes import automated_notifications as route
     update = AsyncMock(return_value=True)
     monkeypatch.setattr(route, "update_notification", update)
-    payload = route.UpdatePayload(trigger_config={"segment_filter": "paid", "before_expiry_hours": 20,
+    payload = route.UpdatePayload(trigger_config={"segment_filter": "paid_lapsed_any", "before_expiry_hours": 20,
                                                   "tolerance_hours": 1})
     try:
         await route.patch_notification(payload, key=key, admin={"sub": "1"})

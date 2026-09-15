@@ -651,9 +651,10 @@ async def mark_trial_used(telegram_id: int, trial_expires_at: datetime) -> bool:
     async with pool.acquire() as conn:
         try:
             await conn.execute("""
-                UPDATE users 
+                UPDATE users
                 SET trial_used_at = CURRENT_TIMESTAMP,
-                    trial_expires_at = $1
+                    trial_expires_at = $1,
+                    trial_completed_sent = FALSE
                 WHERE telegram_id = $2
             """, _to_db_utc(trial_expires_at), telegram_id)
             logger.info(f"Trial marked as used: user={telegram_id}, expires_at={trial_expires_at.isoformat()}")
