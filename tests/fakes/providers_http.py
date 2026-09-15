@@ -217,6 +217,8 @@ class FakeProviders:
         monkeypatch.setattr(config, "CRYPTOBOT_API_TOKEN", CRYPTOBOT_TOKEN)
         monkeypatch.setattr(cryptobot_service, "CRYPTOBOT_API_TOKEN", CRYPTOBOT_TOKEN)
         monkeypatch.setattr(cryptobot_service, "CRYPTOBOT_API_URL", "https://pay.crypt.test/api")
+        # The crypto pipeline stays tested while its button is hidden in prod.
+        monkeypatch.setattr(cryptobot_service, "BUTTON_HIDDEN", False)
         monkeypatch.setattr(config, "WATA_ACCESS_TOKEN", WATA_TOKEN)
         monkeypatch.setattr(wata_service, "WATA_ACCESS_TOKEN", WATA_TOKEN)
         monkeypatch.setattr(wata_service, "WATA_API_URL", "https://api.wata.test/api/h2h")

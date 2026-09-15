@@ -47,7 +47,7 @@ async def show_payment_method_selection(
     import cryptobot_service
     platega_on = platega_service.is_enabled()
     wata_on = wata_service.is_enabled()
-    crypto_on = cryptobot_service.is_enabled()
+    crypto_on = cryptobot_service.show_button()
 
     btn_card_pl = InlineKeyboardButton(text=i18n_get_text(language, "payment.card_pl"), callback_data="pay:card_pl")
     # СБП — обратно через Platega (revert Wata-миграции по просьбе).

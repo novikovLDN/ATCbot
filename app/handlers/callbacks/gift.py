@@ -248,9 +248,9 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
         )],
     ]
 
-    # CryptoBot — если настроен
+    # CryptoBot — если настроен и кнопка не скрыта (cryptobot_service.BUTTON_HIDDEN)
     import cryptobot_service
-    if cryptobot_service.is_enabled():
+    if cryptobot_service.show_button():
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "payment.crypto", "🌎 CryptoBot"),
             callback_data="gift_pay:crypto",
