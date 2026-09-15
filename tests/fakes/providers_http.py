@@ -153,8 +153,9 @@ class FakeProviders:
         if path.endswith("/transaction/process") and request.method == "POST":
             tx = str(uuid_lib.uuid4())
             purchase_id = json.loads(body["payload"])["purchase_id"]
-            self.platega_tx[tx] = {"purchase_id": purchase_id, "body": body}
-            return httpx.Response(200, json={"transactionId": tx, "redirect": f"https://pay.platega.test/{tx}",
+            self.platega_tx[tx] = {"purchase_id": purchase_id, "body": body, "path": path}
+            link = "url" if path.endswith("/v2/transaction/process") else "redirect"   # as Platega answers
+            return httpx.Response(200, json={"transactionId": tx, link: f"https://pay.platega.test/{tx}",
                                              "status": "PENDING"})
         if path.endswith("/h2h/links") and request.method == "POST":
             link = str(uuid_lib.uuid4())

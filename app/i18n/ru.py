@@ -231,6 +231,8 @@ LANG = {
     'payment.sbp': "СБП",
     'payment.sbp_waiting': "🏦 <b>Оплата через СБП</b>\n\nСумма: {amount:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты.\n\nЖдём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Обработка занимает до 5 минут — зависит от банка.</i>",
     'payment.sbp_pay_button': "🏦 Оплатить через СБП",
+    'payment.platega_any_waiting': "💳 <b>Оплата</b>\n\nСумма: {amount:.2f} ₽\n\nНажмите кнопку ниже — откроется форма оплаты, способ выберете там.\n\nЖдём платёж <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Обработка занимает до 5 минут — зависит от банка.</i>",
+    'payment.platega_any_pay_button': "💳 Перейти к оплате",
     'payment.sbp_unavailable': "Оплата через СБП временно недоступна",
     'payment.wata_check_button': "🔄 Проверить платёж",
     'payment.wata_check_cooldown': "Попробуйте через {seconds} сек.",

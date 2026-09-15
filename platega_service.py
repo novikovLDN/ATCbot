@@ -42,6 +42,8 @@ def _get_headers() -> Dict[str, str]:
 PAYMENT_METHOD_SBP = 2
 PAYMENT_METHOD_CARD = 11
 PAYMENT_METHOD_INTL = 12
+# No fixed method: POST /v2/transaction/process, the payer picks it on Platega's page.
+PAYMENT_METHOD_ANY = None
 # paymentMethod=6 (рекуррентная СБП-подписка) отключён — см. _handle_subscription_callback.
 
 
@@ -204,7 +206,7 @@ async def create_transaction(
     purchase_id: str,
     return_url: Optional[str] = None,
     failed_url: Optional[str] = None,
-    method: int = PAYMENT_METHOD_SBP,
+    method: Optional[int] = PAYMENT_METHOD_SBP,
     telegram_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
@@ -216,7 +218,9 @@ async def create_transaction(
         purchase_id: Internal purchase ID (stored in payload)
         return_url: Redirect URL after successful payment (auto-fallback if None)
         failed_url: Redirect URL after failed payment (auto-fallback if None)
-        method: Platega paymentMethod (2=SBP, 11=Card, 12=International)
+        method: Platega paymentMethod (2=SBP, 11=Card, 12=International);
+                PAYMENT_METHOD_ANY (None) → /v2/transaction/process, the payer
+                picks the method (the link comes back in `url`, not `redirect`)
         telegram_id: Buyer's Telegram ID for `metadata.userId` (антифрод —
                     Platega может выключить магазин, если поле отсутствует
                     для категорий, где его требуют).
@@ -237,7 +241,6 @@ async def create_transaction(
     _failed_url = failed_url or _fb_fail
 
     request_body: Dict[str, Any] = {
-        "paymentMethod": method,
         # ВАЖНО: не передаём поле `id` — Platega docs, rule #1 (генерирует
         # сама).  Раньше слали random UUID, работало по инерции.
         "paymentDetails": {
@@ -253,11 +256,16 @@ async def create_transaction(
         # metadata.userId — обязателен для магазинов ряда категорий
         # (иначе антифрод отключается + возможна блокировка магазина).
         request_body["metadata"] = {"userId": str(telegram_id)}
+    if method is PAYMENT_METHOD_ANY:
+        path = "/v2/transaction/process"
+    else:
+        path = "/transaction/process"
+        request_body["paymentMethod"] = method
 
     async def _make_request():
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{PLATEGA_API_URL}/transaction/process",
+                f"{PLATEGA_API_URL}{path}",
                 headers=_get_headers(),
                 json=request_body,
             )
@@ -281,14 +289,15 @@ async def create_transaction(
 
     data = response.json()
     transaction_id = data.get("transactionId")
-    redirect_url = data.get("redirect")
+    redirect_url = data.get("redirect") or data.get("url")   # v2 answers `url`
 
     if not transaction_id or not redirect_url:
         raise Exception(f"Invalid Platega response: missing transactionId or redirect. Response: {data}")
 
     logger.info(
         f"Platega transaction created: transaction_id={transaction_id}, "
-        f"amount={amount_rubles} RUB, purchase_id={purchase_id}, method={method}"
+        f"amount={amount_rubles} RUB, purchase_id={purchase_id}, "
+        f"method={'any' if method is PAYMENT_METHOD_ANY else method}"
     )
 
     return {

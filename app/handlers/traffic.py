@@ -210,7 +210,7 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
 
     # Оплата трафика (bypass-only) — те же 2 кнопки, что и на трафик-паке:
     #   «Оплатить (Wata)» — универсальный инвойс Wata (юзер сам выбирает способ)
-    #   «Резерв (Platega)» — запасной провайдер (Platega СБП)
+    #   «Резерв (Platega)» — запасной провайдер (Platega, способ выбирает плательщик)
     import wata_service
     import platega_service
     if wata_service.is_enabled():
@@ -813,7 +813,7 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
 
     # Оплата трафика — 2 кнопки, без старых иконок:
     #   «Оплатить (Wata)» — универсальный инвойс Wata (юзер сам выбирает способ)
-    #   «Резерв (Platega)» — запасной провайдер (Platega СБП)
+    #   «Резерв (Platega)» — запасной провайдер (Platega, способ выбирает плательщик)
     import wata_service
     import platega_service
     if wata_service.is_enabled():
@@ -848,7 +848,8 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
 
 @traffic_router.callback_query(F.data.startswith("traffic_pay_sbp:"))
 async def callback_traffic_pay_sbp(callback: CallbackQuery):
-    """Pay for traffic pack via SBP (Platega, +11% markup)."""
+    """«Резерв»: traffic pack via Platega without a fixed method (the payer picks
+    card / SBP / … on Platega's page), SBP markup kept."""
     if not await ensure_db_ready_callback(callback):
         return
 
@@ -897,6 +898,7 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
             description=f"Atlas Secure — {gb} GB traffic",
             purchase_id=purchase_id,
             telegram_id=telegram_id,
+            method=platega_service.PAYMENT_METHOD_ANY,
         )
 
         transaction_id = tx_data["transaction_id"]
@@ -913,10 +915,10 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
             telegram_id, purchase_id, gb, sbp_price_rubles, transaction_id,
         )
 
-        text = i18n_get_text(language, "payment.sbp_waiting", amount=sbp_price_rubles)
+        text = i18n_get_text(language, "payment.platega_any_waiting", amount=sbp_price_rubles)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=i18n_get_text(language, "payment.sbp_pay_button"),
+                text=i18n_get_text(language, "payment.platega_any_pay_button"),
                 url=redirect_url,
             )],
             [InlineKeyboardButton(
@@ -1047,7 +1049,8 @@ async def _bypass_price(telegram_id: int, gb: int):
 
 @traffic_router.callback_query(F.data.startswith("bypass_pay_sbp:"))
 async def callback_bypass_pay_sbp(callback: CallbackQuery):
-    """Pay for bypass-only pack via SBP (Platega, +11%)."""
+    """«Резерв»: bypass-only pack via Platega without a fixed method (the payer
+    picks it on Platega's page), SBP markup kept."""
     if not await ensure_db_ready_callback(callback):
         return
 
@@ -1088,6 +1091,7 @@ async def callback_bypass_pay_sbp(callback: CallbackQuery):
             description=f"Atlas Secure — Bypass {gb} GB",
             purchase_id=purchase_id,
             telegram_id=telegram_id,
+            method=platega_service.PAYMENT_METHOD_ANY,
         )
 
         transaction_id = tx_data["transaction_id"]
@@ -1098,9 +1102,9 @@ async def callback_bypass_pay_sbp(callback: CallbackQuery):
         except Exception as e:
             logger.error("Failed to save SBP tx_id: purchase_id=%s error=%s", purchase_id, e)
 
-        text = i18n_get_text(language, "payment.sbp_waiting", amount=sbp_price_rubles)
+        text = i18n_get_text(language, "payment.platega_any_waiting", amount=sbp_price_rubles)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp_pay_button"), url=redirect_url)],
+            [InlineKeyboardButton(text=i18n_get_text(language, "payment.platega_any_pay_button"), url=redirect_url)],
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only", icon_custom_emoji_id=CE["back"], style="primary")],
         ])
         msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
