@@ -30,6 +30,7 @@ import { Spinner } from "@/components/Spinner";
 import { PageHeader, Surface } from "@/components/ui/Surface";
 import { IconButton, PillProgress, StatusDot } from "@/components/ui/controls";
 import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
+import { SegmentSelect } from "@/components/segments/SegmentSelect";
 
 /** A small chip that stays visible on a `bg-tile-3` row. */
 const CHIP = "badge bg-tile-1 t-mute";
@@ -40,6 +41,8 @@ interface BroadcastRow extends Record<string, unknown> {
   message?: string;
   broadcast_type?: string;
   segment?: string;
+  /** Human name of the stored key (backend: database/segments.segment_label). */
+  segment_label?: string;
   is_ab_test?: boolean;
   created_at?: string;
   sent_at?: string;
@@ -579,7 +582,7 @@ function BroadcastListRow({
             {row.segment && (
               <span className="inline-flex items-center gap-1">
                 <UsersIcon className="h-3 w-3" /> сегмент:{" "}
-                <b className="font-semibold text-ink">{String(row.segment)}</b>
+                <b className="font-semibold text-ink">{String(row.segment_label || row.segment)}</b>
               </span>
             )}
             {typeof row.total_recipients === "number" && (
@@ -642,7 +645,7 @@ function BroadcastListRow({
           )}
           <div className="t-mute mt-1 flex flex-wrap items-center gap-2 text-[12px]">
             {row.created_at && <span>{fmtDate(String(row.created_at))}</span>}
-            {row.segment && <span>· сегмент {String(row.segment)}</span>}
+            {row.segment && <span>· сегмент {String(row.segment_label || row.segment)}</span>}
           </div>
           {progress && progress.total > 0 && (
             <div className="mt-3">
@@ -831,7 +834,7 @@ function BroadcastDetail({
 
       <div className="mt-4 flex flex-col gap-1.5">
         <Row label="Тип" value={String(b.broadcast_type ?? "—")} />
-        <Row label="Сегмент" value={String(b.segment ?? "—")} />
+        <Row label="Сегмент" value={String(b.segment_label || b.segment || "—")} />
         <Row label="A/B" value={b.is_ab_test ? "да" : "нет"} />
         <Row label="Создана" value={fmtDate(String(b.created_at ?? ""))} />
         {b.sent_at && (
@@ -1459,25 +1462,14 @@ function ScheduleBroadcastModal({
 
         <div className="mb-4">
           <div className="t-mute mb-1.5 text-[13px]">Сегмент получателей</div>
-          <select
+          <SegmentSelect
+            segments={segments.data}
+            loading={segments.isLoading}
             value={segmentOverride ?? ""}
-            onChange={(e) => setSegmentOverride(e.target.value || null)}
-            className="input"
-            aria-label="Сегмент получателей"
-            disabled={segments.isLoading}
-          >
-            <option value="">
-              {segments.isLoading
-                ? "Загружаю сегменты…"
-                : "— Как в исходной рассылке —"}
-            </option>
-            {(segments.data ?? []).map((s) => (
-              <option key={s.key} value={s.key}>
-                {s.group ? `[${s.group}] ` : ""}
-                {s.label} · {s.count} чел
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setSegmentOverride(v || null)}
+            emptyLabel="— Как в исходной рассылке —"
+            ariaLabel="Сегмент получателей"
+          />
           <div className="t-mute mt-1 text-[12px] leading-4">
             Аудитория пересчитывается в момент отправки — показанное число
             «на сейчас» для ориентира.
@@ -1666,7 +1658,7 @@ export function ScheduledBroadcastsSection() {
                         <>
                           {" · "}
                           <span className="t-body">
-                            {s?.label ?? key}
+                            {String(r.segment_label || s?.label || key)}
                           </span>
                           {s ? (
                             <span className="tabular ml-1 rounded-full bg-tile-1 px-1.5 py-0.5 font-semibold text-ink">

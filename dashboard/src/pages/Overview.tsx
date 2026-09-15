@@ -34,6 +34,7 @@ import { DeltaPill, ListRow, Segmented, StatusDot, type Tone } from "@/component
 import { ReasonList } from "@/components/ui/StatusBadge";
 import { ErrorState, LoadingTiles, Skeleton } from "@/components/ui/states";
 import { Sparkline } from "@/components/Sparkline";
+import { RenewalOfferSheet } from "@/components/RenewalOfferSheet";
 
 /** Kept for screens that still import it from here. */
 export const WINDOWS = SHARED_WINDOWS;
@@ -407,6 +408,7 @@ function DayBars({ days }: { days: { date: string; total: number; auto_renew: nu
 }
 
 function PipelineCard({ pipe }: { pipe: OverviewReport["subscribers"]["pipeline"] }) {
+  const [offer, setOffer] = useState(false);
   if (!pipe) {
     return (
       <div className="tile p-4 text-[15px]">
@@ -479,6 +481,12 @@ function PipelineCard({ pipe }: { pipe: OverviewReport["subscribers"]["pipeline"
           </li>
         )}
       </ul>
+      {/* Quick action: a broadcast with the «🎁 Купить со скидкой» button to
+          paid subscriptions ending in these 7 days (RenewalOfferSheet). */}
+      <button type="button" className="btn-secondary mt-3 w-full" onClick={() => setOffer(true)}>
+        🎁 Предложить продление со скидкой
+      </button>
+      {offer && <RenewalOfferSheet onClose={() => setOffer(false)} />}
     </div>
   );
 }
