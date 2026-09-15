@@ -80,6 +80,35 @@ def _rewrite_sub_host(url: Optional[str]) -> Optional[str]:
 rewrite_sub_host = _rewrite_sub_host
 
 
+_PANEL_SUB_PATH_PREFIX = "/api/sub/"
+
+
+def public_sub_url(url: Optional[str]) -> Optional[str]:
+    """Plain subscription link as users must see it: https://sub.atlassecure.ru/<shortuuid>.
+
+    The panel's subscriptionUrl is https://rmnw.atlassecure.ru/api/sub/<shortuuid>
+    (panel host, legacy path); the public host serves the same subscription at
+    /<shortuuid> (the /api/sub/ path is 404 there). Only the panel host, the live
+    host and dead hosts are rewritten; any other host is returned unchanged."""
+    url = _rewrite_sub_host(url)
+    if not url:
+        return url
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        live = _live_sub_host()
+        panel = (urlsplit(getattr(config, "REMNAWAVE_SUB_BASE_URL", "") or "").hostname or "").lower()
+        if host not in {live, panel, "rmnw.atlassecure.ru"}:
+            return url
+        path = parts.path
+        if path.startswith(_PANEL_SUB_PATH_PREFIX):
+            path = "/" + path[len(_PANEL_SUB_PATH_PREFIX):]
+        return urlunsplit((parts.scheme or "https", live, path, parts.query, parts.fragment))
+    except Exception:
+        return url
+
+
 async def get_user_premium_url(telegram_id: int) -> Optional[str]:
     """Return the Remnawave premium subscription URL for the user, or None.
 

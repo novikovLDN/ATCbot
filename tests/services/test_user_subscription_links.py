@@ -127,6 +127,31 @@ def test_rewrite_leaves_live_and_other_hosts_untouched():
         assert r(None) is None
 
 
+# ── public_sub_url: what a user sees as a plain link ─────────────────
+
+def test_public_sub_url_panel_link_goes_to_public_host():
+    """Prod 2026-09-15: «Другие клиенты» showed rmnw…/api/sub/<id>; the public
+    host serves /<id> (its /api/sub/<id> is 404)."""
+    with _patch_config():
+        p = user_subscription_links.public_sub_url
+        assert p("https://rmnw.atlassecure.ru/api/sub/2f1d7eb0-420") == \
+            "https://sub.atlassecure.ru/2f1d7eb0-420"
+        assert p("https://sub.atlassecure.ru/api/sub/abc?x=1") == "https://sub.atlassecure.ru/abc?x=1"
+        assert p("https://subscription.vps-cloud.uk/api/sub/abc") == "https://sub.atlassecure.ru/abc"
+
+
+def test_public_sub_url_leaves_good_and_foreign_links():
+    with _patch_config():
+        p = user_subscription_links.public_sub_url
+        assert p("https://sub.atlassecure.ru/abc") == "https://sub.atlassecure.ru/abc"
+        assert p("https://app.atlassecure.ru/api/sub/xyz?id=42") == \
+            "https://app.atlassecure.ru/api/sub/xyz?id=42"
+        assert p("https://subscription.palantirdns.uk/a/TOKEN") == \
+            "https://subscription.palantirdns.uk/a/TOKEN"
+        assert p("") == ""
+        assert p(None) is None
+
+
 # ── get_user_premium_url: cache hit / status-agnostic / panel fallback ──
 
 @pytest.mark.asyncio

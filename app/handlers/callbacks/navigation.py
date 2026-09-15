@@ -1265,7 +1265,11 @@ async def callback_setup_other(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
+    from app.services.user_subscription_links import public_sub_url
+
     premium_url, bypass_url = await _setup_key_urls(telegram_id)
+    # Plain links are shown and copied as is → public host, never the panel's rmnw…/api/sub/.
+    premium_url, bypass_url = public_sub_url(premium_url), public_sub_url(bypass_url)
     text, keyboard = _other_clients_screen(language, platform, premium_url, bypass_url)
     logger.info(
         "SETUP_OTHER_CLIENTS platform=%s premium=%s bypass=%s",

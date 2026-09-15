@@ -15,8 +15,12 @@ from app.services import user_subscription_links as links
 from app.utils.telegram_html import telegram_html_errors
 
 BASE = "https://bot.example"
-PREMIUM = "https://sub.atlassecure.ru/api/sub/PREM_tok?x=1&y=2"
-BYPASS = "https://sub.atlassecure.ru/api/sub/BYP_tok"
+# What the panel returns as subscriptionUrl (panel host, /api/sub/ path) …
+PREMIUM = "https://rmnw.atlassecure.ru/api/sub/PREM_tok?x=1&y=2"
+BYPASS = "https://rmnw.atlassecure.ru/api/sub/BYP_tok"
+# … and what «Другие клиенты» must show (public host, /<shortuuid>).
+PUB_PREMIUM = "https://sub.atlassecure.ru/PREM_tok?x=1&y=2"
+PUB_BYPASS = "https://sub.atlassecure.ru/BYP_tok"
 
 
 def _callback(data: str, tg_id: int = 4242):
@@ -169,7 +173,8 @@ async def test_ios_step2_aggregator_has_add_key_to_karing(env, monkeypatch):
 
 async def test_other_clients_keys_are_the_manual_screen_keys(env, monkeypatch):
     """Same source as «Установить вручную»: the manual screen seals the very
-    same premium/bypass URLs for Happ; «Другие клиенты» shows them plain."""
+    same premium/bypass URLs for Happ; «Другие клиенты» shows them plain, on
+    the public host (prod 2026-09-15: the panel's rmnw…/api/sub/ leaked)."""
     monkeypatch.setattr(happ_crypto, "format_for_user", lambda u: f"HAPP[{u}]")
     cb = _callback("setup_manual:windows")
     await nav.callback_setup_manual(cb)
@@ -179,12 +184,14 @@ async def test_other_clients_keys_are_the_manual_screen_keys(env, monkeypatch):
     cb = _callback("setup_other:windows")
     await nav.callback_setup_other(cb)
     text, kb = env["sent"]["text"], env["sent"]["kb"]
-    esc_premium = PREMIUM.replace("&", "&amp;")
+    esc_premium = PUB_PREMIUM.replace("&", "&amp;")
     assert f"<code>{esc_premium}</code>" in text
-    assert f"<code>{BYPASS}</code>" in text
+    assert f"<code>{PUB_BYPASS}</code>" in text
+    assert "rmnw" not in text and "/api/sub/" not in text
     assert "crypt" not in text  # plain links, not Happ/Incy crypt links
     copies = {b.text: b.copy_text.text for b in _flat(kb) if b.copy_text}
-    assert copies == {"📋 Скопировать Premium": PREMIUM, "📋 Скопировать Обход": BYPASS}
+    assert copies == {"📋 Скопировать Premium": PUB_PREMIUM, "📋 Скопировать Обход": PUB_BYPASS}
+    assert not [b for b in _flat(kb) if b.url and "rmnw" in b.url]
     assert env["sent"]["kwargs"]["link_preview_options"].is_disabled
 
 
@@ -202,7 +209,7 @@ async def test_other_clients_one_tap_buttons_per_platform(env, platform, clients
     assert sorted({urlsplit(u).path.rsplit("/", 1)[1] for u in one_tap}) == sorted(clients)
     for url in one_tap:
         assert url.startswith(f"{BASE}/open/")
-        assert parse_qs(urlsplit(url).query)["url"][0] in (PREMIUM, BYPASS)
+        assert parse_qs(urlsplit(url).query)["url"][0] in (PUB_PREMIUM, PUB_BYPASS)
     assert len(one_tap) == 2 * len(clients)  # Premium + Обход per client
     back = _flat(kb)[-1]
     assert back.callback_data == f"setup_step2:{platform}"   # back to the one-tap key screen
@@ -213,7 +220,7 @@ async def test_other_clients_bypass_only_user(env):
     cb = _callback("setup_other:ios")
     await nav.callback_setup_other(cb)
     text, kb = env["sent"]["text"], env["sent"]["kb"]
-    assert BYPASS in text and "PREM_tok" not in text
+    assert PUB_BYPASS in text and "PREM_tok" not in text
     assert "только ключ обхода" in text
     assert all("Premium" not in t for t in _texts(kb))
     assert "Karing · Обход" in _texts(kb)
