@@ -18,8 +18,8 @@ def world(monkeypatch):
         st["calls"] += 1
         if key in st["fail"]:
             raise RuntimeError("db down")
-        return [1, 2]
-    monkeypatch.setattr(br.database, "get_users_by_segment", count)
+        return 2
+    monkeypatch.setattr(br.database, "count_users_by_segment", count)
     monkeypatch.setattr(br, "_clock", lambda: st["clock"])
     yield st
     br.reset_segment_counts_cache()

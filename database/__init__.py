@@ -279,6 +279,7 @@ from database.admin import (  # noqa: F401
     get_extended_bot_stats,
     get_eligible_no_subscription_broadcast_users,
     get_users_by_segment,
+    count_users_by_segment,
     log_broadcast_send,
     get_broadcast_stats,
     get_recent_broadcasts,

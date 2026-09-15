@@ -63,17 +63,17 @@ async def test_expired_within_1y_routes_expected_sql():
 @pytest.mark.asyncio
 async def test_expired_within_1y_listed_in_dashboard_segments():
     # Сегмент должен присутствовать в списке, отдаваемом дашборду
-    # (endpoint считает count через get_users_by_segment — мокаем его).
+    # (endpoint считает count через count_users_by_segment — мокаем его).
     try:
         from app.api.dashboard.routes import broadcasts as br
     except BaseException as e:  # noqa: BLE001  # pyo3 PanicException — не Exception
         pytest.skip(f"dashboard broadcasts route import unavailable in env: {e}")
 
     async def _fake_count(key):
-        return [1, 2, 3]
+        return 3
 
     br.reset_segment_counts_cache()
-    with patch.object(br.database, "get_users_by_segment", AsyncMock(side_effect=_fake_count)):
+    with patch.object(br.database, "count_users_by_segment", AsyncMock(side_effect=_fake_count)):
         # GET /segments handler is `segments_list` (b2a90f44); the name
         # `broadcast_segments` never existed in this module.
         out = await br.segments_list()
