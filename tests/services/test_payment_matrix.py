@@ -1764,6 +1764,36 @@ async def test_alert_confirmation_purchase_missing_is_forced(monkeypatch):
     assert w.forced_alerts() and w.payment_errors[-1]["stage"] == "confirm_purchase_not_found"
 
 
+async def test_confirmation_already_paid_purchase_is_not_an_anomaly(monkeypatch):
+    """Prod 2026-09-15: WATA fast-poll reached confirmation right after the
+    webhook had finalized the purchase → false «NOT credited» alert."""
+    w = build(monkeypatch, flag="off", entrypoint="webhook")
+    monkeypatch.setattr(database, "get_pending_purchase_by_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(database, "get_pending_purchase_any_status",
+                        AsyncMock(return_value={**pending_for("basic", 30), "status": "paid"}))
+
+    res = await confirmation.process_confirmed_payment(
+        provider="wata", purchase_id="pid-1", amount_rubles=199.0, invoice_id="inv-1",
+        telegram_id=TG, bot=BOT)
+
+    assert res["status"] == "already_processed" and w.payments == []
+    assert w.forced_alerts() == [] and w.payment_errors == []
+
+
+async def test_alert_confirmation_paid_purchase_of_another_user_is_forced(monkeypatch):
+    w = build(monkeypatch, flag="off", entrypoint="webhook")
+    monkeypatch.setattr(database, "get_pending_purchase_by_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(database, "get_pending_purchase_any_status", AsyncMock(
+        return_value={**pending_for("basic", 30), "status": "paid", "telegram_id": OTHER_TG}))
+
+    res = await confirmation.process_confirmed_payment(
+        provider="wata", purchase_id="pid-1", amount_rubles=199.0, invoice_id="inv-1",
+        telegram_id=TG, bot=BOT)
+
+    assert res["status"] == "error" and w.payments == []
+    assert w.forced_alerts() and w.payment_errors[-1]["stage"] == "confirm_purchase_not_found"
+
+
 async def test_alert_delivery_unexpected_error_after_commit_is_forced(monkeypatch):
     w = build(monkeypatch, flag="off", entrypoint="webhook")
     seed(w, "active")
