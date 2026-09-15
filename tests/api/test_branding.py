@@ -8,16 +8,19 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 from fastapi import FastAPI  # noqa: E402
 
+import config  # noqa: E402
 from app import branding  # noqa: E402
 from app.api.dashboard.routes import branding as branding_routes  # noqa: E402
 from app.services import admin_auth  # noqa: E402
+
+PREFIX = f"{config.APP_ENV.upper()}_"   # CI runs APP_ENV=local, ad-hoc runs stage
 
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for name in branding.DEFAULTS:
         monkeypatch.delenv(name, raising=False)
-        monkeypatch.delenv(f"STAGE_{name}", raising=False)
+        monkeypatch.delenv(f"{PREFIX}{name}", raising=False)
     branding.get_brand.cache_clear()
     yield
     branding.get_brand.cache_clear()
@@ -38,8 +41,8 @@ def test_defaults_keep_current_brand():
 
 def test_env_override_prefixed_wins(monkeypatch):
     monkeypatch.setenv("BRAND_NAME", "Plain")
-    monkeypatch.setenv("STAGE_BRAND_NAME", "Nova VPN")
-    monkeypatch.setenv("STAGE_BRAND_SHORT", "Nova")
+    monkeypatch.setenv(f"{PREFIX}BRAND_NAME", "Nova VPN")
+    monkeypatch.setenv(f"{PREFIX}BRAND_SHORT", "Nova")
     b = branding.load()
     assert b.name == "Nova VPN"
     assert b.admin_title == "Nova Admin"

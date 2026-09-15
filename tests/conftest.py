@@ -13,7 +13,9 @@ os.environ.setdefault("STAGE_WEBHOOK_SECRET", "test-secret")
 # Product default of USE_NEW_PROVISIONING is "on" (owner decision 2026-09-14).
 # Hermetic tests that never mention the flag keep exercising the legacy path;
 # tests of the new core set "on" explicitly, flag-semantics tests delenv it.
-os.environ.setdefault("STAGE_USE_NEW_PROVISIONING", "off")
+# Prefixed by the ACTIVE env: CI runs with APP_ENV=local, where a STAGE_ stub
+# is never read and the flag silently defaulted to "on" (25 red CI tests).
+os.environ.setdefault(f"{os.environ['APP_ENV'].upper()}_USE_NEW_PROVISIONING", "off")
 
 import sys
 
