@@ -192,8 +192,11 @@ async def claim(telegram_id: int, chain: str, anchor_at: datetime, step: str, ea
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SELECT pg_advisory_xact_lock(hashtext('sales_funnel'), ($1 % 2147483647)::int)",
-                               telegram_id)
+            # $1::bigint — without the cast PG infers int4 from the literal and
+            # any telegram_id above 2^31 fails the whole pass (prod 2026-09-15).
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext('sales_funnel'), ($1::bigint % 2147483647)::int)",
+                telegram_id)
             row = await conn.fetchrow(candidates_sql(chain, single_user_param=3),
                                       _aware(now), _aware(lower), telegram_id)
             if row is None or _aware(row["anchor_at"]) != _aware(anchor_at):
