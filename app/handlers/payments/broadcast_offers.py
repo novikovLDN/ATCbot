@@ -217,10 +217,9 @@ def _gift1m_base_price_rubles(tariff: str) -> int | None:
 
 
 def _gift1m_price_rubles(tariff: str) -> int | None:
-    base = _gift1m_base_price_rubles(tariff)
-    if not base:
-        return None
-    return round(base * (100 - _GIFT1M_DISCOUNT_PERCENT) / 100)
+    # One formula with the Combo price guard (app/services/broadcast_offer_prices.py).
+    from app.services.broadcast_offer_prices import offer_price_rubles
+    return offer_price_rubles("gift1m", tariff, _GIFT1M_PERIOD_DAYS)
 
 
 def _gift1m_menu_text_and_keyboard() -> tuple[str, InlineKeyboardMarkup]:
@@ -306,6 +305,7 @@ async def callback_broadcast_gift_1m_buy(callback: CallbackQuery, state: FSMCont
         final_price_kopecks=price_kopecks,
         discount_percent=_GIFT1M_DISCOUNT_PERCENT,
         combo_bypass_gb=gb,
+        offer_key="gift1m",  # the Combo price guard accepts the offer price
     )
     await state.set_state(PurchaseState.choose_payment_method)
 
@@ -320,15 +320,9 @@ async def callback_broadcast_gift_1m_buy(callback: CallbackQuery, state: FSMCont
 
 def _gift3m_price_rubles(tariff: str) -> int | None:
     """Discounted 3-month price in rubles for the four eligible tariffs."""
-    if tariff in ("basic", "plus"):
-        base = config.TARIFFS.get(tariff, {}).get(_GIFT3M_PERIOD_DAYS, {}).get("price")
-    elif tariff in ("combo_basic", "combo_plus"):
-        base = config.COMBO_TARIFFS.get(tariff, {}).get(_GIFT3M_PERIOD_DAYS, {}).get("price")
-    else:
-        return None
-    if not base:
-        return None
-    return round(base * (100 - _GIFT3M_DISCOUNT_PERCENT) / 100)
+    # One formula with the Combo price guard (app/services/broadcast_offer_prices.py).
+    from app.services.broadcast_offer_prices import offer_price_rubles
+    return offer_price_rubles("gift3m", tariff, _GIFT3M_PERIOD_DAYS)
 
 
 def _gift3m_base_price_rubles(tariff: str) -> int | None:
@@ -514,6 +508,7 @@ async def callback_broadcast_gift_3m_buy(callback: CallbackQuery, state: FSMCont
         final_price_kopecks=price_kopecks,
         discount_percent=_GIFT3M_DISCOUNT_PERCENT,
         combo_bypass_gb=gb,
+        offer_key="gift3m",  # the Combo price guard accepts the offer price
     )
     await state.set_state(PurchaseState.choose_payment_method)
 
@@ -571,12 +566,9 @@ def _gift1y40_base_price(tariff: str, period_days: int) -> int | None:
 def _gift1y40_final_price(tariff: str, period_days: int) -> int | None:
     """Финальная цена с учётом акции: 40% скидка ТОЛЬКО на 365 дней,
     остальные периоды по обычному прайсу."""
-    base = _gift1y40_base_price(tariff, period_days)
-    if base is None:
-        return None
-    if period_days == _GIFT1Y40_PERIOD_DAYS_DISCOUNTED:
-        return round(base * (100 - _GIFT1Y40_DISCOUNT_PERCENT) / 100)
-    return base
+    # One formula with the Combo price guard (app/services/broadcast_offer_prices.py).
+    from app.services.broadcast_offer_prices import offer_price_rubles
+    return offer_price_rubles("gift1y40", tariff, period_days)
 
 
 def _gift1y40_tariff_menu() -> tuple[str, InlineKeyboardMarkup]:
@@ -844,6 +836,7 @@ async def callback_broadcast_gift_1y_40_buy(callback: CallbackQuery, state: FSMC
         period_days=period_days,
         final_price_kopecks=price_kopecks,
         combo_bypass_gb=gb,
+        offer_key="gift1y40",  # the Combo price guard accepts the offer price
     )
     # discount_percent пишем только для 365 — на других периодах цена
     # обычная, discount-показ в чекауте не нужен.
