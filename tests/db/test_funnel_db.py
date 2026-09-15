@@ -93,6 +93,31 @@ async def test_claim_dedups_stops_and_caps(pool):
     assert await funnel_db.claim(TG, "start", a, "1d", ("1h",), **kw_next_day) == (None, "stopped")
 
 
+BIG_TG = 6_059_619_426  # > 2^31, from the prod log
+
+
+async def test_claim_accepts_a_telegram_id_above_int32(pool):
+    """Prod 2026-09-15: SALES_FUNNEL_PASS_FAILED «6059619426 (value out of int32
+    range)» — the advisory-lock key made PG infer int4 and killed every pass."""
+    now = datetime.now(UTC)
+    kw = dict(now=now, lower=now - timedelta(days=1), day_start=now - timedelta(hours=1),
+              other_since=now - timedelta(hours=6))
+    try:
+        async with pool.acquire() as c:
+            await c.execute(
+                "INSERT INTO users (telegram_id, created_at, captcha_passed_at) VALUES ($1, $2, $2)",
+                BIG_TG, _to_db_utc(now - timedelta(hours=2)))
+        (a,) = [r["anchor_at"] for r in await funnel_db.fetch_due(
+            "start", now=now, lower=kw["lower"], steps=[("1h", 3600.0)],
+            day_start=kw["day_start"], limit=10) if r["telegram_id"] == BIG_TG]
+        cid, reason = await funnel_db.claim(BIG_TG, "start", a, "1h", (), **kw)
+        assert cid and reason == "claimed"
+    finally:
+        async with pool.acquire() as c:
+            for t in ("funnel_messages", "users"):
+                await c.execute(f"DELETE FROM {t} WHERE telegram_id = $1", BIG_TG)  # noqa: S608 — fixed table names
+
+
 async def test_claim_waits_6h_after_an_expiry_or_a_traffic_notice(pool):
     """«Nothing within 6 h of another notification» saw only the reminders: the
     «subscription ended» notice and the traffic notices recorded nothing there."""

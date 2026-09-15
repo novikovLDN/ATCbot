@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -108,9 +109,10 @@ async def apply_check(bot: Bot, telegram_id: int, *, used: int, limit: int, prem
         return False
 
 
-async def _check_user_traffic(bot: Bot, row: Dict[str, Any], now: datetime) -> None:
+async def _check_user_traffic(bot: Bot, row: Dict[str, Any], now: datetime) -> str:
     """One check: one panel GET (as on production), the user's notice state
-    (one short DB read — production read the flags here), then apply_check."""
+    (one short DB read — production read the flags here), then apply_check.
+    Returns the outcome for the pass summary: sent / checked / skipped / no_data / error."""
     telegram_id = row["telegram_id"]
     # Prefer numeric id (3.x fast-path без UUID→id auto-resolve).
     # Fallback на uuid для legacy юзеров без забэкфильнутого id.
@@ -119,20 +121,21 @@ async def _check_user_traffic(bot: Bot, row: Dict[str, Any], now: datetime) -> N
         traffic = await remnawave_api.get_user_traffic(panel_ref)
         if not traffic:
             logger.warning("TRAFFIC_CHECK_NO_DATA: tg=%s", telegram_id)
-            return
+            return "no_data"
         limit = int(traffic.get("trafficLimitBytes") or 0)
         if limit <= 0:
-            return                                         # unlimited: nothing to count down
+            return "skipped"                               # unlimited: nothing to count down
         state = await database.get_traffic_notice_state(telegram_id)
         if state is None:
-            return
+            return "skipped"
     except Exception as e:  # noqa: BLE001
         logger.warning("TRAFFIC_CHECK_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
-        return
-    await apply_check(
+        return "error"
+    sent = await apply_check(
         bot, telegram_id, used=int(traffic.get("usedTrafficBytes") or 0), limit=limit,
         premium=premium_active(row, now), state=state, now=now,
     )
+    return "sent" if sent else "checked"
 
 
 def _text_key(threshold: int, premium: bool) -> str:
@@ -180,9 +183,23 @@ async def traffic_monitor_iteration(bot: Bot) -> None:
     if not users:
         return
     now = datetime.now(timezone.utc)
+    started = time.monotonic()
+    counts: Dict[str, int] = {}
+    notified: list = []
     for row in users:
-        await _check_user_traffic(bot, row, now)
+        outcome = await _check_user_traffic(bot, row, now)
+        counts[outcome] = counts.get(outcome, 0) + 1
+        if outcome == "sent":
+            notified.append(row["telegram_id"])
         await asyncio.sleep(REQUEST_PACING_S)  # Rate limit API calls
+    # One line per pass (the per-user panel GETs are filtered out of the log).
+    logger.info(
+        "TRAFFIC_MONITOR_PASS: users=%d sent=%d checked=%d skipped=%d no_data=%d errors=%d "
+        "duration_s=%d notified_tg=%s",
+        len(users), counts.get("sent", 0), counts.get("checked", 0), counts.get("skipped", 0),
+        counts.get("no_data", 0), counts.get("error", 0), int(time.monotonic() - started),
+        ",".join(str(t) for t in notified[:50]) + (f",…+{len(notified) - 50}" if len(notified) > 50 else ""),
+    )
 
 
 async def traffic_monitor_task(bot: Bot) -> None:
