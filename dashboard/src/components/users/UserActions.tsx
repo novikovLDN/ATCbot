@@ -32,6 +32,8 @@ interface Props {
   onSwitchTariff: (tariff: string) => void;
   onRevoke: () => void;
   onReissueAggregator: () => void;
+  onRefreshSubLinks: () => void;
+  onReissueSubLinks: () => void;
   isPending?: boolean;
   className?: string;
 }
@@ -43,6 +45,8 @@ export function UserActions({
   onSwitchTariff,
   onRevoke,
   onReissueAggregator,
+  onRefreshSubLinks,
+  onReissueSubLinks,
   isPending = false,
   className,
 }: Props) {
@@ -51,6 +55,7 @@ export function UserActions({
   const [minutes, setMinutes] = useState(10);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [confirmReissue, setConfirmReissue] = useState(false);
+  const [confirmSubReissue, setConfirmSubReissue] = useState(false);
   const [showTest, setShowTest] = useState(false);
 
   const current = subscription?.subscription_type ?? null;
@@ -149,6 +154,52 @@ export function UserActions({
             title="Новый token агрегатора. Затрагивает только этого юзера, апстрим-ссылки не меняются."
           >
             Перевыпустить ссылку
+          </button>
+        )}
+
+        {/* Subscription links (Premium + Обход). The bot serves them from its
+            cache: after a manual «перевыпуск» in the panel, «Обновить»
+            re-reads them; «Перевыпустить» does the panel revoke itself. */}
+        <button
+          type="button"
+          className="btn-secondary w-full"
+          disabled={isPending}
+          onClick={onRefreshSubLinks}
+          title="После ручного перевыпуска в панели: бот перечитает ссылки Premium и Обхода и сохранит новые."
+        >
+          Обновить ссылки из панели
+        </button>
+
+        {confirmSubReissue ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-row bg-tile-3 p-3">
+            <span className="t-body min-w-0 flex-1 basis-40 text-[13px]">
+              Перевыпустить подписку в панели? Старые ключи у пользователя перестанут работать —
+              новый он возьмёт в боте.
+            </span>
+            <button type="button" className="btn-ghost" onClick={() => setConfirmSubReissue(false)}>
+              Отмена
+            </button>
+            <button
+              type="button"
+              className="btn-danger"
+              disabled={isPending}
+              onClick={() => {
+                setConfirmSubReissue(false);
+                onReissueSubLinks();
+              }}
+            >
+              Перевыпустить
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="btn-secondary w-full"
+            disabled={isPending}
+            onClick={() => setConfirmSubReissue(true)}
+            title="Перевыпуск Premium и Обхода в панели: новые ссылки, старые перестают работать."
+          >
+            Перевыпустить подписку
           </button>
         )}
 

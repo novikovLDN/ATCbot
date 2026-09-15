@@ -182,6 +182,7 @@ from database.traffic import (  # noqa: F401
     set_remnawave_premium_uuid_and_url,
     set_remnawave_premium_sub_url,
     set_remnawave_bypass_cache,
+    replace_cached_sub_url,
     get_remnawave_bypass_cache,
     get_traffic_notification_flags,
     set_traffic_notification_flag,

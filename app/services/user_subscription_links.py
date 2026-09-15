@@ -428,6 +428,138 @@ async def get_user_bypass_url(telegram_id: int) -> Optional[str]:
     return None
 
 
+# ── Dashboard: «Обновить ссылки» / «Перевыпустить подписку» ─────────
+#
+# The bot serves subscription links from its cache (remnawave_*_sub_url,
+# vpn_key / vpn_key_plus). A panel «перевыпуск» (revoke) issues a new
+# shortUuid, so after a manual one in the panel the bot kept handing out the
+# dead link (prod 2026-09-15). Owner's choice: fixed from the user's card in
+# the dashboard, never on the user's key screens (no panel wait there).
+
+_PANEL_TIMEOUT_S = 15.0
+_ENTITIES = ("premium", "bypass")
+
+
+async def _sub_row(telegram_id: int):
+    import database
+    pool = await database.get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT remnawave_premium_id, remnawave_premium_uuid, remnawave_premium_sub_url, "
+            "       remnawave_bypass_sub_url "
+            "FROM subscriptions WHERE telegram_id = $1 "
+            "ORDER BY (status='active') DESC, expires_at DESC NULLS LAST LIMIT 1",
+            telegram_id,
+        )
+
+
+async def _premium_entity(telegram_id: int, row) -> Optional[dict]:
+    """The premium panel entity — only if its username is tg_{id}_premium."""
+    from app.services import remnawave_api
+    from app.services.remnawave_premium import build_premium_username
+    ref = row and (row["remnawave_premium_id"] or (row["remnawave_premium_uuid"] or "").strip())
+    if not ref:
+        return None
+    ent = await remnawave_api.get_user(ref)
+    if not isinstance(ent, dict) or str(ent.get("username") or "") != build_premium_username(telegram_id):
+        return None
+    return ent
+
+
+async def _bypass_entity(telegram_id: int) -> Optional[dict]:
+    """The bypass panel entity (get_bypass_entity_safe checks username == str(tg))."""
+    from app.services import remnawave_api
+    ent = await remnawave_api.get_bypass_entity_safe(telegram_id)
+    return ent if isinstance(ent, dict) else None
+
+
+async def refresh_cached_sub_urls(telegram_id: int) -> dict:
+    """Re-read both subscription links from the panel; store the ones that changed.
+
+    Returns {"premium": s, "bypass": s}, s ∈ updated / unchanged / no_entity /
+    error / disabled. Never raises."""
+    if not getattr(config, "REMNAWAVE_ENABLED", False):
+        return dict.fromkeys(_ENTITIES, "disabled")
+    try:
+        return await asyncio.wait_for(_refresh_cached_sub_urls(telegram_id), timeout=_PANEL_TIMEOUT_S)
+    except Exception as e:  # noqa: BLE001 — timeout included
+        logger.warning("SUB_URL_REFRESH_FAIL: tg=%s %s", telegram_id, type(e).__name__)
+        return dict.fromkeys(_ENTITIES, "error")
+
+
+async def _refresh_cached_sub_urls(telegram_id: int) -> dict:
+    import database
+    row = await _sub_row(telegram_id)
+    if not row:
+        return dict.fromkeys(_ENTITIES, "no_entity")
+
+    async def one(which: str, entity, cached: str) -> str:
+        ent = await entity
+        url = ((ent or {}).get("subscriptionUrl") or "").strip()
+        if not url:
+            return "no_entity"
+        if url == cached:
+            return "unchanged"
+        await database.replace_cached_sub_url(telegram_id, which, cached, url, ent.get("shortUuid"))
+        logger.info("SUB_URL_REFRESHED: tg=%s which=%s", telegram_id, which)
+        return "updated"
+
+    results = await asyncio.gather(
+        one("premium", _premium_entity(telegram_id, row), (row["remnawave_premium_sub_url"] or "").strip()),
+        one("bypass", _bypass_entity(telegram_id), (row["remnawave_bypass_sub_url"] or "").strip()),
+        return_exceptions=True,
+    )
+    out = {}
+    for which, res in zip(_ENTITIES, results):
+        if isinstance(res, BaseException):
+            logger.warning("SUB_URL_REFRESH_FAIL: tg=%s which=%s %s", telegram_id, which, type(res).__name__)
+            res = "error"
+        out[which] = res
+    return out
+
+
+async def reissue_sub_urls(telegram_id: int) -> dict:
+    """Full «перевыпуск» of both panel entities (new shortUuid, vless uuid and
+    passwords — the old links and client configs stop working), then the new
+    links go to the cache.
+
+    Returns {which: {"revoke": revoked / no_entity / error / disabled,
+    "links": <refresh status>}}. Never raises."""
+    if not getattr(config, "REMNAWAVE_ENABLED", False):
+        return {w: {"revoke": "disabled", "links": "disabled"} for w in _ENTITIES}
+    try:
+        return await asyncio.wait_for(_reissue_sub_urls(telegram_id), timeout=2 * _PANEL_TIMEOUT_S)
+    except Exception as e:  # noqa: BLE001 — timeout included
+        logger.warning("SUB_REISSUE_FAIL: tg=%s %s", telegram_id, type(e).__name__)
+        return {w: {"revoke": "error", "links": "error"} for w in _ENTITIES}
+
+
+async def _reissue_sub_urls(telegram_id: int) -> dict:
+    from app.services import remnawave_api
+    row = await _sub_row(telegram_id)
+    entities = await asyncio.gather(
+        _premium_entity(telegram_id, row), _bypass_entity(telegram_id), return_exceptions=True,
+    )
+    revoke = {}
+    for which, ent in zip(_ENTITIES, entities):
+        if isinstance(ent, BaseException):
+            revoke[which] = "error"
+        elif not ent or ent.get("id") is None:
+            revoke[which] = "no_entity"
+        else:
+            try:
+                done = await remnawave_api.revoke_user_subscription(int(ent["id"]))
+                revoke[which] = "revoked" if done is not None else "error"
+            except Exception as e:  # noqa: BLE001
+                logger.warning("SUB_REISSUE_FAIL: tg=%s which=%s %s", telegram_id, which, type(e).__name__)
+                revoke[which] = "error"
+    links = await _refresh_cached_sub_urls(telegram_id)
+    logger.info("SUB_REISSUED: tg=%s revoke=%s links=%s", telegram_id, revoke, links)
+    return {w: {"revoke": revoke[w], "links": links[w]} for w in _ENTITIES}
+
+
 async def get_user_primary_subscription_url(telegram_id: int) -> str:
     """Return the URL the bot's "Подключиться" / copy-key buttons should
     point at for this user.
@@ -460,4 +592,6 @@ __all__ = [
     "get_user_premium_url",
     "get_user_bypass_url",
     "get_user_primary_subscription_url",
+    "refresh_cached_sub_urls",
+    "reissue_sub_urls",
 ]

@@ -17,6 +17,7 @@
  */
 import { useMutation } from "@tanstack/react-query";
 import { endpoints } from "@/lib/api";
+import type { SubLinksRefreshResult, SubLinksReissueResult } from "@/lib/api";
 import { useIdempotencyKeys } from "./useIdempotencyKeys";
 import { toast } from "@/store/toast";
 import { useInvalidateUser } from "./useUsers";
@@ -26,6 +27,28 @@ function describe(err: unknown): string {
   if (err instanceof ApiError) return err.detail || `Ошибка ${err.status}`;
   if (err instanceof Error) return err.message;
   return "Неизвестная ошибка";
+}
+
+const LINK_STATUS: Record<string, string> = {
+  updated: "обновлена",
+  unchanged: "без изменений",
+  no_entity: "нет в панели",
+  error: "ошибка панели",
+  disabled: "панель выключена",
+};
+const REVOKE_STATUS: Record<string, string> = {
+  revoked: "перевыпущена",
+  no_entity: "нет в панели",
+  error: "панель отказала",
+  disabled: "панель выключена",
+};
+const ENTITY_LABEL: Record<string, string> = { premium: "Premium", bypass: "Обход" };
+
+/** «Premium: обновлена · Обход: без изменений» */
+function describeLinks(result: Record<string, string>, labels: Record<string, string>): string {
+  return Object.entries(result)
+    .map(([which, s]) => `${ENTITY_LABEL[which] ?? which}: ${labels[s] ?? s}`)
+    .join(" · ");
 }
 
 export function useUserMutations(tg: number) {
@@ -92,6 +115,45 @@ export function useUserMutations(tg: number) {
       },
       onError: (err: unknown) => {
         keys.settle("reissue", err);
+        toast.error(describe(err));
+      },
+    }),
+
+    /**
+     * «Обновить ссылки из панели»: after a manual «перевыпуск» in the panel
+     * the bot kept serving the old cached links. Read-only on the panel.
+     */
+    refreshSubLinks: useMutation({
+      mutationFn: () => endpoints.userRefreshSubLinks(tg, keys.opts("refreshSubLinks")),
+      onSuccess: (r: SubLinksRefreshResult) => {
+        keys.settle("refreshSubLinks");
+        const text = `Ссылки — ${describeLinks(r.result, LINK_STATUS)}`;
+        if (r.ok) toast.success(text);
+        else toast.error(text);
+        invalidate(tg);
+      },
+      onError: (err: unknown) => {
+        keys.settle("refreshSubLinks", err);
+        toast.error(describe(err));
+      },
+    }),
+
+    /**
+     * «Перевыпустить подписку»: panel revoke of premium + bypass (new links,
+     * the user's old keys stop working), then the bot stores the new links.
+     */
+    reissueSubLinks: useMutation({
+      mutationFn: () => endpoints.userReissueSubLinks(tg, keys.opts("reissueSubLinks")),
+      onSuccess: (r: SubLinksReissueResult) => {
+        keys.settle("reissueSubLinks");
+        const revoke = Object.fromEntries(Object.entries(r.result).map(([w, v]) => [w, v.revoke]));
+        const text = `Перевыпуск — ${describeLinks(revoke, REVOKE_STATUS)}`;
+        if (r.ok) toast.success(text);
+        else toast.error(text);
+        invalidate(tg);
+      },
+      onError: (err: unknown) => {
+        keys.settle("reissueSubLinks", err);
         toast.error(describe(err));
       },
     }),

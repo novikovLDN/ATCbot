@@ -210,6 +210,8 @@ admin-хендлере. Для дашборда — JWT (PyJWT) с тем же `
 | `POST /api/users/{tg_id}/grant` body `{days, tariff}` | `admin_grant_access_atomic(...)` |
 | `POST /api/users/{tg_id}/grant-minutes` body `{minutes}` | `admin_grant_access_minutes_atomic(...)` |
 | `POST /api/users/{tg_id}/revoke` | `admin_revoke_access_atomic(...)` |
+| `POST /api/users/{tg_id}/sub-links/refresh` | `user_subscription_links.refresh_cached_sub_urls` — после ручного перевыпуска в панели: перечитать ссылки Premium/Обхода, сохранить изменившиеся (панель только читается) |
+| `POST /api/users/{tg_id}/sub-links/reissue` | `user_subscription_links.reissue_sub_urls` — перевыпуск обеих сущностей в панели (`actions/revoke`), затем новые ссылки в кэш бота |
 | `POST /api/users/{tg_id}/switch-tariff` body `{tariff}` | `admin_switch_tariff(...)` |
 | `POST /api/users/{tg_id}/discount` body `{percent, expires_at}` | `create_user_discount(...)` |
 | `DELETE /api/users/{tg_id}/discount` | `delete_user_discount(tg_id)` |

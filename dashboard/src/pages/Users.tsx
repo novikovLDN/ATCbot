@@ -430,12 +430,16 @@ function DetailView({ tg, onBack }: { tg: number; onBack: () => void }) {
             onSwitchTariff={(tariff) => m.switchTariff.mutate({ tariff })}
             onRevoke={() => m.revoke.mutate()}
             onReissueAggregator={() => m.reissueAggregator.mutate()}
+            onRefreshSubLinks={() => m.refreshSubLinks.mutate()}
+            onReissueSubLinks={() => m.reissueSubLinks.mutate()}
             isPending={
               m.grant.isPending ||
               m.grantMinutes.isPending ||
               m.switchTariff.isPending ||
               m.revoke.isPending ||
-              m.reissueAggregator.isPending
+              m.reissueAggregator.isPending ||
+              m.refreshSubLinks.isPending ||
+              m.reissueSubLinks.isPending
             }
           />
 

@@ -237,6 +237,33 @@ async def set_remnawave_bypass_cache(
         )
 
 
+async def replace_cached_sub_url(
+    telegram_id: int, which: str, old_url: Optional[str], new_url: str, short_uuid: Optional[str],
+) -> None:
+    """Store a re-issued subscription URL (panel «перевыпуск»): the cache column
+    + short uuid, and vpn_key / vpn_key_plus only when they held the same old
+    link (they are shown in the purchase message). One UPDATE."""
+    if which == "premium":
+        sql = ("UPDATE subscriptions SET remnawave_premium_sub_url = $2, "
+               "  remnawave_premium_short_uuid = COALESCE($4, remnawave_premium_short_uuid), "
+               "  vpn_key = CASE WHEN vpn_key = $3 THEN $2 ELSE vpn_key END "
+               "WHERE telegram_id = $1")
+    elif which == "bypass":
+        sql = ("UPDATE subscriptions SET remnawave_bypass_sub_url = $2, "
+               "  remnawave_bypass_short_uuid = COALESCE($4, remnawave_bypass_short_uuid), "
+               "  vpn_key_plus = CASE WHEN vpn_key_plus = $3 THEN $2 ELSE vpn_key_plus END "
+               "WHERE telegram_id = $1")
+    else:
+        raise ValueError(f"unknown entity: {which}")
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(sql, telegram_id, new_url, old_url or "", short_uuid)
+
+
 async def get_remnawave_bypass_cache(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Return (uuid, sub_url, short_uuid) for the bypass entity or None."""
     if not _core.DB_READY:

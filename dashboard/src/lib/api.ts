@@ -322,6 +322,10 @@ export const endpoints = {
   userRevoke: (tg: number, opts?: RequestOptions) => api.post<{ ok: boolean }>(`/users/${tg}/revoke`, undefined, opts),
   userReissueAggregator: (tg: number, opts?: RequestOptions) =>
     api.post<{ ok: boolean; url: string }>(`/users/${tg}/reissue-aggregator`, undefined, opts),
+  userRefreshSubLinks: (tg: number, opts?: RequestOptions) =>
+    api.post<SubLinksRefreshResult>(`/users/${tg}/sub-links/refresh`, undefined, opts),
+  userReissueSubLinks: (tg: number, opts?: RequestOptions) =>
+    api.post<SubLinksReissueResult>(`/users/${tg}/sub-links/reissue`, undefined, opts),
   userSwitchTariff: (tg: number, body: { tariff: string }, opts?: RequestOptions) =>
     api.post<{ ok: boolean; subscription: unknown }>(`/users/${tg}/switch-tariff`, body, opts),
   userDiscountCreate: (
@@ -966,6 +970,18 @@ export const endpoints = {
 /** GET /broadcasts/segments item (catalog: database/segments.py). A
     parametric one is sent as "<key>:<window>"; its count is for
     `default_window`. */
+/** Per panel entity: updated / unchanged / no_entity / error / disabled. */
+export interface SubLinksRefreshResult {
+  ok: boolean;
+  result: Record<"premium" | "bypass", string>;
+}
+
+/** Per panel entity: revoke = revoked / no_entity / error / disabled; links as above. */
+export interface SubLinksReissueResult {
+  ok: boolean;
+  result: Record<"premium" | "bypass", { revoke: string; links: string }>;
+}
+
 export interface BroadcastSegment {
   key: string;
   label: string;

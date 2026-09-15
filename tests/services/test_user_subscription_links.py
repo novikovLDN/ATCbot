@@ -152,6 +152,96 @@ def test_public_sub_url_leaves_good_and_foreign_links():
         assert p(None) is None
 
 
+# ── refresh_cached_sub_urls: a panel «перевыпуск» reaches the bot ─────
+
+OLD_P = "https://rmnw.atlassecure.ru/api/sub/OLDP"
+OLD_B = "https://rmnw.atlassecure.ru/api/sub/OLDB"
+NEW_P = "https://rmnw.atlassecure.ru/api/sub/NEWP"
+NEW_B = "https://rmnw.atlassecure.ru/api/sub/NEWB"
+
+
+PREM = {"id": 11, "username": "tg_42_premium", "shortUuid": "OLDP", "subscriptionUrl": OLD_P}
+BYP = {"id": 22, "username": "42", "uuid": "u-b", "shortUuid": "OLDB", "subscriptionUrl": OLD_B}
+PREM_NEW = dict(PREM, shortUuid="NEWP", subscriptionUrl=NEW_P)
+BYP_NEW = dict(BYP, shortUuid="NEWB", subscriptionUrl=NEW_B)
+
+
+def _refresh_world(monkeypatch, *, premium, bypass, rows=1, revoke=None):
+    """premium / bypass: what the panel returns, one value per read (a list) or always the same."""
+    from app.services import remnawave_api
+    row = _Row(remnawave_premium_id=11, remnawave_premium_uuid="u-p",
+               remnawave_premium_sub_url=OLD_P, remnawave_bypass_sub_url=OLD_B)
+    db = _patch_db(monkeypatch, rows=[row] * rows)
+    db.replace_cached_sub_url = AsyncMock()
+
+    def mock(v):
+        if isinstance(v, Exception):
+            return AsyncMock(side_effect=v)
+        return AsyncMock(side_effect=list(v)) if isinstance(v, list) else AsyncMock(return_value=v)
+    get_user, get_bypass = mock(premium), mock(bypass)
+    monkeypatch.setattr(remnawave_api, "get_user", get_user)
+    monkeypatch.setattr(remnawave_api, "get_bypass_entity_safe", get_bypass, raising=False)
+    revoke = revoke or AsyncMock(return_value={"response": {}})
+    monkeypatch.setattr(remnawave_api, "revoke_user_subscription", revoke)
+    return db, get_user, revoke
+
+
+async def test_refresh_stores_links_changed_by_a_panel_reissue(monkeypatch):
+    db, get_user, _ = _refresh_world(monkeypatch, premium=PREM_NEW, bypass=BYP_NEW)
+    with _patch_config():
+        res = await user_subscription_links.refresh_cached_sub_urls(42)
+    assert res == {"premium": "updated", "bypass": "updated"}
+    get_user.assert_awaited_once_with(11)                       # premium by its numeric panel id
+    assert db.replace_cached_sub_url.await_args_list == [
+        ((42, "premium", OLD_P, NEW_P, "NEWP"),), ((42, "bypass", OLD_B, NEW_B, "NEWB"),)]
+
+
+async def test_refresh_keeps_unchanged_links(monkeypatch):
+    db, _, _ = _refresh_world(monkeypatch, premium=PREM, bypass=BYP)
+    with _patch_config():
+        res = await user_subscription_links.refresh_cached_sub_urls(42)
+    assert res == {"premium": "unchanged", "bypass": "unchanged"}
+    db.replace_cached_sub_url.assert_not_awaited()
+
+
+async def test_refresh_never_writes_another_entity_into_premium(monkeypatch):
+    """The premium pointer resolved to the bypass entity (username «42»): skipped."""
+    db, _, _ = _refresh_world(monkeypatch, premium=BYP_NEW, bypass=BYP)
+    with _patch_config():
+        res = await user_subscription_links.refresh_cached_sub_urls(42)
+    assert res == {"premium": "no_entity", "bypass": "unchanged"}
+    db.replace_cached_sub_url.assert_not_awaited()
+
+
+async def test_refresh_survives_a_panel_error_on_one_entity(monkeypatch):
+    db, _, _ = _refresh_world(monkeypatch, premium=RuntimeError("panel down"), bypass=BYP_NEW)
+    with _patch_config():
+        res = await user_subscription_links.refresh_cached_sub_urls(42)   # never raises
+    assert res == {"premium": "error", "bypass": "updated"}
+    db.replace_cached_sub_url.assert_awaited_once_with(42, "bypass", OLD_B, NEW_B, "NEWB")
+
+
+async def test_reissue_revokes_both_entities_then_stores_the_new_links(monkeypatch):
+    db, _, revoke = _refresh_world(monkeypatch, premium=[PREM, PREM_NEW], bypass=[BYP, BYP_NEW], rows=2)
+    with _patch_config():
+        res = await user_subscription_links.reissue_sub_urls(42)
+    assert [c.args for c in revoke.await_args_list] == [(11,), (22,)]
+    assert res == {"premium": {"revoke": "revoked", "links": "updated"},
+                   "bypass": {"revoke": "revoked", "links": "updated"}}
+    assert db.replace_cached_sub_url.await_count == 2
+
+
+async def test_reissue_reports_a_refused_revoke(monkeypatch):
+    """The panel refused (None from _request): reported, the links stay as they were."""
+    db, _, _ = _refresh_world(monkeypatch, premium=PREM, bypass=BYP, rows=2,
+                              revoke=AsyncMock(return_value=None))
+    with _patch_config():
+        res = await user_subscription_links.reissue_sub_urls(42)
+    assert res == {"premium": {"revoke": "error", "links": "unchanged"},
+                   "bypass": {"revoke": "error", "links": "unchanged"}}
+    db.replace_cached_sub_url.assert_not_awaited()
+
+
 # ── get_user_premium_url: cache hit / status-agnostic / panel fallback ──
 
 @pytest.mark.asyncio

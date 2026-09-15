@@ -810,11 +810,14 @@ async def update_user(user_id: Union[str, int], **fields) -> Optional[Dict[str, 
 
 
 async def revoke_user_subscription(user_id: Union[str, int]) -> Optional[Dict[str, Any]]:
-    """POST /api/users/{userId}/actions/revoke — invalidate subscription URL."""
+    """POST /api/users/{userId}/actions/revoke — full «перевыпуск»: new shortUuid
+    (subscription URL), vless uuid and passwords; the old links stop working.
+    revokeOnlyPasswords=False keeps the URL change (RevokeUserSubscriptionBodyDto)."""
     resolved = await _resolve_to_int_id(user_id)
     if resolved is None:
         return None
-    return await _request("POST", f"/api/users/{resolved}/actions/revoke")
+    return await _request("POST", f"/api/users/{resolved}/actions/revoke",
+                          json={"revokeOnlyPasswords": False})
 
 
 # ── HWID devices (3.x) ─────────────────────────────────────────────────
