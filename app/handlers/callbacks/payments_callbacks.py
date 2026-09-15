@@ -15,7 +15,6 @@ from aiogram.fsm.context import FSMContext
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.services.subscriptions import service as subscription_service
-from app.services.broadcast_offer_prices import fsm_offer_key
 from app.services.subscriptions.service import is_subscription_active
 from app.core.rate_limit import check_rate_limit
 from app.services import provisioning_flags
@@ -386,7 +385,6 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             await subscription_service.ensure_combo_price_not_below(
                 telegram_id, tariff_type, period_days, final_price_kopecks,
                 promo_code=_promo.get("promo_code") if _promo else None,
-                combo_offer_key=fsm_offer_key(fsm_data),
             )
         except subscription_service.InvalidTariffError:
             await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
@@ -815,7 +813,6 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
             price_kopecks=final_price_kopecks,
             promo_code=promo_code,
             is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
-            combo_offer_key=fsm_offer_key(fsm_data),
         )
 
         # КРИТИЧНО: Сохраняем purchase_id в FSM state
@@ -951,7 +948,6 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
             price_kopecks=price_kopecks,
             promo_code=promo_code,
             is_combo=is_combo,
-            combo_offer_key=fsm_offer_key(fsm_data),
         )
 
         await state.update_data(purchase_id=purchase_id, payment_method="stars")
@@ -1075,7 +1071,6 @@ async def _start_platega_payment(
             price_kopecks=marked_price_kopecks,
             promo_code=promo_code,
             is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
-            combo_offer_key=fsm_offer_key(fsm_data),
         )
 
         await state.update_data(purchase_id=purchase_id)
@@ -1246,7 +1241,6 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
             price_kopecks=sbp_price_kopecks,
             promo_code=promo_code,
             is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
-            combo_offer_key=fsm_offer_key(fsm_data),
         )
 
         await state.update_data(purchase_id=purchase_id)
@@ -1381,7 +1375,6 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
             price_kopecks=final_price_kopecks,
             promo_code=promo_code,
             is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
-            combo_offer_key=fsm_offer_key(fsm_data),
         )
 
         await state.update_data(purchase_id=purchase_id, payment_method="crypto")
@@ -1503,7 +1496,6 @@ async def callback_pay_wata(callback: CallbackQuery, state: FSMContext):
             price_kopecks=final_price_kopecks,
             promo_code=promo_code,
             is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
-            combo_offer_key=fsm_offer_key(fsm_data),
         )
         await state.update_data(purchase_id=purchase_id, payment_method="wata")
 

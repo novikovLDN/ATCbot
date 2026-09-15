@@ -133,63 +133,37 @@ async def calculate_price(
 # Purchase Creation
 # ====================================================================================
 
-async def _combo_min_price_kopecks(
-    telegram_id: int,
-    tariff: str,
-    period_days: int,
-    combo_price_rubles: int,
-    promo_code: Optional[str],
-    combo_offer_key: Optional[str],
-) -> int:
-    """Lowest price a Combo purchase may carry: the Combo price with the user's
-    discount chain — or, for a broadcast gift offer, the offer price. The offer
-    screens price Combo themselves; without this the guard refused every paid
-    Combo offer (prod 2026-09-15: gift1y40 2399 < 3999 ₽). `combo_offer_key`
-    comes from broadcast_offer_prices.fsm_offer_key, which accepts it only
-    while the FSM price is exactly that offer's price."""
-    if combo_offer_key:
-        from app.services.broadcast_offer_prices import offer_price_rubles
-        offer = offer_price_rubles(combo_offer_key, f"combo_{tariff}", period_days)
-        if offer is not None:
-            return offer * 100
-    combo_price_info = await calculate_price(
-        telegram_id=telegram_id,
-        tariff=tariff,
-        period_days=period_days,
-        promo_code=promo_code,
-        base_price_override_rubles=combo_price_rubles,
-    )
-    return combo_price_info["final_price_kopecks"]
-
-
 async def ensure_combo_price_not_below(
     telegram_id: int,
     tariff: str,
     period_days: int,
     price_kopecks: int,
     promo_code: Optional[str] = None,
-    combo_offer_key: Optional[str] = None,
 ) -> None:
     """P0 guard (9c497027) for paths that do not go through
     create_subscription_purchase — the balance purchase: never sell Combo
-    (combo GB) below the Combo price, recomputed with the same discount chain
-    (or the broadcast offer's price, see _combo_min_price_kopecks).
+    (combo GB) below the Combo price, recomputed with the same discount chain.
     A forged / stale FSM (combo flag + Basic/Plus price) used to be paid from
     the balance as Combo (docs/audit/07_e2e.md, E2E-COMBO-BALANCE).
     Raises InvalidTariffError; returns None when the price is fine."""
     combo = (config.COMBO_TARIFFS.get(f"combo_{tariff}") or {}).get(period_days)
     if not combo:
         raise InvalidTariffError(f"No combo tariff for {tariff}/{period_days}")
-    expected = await _combo_min_price_kopecks(
-        telegram_id, tariff, period_days, combo["price"], promo_code, combo_offer_key,
+    combo_price_info = await calculate_price(
+        telegram_id=telegram_id,
+        tariff=tariff,
+        period_days=period_days,
+        promo_code=promo_code,
+        base_price_override_rubles=combo["price"],
     )
-    if price_kopecks < expected:
+    if price_kopecks < combo_price_info["final_price_kopecks"]:
         logger.error(
-            "COMBO_PRICE_BELOW_COMBO user=%s tariff=%s period=%s price=%s expected=%s offer=%s (balance)",
-            telegram_id, tariff, period_days, price_kopecks, expected, combo_offer_key,
+            "COMBO_PRICE_BELOW_COMBO user=%s tariff=%s period=%s price=%s expected=%s (balance)",
+            telegram_id, tariff, period_days, price_kopecks, combo_price_info["final_price_kopecks"],
         )
         raise InvalidTariffError(
-            f"Combo price {price_kopecks} below combo price {expected} for {tariff}/{period_days}"
+            f"Combo price {price_kopecks} below combo price "
+            f"{combo_price_info['final_price_kopecks']} for {tariff}/{period_days}"
         )
 
 
@@ -201,7 +175,6 @@ async def create_subscription_purchase(
     promo_code: Optional[str] = None,
     country: Optional[str] = None,
     is_combo: bool = False,
-    combo_offer_key: Optional[str] = None,
 ) -> str:
     """
     Create a pending subscription purchase record.
@@ -238,19 +211,23 @@ async def create_subscription_purchase(
         if is_combo:
             # P0 guard: never sell Combo (combo GB) below the Combo price. The UI
             # price comes from FSM; a stale Combo flag once paired it with a
-            # Basic/Plus price. Recompute with the same discount chain (a
-            # broadcast gift offer: its own price — _combo_min_price_kopecks).
-            expected = await _combo_min_price_kopecks(
-                telegram_id, tariff, period_days, periods[period_days]["price"],
-                promo_code, combo_offer_key,
+            # Basic/Plus price. Recompute with the same discount chain.
+            combo_price_info = await calculate_price(
+                telegram_id=telegram_id,
+                tariff=tariff,
+                period_days=period_days,
+                promo_code=promo_code,
+                base_price_override_rubles=periods[period_days]["price"],
             )
-            if price_kopecks < expected:
+            if price_kopecks < combo_price_info["final_price_kopecks"]:
                 logger.error(
-                    "COMBO_PRICE_BELOW_COMBO user=%s tariff=%s period=%s price=%s expected=%s offer=%s",
-                    telegram_id, tariff, period_days, price_kopecks, expected, combo_offer_key,
+                    "COMBO_PRICE_BELOW_COMBO user=%s tariff=%s period=%s price=%s expected=%s",
+                    telegram_id, tariff, period_days, price_kopecks,
+                    combo_price_info["final_price_kopecks"],
                 )
                 raise InvalidTariffError(
-                    f"Combo price {price_kopecks} below combo price {expected} for {tariff}/{period_days}"
+                    f"Combo price {price_kopecks} below combo price "
+                    f"{combo_price_info['final_price_kopecks']} for {tariff}/{period_days}"
                 )
 
         # SECURITY: Block new subscription purchases when VPN is disabled

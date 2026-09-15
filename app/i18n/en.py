@@ -775,7 +775,8 @@ LANG = {
     # main — 15% auto-discount notification
     'main.discount_applied_choose_tariff': "🎁 15% discount applied — valid until {deadline}.\n\nChoose a plan:",
     # the user already has a bigger discount — it stays (the −15 % did not replace it)
-    'main.discount_bigger_kept': "🎁 You already have a {percent}% discount — it is bigger, so it stays and applies at checkout.\n\nChoose a plan:",
+    'broadcast.gift_discount_applied': "🎁 {percent}% off any plan applied — valid for {hours} h.\n\nChoose a plan:",
+    'main.discount_bigger_kept':"🎁 You already have a {percent}% discount — it is bigger, so it stays and applies at checkout.\n\nChoose a plan:",
 
     # combo flow
     'combo.promo_period_prompt': "\n\n🎁 Promo code: {discount_pct}% off\nChoose period:",
