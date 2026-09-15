@@ -205,6 +205,19 @@ SELECT indexrelid::regclass, indisvalid FROM pg_index
 ```
 
   Если `indisvalid = f` (построение прервалось), `DROP INDEX CONCURRENTLY idx_broadcast_log_broadcast_status;` и создать снова. После этого миграция 092 — no-op.
+- [ ] **093 (`subscription_history`, `payments`) — создать индексы руками ДО деплоя.** Без них выборка напоминаний (`get_subscriptions_for_reminders`, подзапрос в историю на каждую активную подписку) упирается в `command_timeout=30` с: 2026-09-15 на проде `TimeoutError` в `send_smart_reminders`, напоминания о конце платной подписки не уходили. Заранее, каждый по отдельности:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_subscription_history_tg_created
+    ON subscription_history (telegram_id, created_at DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_payments_telegram_id
+    ON payments (telegram_id);
+-- проверка: оба валидны
+SELECT indexrelid::regclass, indisvalid FROM pg_index
+ WHERE indexrelid IN ('idx_subscription_history_tg_created'::regclass, 'idx_payments_telegram_id'::regclass);
+```
+
+  Невалидный (`indisvalid = f`) — `DROP INDEX CONCURRENTLY …` и создать снова. После этого миграция 093 — no-op.
 - [ ] **Таймаут.** Миграции идут на соединении пула с `command_timeout=30` с (`database/core.py:250`, env `DB_POOL_COMMAND_TIMEOUT` **без префикса**). Если построение индекса не уложится в 30 с:
   - миграция 081 упадёт;
   - бот уйдёт в деградированный режим;
