@@ -173,6 +173,8 @@ LANG = {
     'payment.sbp': "🏦 SBP",
     'payment.sbp_waiting': "🏦 <b>SBP Payment</b>\n\nAmount: {amount:.2f} ₽\n\nTap the button below to open the payment form.\n\nWaiting for payment <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Processing takes up to 5 minutes — depends on the bank.</i>",
     'payment.sbp_pay_button': "🏦 Pay via SBP",
+    'payment.platega_any_waiting': "💳 <b>Payment</b>\n\nAmount: {amount:.2f} ₽\n\nTap the button below to open the payment form and choose how to pay.\n\nWaiting for payment <tg-emoji emoji-id=\"5886538930148350129\">⏳</tg-emoji>\n<i>Processing takes up to 5 minutes — depends on the bank.</i>",
+    'payment.platega_any_pay_button': "💳 Go to payment",
     'payment.sbp_unavailable': "SBP payment is temporarily unavailable",
     'payment.wata_check_button': "🔄 Check payment",
     'payment.wata_check_cooldown': "Try again in {seconds} sec.",
