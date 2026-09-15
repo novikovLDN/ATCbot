@@ -71,6 +71,28 @@ async def test_payment_method_screen(monkeypatch):
     assert any(t.endswith("SBP") for t in labels) and not any("+11%" in t for t in labels)
 
 
+@pytest.mark.parametrize("hidden, shown", [(True, False), (False, True)])
+async def test_cryptobot_button_hidden_while_configured(monkeypatch, hidden, shown):
+    """CryptoBot under repair (2026-09-15): the token stays (webhooks keep
+    working), only the purchase button is hidden."""
+    import cryptobot_service
+    from app.handlers.payments import payment_method_selection as pms
+    monkeypatch.setattr(cryptobot_service, "CRYPTOBOT_API_TOKEN", "tok")
+    monkeypatch.setattr(cryptobot_service, "BUTTON_HIDDEN", hidden)
+    monkeypatch.setattr(database, "get_user_balance", AsyncMock(return_value=0))
+    monkeypatch.setattr(pms, "resolve_user_language", AsyncMock(return_value="en"))
+    cb = MagicMock()
+    cb.from_user.id = 1
+    cb.message.delete = AsyncMock()
+    cb.bot.send_photo = AsyncMock()
+    cb.answer = AsyncMock()
+
+    await pms.show_payment_method_selection(cb, "basic", 30, 19900, back_callback="tariff:basic")
+
+    assert cryptobot_service.is_enabled() is True
+    assert ("pay:crypto" in _datas(cb.bot.send_photo.await_args.kwargs["reply_markup"])) is shown
+
+
 def test_invoice_back_and_label_know_the_combo():
     from app.handlers.callbacks import payments_callbacks as pc
     assert pc._invoice_back({"combo_bypass_gb": 75}, "basic") == "combo_tariff:combo_basic"

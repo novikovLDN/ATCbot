@@ -30,6 +30,17 @@ def is_enabled() -> bool:
     return bool(CRYPTOBOT_API_TOKEN)
 
 
+# Temporarily hidden from users while CryptoBot is being repaired (owner,
+# 2026-09-15). Only the purchase / gift buttons: is_enabled() and the webhook
+# are untouched. Set to False to show the button again.
+BUTTON_HIDDEN = True
+
+
+def show_button() -> bool:
+    """Whether the purchase screens offer the CryptoBot button."""
+    return is_enabled() and not BUTTON_HIDDEN
+
+
 def _get_headers() -> Dict[str, str]:
     """Get authentication headers for Crypto Pay API."""
     return {
