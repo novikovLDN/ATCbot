@@ -138,7 +138,13 @@ async def callback_broadcast_gift_combo(callback: CallbackQuery, state: FSMConte
         # Применяем скидку глобально к юзеру (create_user_discount) —
         # чтобы срабатывала в любом покупательском flow, не только здесь.
         # Плюс явно посчитаем цену для этого экрана.
-        final_price_rubles = round(base_price * (100 - discount_percent) / 100)
+        # One formula with the Combo price guard (app/services/broadcast_offer_prices.py);
+        # a 0 % / ≥ 100 % discount is not an offer → the old formula.
+        from app.services.broadcast_offer_prices import gift_combo_key, offer_price_rubles
+        final_price_rubles = (
+            offer_price_rubles(gift_combo_key(discount_percent), _GIFT_COMBO_TARIFF, _GIFT_COMBO_PERIOD_DAYS)
+            or round(base_price * (100 - discount_percent) / 100)
+        )
         final_price_kopecks = final_price_rubles * 100
 
         from datetime import timedelta
@@ -163,6 +169,7 @@ async def callback_broadcast_gift_combo(callback: CallbackQuery, state: FSMConte
             final_price_kopecks=final_price_kopecks,
             discount_percent=discount_percent,
             combo_bypass_gb=combo_gb,
+            offer_key=gift_combo_key(discount_percent),  # the Combo price guard accepts the gift price
         )
         await state.set_state(PurchaseState.choose_payment_method)
 

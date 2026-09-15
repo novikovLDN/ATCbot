@@ -21,6 +21,26 @@ OFFERS = {
 }
 
 
+# «🎁 Забрать подарок» (broadcast_gift_combo): Combo Basic / 30 at the
+# broadcast's own percent, so the key carries it: "gift_combo:<percent>".
+# The screen rounds to whole rubles; the guard's personal-discount price is
+# kopeck-exact (d = 30: 230 ₽ < 230.30 ₽ → refused, prod since 2026-09-14).
+GIFT_COMBO = "gift_combo"
+
+
+def gift_combo_key(percent: int) -> str:
+    return f"{GIFT_COMBO}:{int(percent)}"
+
+
+def _offer(offer_key: str) -> Optional[dict]:
+    if offer_key in OFFERS:
+        return OFFERS[offer_key]
+    name, _, pct = str(offer_key).partition(":")
+    if name == GIFT_COMBO and pct.isdigit() and 0 < int(pct) < 100:
+        return {"percent": int(pct), "periods": (30,), "tariffs": ("combo_basic",)}
+    return None
+
+
 def list_price_rubles(tariff: str, period_days: int) -> Optional[int]:
     """List price of basic / plus / combo_basic / combo_plus for the period."""
     if tariff in ("basic", "plus"):
@@ -32,9 +52,9 @@ def list_price_rubles(tariff: str, period_days: int) -> Optional[int]:
 
 def offer_price_rubles(offer_key: str, tariff: str, period_days: int) -> Optional[int]:
     """Price of `tariff` for `period_days` inside the offer; None when unknown."""
-    offer = OFFERS.get(offer_key)
+    offer = _offer(offer_key)
     base = list_price_rubles(tariff, period_days)
-    if offer is None or not base:
+    if offer is None or not base or tariff not in offer.get("tariffs", (tariff,)):
         return None
     if period_days in offer["periods"]:
         return round(base * (100 - offer["percent"]) / 100)

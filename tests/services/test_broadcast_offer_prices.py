@@ -130,3 +130,38 @@ async def test_offer_buy_screen_stores_a_valid_offer_key(monkeypatch, data, hand
     fsm = state.update_data.await_args.kwargs
     assert fsm["offer_key"] == key and fsm["combo_bypass_gb"] > 0
     assert offers.fsm_offer_key(fsm) == key        # the guard will accept this purchase
+
+
+# ── «Забрать подарок» (broadcast_gift_combo): the broadcast's own percent ─
+
+GIFT_BASE = config.COMBO_TARIFFS["combo_basic"][30]["price"]     # 329
+
+
+def test_gift_combo_price_is_the_screen_price_for_combo_basic_only():
+    assert offers.offer_price_rubles(offers.gift_combo_key(30), "combo_basic", 30) == round(GIFT_BASE * 0.7)
+    assert offers.offer_price_rubles(offers.gift_combo_key(30), "combo_plus", 30) is None
+    assert offers.offer_price_rubles(offers.gift_combo_key(30), "combo_basic", 90) == \
+        config.COMBO_TARIFFS["combo_basic"][90]["price"]   # outside the gift: list price
+    for bad in ("gift_combo:0", "gift_combo:100", "gift_combo:x", "gift_combo"):
+        assert offers.offer_price_rubles(bad, "combo_basic", 30) is None
+
+
+def test_gift_combo_fsm_key_holds_only_for_the_gift_price():
+    fsm = {"offer_key": "gift_combo:30", "tariff_type": "basic", "period_days": 30,
+           "combo_bypass_gb": 75, "final_price_kopecks": round(GIFT_BASE * 0.7) * 100}
+    assert offers.fsm_offer_key(fsm) == "gift_combo:30"
+    assert offers.fsm_offer_key({**fsm, "final_price_kopecks": 19_900}) is None   # stale flag + Basic price
+    assert offers.fsm_offer_key({**fsm, "combo_bypass_gb": 0}) is None
+
+
+async def test_gift_combo_rounded_down_price_passes_the_guard(monkeypatch):
+    """d = 30: the screen's 230 ₽ is 30 kopecks under the guard's exact 230.30 ₽."""
+    monkeypatch.setattr(service, "calculate_price",
+                        AsyncMock(return_value={"final_price_kopecks": 32_900 - int(32_900 * 30 / 100)}))
+    monkeypatch.setattr(database, "create_pending_purchase", AsyncMock(return_value="pid-g"), raising=False)
+    monkeypatch.setattr(config, "VPN_ENABLED", True, raising=False)
+    price = round(GIFT_BASE * 0.7) * 100
+    with pytest.raises(InvalidTariffError):                    # without the key: refused, as before
+        await service.create_subscription_purchase(1, "basic", 30, price, is_combo=True)
+    assert await service.create_subscription_purchase(
+        1, "basic", 30, price, is_combo=True, combo_offer_key="gift_combo:30") == "pid-g"
