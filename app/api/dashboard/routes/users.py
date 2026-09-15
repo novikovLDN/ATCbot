@@ -16,6 +16,7 @@ from typing import Optional
 from app.services.tariffs import normalize_tier
 
 import html as _html
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field, field_validator
@@ -456,6 +457,45 @@ async def user_reissue_aggregator(
         "by": admin.get("sub"),
     })
     return {"ok": True, "url": new_url}
+
+
+# The bot serves subscription links from its cache; a panel «перевыпуск»
+# changes them (new shortUuid). Both actions report per entity (premium /
+# bypass) so the operator sees exactly what happened.
+
+@router.post("/{telegram_id}/sub-links/refresh")
+async def user_refresh_sub_links(
+    telegram_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+):
+    """«Обновить ссылки из панели» — after a manual «перевыпуск» in the panel:
+    re-read both entities, store the links that changed. Read-only on the panel."""
+    from app.services.user_subscription_links import refresh_cached_sub_urls
+    result = await refresh_cached_sub_urls(telegram_id)
+    await database._log_audit_event_atomic_standalone(
+        "admin_sub_links_refresh", int(admin["sub"]), target_user=telegram_id,
+        details=json.dumps(result, ensure_ascii=False),
+    )
+    bus.publish({"type": "admin:sub_links_refresh", "telegram_id": telegram_id, "by": admin.get("sub")})
+    return {"ok": "error" not in result.values(), "result": result}
+
+
+@router.post("/{telegram_id}/sub-links/reissue")
+async def user_reissue_sub_links(
+    telegram_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+):
+    """«Перевыпустить подписку» — panel revoke of both entities (new links,
+    the old keys stop working), then the new links go to the bot's cache."""
+    from app.services.user_subscription_links import reissue_sub_urls
+    result = await reissue_sub_urls(telegram_id)
+    await database._log_audit_event_atomic_standalone(
+        "admin_sub_links_reissue", int(admin["sub"]), target_user=telegram_id,
+        details=json.dumps(result, ensure_ascii=False),
+    )
+    bus.publish({"type": "admin:sub_links_reissue", "telegram_id": telegram_id, "by": admin.get("sub")})
+    ok = all(r["revoke"] in ("revoked", "no_entity") and r["links"] != "error" for r in result.values())
+    return {"ok": ok, "result": result}
 
 
 class SwitchTariffRequest(BaseModel):
