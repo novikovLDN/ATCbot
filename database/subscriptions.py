@@ -3950,13 +3950,17 @@ async def calculate_final_price(
     # broadcast / admin discounts). The LARGEST single one wins, nothing
     # stacks; on a tie the promo code the user typed wins. A promo code that
     # lost is not reported as applied (promo_code=None) → not consumed.
+    from database.admin import get_period_discount as _get_period_discount
     from database.admin import get_user_discount as _get_discount
     special_offer = await get_special_offer_info(telegram_id)
     personal_discount = await _get_discount(telegram_id)
+    # A broadcast gift on ONE period («−40% на 1 год», migration 095): only here.
+    period_discount = await _get_period_discount(telegram_id, period_days)
     discount_type, discount_percent = pick_largest_discount([
         ("promo", promo_data["discount_percent"] if has_promo else 0),
         ("special_offer", special_offer["discount_percent"] if special_offer else 0),
         ("personal", personal_discount["discount_percent"] if personal_discount else 0),
+        ("personal", period_discount["discount_percent"] if period_discount else 0),
     ])
     discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
     # КРИТИЧНО: финальная цена >= 0 (процент уже ограничен 0..100)

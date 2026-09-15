@@ -776,6 +776,10 @@ LANG = {
     'main.discount_applied_choose_tariff': "🎁 15% discount applied — valid until {deadline}.\n\nChoose a plan:",
     # the user already has a bigger discount — it stays (the −15 % did not replace it)
     'broadcast.gift_discount_applied': "🎁 {percent}% off any plan applied — valid for {hours} h.\n\nChoose a plan:",
+    'broadcast.period_discount_applied': "🎁 {percent}% off {period} applied — valid for {hours} h. Other periods: regular price.\n\nChoose a plan:",
+    'broadcast.period_30': "1 month",
+    'broadcast.period_90': "3 months",
+    'broadcast.period_365': "1 year",
     'main.discount_bigger_kept':"🎁 You already have a {percent}% discount — it is bigger, so it stays and applies at checkout.\n\nChoose a plan:",
 
     # combo flow

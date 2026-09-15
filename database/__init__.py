@@ -297,6 +297,8 @@ from database.admin import (  # noqa: F401
     get_user_discount,
     create_user_discount,
     delete_user_discount,
+    create_period_discount,
+    get_period_discount,
     has_claimed_referral_share_discount,
     record_referral_share_discount_claim,
     get_hourly_timeseries,

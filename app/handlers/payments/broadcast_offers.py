@@ -82,10 +82,15 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
         await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
 
 
-# === Broadcast gift buttons: one simple rule (owner 2026-09-15) ===
-# Every gift button turns on a personal discount for N hours (keep_max: a
-# bigger active one stays) and opens the tariff screen — the user buys now or
-# later there, any plan and period. The price comes from the regular purchase
+# === Broadcast gift buttons (owner 2026-09-15) ===
+# A gift button turns on a discount for N hours (a bigger active one stays)
+# and opens the tariff screen — the user buys now or later there:
+#   * «Забрать подарок»: the broadcast's percent on any plan and period
+#     (the general personal discount, user_discounts);
+#   * «−30% на 1 месяц» / «−30% на 3 месяца» / «−40% на 1 год»: ONLY that
+#     period, any plan of it (user_period_discounts, migration 095) — «if the
+#     button says 1 year −40 %, it is 1 year −40 %».
+# The price comes from the regular purchase
 # flow (calculate_price), the same one the Combo price guard uses. The old
 # buttons put their own price into the purchase FSM (gift1m / gift3m /
 # gift1y40 menus, gift_combo); since 2026-09-14 the guard refused those Combo
@@ -95,9 +100,10 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
 # the same as their gift button.
 
 _GIFT_HOURS = 24
-_GIFT1M_PERCENT = 30
-_GIFT3M_PERCENT = 30
-_GIFT1Y40_PERCENT = 40
+# Period gift buttons: (percent, the ONLY period it discounts).
+_GIFT1M = (30, 30)
+_GIFT3M = (30, 90)
+_GIFT1Y40 = (40, 365)
 
 # «🎁 1 год со скидкой 40%»: the 🏆 reveal before the tariff screen (premium
 # emoji; clients without Telegram Premium see a plain 🏆).
@@ -110,6 +116,58 @@ async def _answer(callback: CallbackQuery) -> None:
         await callback.answer()
     except Exception:
         pass
+
+
+async def _show_tariffs(callback: CallbackQuery, state: FSMContext, text: str) -> None:
+    """The discount message, then the tariff screen (prices from the regular flow)."""
+    chat_id = callback.message.chat.id if callback.message and callback.message.chat else callback.from_user.id
+    try:
+        await callback.bot.send_message(chat_id, text, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("BROADCAST_GIFT_MSG_FAIL user=%s: %s", callback.from_user.id, e)
+    # from_broadcast: «Назад» from the period screen returns to the tariff screen.
+    await state.update_data(from_broadcast=True)
+    from app.handlers.common.screens import show_tariffs_main_screen
+    await show_tariffs_main_screen(callback, state, force_new_message=True)
+
+
+async def _grant_period_discount(
+    callback: CallbackQuery, state: FSMContext, *, offer: tuple, source: str,
+) -> None:
+    """Discount `percent` on `period_days` ONLY, for _GIFT_HOURS (a bigger active
+    one on that period stays), then the tariff screen."""
+    percent, period_days = offer
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    try:
+        await database.create_period_discount(
+            telegram_id, period_days, percent,
+            datetime.now(timezone.utc) + timedelta(hours=_GIFT_HOURS), source,
+        )
+        period = await database.get_period_discount(telegram_id, period_days)
+        general = await database.get_user_discount(telegram_id)
+    except Exception as e:
+        logger.exception("BROADCAST_GIFT_PERIOD_FAIL user=%s source=%s: %s", telegram_id, source, e)
+        try:
+            await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
+        except Exception:
+            pass
+        return
+
+    # What the user actually gets on this period: the largest one wins.
+    kept = max(int((period or {}).get("discount_percent") or 0), int((general or {}).get("discount_percent") or 0))
+    if kept > percent:
+        text = i18n_get_text(language, "main.discount_bigger_kept", percent=kept)
+    else:
+        text = i18n_get_text(
+            language, "broadcast.period_discount_applied", percent=percent, hours=_GIFT_HOURS,
+            period=i18n_get_text(language, f"broadcast.period_{period_days}"),
+        )
+    await _show_tariffs(callback, state, text)
+    logger.info(
+        "BROADCAST_GIFT_PERIOD_DISCOUNT user=%s source=%s pct=%s period=%s kept=%s",
+        telegram_id, source, percent, period_days, kept,
+    )
 
 
 async def _grant_gift_discount(
@@ -140,16 +198,7 @@ async def _grant_gift_discount(
         text = i18n_get_text(language, "main.discount_bigger_kept", percent=kept)
     else:
         text = i18n_get_text(language, "broadcast.gift_discount_applied", percent=percent, hours=hours)
-    chat_id = callback.message.chat.id if callback.message and callback.message.chat else telegram_id
-    try:
-        await callback.bot.send_message(chat_id, text, parse_mode="HTML")
-    except Exception as e:
-        logger.warning("BROADCAST_GIFT_MSG_FAIL user=%s: %s", telegram_id, e)
-
-    # from_broadcast: «Назад» from the period screen returns to the tariff screen.
-    await state.update_data(from_broadcast=True)
-    from app.handlers.common.screens import show_tariffs_main_screen
-    await show_tariffs_main_screen(callback, state, force_new_message=True)
+    await _show_tariffs(callback, state, text)
     logger.info(
         "BROADCAST_GIFT_DISCOUNT user=%s source=%s pct=%s hours=%s kept=%s",
         telegram_id, source, percent, hours, kept,
@@ -180,14 +229,14 @@ async def callback_broadcast_gift_combo(callback: CallbackQuery, state: FSMConte
 async def callback_broadcast_gift_1m(callback: CallbackQuery, state: FSMContext):
     """«🎁 −30% на 1 месяц» (and the old bcg1m:* buttons of sent broadcasts)."""
     await _answer(callback)
-    await _grant_gift_discount(callback, state, percent=_GIFT1M_PERCENT, hours=_GIFT_HOURS, source="gift1m")
+    await _grant_period_discount(callback, state, offer=_GIFT1M, source="gift1m")
 
 
 @broadcast_offers_router.callback_query(F.data.startswith(("broadcast_gift_3m", "bcg3m:")))
 async def callback_broadcast_gift_3m(callback: CallbackQuery, state: FSMContext):
     """«🎁 Скидка 30% на 3 месяца» (and the old bcg3m:* buttons of sent broadcasts)."""
     await _answer(callback)
-    await _grant_gift_discount(callback, state, percent=_GIFT3M_PERCENT, hours=_GIFT_HOURS, source="gift3m")
+    await _grant_period_discount(callback, state, offer=_GIFT3M, source="gift3m")
 
 
 @broadcast_offers_router.callback_query(F.data.startswith(("broadcast_gift_1y_40", "bcg1y40:")))
@@ -203,7 +252,7 @@ async def callback_broadcast_gift_1y_40(callback: CallbackQuery, state: FSMConte
             await callback.bot.delete_message(chat_id, reveal.message_id)
         except Exception as e:
             logger.warning("BROADCAST_GIFT1Y40_REVEAL_FAIL user=%s: %s", callback.from_user.id, e)
-    await _grant_gift_discount(callback, state, percent=_GIFT1Y40_PERCENT, hours=_GIFT_HOURS, source="gift1y40")
+    await _grant_period_discount(callback, state, offer=_GIFT1Y40, source="gift1y40")
 
 
 @broadcast_offers_router.callback_query(F.data.startswith("broadcast_promo_traffic:"))

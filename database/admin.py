@@ -3656,6 +3656,51 @@ async def get_user_discount(telegram_id: int, conn: Optional[asyncpg.Connection]
         return dict(row) if row else None
 
 
+async def create_period_discount(
+    telegram_id: int, period_days: int, discount_percent: int, expires_at: datetime, source: str,
+) -> None:
+    """Broadcast gift discount on ONE period (user_period_discounts, migration 095).
+
+    User-pressed, so keep_max: an active BIGGER discount on this period stays,
+    an EQUAL one is not extended; an expired or smaller one is replaced. The
+    general personal discount (user_discounts) is never touched."""
+    now = _to_db_utc(datetime.now(timezone.utc))
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO user_period_discounts (telegram_id, period_days, discount_percent, expires_at, source)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (telegram_id, period_days) DO UPDATE
+               SET discount_percent = EXCLUDED.discount_percent, expires_at = EXCLUDED.expires_at,
+                   source = EXCLUDED.source, created_at = $6
+               WHERE user_period_discounts.discount_percent < EXCLUDED.discount_percent
+                  OR user_period_discounts.expires_at <= $6""",
+            telegram_id, period_days, discount_percent, _to_db_utc(expires_at), source, now,
+        )
+
+
+async def get_period_discount(telegram_id: int, period_days: int) -> Optional[Dict[str, Any]]:
+    """The ACTIVE broadcast gift discount on this period, or None. Never raises:
+    a failed lookup prices without it (never below the right price)."""
+    from database import core as _core
+    if not _core.DB_READY:
+        return None
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return None
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT * FROM user_period_discounts
+                   WHERE telegram_id = $1 AND period_days = $2 AND expires_at > $3""",
+                telegram_id, period_days, _to_db_utc(datetime.now(timezone.utc)),
+            )
+        return dict(row) if row else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("PERIOD_DISCOUNT_LOOKUP_FAIL tg=%s period=%s: %s", telegram_id, period_days, type(e).__name__)
+        return None
+
+
 async def create_user_discount(telegram_id: int, discount_percent: int, expires_at: Optional[datetime], created_by: int,
                                keep_max: bool = False) -> bool:
     """Создать или обновить персональную скидку пользователя
@@ -4055,6 +4100,7 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
             # Удаляем все связанные данные (порядок важен для FK constraints)
             await conn.execute("DELETE FROM promo_usage_logs WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM user_discounts WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM user_period_discounts WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM vip_users WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM referral_rewards WHERE referrer_id = $1 OR buyer_id = $1", telegram_id)
             await conn.execute("DELETE FROM referrals WHERE referrer_user_id = $1 OR referred_user_id = $1", telegram_id)

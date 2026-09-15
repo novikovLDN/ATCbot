@@ -775,6 +775,10 @@ LANG = {
     'main.discount_applied_choose_tariff': "🎁 Скидка 15% применена — действует до {deadline}.\n\nВыберите тариф:",
     # the user already has a bigger discount — it stays (the −15 % did not replace it)
     'broadcast.gift_discount_applied': "🎁 Скидка {percent}% на любой тариф применена — действует {hours} ч.\n\nВыберите тариф:",
+    'broadcast.period_discount_applied': "🎁 Скидка {percent}% на {period} применена — действует {hours} ч. На другие сроки — обычная цена.\n\nВыберите тариф:",
+    'broadcast.period_30': "1 месяц",
+    'broadcast.period_90': "3 месяца",
+    'broadcast.period_365': "1 год",
     'main.discount_bigger_kept':"🎁 У вас уже есть скидка {percent}% — она больше, поэтому остаётся в силе и применится при оплате.\n\nВыберите тариф:",
 
     # combo flow
