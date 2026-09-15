@@ -746,19 +746,22 @@ async def init_db() -> bool:
         except Exception:
             pass
         
-        # Миграция: переименовываем колонки, если они еще старые
-        try:
-            await conn.execute("ALTER TABLE referrals RENAME COLUMN referrer_id TO referrer_user_id")
-        except Exception:
-            pass
-        try:
-            await conn.execute("ALTER TABLE referrals RENAME COLUMN referred_id TO referred_user_id")
-        except Exception:
-            pass
-        try:
-            await conn.execute("ALTER TABLE referrals RENAME COLUMN rewarded TO is_rewarded")
-        except Exception:
-            pass
+        # Миграция: переименовываем колонки, если они еще старые. Only when the
+        # old column is still there — an unconditional RENAME failed on every
+        # start and Postgres logged it as ERROR (production 2026-09-15).
+        for old_col, new_col in (("referrer_id", "referrer_user_id"),
+                                 ("referred_id", "referred_user_id"),
+                                 ("rewarded", "is_rewarded")):
+            try:
+                has_old = await conn.fetchval(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name = 'referrals' AND column_name = $1",
+                    old_col,
+                )
+                if has_old:
+                    await conn.execute(f"ALTER TABLE referrals RENAME COLUMN {old_col} TO {new_col}")  # noqa: S608 — constant names
+            except Exception:
+                pass
         try:
             await conn.execute("ALTER TABLE referrals ADD COLUMN IF NOT EXISTS reward_amount INTEGER DEFAULT 0")
         except Exception:
@@ -992,17 +995,12 @@ async def init_db() -> bool:
         # Инициализируем промокоды, если их нет
         await _init_promo_codes(conn)
 
-        # Миграция 034: расширяем CHECK constraint для бизнес-тарифов в pending_purchases
-        try:
-            await conn.execute("""
-                ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_tariff_check
-            """)
-            await conn.execute("""
-                ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_tariff_check
-                CHECK (tariff IS NULL OR tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate', 'telegram_premium') OR tariff LIKE 'traffic_%' OR tariff LIKE 'apple_id_%')
-            """)
-        except Exception:
-            pass
+        # pending_purchases has no purchase_type / tariff CHECK (migration 094,
+        # matches production): the code validates them. The old block here
+        # dropped the migrations' constraint on every start and re-added a
+        # narrower one (no steam/proxy/farm/spotify) that failed on existing
+        # rows — an ACCESS EXCLUSIVE lock + full scan of the purchases table on
+        # every deploy, ending in an ERROR (production 2026-09-15).
 
         # Миграция 035: добавляем колонку country для бизнес-тарифов
         try:

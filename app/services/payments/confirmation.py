@@ -199,6 +199,20 @@ async def _process_confirmed_payment(
         # itself is still valid and must not be dropped. Consistent with
         # lookup_pending_purchase() upstream and finalize_purchase()'s recovery path.
         pending = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
+        if not pending:
+            # Race (prod 2026-09-15, WATA fast-poll vs webhook): the poll saw
+            # 'pending', went to the provider, and the webhook finalized the
+            # purchase meanwhile. Already paid for this user → not an anomaly.
+            try:
+                _any = await database.get_pending_purchase_any_status(purchase_id)
+            except Exception:  # noqa: BLE001 — unknown state keeps the alert below
+                _any = None
+            if _any and _any.get("telegram_id") == telegram_id and _any.get("status") == "paid":
+                logger.info(
+                    f"{provider} webhook: purchase already paid (concurrent finalize), "
+                    f"purchase_id={purchase_id} user={telegram_id}"
+                )
+                return {"status": "already_processed", "purchase_id": purchase_id}
         if not pending or pending.get("telegram_id") != telegram_id:
             logger.error(f"{provider} webhook: pending purchase not found: {purchase_id}")
             await _report_webhook_anomaly(
