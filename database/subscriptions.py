@@ -4261,6 +4261,10 @@ async def mark_pending_purchase_paid(purchase_id: str) -> bool:
 
         if result == "UPDATE 1":
             logger.info(f"Pending purchase marked as paid: purchase_id={purchase_id}")
+            # Shop / notification-only products settle here instead of in
+            # finalize_purchase. The UPDATE flips the row once, so a retried
+            # webhook publishes nothing the second time.
+            _publish_payment_approved(purchase_id=purchase_id)
             return True
         else:
             logger.warning(f"Failed to mark pending purchase as paid: purchase_id={purchase_id}, result={result}")
@@ -4558,6 +4562,37 @@ async def _finalize_subscription_via_outbox(
     return ret_val
 
 
+def _publish_payment_approved(
+    *,
+    purchase_id: str,
+    telegram_id: Optional[int] = None,
+    provider: Optional[str] = None,
+    amount_rubles: Optional[float] = None,
+) -> None:
+    """Announce a settled payment on the in-process bus.
+
+    Consumers: the dashboard WebSocket and the revenue-milestone notifier
+    (app/services/admin_notifier.py). The older publisher sat inside
+    approve_payment_atomic, which has no call sites — so no milestone could
+    ever fire. Publish only from the paths that really flip a purchase to
+    'paid', always after commit, and never raise: the money is already
+    banked and a notification must not put it at risk.
+    """
+    try:
+        from app.events import bus
+        bus.publish({
+            "type": "payment:approved",
+            "purchase_id": purchase_id,
+            "telegram_id": telegram_id,
+            "provider": provider,
+            "amount_rubles": amount_rubles,
+        })
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "payment:approved publish failed: purchase_id=%s, err=%s", purchase_id, e
+        )
+
+
 async def finalize_purchase(
     purchase_id: str,
     payment_provider: str,
@@ -4661,6 +4696,13 @@ async def finalize_purchase(
     # T8: panel work only after commit AND with no DB connection held.
     if isinstance(result, dict) and result.get("provisioning_job_id") is not None:
         await _run_provisioning_after_commit(result, post_commit["telegram_id"])
+    if isinstance(result, dict) and result.get("success"):
+        _publish_payment_approved(
+            purchase_id=purchase_id,
+            telegram_id=post_commit.get("telegram_id"),
+            provider=payment_provider,
+            amount_rubles=amount_rubles,
+        )
     return result
 
 

@@ -16,6 +16,7 @@ Telegram failures (logged, continues).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 from datetime import datetime, timedelta, timezone
@@ -94,6 +95,26 @@ def _today_key() -> str:
     return datetime.now(MSK_TZ).strftime("%Y-%m-%d")
 
 
+def msk_midnight_utc() -> datetime:
+    """Start of the current MSK day as an aware UTC moment."""
+    now_msk = datetime.now(MSK_TZ)
+    start = now_msk.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(timezone.utc)
+
+
+async def revenue_since_msk_midnight() -> float:
+    """Gross revenue of the running MSK day, in rubles.
+
+    Exact midnight bound. The previous call passed «hours since midnight»
+    rounded to whole hours into a trailing-window query, so at 10:20 MSK
+    it measured from 00:20 and quietly dropped the first minutes of the
+    day (and at 10:40 it counted 20 minutes of yesterday).
+    """
+    import database
+    data = await database.get_revenue_for_period(24, since=msk_midnight_utc())
+    return float(data.get("revenue_rubles") or 0)
+
+
 def _fmt_provider(p: str | None) -> str:
     if not p:
         return "—"
@@ -138,25 +159,61 @@ class _State:
         self.error_last_sent[key] = now
         return True
 
-    def milestones_to_fire(self, revenue_now: float) -> list[int]:
-        """Return milestones the current daily revenue has just crossed
-        for the first time today (in ascending order, possibly multi
-        if a single payment leapfrogged several)."""
-        day = _today_key()
-        fired = self.fired_milestones.setdefault(day, set())
-        # Forget older days to keep the dict small over weeks.
-        for k in list(self.fired_milestones.keys()):
-            if k != day:
-                del self.fired_milestones[k]
-        out = []
-        for m in MILESTONES:
-            if revenue_now >= m and m not in fired:
-                fired.add(m)
-                out.append(m)
-        return out
-
 
 _state = _State()
+
+
+# ── «Какие планки уже объявлены сегодня» ─────────────────────────────
+# Раньше жило только в памяти процесса: любой деплой среди дня забывал
+# отправленное, и вечерний платёж заново присылал 5k/10k/15k… Redis
+# переживает рестарт; без Redis остаётся прежнее поведение (память).
+_MILESTONES_KEY = "dashboard:revenue_milestones"
+_MILESTONES_TTL_S = 48 * 3600
+
+
+async def _redis():
+    try:
+        from app.utils.redis_client import get_redis, is_configured
+        if not is_configured():
+            return None
+        return await get_redis()
+    except Exception:
+        return None
+
+
+def _remember(day: str, fired: set[int]) -> None:
+    """In-process mirror of today's state; also the whole store when
+    Redis is not configured. Older days are dropped."""
+    _state.fired_milestones = {day: set(fired)}
+
+
+async def fired_milestones(day: str) -> set[int]:
+    """Milestones already announced on that MSK day."""
+    r = await _redis()
+    if r is not None:
+        try:
+            raw = await r.get(f"{_MILESTONES_KEY}:{day}")
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            return {int(m) for m in json.loads(raw)} if raw else set()
+        except Exception as e:
+            logger.warning("milestone state read failed: %s", e)
+    return set(_state.fired_milestones.get(day, set()))
+
+
+async def remember_milestones(day: str, fired: set[int]) -> None:
+    _remember(day, fired)
+    r = await _redis()
+    if r is None:
+        return
+    try:
+        await r.set(
+            f"{_MILESTONES_KEY}:{day}",
+            json.dumps(sorted(fired)),
+            ex=_MILESTONES_TTL_S,
+        )
+    except Exception as e:
+        logger.warning("milestone state write failed: %s", e)
 
 
 async def _dashboard_url(path: str) -> str:
@@ -165,10 +222,15 @@ async def _dashboard_url(path: str) -> str:
 
 
 async def _send(bot: Bot, *, title: str, body: str, tag: str, url: str) -> None:
-    """Primary delivery is browser web-push (system notifications).
-    Telegram DM is intentionally NOT used here — admin opted into web
-    push as the channel. The /settings → "тестовые в Telegram" button
-    still uses the bot directly for the dry-run."""
+    """Deliver to both channels the admin really has.
+
+    Browser web-push reaches a registered device; the Telegram DM is what
+    the admin actually watches — and what the dashboard's «тестовая
+    отправка» button uses. Until now only the test wrote to Telegram, so
+    a real event was silent whenever no browser was subscribed (a revoked
+    or never-created push subscription returns "sent 0" without an error).
+    Each channel fails on its own; neither can break the other.
+    """
     from app.services import push_notifications
     try:
         await push_notifications.send_to_all(
@@ -181,6 +243,21 @@ async def _send(bot: Bot, *, title: str, body: str, tag: str, url: str) -> None:
             pass
     except Exception as e:
         logger.warning("admin_notifier push send failed: %s", e)
+
+    admin_id = getattr(config, "ADMIN_TELEGRAM_ID", None)
+    if not admin_id:
+        logger.warning("ADMIN_NOTIFIER: ADMIN_TELEGRAM_ID not set — Telegram DM skipped")
+        return
+    try:
+        from app.utils.telegram_safe import safe_send_message
+        await safe_send_message(
+            bot,
+            int(admin_id),
+            f"<b>{title}</b>\n{body}",
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        logger.warning("admin_notifier telegram send failed: %s", e)
 
 
 async def _on_payment_error(bot: Bot, e: dict[str, Any]) -> None:
@@ -204,7 +281,9 @@ async def _on_payment_error(bot: Bot, e: dict[str, Any]) -> None:
         title="⚠️ Ошибка платежа",
         body=body,
         tag=f"payment_error:{stage}:{provider}",
-        url=await _dashboard_url("/dashboard/payments"),
+        # /dashboard/payments only redirects since v4; link the screen
+        # that actually shows payment health.
+        url=await _dashboard_url("/dashboard/health"),
     )
 
 
@@ -232,34 +311,32 @@ async def _on_payment_approved(bot: Bot, _e: dict[str, Any]) -> None:
     here so the totals match the dashboard exactly."""
     from app.services import admin_settings
     if not await admin_settings.is_enabled("revenue_milestone"):
+        logger.info("REVENUE_MILESTONE skipped: toggle revenue_milestone is off")
         return
     try:
-        import database
-        # 24h trailing != today; хотим «с полуночи МСК».
-        # /payments/revenue берёт trailing-N-hours; считаем сколько часов
-        # прошло с MSK-полуночи и передаём. min 1 час, чтобы не поймать 0.
-        now_msk = datetime.now(MSK_TZ)
-        msk_midnight = now_msk.replace(hour=0, minute=0, second=0, microsecond=0)
-        seconds_into_day = max(1, (now_msk - msk_midnight).total_seconds())
-        hours_since_midnight = max(1, int(round(seconds_into_day / 3600)))
-        data = await database.get_revenue_for_period(hours_since_midnight)
-        revenue_today = float(data.get("revenue_rubles") or 0)
+        revenue_today = await revenue_since_msk_midnight()
     except Exception as e:
         logger.warning("milestone revenue lookup failed: %s", e)
         return
 
-    crossed = _state.milestones_to_fire(revenue_today)
+    day = _today_key()
+    fired = await fired_milestones(day)
+    crossed = [m for m in MILESTONES if revenue_today >= m and m not in fired]
     if not crossed:
         return
+    await remember_milestones(day, fired | set(crossed))
     target = crossed[-1]
     phrase = random.choice(PHRASES.get(target, ["Ты молодец! 🦾"]))
     title = f"💸 {target:,} ₽ за день".replace(",", " ")
+    logger.info(
+        "REVENUE_MILESTONE fired=%s revenue=%.2f day=%s", target, revenue_today, day
+    )
     await _send(
         bot,
         title=title,
         body=phrase,
         tag=f"revenue_milestone:{target}",
-        url=await _dashboard_url("/dashboard/payments"),
+        url=await _dashboard_url("/dashboard/money"),
     )
 
 
