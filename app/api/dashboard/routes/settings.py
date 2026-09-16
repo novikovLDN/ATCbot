@@ -89,6 +89,14 @@ async def _send_test_sequence(bot):
             + random.choice(_TEST_PHRASES)
             + "\n\n<i>тестовое сообщение</i>"
         ),
+        (
+            "📊 <b>Итог дня: 27 400 ₽</b>\n"
+            "Вчера было 21 900 ₽ · +25 %\n"
+            "Оплат 48 · средний чек 571 ₽\n"
+            "Новых пользователей 132\n"
+            "Планки: 5k · 10k · 15k · 20k · 25k\n\n"
+            "<i>тестовое сообщение</i>"
+        ),
     ]
     for text in messages:
         await asyncio.sleep(1.0)
@@ -133,7 +141,7 @@ async def settings_test_notifications():
     send is fired as a background task."""
     bot = _get_bot()
     asyncio.create_task(_send_test_sequence(bot))
-    return {"ok": True, "count": 3, "delay_seconds": 1.0}
+    return {"ok": True, "count": 4, "delay_seconds": 1.0}
 
 
 # ── Web Push (browser notifications) ────────────────────────────────

@@ -753,11 +753,14 @@ async def get_active_paid_subscriptions_count() -> int:
 async def get_revenue_for_period(
     hours: int,
     since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Money in over the window from paid pending_purchases.
 
     If `since` is given, the lower bound is that exact moment (used for
     "today MSK" tile on the dashboard). Otherwise — trailing N hours.
+    `until` closes the window (yesterday for the daily summary); without
+    it the window runs to now, as before.
 
     Returns totals (rubles) + counts split by purchase_type so the
     UI can render a single KPI for the period plus a small breakdown.
@@ -773,14 +776,17 @@ async def get_revenue_for_period(
     if since is None:
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
     since = _to_db_utc(since)
+    # A NULL upper bound keeps one SQL text for both shapes.
+    upper = _to_db_utc(until) if until is not None else None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """SELECT
                    COALESCE(SUM(price_kopecks), 0)::BIGINT AS total_kopecks,
                    COUNT(*)::BIGINT AS count
                FROM pending_purchases
-               WHERE status = 'paid' AND created_at >= $1""",
-            since,
+               WHERE status = 'paid' AND created_at >= $1
+                 AND ($2::timestamp IS NULL OR created_at < $2)""",
+            since, upper,
         )
         by_type_rows = await conn.fetch(
             """SELECT
@@ -789,9 +795,10 @@ async def get_revenue_for_period(
                    COALESCE(SUM(price_kopecks), 0)::BIGINT AS revenue_kopecks
                FROM pending_purchases
                WHERE status = 'paid' AND created_at >= $1
+                 AND ($2::timestamp IS NULL OR created_at < $2)
                GROUP BY purchase_type
                ORDER BY revenue_kopecks DESC""",
-            since,
+            since, upper,
         )
     total = int(row["total_kopecks"]) if row else 0
     count = int(row["count"]) if row else 0
