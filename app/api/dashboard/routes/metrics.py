@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_admin)])
 
 REPORT_TTL = 60.0
+# «Сегодня» is the number the owner watches while payments land — short
+# enough to feel live, long enough to keep the unindexed scan off the bot.
+TODAY_TTL = 20.0
 COHORT_TTL = 300.0
 HEALTH_TTL = 30.0
 ENGAGEMENT_TTL = 300.0
@@ -385,3 +388,36 @@ async def _overview(days: int) -> dict[str, Any]:
 @router.get("/overview")
 async def metrics_overview(days: int = Query(7, ge=1, le=90)):
     return await _run("overview", cached(f"m:overview:{days}", REPORT_TTL, lambda: _overview(days)))
+
+
+async def _today() -> dict[str, Any]:
+    """The running MSK day and the milestone ladder behind the DM.
+
+    Same source as app/services/admin_notifier, so what the screen shows
+    is exactly what decides whether «💸 15 000 ₽ за день» is sent: a
+    silent day can be read off the screen instead of out of the logs.
+    """
+    from app.services import admin_notifier as notifier
+    from app.services import admin_settings
+
+    since = notifier.msk_midnight_utc()
+    data = await database.get_revenue_for_period(24, since=since)
+    revenue = float(data.get("revenue_rubles") or 0)
+    fired = sorted(await notifier.fired_milestones(notifier.msk_day_key()))
+    return {
+        "since": since.isoformat(),
+        "revenue_kopecks": int(round(revenue * 100)),
+        "payments_count": int(data.get("payments_count") or 0),
+        "avg_check_kopecks": int(round(float(data.get("avg_check_rubles") or 0) * 100)),
+        "milestones": {
+            "all": notifier.MILESTONES,
+            "fired": fired,
+            "next": next((m for m in notifier.MILESTONES if revenue < m), None),
+            "notifications_enabled": await admin_settings.is_enabled("revenue_milestone"),
+        },
+    }
+
+
+@router.get("/today")
+async def metrics_today():
+    return await _run("today", cached("m:today", TODAY_TTL, _today))

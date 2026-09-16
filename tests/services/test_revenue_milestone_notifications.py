@@ -170,3 +170,29 @@ async def test_revenue_window_starts_at_msk_midnight(monkeypatch, notifier):
     local = since.astimezone(MSK)
     assert (local.hour, local.minute, local.second) == (0, 0, 0)
     assert local.date() == datetime.now(MSK).date()
+
+
+class TestTodayEndpoint:
+    """/metrics/today shows the owner the very number the notifier
+    compares against the ladder — so «почему не пришло» is answerable
+    from the screen."""
+
+    async def test_reports_progress_to_the_next_milestone(self, monkeypatch, notifier):
+        from app.api.dashboard.routes import metrics as routes
+
+        set_revenue(monkeypatch, 12_300.0)
+        await admin_notifier.remember_milestones(admin_notifier.msk_day_key(), {5_000, 10_000})
+
+        today = await routes._today()
+
+        assert today["revenue_kopecks"] == 1_230_000
+        assert today["milestones"]["fired"] == [5_000, 10_000]
+        assert today["milestones"]["next"] == 15_000
+        assert today["milestones"]["notifications_enabled"] is True
+
+    async def test_no_next_milestone_above_the_ladder(self, monkeypatch, notifier):
+        from app.api.dashboard.routes import metrics as routes
+
+        set_revenue(monkeypatch, 99_000.0)
+
+        assert (await routes._today())["milestones"]["next"] is None
