@@ -9,6 +9,7 @@ import {
   Bell,
   BellRing,
   AlertCircle,
+  CalendarCheck,
   Megaphone,
   TrendingUp,
   Send,
@@ -36,7 +37,7 @@ import {
 import { Share } from "lucide-react";
 
 interface FlagDescriptor {
-  key: "payment_error" | "broadcast_done" | "revenue_milestone";
+  key: "payment_error" | "broadcast_done" | "revenue_milestone" | "daily_summary";
   title: string;
   description: string;
   icon: typeof Bell;
@@ -61,8 +62,15 @@ const FLAGS: FlagDescriptor[] = [
     key: "revenue_milestone",
     title: "Дневной доход",
     description:
-      "DM с похвалой при пересечении планок 5k / 10k / 15k / 20k / 25k / 30k / 35k ₽ за сутки (UTC).",
+      "DM с похвалой при пересечении планок 5k / 10k / 15k / 20k / 25k / 30k / 35k / 40k ₽ за день (с полуночи МСК).",
     icon: TrendingUp,
+  },
+  {
+    key: "daily_summary",
+    title: "Итог дня",
+    description:
+      "Один DM в 23:59 МСК: доход за день, оплаты, средний чек, сравнение со вчера и взятые планки.",
+    icon: CalendarCheck,
   },
 ];
 

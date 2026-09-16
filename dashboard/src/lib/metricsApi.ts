@@ -504,8 +504,24 @@ export interface PanelBandwidth {
   series: { name: string; country: string | null; total_bytes: number; data: number[] }[];
 }
 
+/** The running MSK day and the milestone ladder behind the «💸 … ₽ за
+    день» DM — same source as app/services/admin_notifier. */
+export interface TodayReport {
+  since: string;
+  revenue_kopecks: number;
+  payments_count: number;
+  avg_check_kopecks: number;
+  milestones: {
+    all: number[];
+    fired: number[];
+    next: number | null;
+    notifications_enabled: boolean;
+  };
+}
+
 export const metricsApi = {
   overview: (days: number) => api.get<OverviewReport>(`/metrics/overview?days=${days}`),
+  today: () => api.get<TodayReport>("/metrics/today"),
   money: (days: number) => api.get<MoneyReport>(`/metrics/money?days=${days}`),
   subscribers: (days: number, graceDays = 3) =>
     api.get<SubscribersReport>(`/metrics/subscribers?days=${days}&grace_days=${graceDays}`),

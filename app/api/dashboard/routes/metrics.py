@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_admin)])
 
 REPORT_TTL = 60.0
+# «Сегодня» is the number the owner watches while payments land — short
+# enough to feel live, long enough to keep the unindexed scan off the bot.
+TODAY_TTL = 20.0
 COHORT_TTL = 300.0
 HEALTH_TTL = 30.0
 ENGAGEMENT_TTL = 300.0
@@ -287,20 +290,35 @@ async def _safe(name: str, coro, default):
 
 async def _overview(days: int) -> dict[str, Any]:
     w = rev.window(days)
-    cur = await rev.totals(w["since"], w["until"])
-    prev = await rev.totals(w["prev_since"], w["prev_until"])
-    pay = await rev.payers(w["since"], w["until"])
-    prev_pay = await rev.payers(w["prev_since"], w["prev_until"])
-    nu = await mx.new_users(w["since"], w["until"])
-    prev_nu = await mx.new_users(w["prev_since"], w["prev_until"])
-    series = await rev.series("day", max(days, 14))
-    active = await mx.active_subscriptions()
-    renewals = await mx.renewals(w["since"], w["until"])
-    pipeline = await _safe("pipeline", cached("m:pipeline", REPORT_TTL, mx.renewal_pipeline), None)
-    pay_h = await _safe("payments_health", cached("m:payhealth", REPORT_TTL, _payments_health), None)
-    deliv = await _safe("delivery", cached("m:delivery", 30.0, _delivery), None)
-    health = await _safe("health", _system_health(), None)
-    panel, nodes = await _panel_quick()
+    # The home screen is ~30 queries. They are independent of each other, so
+    # they run together instead of end to end: on a cold cache (60 s) this is
+    # the slowest page in the app, and it shares the bot's pool. Fourteen
+    # concurrent loads out of max_size=50 leave the bot its connections.
+    # return_exceptions keeps the failure behaviour of the sequential version
+    # — the first error becomes the 500 — without leaving orphan tasks.
+    parts = await asyncio.gather(
+        rev.totals(w["since"], w["until"]),
+        rev.totals(w["prev_since"], w["prev_until"]),
+        rev.payers(w["since"], w["until"]),
+        rev.payers(w["prev_since"], w["prev_until"]),
+        mx.new_users(w["since"], w["until"]),
+        mx.new_users(w["prev_since"], w["prev_until"]),
+        rev.series("day", max(days, 14)),
+        mx.active_subscriptions(),
+        mx.renewals(w["since"], w["until"]),
+        _safe("pipeline", cached("m:pipeline", REPORT_TTL, mx.renewal_pipeline), None),
+        _safe("payments_health", cached("m:payhealth", REPORT_TTL, _payments_health), None),
+        _safe("delivery", cached("m:delivery", 30.0, _delivery), None),
+        _safe("health", _system_health(), None),
+        _panel_quick(),
+        return_exceptions=True,
+    )
+    for part in parts:
+        if isinstance(part, BaseException):
+            raise part
+    (cur, prev, pay, prev_pay, nu, prev_nu, series, active, renewals,
+     pipeline, pay_h, deliv, health, panel_nodes) = parts
+    panel, nodes = panel_nodes
 
     arppu, prev_arppu = rev.per_user(cur["net_kopecks"], pay["payers"]), rev.per_user(prev["net_kopecks"], prev_pay["payers"])
     kpis = [
@@ -385,3 +403,36 @@ async def _overview(days: int) -> dict[str, Any]:
 @router.get("/overview")
 async def metrics_overview(days: int = Query(7, ge=1, le=90)):
     return await _run("overview", cached(f"m:overview:{days}", REPORT_TTL, lambda: _overview(days)))
+
+
+async def _today() -> dict[str, Any]:
+    """The running MSK day and the milestone ladder behind the DM.
+
+    Same source as app/services/admin_notifier, so what the screen shows
+    is exactly what decides whether «💸 15 000 ₽ за день» is sent: a
+    silent day can be read off the screen instead of out of the logs.
+    """
+    from app.services import admin_notifier as notifier
+    from app.services import admin_settings
+
+    since = notifier.msk_midnight_utc()
+    data = await database.get_revenue_for_period(24, since=since)
+    revenue = float(data.get("revenue_rubles") or 0)
+    fired = sorted(await notifier.fired_milestones(notifier.msk_day_key()))
+    return {
+        "since": since.isoformat(),
+        "revenue_kopecks": int(round(revenue * 100)),
+        "payments_count": int(data.get("payments_count") or 0),
+        "avg_check_kopecks": int(round(float(data.get("avg_check_rubles") or 0) * 100)),
+        "milestones": {
+            "all": notifier.MILESTONES,
+            "fired": fired,
+            "next": next((m for m in notifier.MILESTONES if revenue < m), None),
+            "notifications_enabled": await admin_settings.is_enabled("revenue_milestone"),
+        },
+    }
+
+
+@router.get("/today")
+async def metrics_today():
+    return await _run("today", cached("m:today", TODAY_TTL, _today))

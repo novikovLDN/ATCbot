@@ -383,6 +383,17 @@ async def main():
     except Exception as e:
         logger.warning("admin_notifier failed to start: %s", e)
 
+    # «Итог дня» — one DM at 23:59 MSK closing the day (revenue, payments,
+    # comparison with yesterday). Sleeps until the target time; the state
+    # of "already sent" lives in Redis, so a restart does not double it.
+    try:
+        from app.services.admin_notifier import run_daily_summary
+        daily_summary_task = asyncio.create_task(run_daily_summary(bot))
+        background_tasks.append(daily_summary_task)
+        logger.info("Daily summary task started")
+    except Exception as e:
+        logger.warning("daily_summary failed to start: %s", e)
+
     # Automated notifications registry sync (migration 068). Upsert-only
     # для defaults — админ-правки не затираются. Ошибка не критична: если
     # sync упал, bot всё равно работает по in-code REGISTRY defaults.

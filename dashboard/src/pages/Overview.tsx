@@ -23,6 +23,7 @@ import {
   type PaymentsHealth,
   type ProviderHealth,
   type SubKind,
+  type TodayReport,
 } from "@/lib/metricsApi";
 import { DEF } from "@/lib/metricDefs";
 import { OVERVIEW_PERIODS, WINDOWS as SHARED_WINDOWS, comparedTo } from "@/lib/periods";
@@ -30,7 +31,7 @@ import { fmtKop, fmtNum, fmtPct, fmtRelative } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { Bento, PageHeader } from "@/components/ui/Surface";
 import { Hint } from "@/components/ui/Hint";
-import { DeltaPill, ListRow, Segmented, StatusDot, type Tone } from "@/components/ui/controls";
+import { DeltaPill, ListRow, PillProgress, Segmented, StatusDot, type Tone } from "@/components/ui/controls";
 import { ReasonList } from "@/components/ui/StatusBadge";
 import { ErrorState, LoadingTiles, Skeleton } from "@/components/ui/states";
 import { Sparkline } from "@/components/Sparkline";
@@ -240,6 +241,48 @@ function StatusCard({ d }: { d: OverviewReport }) {
 }
 
 // ── 2. Money ─────────────────────────────────────────────────────────
+
+/** Today by Moscow time next to the milestone ladder that decides the
+    «💸 … ₽ за день» DM. It is the very number the notifier compares, so
+    a quiet day is readable here instead of in the logs. */
+function TodayCard({ t }: { t: TodayReport }) {
+  const m = t.milestones;
+  const left = m.next != null ? m.next * 100 - t.revenue_kopecks : 0;
+  return (
+    <div className="tile p-4">
+      <div className="flex items-end justify-between gap-4">
+        <div className="min-w-0">
+          <p className="t-mute text-[13px] leading-[18px]">Сегодня с полуночи МСК</p>
+          <div className="tabular mt-0.5 text-[28px] font-bold leading-[34px] track-hero">
+            {fmtKop(t.revenue_kopecks)}
+          </div>
+        </div>
+        <p className="t-mute flex-none text-right text-[13px] leading-[18px]">
+          {fmtNum(t.payments_count)} опл.
+          <br />
+          средний {fmtKop(t.avg_check_kopecks)}
+        </p>
+      </div>
+      <div className="mt-3">
+        <PillProgress
+          value={m.next != null ? (t.revenue_kopecks / (m.next * 100)) * 100 : 100}
+          label={m.next != null ? `До планки ${fmtKop(m.next * 100)}` : "Все планки дня взяты"}
+          valueLabel={m.next != null ? `осталось ${fmtKop(left)}` : "🎉"}
+        />
+      </div>
+      <p className="t-mute mt-2 text-[13px] leading-[18px]">
+        {m.fired.length
+          ? `Планки сегодня: ${m.fired.map((x) => fmtKop(x * 100)).join(" · ")}`
+          : "Планок сегодня ещё не было"}
+      </p>
+      {!m.notifications_enabled && (
+        <Link to="/settings" className="mt-1 block text-[13px] leading-[18px] text-warning active:opacity-50">
+          Уведомления о планках выключены — включить
+        </Link>
+      )}
+    </div>
+  );
+}
 
 function MoneyCard({ d, days }: { d: OverviewReport; days: number }) {
   const [open, setOpen] = useState(false);
@@ -628,6 +671,9 @@ export function Overview() {
     refetchInterval: 60_000,
   });
   const ph = useQuery({ queryKey: ["m-payments-health"], queryFn: metricsApi.paymentsHealth, refetchInterval: 60_000 });
+  // Today moves while the owner is looking at it: refreshed on its own
+  // rhythm and invalidated by every payment the bus announces (Shell).
+  const today = useQuery({ queryKey: ["m-today"], queryFn: metricsApi.today, refetchInterval: 30_000 });
   const d = q.data;
   const header = (
     <PageHeader
@@ -661,7 +707,10 @@ export function Overview() {
           <StatusCard d={d} />
         </div>
         <Group title="Деньги" hint={DEF.revenue} to="/money" className="sm:col-span-6 xl:col-span-7">
-          <MoneyCard d={d} days={days} />
+          <div className="space-y-3">
+            {today.data && <TodayCard t={today.data} />}
+            <MoneyCard d={d} days={days} />
+          </div>
         </Group>
         <Group title="Подписчики" hint={DEF.with_access} to="/subscribers" className="sm:col-span-6 xl:col-span-5">
           <SubscribersCard d={d} days={days} />

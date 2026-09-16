@@ -1,9 +1,10 @@
 """Admin-level notification toggles persisted in Redis (memory fallback).
 
-Three categories, each on/off:
+Four categories, each on/off:
   - payment_error
   - broadcast_done
   - revenue_milestone
+  - daily_summary
 
 Defaults to all ON when the key is missing so first-time admins get
 the full feed.
@@ -21,6 +22,7 @@ _DEFAULTS = {
     "payment_error": True,
     "broadcast_done": True,
     "revenue_milestone": True,
+    "daily_summary": True,
 }
 
 _MEM_CACHE: dict[str, bool] = dict(_DEFAULTS)

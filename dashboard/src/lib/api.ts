@@ -153,6 +153,14 @@ export type {
   SubscriptionHistoryRow,
 } from "@/types/user";
 
+/** Admin DM toggles — mirrors app/services/admin_settings._DEFAULTS. */
+export interface NotificationFlags {
+  payment_error: boolean;
+  broadcast_done: boolean;
+  revenue_milestone: boolean;
+  daily_summary: boolean;
+}
+
 export const endpoints = {
   authStatus: () =>
     api.get<{
@@ -659,18 +667,9 @@ export const endpoints = {
       `/activations/${subscriptionId}/retry`,
     ),
 
-  settingsNotificationsGet: () =>
-    api.get<{
-      payment_error: boolean;
-      broadcast_done: boolean;
-      revenue_milestone: boolean;
-    }>("/settings/notifications"),
+  settingsNotificationsGet: () => api.get<NotificationFlags>("/settings/notifications"),
   settingsNotificationsPatch: (key: string, enabled: boolean) =>
-    api.post<{
-      payment_error: boolean;
-      broadcast_done: boolean;
-      revenue_milestone: boolean;
-    }>("/settings/notifications", { key, enabled }),
+    api.post<NotificationFlags>("/settings/notifications", { key, enabled }),
   settingsTestNotifications: () =>
     api.post<{ ok: boolean; count: number; delay_seconds: number }>(
       "/settings/notifications/test",
