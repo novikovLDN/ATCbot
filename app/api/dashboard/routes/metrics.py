@@ -290,20 +290,35 @@ async def _safe(name: str, coro, default):
 
 async def _overview(days: int) -> dict[str, Any]:
     w = rev.window(days)
-    cur = await rev.totals(w["since"], w["until"])
-    prev = await rev.totals(w["prev_since"], w["prev_until"])
-    pay = await rev.payers(w["since"], w["until"])
-    prev_pay = await rev.payers(w["prev_since"], w["prev_until"])
-    nu = await mx.new_users(w["since"], w["until"])
-    prev_nu = await mx.new_users(w["prev_since"], w["prev_until"])
-    series = await rev.series("day", max(days, 14))
-    active = await mx.active_subscriptions()
-    renewals = await mx.renewals(w["since"], w["until"])
-    pipeline = await _safe("pipeline", cached("m:pipeline", REPORT_TTL, mx.renewal_pipeline), None)
-    pay_h = await _safe("payments_health", cached("m:payhealth", REPORT_TTL, _payments_health), None)
-    deliv = await _safe("delivery", cached("m:delivery", 30.0, _delivery), None)
-    health = await _safe("health", _system_health(), None)
-    panel, nodes = await _panel_quick()
+    # The home screen is ~30 queries. They are independent of each other, so
+    # they run together instead of end to end: on a cold cache (60 s) this is
+    # the slowest page in the app, and it shares the bot's pool. Fourteen
+    # concurrent loads out of max_size=50 leave the bot its connections.
+    # return_exceptions keeps the failure behaviour of the sequential version
+    # — the first error becomes the 500 — without leaving orphan tasks.
+    parts = await asyncio.gather(
+        rev.totals(w["since"], w["until"]),
+        rev.totals(w["prev_since"], w["prev_until"]),
+        rev.payers(w["since"], w["until"]),
+        rev.payers(w["prev_since"], w["prev_until"]),
+        mx.new_users(w["since"], w["until"]),
+        mx.new_users(w["prev_since"], w["prev_until"]),
+        rev.series("day", max(days, 14)),
+        mx.active_subscriptions(),
+        mx.renewals(w["since"], w["until"]),
+        _safe("pipeline", cached("m:pipeline", REPORT_TTL, mx.renewal_pipeline), None),
+        _safe("payments_health", cached("m:payhealth", REPORT_TTL, _payments_health), None),
+        _safe("delivery", cached("m:delivery", 30.0, _delivery), None),
+        _safe("health", _system_health(), None),
+        _panel_quick(),
+        return_exceptions=True,
+    )
+    for part in parts:
+        if isinstance(part, BaseException):
+            raise part
+    (cur, prev, pay, prev_pay, nu, prev_nu, series, active, renewals,
+     pipeline, pay_h, deliv, health, panel_nodes) = parts
+    panel, nodes = panel_nodes
 
     arppu, prev_arppu = rev.per_user(cur["net_kopecks"], pay["payers"]), rev.per_user(prev["net_kopecks"], prev_pay["payers"])
     kpis = [
