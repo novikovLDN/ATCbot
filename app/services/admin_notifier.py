@@ -86,7 +86,7 @@ PHRASES: dict[int, list[str]] = {
 MSK_TZ = timezone(timedelta(hours=3))
 
 
-def _today_key() -> str:
+def msk_day_key() -> str:
     """MSK date key for milestone bookkeeping (admin lives in MSK).
 
     Раньше был UTC, из-за чего в 03:00 МСК счётчик сбрасывался и админ
@@ -319,7 +319,7 @@ async def _on_payment_approved(bot: Bot, _e: dict[str, Any]) -> None:
         logger.warning("milestone revenue lookup failed: %s", e)
         return
 
-    day = _today_key()
+    day = msk_day_key()
     fired = await fired_milestones(day)
     crossed = [m for m in MILESTONES if revenue_today >= m and m not in fired]
     if not crossed:

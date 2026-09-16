@@ -10,7 +10,8 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { ChevronLeft, MoreHorizontal } from "lucide-react";
-import { useEventStream } from "@/lib/ws";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEventStream, type BusEvent } from "@/lib/ws";
 import { TABS, backFor, inMore, titleFor } from "@/lib/nav";
 import { cn } from "@/lib/cn";
 import { InstallHint } from "./InstallHint";
@@ -35,11 +36,15 @@ function useWide(): boolean {
 }
 
 function LiveDot() {
+  const qc = useQueryClient();
   const [status, setStatus] = useState<"connecting" | "live" | "offline">("connecting");
   const lastBeat = useRef(Date.now());
-  useEventStream(() => {
+  useEventStream((e: BusEvent) => {
     lastBeat.current = Date.now();
     setStatus("live");
+    // A settled payment moves today's money and the milestone ladder —
+    // refresh them now instead of waiting out the poll interval.
+    if (e.type === "payment:approved") qc.invalidateQueries({ queryKey: ["m-today"] });
   });
   useEffect(() => {
     const t = window.setInterval(() => {
