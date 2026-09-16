@@ -1,5 +1,5 @@
 # Updated 2026-03-15 — security patches + compatibility upgrades
-aiogram>=3.25.0,<4.0  # InlineKeyboardButton style/icon_custom_emoji_id (button_defaults)
+aiogram>=3.31.0,<4.0  # InlineKeyboardButton style/icon_custom_emoji_id (button_defaults)
 asyncpg>=0.30.0,<1.0
 pydantic>=2.10.0,<3.0
 httpx>=0.27.0,<1.0
