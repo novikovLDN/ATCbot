@@ -6,6 +6,7 @@ import logging
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from app.api import telegram_webhook
 from app.api import payment_webhook
 from app.api import deeplink_redirect
@@ -92,6 +93,10 @@ async def drain_payment_tasks_on_shutdown() -> None:
 
 app.router.on_shutdown.append(drain_payment_tasks_on_shutdown)
 app.router.on_shutdown.append(flush_alerts_on_shutdown)
+# The dashboard ships ~700 KB of JavaScript and every metrics answer is
+# JSON; both went over the wire uncompressed, which is what a phone on a
+# mobile network feels. Added last, so it wraps everything below it.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(RequestSizeLimitMiddleware, max_size=1 * 1024 * 1024)
 app.include_router(telegram_webhook.router)
 app.include_router(payment_webhook.router)
@@ -125,8 +130,8 @@ try:
         import os as _os
         _dist = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))), "dashboard", "dist")
         if _os.path.isdir(_dist):
-            from fastapi.staticfiles import StaticFiles
-            app.mount("/dashboard", StaticFiles(directory=_dist, html=True), name="dashboard-spa")
+            from app.api.spa import SpaStaticFiles
+            app.mount("/dashboard", SpaStaticFiles(directory=_dist, html=True), name="dashboard-spa")
             logger.info("DASHBOARD mounted: api+ws+static (dist=%s)", _dist)
         else:
             logger.info("DASHBOARD mounted: api+ws only (no dist at %s yet)", _dist)
