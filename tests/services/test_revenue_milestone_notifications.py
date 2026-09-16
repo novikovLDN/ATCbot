@@ -92,11 +92,12 @@ def notifier(monkeypatch):
 
 
 def set_revenue(monkeypatch, rubles: float, *, seen: dict | None = None):
-    async def fake_revenue(hours, since=None):
+    async def fake_revenue(hours, since=None, until=None):
         if seen is not None:
             seen["hours"] = hours
             seen["since"] = since
-        return {"revenue_rubles": rubles, "payments_count": 1}
+            seen["until"] = until
+        return {"revenue_rubles": rubles, "payments_count": 1, "avg_check_rubles": rubles}
 
     monkeypatch.setattr(database, "get_revenue_for_period", fake_revenue)
 
@@ -196,3 +197,59 @@ class TestTodayEndpoint:
         set_revenue(monkeypatch, 99_000.0)
 
         assert (await routes._today())["milestones"]["next"] is None
+
+
+class TestDailySummary:
+    """«Итог дня» — one DM at 23:59 MSK, once per day even across a
+    restart, and never before the day is over."""
+
+    def test_body_compares_with_yesterday(self):
+        title, body = admin_notifier.format_daily_summary(
+            today={"revenue_rubles": 27_400.0, "payments_count": 48, "avg_check_rubles": 570.8},
+            yesterday={"revenue_rubles": 21_920.0},
+            new_users=132,
+            fired=[10_000, 5_000, 25_000],
+        )
+        assert title == "📊 Итог дня: 27 400 ₽"
+        assert "Вчера было 21 920 ₽ · +25 %" in body
+        assert "Оплат 48 · средний чек 571 ₽" in body
+        assert "Новых пользователей 132" in body
+        assert "Планки: 5k · 10k · 25k" in body
+
+    def test_yesterday_without_revenue_has_no_percentage(self):
+        _, body = admin_notifier.format_daily_summary(
+            today={"revenue_rubles": 500.0, "payments_count": 1, "avg_check_rubles": 500.0},
+            yesterday={"revenue_rubles": 0.0},
+            new_users=0,
+            fired=[],
+        )
+        assert "Вчера было 0 ₽ · —" in body
+        assert "Планки" not in body
+
+    async def test_not_due_before_2359(self, monkeypatch, notifier):
+        set_revenue(monkeypatch, 1_000.0)
+        monkeypatch.setattr(admin_notifier, "_send", AsyncMock())
+        monkeypatch.setattr(admin_notifier, "datetime", _FrozenMsk(hour=23, minute=58))
+
+        assert await admin_notifier._send_daily_summary_if_due(notifier.bot) is False
+        assert admin_notifier._send.await_count == 0
+
+    async def test_sent_once_per_day(self, monkeypatch, notifier):
+        set_revenue(monkeypatch, 1_000.0)
+        monkeypatch.setattr(admin_notifier, "_send", AsyncMock())
+        monkeypatch.setattr(admin_notifier, "datetime", _FrozenMsk(hour=23, minute=59))
+
+        assert await admin_notifier._send_daily_summary_if_due(notifier.bot) is True
+        admin_notifier._state.summary_sent_day = None  # a restart forgets it
+        assert await admin_notifier._send_daily_summary_if_due(notifier.bot) is False
+        assert admin_notifier._send.await_count == 1
+
+
+class _FrozenMsk:
+    """datetime stand-in whose now() sits at a chosen MSK time today."""
+
+    def __init__(self, *, hour: int, minute: int):
+        self.at = datetime.now(MSK).replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+    def now(self, tz=None):
+        return self.at.astimezone(tz) if tz else self.at

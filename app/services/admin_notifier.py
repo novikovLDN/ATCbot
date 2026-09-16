@@ -149,6 +149,8 @@ class _State:
         self.error_last_sent: dict[tuple[str, str], float] = {}
         # Day → set of milestones already announced today
         self.fired_milestones: dict[str, set[int]] = {}
+        # MSK day whose «итог дня» has been sent (memory fallback)
+        self.summary_sent_day: str | None = None
 
     def can_send_error(self, key: tuple[str, str], cooldown: float = 60.0) -> bool:
         loop = asyncio.get_event_loop()
@@ -338,6 +340,124 @@ async def _on_payment_approved(bot: Bot, _e: dict[str, Any]) -> None:
         tag=f"revenue_milestone:{target}",
         url=await _dashboard_url("/dashboard/money"),
     )
+
+
+# ── Итог дня ─────────────────────────────────────────────────────────
+# Планки говорят «взяли 15k», но не говорят, чем день кончился. Один DM
+# в 23:59 МСК закрывает день: доход, оплаты, средний чек, сравнение со
+# вчера. Раз в сутки, поэтому переживает рестарт через Redis.
+_SUMMARY_KEY = "dashboard:daily_summary_sent"
+SUMMARY_HOUR = 23
+SUMMARY_MINUTE = 59
+
+
+def _pct_change(now: float, prev: float) -> str:
+    """«+21 %», «−8 %», or «—» when yesterday earned nothing."""
+    if prev <= 0:
+        return "—"
+    pct = (now - prev) / prev * 100
+    sign = "+" if pct >= 0 else "−"
+    return f"{sign}{abs(pct):.0f} %"
+
+
+def format_daily_summary(
+    *, today: dict[str, Any], yesterday: dict[str, Any], new_users: int, fired: list[int]
+) -> tuple[str, str]:
+    """Title and body of the end-of-day DM. Pure — the worker feeds it."""
+    revenue = float(today.get("revenue_rubles") or 0)
+    prev_revenue = float(yesterday.get("revenue_rubles") or 0)
+    count = int(today.get("payments_count") or 0)
+    avg = float(today.get("avg_check_rubles") or 0)
+    lines = [
+        f"Вчера было {prev_revenue:,.0f} ₽ · {_pct_change(revenue, prev_revenue)}".replace(",", " "),
+        f"Оплат {count} · средний чек {avg:,.0f} ₽".replace(",", " "),
+        f"Новых пользователей {new_users}",
+    ]
+    if fired:
+        lines.append("Планки: " + " · ".join(f"{m // 1000}k" for m in sorted(fired)))
+    title = f"📊 Итог дня: {revenue:,.0f} ₽".replace(",", " ")
+    return title, "\n".join(lines)
+
+
+def _seconds_until(hour: int, minute: int) -> float:
+    now = datetime.now(MSK_TZ)
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+async def _summary_sent(day: str) -> bool:
+    r = await _redis()
+    if r is not None:
+        try:
+            return bool(await r.get(f"{_SUMMARY_KEY}:{day}"))
+        except Exception as e:
+            logger.warning("daily summary state read failed: %s", e)
+    return _state.summary_sent_day == day
+
+
+async def _mark_summary_sent(day: str) -> None:
+    _state.summary_sent_day = day
+    r = await _redis()
+    if r is None:
+        return
+    try:
+        await r.set(f"{_SUMMARY_KEY}:{day}", "1", ex=_MILESTONES_TTL_S)
+    except Exception as e:
+        logger.warning("daily summary state write failed: %s", e)
+
+
+async def _send_daily_summary_if_due(bot: Bot) -> bool:
+    """Send the end-of-day DM once the day is over. Also the catch-up
+    path: a restart at 23:59 still closes the day."""
+    from app.services import admin_settings
+    now_msk = datetime.now(MSK_TZ)
+    if (now_msk.hour, now_msk.minute) < (SUMMARY_HOUR, SUMMARY_MINUTE):
+        return False
+    day = msk_day_key()
+    if await _summary_sent(day):
+        return False
+    if not await admin_settings.is_enabled("daily_summary"):
+        return False
+
+    import database
+    from database import metrics as mx
+    midnight = msk_midnight_utc()
+    prev_midnight = midnight - timedelta(days=1)
+    today = await database.get_revenue_for_period(24, since=midnight)
+    yesterday = await database.get_revenue_for_period(24, since=prev_midnight, until=midnight)
+    try:
+        new_users = await mx.new_users(midnight, now_msk.astimezone(timezone.utc))
+    except Exception as e:
+        logger.warning("daily summary new_users failed: %s", e)
+        new_users = 0
+
+    title, body = format_daily_summary(
+        today=today,
+        yesterday=yesterday,
+        new_users=new_users,
+        fired=sorted(await fired_milestones(day)),
+    )
+    await _mark_summary_sent(day)
+    logger.info("DAILY_SUMMARY sent day=%s revenue=%s", day, today.get("revenue_rubles"))
+    await _send(bot, title=title, body=body, tag=f"daily_summary:{day}",
+                url=await _dashboard_url("/dashboard/money"))
+    return True
+
+
+async def run_daily_summary(bot: Bot) -> None:
+    """Long-lived task: one «итог дня» DM per MSK day at 23:59."""
+    logger.info("DAILY_SUMMARY worker started")
+    while True:
+        try:
+            await _send_daily_summary_if_due(bot)
+            await asyncio.sleep(_seconds_until(SUMMARY_HOUR, SUMMARY_MINUTE) + 1)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.exception("DAILY_SUMMARY error: %s", e)
+            await asyncio.sleep(60)
 
 
 async def run_admin_notifier(bot: Bot) -> None:
