@@ -61,7 +61,7 @@ const FLAGS: FlagDescriptor[] = [
     key: "revenue_milestone",
     title: "Дневной доход",
     description:
-      "DM с похвалой при пересечении планок 5k / 10k / 15k / 20k / 25k / 30k / 35k ₽ за сутки (UTC).",
+      "DM с похвалой при пересечении планок 5k / 10k / 15k / 20k / 25k / 30k / 35k / 40k ₽ за день (с полуночи МСК).",
     icon: TrendingUp,
   },
 ];
