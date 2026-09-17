@@ -1469,7 +1469,9 @@ def _subscription_period_label(period_days: int) -> str:
 async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMContext):
     """Оплата рекуррентной СБП-подпиской через Platega (paymentMethod=6).
 
-    MVP: admin-only + только период 30 дней (interval=3 месяц).
+    Доступна всем юзерам и на всех периодах каталога (30/90/180/365/730):
+    период → (interval, intervalCount) в platega_service.SUBSCRIPTION_PLANS.
+    Покупка со скидкой сюда НЕ идёт — акционная цена стала бы вечной.
     Итог: юзеру приходит ссылка redirect (окно 30 мин) на привязку
     счёта в банке. После подтверждения Platega начинает слать
     callback'и списаний на /webhooks/platega-subscription — их
@@ -1479,7 +1481,9 @@ async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMConte
     import platega_service
     if not platega_service.is_subscription_visible_to(telegram_id):
         await callback.answer(
-            "СБП-подписка временно недоступна", show_alert=True,
+            i18n_get_text(await resolve_user_language(telegram_id),
+                          "payment.subscription_unavailable"),
+            show_alert=True,
         )
         return
 
@@ -1513,6 +1517,20 @@ async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMConte
         await state.set_state(None)
         return
 
+    # Разовая скидка не должна становиться вечной ценой. Подписка списывает
+    # ОДНУ И ТУ ЖЕ сумму каждый период, поэтому покупка со скидкой (промокод,
+    # персональная скидка, «Забрать подарок» из рассылки) зафиксировала бы
+    # акционную цену навсегда. Такие покупки идут прежней разовой оплатой.
+    discount_percent = int(fsm_data.get("discount_percent") or 0)
+    if discount_percent > 0 or fsm_data.get("promo_applied") or fsm_data.get("offer_key"):
+        logger.info(
+            "platega_subscription: скидка (percent=%s promo=%s offer=%s) — разовая оплата, "
+            "чтобы не зафиксировать акционную цену в рекуррент",
+            discount_percent, bool(fsm_data.get("promo_applied")), fsm_data.get("offer_key"),
+        )
+        await callback_pay_card_pl(callback, state)
+        return
+
     # Период → (interval, intervalCount) по доке §2.4. Период, который
     # рекуррентом не покрывается, не должен упираться в тупик: уводим на
     # прежнюю разовую оплату картой, юзер всё равно купит.
@@ -1528,19 +1546,18 @@ async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMConte
 
     try:
         final_price_rubles = final_price_kopecks / 100.0
-        if config.is_biz_tariff(tariff_type):
-            tariff_name = "Business"
-        elif tariff_type == "basic":
-            tariff_name = "Basic"
-        elif tariff_type == "plus":
-            tariff_name = "Plus"
-        else:
-            tariff_name = tariff_type
+        # Бизнес-тарифы убраны (2026-09-14): легаси biz_* — это Plus, и
+        # normalize_tier — единственное место, которое это решает.
+        from app.services import tariffs as _tariffs
+        tier = _tariffs.normalize_tier(tariff_type)
+        tariff_name = {"basic": "Basic", "plus": "Plus"}.get(tier, str(tier))
 
         period_label = _subscription_period_label(int(period_days))
-        description = (
-            f"Atlas Secure VPN — подписка {tariff_name} "
-            f"({period_label}, авто-продление)"
+        # Описание видит плательщик в форме банка и в письме (доку §6.1).
+        from app.branding import get_brand as _brand
+        description = i18n_get_text(
+            language, "payment.subscription_description",
+            brand=_brand().name, tariff=tariff_name, period=period_label,
         )
 
         hook_base = (getattr(config, "PUBLIC_BASE_URL", "") or "").rstrip("/")
@@ -1568,20 +1585,14 @@ async def callback_pay_sbp_subscription(callback: CallbackQuery, state: FSMConte
             telegram_id, subscription_id, final_price_rubles,
         )
 
-        text = (
-            f"🔄 <b>СБП-подписка (авто-продление)</b>\n\n"
-            f"Сумма: <b>{final_price_rubles:.2f} ₽</b> / {period_label}\n"
-            f"Тариф: <b>{tariff_name}</b>\n\n"
-            f"Нажмите кнопку ниже — откроется окно привязки счёта в вашем банке.\n"
-            f"<b>Окно активно 30 минут.</b>\n\n"
-            f"После подтверждения привязки в банке будет проведено первое "
-            f"списание — VPN активируется автоматически. Дальше сумма будет "
-            f"списываться раз в {period_label}, ничего нажимать не нужно.\n\n"
-            f"<i>Отменить подписку можно, написав в поддержку.</i>"
+        text = i18n_get_text(
+            language, "payment.subscription_waiting",
+            amount=final_price_rubles, period=period_label, tariff=tariff_name,
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=f"🔗 Открыть форму привязки ({final_price_rubles:.0f} ₽)",
+                text=i18n_get_text(language, "payment.subscription_pay_button",
+                                   amount=final_price_rubles),
                 url=redirect_url,
             )],
             [InlineKeyboardButton(

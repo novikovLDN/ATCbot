@@ -236,6 +236,8 @@ class World:
             "in_tx": bool(conn is not None and conn.is_in_transaction()),
             "caller_holds_tx": _caller_holds_transaction, "defer_panel": defer_panel,
             "tariff": tariff,
+            # платный период каталога → календарные месяцы в grant_access
+            "tariff_period_days": _kw.get("tariff_period_days"),
         })
         if self.fail_grant:
             self.fail_grant -= 1
@@ -637,3 +639,26 @@ async def test_service_create_subscription_passes_is_combo_to_db(monkeypatch, is
     )
 
     assert create.await_args.kwargs["is_combo"] is is_combo
+
+
+# ── Найдено в ревью PR 798 ─────────────────────────────────────────────
+
+async def test_charge_extends_by_calendar_months(w):
+    """Платный период каталога продлевается КАЛЕНДАРНЫМИ месяцами
+    (решение владельца 2026-09-14). Рекуррент считал голые 30 дней —
+    единственный платный путь в репозитории, который так делал."""
+    await webhook(w)
+
+    (call,) = w.grant_calls
+    assert call.get("tariff_period_days") == 30, "продление в днях вместо календарных месяцев"
+
+
+async def test_amount_mismatch_alerts_on_the_emergency_path_too(w, monkeypatch):
+    """Сверка суммы обязательна на обоих путях выдачи: при выключенном
+    флаге списание на любую сумму раньше проходило без единого слова."""
+    monkeypatch.setenv(MODE_VAR, "off")
+
+    await webhook(w, amount=1.0)
+
+    alerts = w.forced_alerts()
+    assert any("differs" in a.message for a in alerts), [a.message for a in alerts]

@@ -715,9 +715,12 @@ async def cancel_subscription(subscription_id: str) -> bool:
     Плательщик может отменить и сам, по ссылке из письма после списания —
     тогда придёт callback SUBSCRIPTION_CANCELLED и статус приедет сам.
 
-    Возвращает True, если Platega подтвердила отмену. Локальный статус здесь
-    не пишем: источник правды — callback (и check_subscription_status для
-    диагностики), иначе при сетевой ошибке БД разойдётся с провайдером.
+    Возвращает True, только если Platega ответила 200 — то есть отмена
+    подтверждена синхронно. Сама функция в БД не пишет: это решает
+    вызывающий, и оба места (карточка в дашборде и /platega_sub_cancel)
+    пишут статус ТОЛЬКО по True. На False не пишет никто — «отменили у
+    себя, а у провайдера живо» означало бы списания у живого человека.
+    Асинхронный SUBSCRIPTION_CANCELLED всё равно придёт и поставит то же.
     """
     if not is_enabled() or not subscription_id:
         return False
@@ -842,6 +845,35 @@ async def process_subscription_webhook_data(
     return await _handle_subscription_callback(body, bot)
 
 
+def _charge_cadence(sub_row: Optional[Dict[str, Any]]) -> str:
+    """«Каждый месяц» / «Каждые 3 месяца» — по периоду подписки.
+
+    Было захардкожено «Каждый месяц» со времён MVP, где других периодов не
+    существовало. Теперь их пять, и юзеру с годовой подпиской нельзя писать
+    про месяц.
+    """
+    days = int((sub_row or {}).get("interval_days") or 30)
+    return {
+        30: "Каждый месяц",
+        90: "Каждые 3 месяца",
+        180: "Каждые 6 месяцев",
+        365: "Каждый год",
+        730: "Каждые 2 года",
+    }.get(days, f"Каждые {days} дн.")
+
+
+async def _safe_send(bot: Bot, chat_id, text: str, **kwargs):
+    """Сообщение юзеру по правилу проекта — через safe_send_message.
+
+    Прямой bot.send_message бросает на заблокировавшем бота пользователе, а
+    мы шлём это из обработчика вебхука: исключение здесь превратилось бы в
+    500, Platega повторила бы списание, и всё ради того, чтобы узнать, что
+    юзер закрыл чат. safe_send_message гасит такое и помечает недоступного.
+    """
+    from app.utils.telegram_safe import safe_send_message
+    return await safe_send_message(bot, chat_id, text, **kwargs)
+
+
 async def _handle_subscription_callback(body: dict, bot: Bot) -> dict:
     """Обработать callback о списании / статусе подписки Platega (paymentMethod=6).
 
@@ -913,7 +945,7 @@ async def _handle_subscription_callback(body: dict, bot: Bot) -> dict:
                     _text = (
                         "✅ <b>СБП-подписка активирована</b>\n\n"
                         "Счёт привязан, первое списание пройдёт в ближайшее время.\n"
-                        f"Сумма: <b>{_amt:.2f} ₽</b> · Каждый месяц.\n\n"
+                        f"Сумма: <b>{_amt:.2f} ₽</b> · {_charge_cadence(sub_row_for_notify)}.\n\n"
                         "Как только банк подтвердит списание — VPN автоматически "
                         "активируется. Уведомим сразу же."
                     )
@@ -945,7 +977,7 @@ async def _handle_subscription_callback(body: dict, bot: Bot) -> dict:
                             text="🛡 Поддержка", url="https://t.me/atlas_suppbot",
                         )],
                     ])
-                    await bot.send_message(
+                    await _safe_send(bot,
                         chat_id=_tg, text=_text,
                         reply_markup=kb, parse_mode="HTML",
                     )
@@ -1063,7 +1095,7 @@ async def _handle_subscription_callback(body: dict, bot: Bot) -> dict:
             next_charge_at=next_dt,
         )
         try:
-            await bot.send_message(
+            await _safe_send(bot,
                 chat_id=tg_id,
                 text=(
                     "⚠️ <b>Списание не прошло</b>\n\n"
@@ -1217,12 +1249,34 @@ async def _process_confirmed_charge(
         amount_kopecks=amount_kopecks,
         next_dt=next_dt,
     )
+    # Сверка суммы — ОБЩАЯ для обоих путей выдачи (CLAUDE.md: «проверка
+    # подписи + идемпотентность + валидация суммы — обязательно»). Раньше
+    # она жила внутри outbox-варианта, и при выключенном флаге списание на
+    # любую сумму выдавало полный период без единого слова админу.
+    # Доступ всё равно выдаём: деньги уже списаны, отказ отнял бы у юзера
+    # оплаченный период — но админ узнаёт об этом принудительным алертом.
+    if expected_amount_kopecks is not None and int(amount_kopecks) != int(expected_amount_kopecks):
+        logger.error(
+            "PLATEGA_SUB_AMOUNT_MISMATCH: sub_id=%s charge_id=%s tg=%s charged_k=%s expected_k=%s",
+            subscription_id, charge_id, tg_id, amount_kopecks, expected_amount_kopecks,
+        )
+        await _alert_admin(bot, (
+            "Platega subscription: charge amount differs from the subscription amount\n"
+            f"Subscription: {subscription_id}\n"
+            f"Charge: {charge_id}\n"
+            f"User TG ID: {tg_id}\n"
+            f"Charged: {amount_kopecks / 100:.2f} RUB, expected: {int(expected_amount_kopecks) / 100:.2f} RUB\n"
+            f"Tariff: {tariff}{' (combo)' if is_combo else ''} ({period_days} days)\n"
+            "Access is granted as usual. Check the subscription in Platega."
+        ))
+
     from app.services import provisioning_flags
-    if provisioning_flags.is_on(_RECURRING_ENTRYPOINT):
-        apply_fn = _apply_confirmed_charge_outbox
-        apply_kwargs.update(is_combo=is_combo, expected_amount_kopecks=expected_amount_kopecks)
-    else:
-        apply_fn = _apply_confirmed_charge
+    apply_kwargs.update(is_combo=is_combo, expected_amount_kopecks=expected_amount_kopecks)
+    apply_fn = (
+        _apply_confirmed_charge_outbox
+        if provisioning_flags.is_on(_RECURRING_ENTRYPOINT)
+        else _apply_confirmed_charge
+    )
 
     # Выдача — в отдельной задаче под asyncio.shield: таймаут вебхука
     # (wait_for в роуте) отменяет только ожидание, а не выдачу посередине.
@@ -1253,14 +1307,40 @@ async def _apply_confirmed_charge(
     amount_rubles: float,
     amount_kopecks: int,
     next_dt: Optional[datetime],
+    is_combo: bool = False,
+    expected_amount_kopecks: Optional[int] = None,
 ) -> None:
-    """Выдать доступ по захваченному списанию и отметить его обработанным."""
+    """Выдать доступ по захваченному списанию и отметить его обработанным.
+
+    Аварийный путь (USE_NEW_PROVISIONING=off): выдаёт только премиум-период,
+    ГБ combo он не начисляет — это умеет только outbox-путь. Поэтому combo
+    здесь сопровождается принудительным алертом: молча недодать оплаченные
+    ГБ хуже, чем разбудить админа.
+    """
     from database import platega_subscriptions as _psub_db
+
+    if is_combo:
+        logger.error(
+            "PLATEGA_SUB_COMBO_ON_LEGACY_PATH: sub_id=%s charge_id=%s tg=%s — ГБ не начислены",
+            subscription_id, charge_id, tg_id,
+        )
+        await _alert_admin(bot, (
+            "Platega subscription: combo charge on the emergency path\n"
+            f"Subscription: {subscription_id}\n"
+            f"Charge: {charge_id}\n"
+            f"User TG ID: {tg_id}\n"
+            "Premium period granted, combo GB NOT granted (the legacy path cannot).\n"
+            "Grant the GB by hand, or switch USE_NEW_PROVISIONING back on."
+        ), force=True)
 
     try:
         await database.grant_access(
             telegram_id=tg_id,
             duration=timedelta(days=int(period_days)),
+            # Платный период каталога продлевается КАЛЕНДАРНЫМИ месяцами
+            # (решение владельца 2026-09-14) — так делают все остальные
+            # платные выдачи; без этого рекуррент считал бы голые 30 дней.
+            tariff_period_days=int(period_days),
             source="platega_subscription",
             admin_telegram_id=None,
             tariff=tariff or "basic",
@@ -1359,7 +1439,7 @@ async def _finish_confirmed_charge(
     # Уведомляем юзера (fail-safe).
     try:
         next_str = next_dt.strftime("%d.%m.%Y %H:%M UTC") if next_dt else "—"
-        await bot.send_message(
+        await _safe_send(bot,
             chat_id=tg_id,
             text=(
                 f"✅ <b>Списание прошло</b>\n\n"
@@ -1414,21 +1494,7 @@ async def _apply_confirmed_charge_outbox(
     from database import platega_subscriptions as _psub_db
     from app.services import provisioning, tariffs
 
-    if expected_amount_kopecks is not None and int(amount_kopecks) != int(expected_amount_kopecks):
-        logger.error(
-            "PLATEGA_SUB_AMOUNT_MISMATCH: sub_id=%s charge_id=%s tg=%s charged_k=%s expected_k=%s",
-            subscription_id, charge_id, tg_id, amount_kopecks, expected_amount_kopecks,
-        )
-        await _alert_admin(bot, (
-            "Platega subscription: charge amount differs from the subscription amount\n"
-            f"Subscription: {subscription_id}\n"
-            f"Charge: {charge_id}\n"
-            f"User TG ID: {tg_id}\n"
-            f"Charged: {amount_kopecks / 100:.2f} RUB, expected: {int(expected_amount_kopecks) / 100:.2f} RUB\n"
-            f"Tariff: {tariff}{' (combo)' if is_combo else ''} ({period_days} days)\n"
-            "Access is granted as usual. Check the subscription in Platega."
-        ))
-
+    # Сверка суммы сделана в _process_confirmed_charge — общая для обоих путей.
     key = f"platega_charge:{charge_id}"
     try:
         ent = tariffs.for_purchase(tariffs.tariff_key(tariff or "basic", bool(is_combo)), int(period_days))
@@ -1448,6 +1514,7 @@ async def _apply_confirmed_charge_outbox(
                 grant = await database.grant_access(
                     telegram_id=tg_id,
                     duration=timedelta(days=int(period_days)),
+                    tariff_period_days=int(period_days),  # calendar months
                     source=_RECURRING_ENTRYPOINT,
                     admin_telegram_id=None,
                     conn=conn,

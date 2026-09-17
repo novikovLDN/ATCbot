@@ -613,11 +613,21 @@ async def test_create_subscription_sends_interval_count_1(env):
     assert details["intervalCount"] == 1
 
 
+def sent_text(env) -> str:
+    """Текст последнего сообщения юзеру.
+
+    Сообщения идут через safe_send_message (правило проекта), а он передаёт
+    текст ПОЗИЦИОННЫМ аргументом — поэтому kwargs["text"] здесь пусто.
+    """
+    call = env.bot.send_message.await_args
+    return (call.kwargs.get("text") or call.args[1]).lower()
+
+
 async def test_past_due_notification_does_not_promise_retry(env):
     await env.svc.process_subscription_webhook_data(
         GOOD_HEADERS, status_body("SUBSCRIPTION_PAST_DUE"), env.bot,
     )
-    text = env.bot.send_message.await_args.kwargs["text"].lower()
+    text = sent_text(env)
     assert "повторим" not in text
     assert "поддержк" in text
 
@@ -627,7 +637,7 @@ async def test_canceled_charge_notification_does_not_promise_retry(env):
         GOOD_HEADERS, charge_body(status="CANCELED"), env.bot,
     )
     assert result["event"] == "charge_canceled"
-    text = env.bot.send_message.await_args.kwargs["text"].lower()
+    text = sent_text(env)
     assert "попробуем" not in text
     assert "повторить через" not in text
     assert "поддержк" in text

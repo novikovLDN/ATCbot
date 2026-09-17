@@ -6,6 +6,7 @@ The rest of the old in-bot admin panel was removed (owner decision
 2026-09-14): everything else lives in the web dashboard. The shop delivery
 handlers (apple_id_delivery.py, spotify_delivery.py) are separate modules.
 """
+import json
 import logging
 
 from aiogram import Router, F, Bot
@@ -184,10 +185,30 @@ async def cmd_platega_sub_cancel(message: Message):
     subscription_id = parts[1].strip()
     import platega_service
     ok = await platega_service.cancel_subscription(subscription_id)
+    # Действие админа с денежным эффектом — в аудит-лог (CLAUDE.md), тем же
+    # событием, что и кнопка в дашборде: две точки входа, один след.
+    try:
+        import database
+        await database._log_audit_event_atomic_standalone(
+            "admin_recurring_cancel",
+            int(message.from_user.id) if message.from_user else 0,
+            details=json.dumps(
+                {"subscription_id": subscription_id, "ok": bool(ok), "via": "bot_command"},
+                ensure_ascii=False,
+            ),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("platega_sub_cancel: audit log failed: %s", e)
     if ok:
+        # Тот же контракт, что у кнопки в дашборде: статус пишем по
+        # подтверждённой отмене, не дожидаясь callback'а.
+        try:
+            from database import platega_subscriptions as _psub_db
+            await _psub_db.update_subscription_status(subscription_id, "Cancelled")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("platega_sub_cancel: local status write failed: %s", e)
         await message.answer(
-            f"✅ Подписка <code>{subscription_id}</code> отменена, списаний больше не будет.\n"
-            "<i>Статус в БД обновится, когда придёт callback SUBSCRIPTION_CANCELLED.</i>",
+            f"✅ Подписка <code>{subscription_id}</code> отменена, списаний больше не будет.",
             parse_mode="HTML",
         )
     else:
