@@ -105,8 +105,15 @@ try:
             logger.info("DASHBOARD mounted: api+ws+static (dist=%s)", _dist)
         else:
             logger.info("DASHBOARD mounted: api+ws only (no dist at %s yet)", _dist)
-except Exception:
-    logger.exception("dashboard mount failed")
+except BaseException as _dash_err:  # noqa: BLE001
+    # Дашборд ОПЦИОНАЛЕН и НЕ должен ронять ядро HTTP-сервера (Telegram-webhook,
+    # платёжные вебхуки, /open-редирект, /health). Ловим BaseException, а не
+    # Exception: импорт app.api.dashboard тянет cryptography/WebAuthn (нативные
+    # расширения), сбой которых может прилететь как non-Exception (PanicException,
+    # SystemError и т.п.) и раньше валил всё приложение целиком.
+    if isinstance(_dash_err, (KeyboardInterrupt, SystemExit)):
+        raise
+    logger.exception("dashboard mount failed — дашборд отключён, ядро сервера продолжает работать")
 
 
 @app.get("/health")
