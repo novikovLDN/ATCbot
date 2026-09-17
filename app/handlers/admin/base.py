@@ -6,6 +6,7 @@ The rest of the old in-bot admin panel was removed (owner decision
 2026-09-14): everything else lives in the web dashboard. The shop delivery
 handlers (apple_id_delivery.py, spotify_delivery.py) are separate modules.
 """
+import json
 import logging
 
 from aiogram import Router, F, Bot
@@ -105,9 +106,9 @@ async def callback_admin_main(callback: CallbackQuery, state: FSMContext):
 @admin_base_router.message(Command("platega_sub_status"))
 @admin_only
 async def cmd_platega_sub_status(message: Message):
-    """Диагностика Platega после отключения рекуррентных подписок: подхватились
-    ли merchant_id/secret и какие подписки из беты ещё живы в БД (их надо
-    отменить в кабинете Platega)."""
+    """Диагностика видимости кнопки СБП-подписки Platega: подхватился
+    ли merchant_id/secret, совпадает ли admin_id, что вернёт
+    is_subscription_visible_to для текущего юзера."""
     lines = ["🔧 <b>Platega subscription status</b>", ""]
     try:
         import platega_service
@@ -123,30 +124,99 @@ async def cmd_platega_sub_status(message: Message):
     lines.append(f"• SECRET loaded: <b>{'YES' if sec else 'NO'}</b> (длина {len(sec)})")
     lines.append(f"• API URL: <code>{platega_service.PLATEGA_API_URL}</code>")
     lines.append(f"• is_enabled(): <b>{platega_service.is_enabled()}</b>")
-    lines.append("")
     lines.append(
-        "⛔ <b>Рекуррентные подписки отключены.</b> Callback'и по ним "
-        "(<code>/webhooks/platega-subscription</code> и общий URL) только "
-        "шлют алерт — доступ не выдаётся."
+        f"• PAYMENT_METHOD_SUBSCRIPTION = <code>{platega_service.PAYMENT_METHOD_SUBSCRIPTION}</code>"
     )
     lines.append("")
 
-    # DB — подписки из беты, которые Platega ещё может списывать.
+    my_id = message.from_user.id if message.from_user else 0
+    admin_id = int(config.ADMIN_TELEGRAM_ID)
+    match = int(my_id) == admin_id
+    lines.append(f"• Ваш telegram_id: <code>{my_id}</code>")
+    lines.append(f"• ADMIN_TELEGRAM_ID: <code>{admin_id}</code>")
+    lines.append(f"• Совпадает: <b>{'YES' if match else 'NO'}</b>")
+    lines.append("")
+
+    visible = platega_service.is_subscription_visible_to(my_id)
+    lines.append(f"🎯 <b>is_subscription_visible_to(вы): {visible}</b>")
+    if not visible:
+        lines.append("")
+        lines.append("<i>Кнопка СБП-подписки будет скрыта. Причина:</i>")
+        lines.append("→ PLATEGA_MERCHANT_ID / PLATEGA_SECRET не заданы в env")
+
+    lines.append("")
+    lines.append("<i>Webhook endpoint:</i> <code>POST /webhooks/platega-subscription</code>")
+
+    # DB — активные подписки текущего юзера (диагностика).
     try:
         from database import platega_subscriptions as _psub_db
-        subs = await _psub_db.list_live_subscriptions(limit=20)
-        lines.append(f"• Живых подписок в БД (Active/PendingAgreement/PastDue): <b>{len(subs)}</b>")
-        for s in subs[:20]:
+        subs = await _psub_db.get_user_active_subscriptions(my_id)
+        lines.append(f"• Ваших Active/Pending подписок в БД: <b>{len(subs)}</b>")
+        for s in subs[:3]:
             lines.append(
-                f"   — <code>{s['subscription_id']}</code> tg={s['telegram_id']} "
-                f"status={s['status']} next={s.get('next_charge_at') or '-'}"
+                f"   — <code>{s['subscription_id']}</code> "
+                f"status={s['status']} charges_ok={s.get('charges_success', 0)}"
             )
-        if subs:
-            lines.append("<i>Отменить в кабинете Platega: POST /subscription/{id}/cancel</i>")
     except Exception as e:
         lines.append(f"• DB probe: <b>FAIL</b> — {type(e).__name__}: {str(e)[:80]}")
 
     await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@admin_base_router.message(Command("platega_sub_cancel"))
+@admin_only
+async def cmd_platega_sub_cancel(message: Message):
+    """Остановить списания по подписке: /platega_sub_cancel <subscription_id>.
+
+    Аварийный рычаг на время теста рекуррента: списания прекращаются сразу,
+    уже выданный доступ не трогаем. Статус в БД не пишем — он приедет
+    callback'ом SUBSCRIPTION_CANCELLED (доку §6.4), это единственный
+    источник правды.
+    """
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer(
+            "Укажите подписку: <code>/platega_sub_cancel &lt;subscription_id&gt;</code>\n"
+            "Список — в <code>/platega_sub_status</code>.",
+            parse_mode="HTML",
+        )
+        return
+
+    subscription_id = parts[1].strip()
+    import platega_service
+    ok = await platega_service.cancel_subscription(subscription_id)
+    # Действие админа с денежным эффектом — в аудит-лог (CLAUDE.md), тем же
+    # событием, что и кнопка в дашборде: две точки входа, один след.
+    try:
+        import database
+        await database._log_audit_event_atomic_standalone(
+            "admin_recurring_cancel",
+            int(message.from_user.id) if message.from_user else 0,
+            details=json.dumps(
+                {"subscription_id": subscription_id, "ok": bool(ok), "via": "bot_command"},
+                ensure_ascii=False,
+            ),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("platega_sub_cancel: audit log failed: %s", e)
+    if ok:
+        # Тот же контракт, что у кнопки в дашборде: статус пишем по
+        # подтверждённой отмене, не дожидаясь callback'а.
+        try:
+            from database import platega_subscriptions as _psub_db
+            await _psub_db.update_subscription_status(subscription_id, "Cancelled")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("platega_sub_cancel: local status write failed: %s", e)
+        await message.answer(
+            f"✅ Подписка <code>{subscription_id}</code> отменена, списаний больше не будет.",
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(
+            f"❌ Не удалось отменить <code>{subscription_id}</code> — подробности в логах "
+            "(<code>platega_cancel_subscription</code>).",
+            parse_mode="HTML",
+        )
 
 
 @admin_base_router.callback_query(F.data == "admin:reset_password")

@@ -410,6 +410,19 @@ async def test_gift_activation_basic_new_recipient_adds_10gb_once(w, monkeypatch
     assert w.panel.added_gb(TG) == 10
 
 
+@payment_core_bug(reason="payment-core: Platega recurring renews premium only, 0 GB (T11)")
+async def test_platega_recurring_confirmed_charge_basic_adds_10gb(w):
+    """Current: 0 GB — grant_access → sync_renewal_to_remnawave extends premium only."""
+    w.seed_active_subscription()
+    premium_before = w.panel.premium_expire[TG]
+
+    result = await h.run_platega_recurring_charge(w)
+
+    assert result["status"] == "ok"
+    assert w.panel.premium_expire[TG] > premium_before
+    assert w.panel.added_gb(TG) == 10
+
+
 @payment_core_bug(reason="payment-core: auto-renewal bills combo users the basic price (T12, §G0)")
 async def test_auto_renewal_combo_charges_combo_price(w, monkeypatch):
     """Current: 199 ₽ (basic price) — payments.tariff of a combo purchase is 'basic_30'."""

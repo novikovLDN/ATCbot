@@ -19,7 +19,7 @@
 
 | Файл (корень) | Провайдер | Верификация вебхука | Осторожно |
 |---|---|---|---|
-| `platega_service.py` | СБП(2)/карта(11)/intl(12) | статич. креды в заголовках `X-MerchantId/X-Secret` через `hmac.compare_digest` (НЕ подпись тела) | рекуррентные СБП-подписки (6) **удалены** (см. ниже). `return`/`failedUrl` REQUIRED (400 без них) |
+| `platega_service.py` | СБП(2)/карта(11)/intl(12)/подписка(6) | статич. креды в заголовках `X-MerchantId/X-Secret` через `hmac.compare_digest` (НЕ подпись тела) | рекуррентные СБП-подписки — ОТДЕЛЬНЫЙ обработчик `process_subscription_webhook_data` (заглавные ключи `Id/SubscriptionId/Status`, идемпотентность по PK `charge_id`); если подписки нет в БД — charge не пишется (FK), только `orphan_charge` лог. `return`/`failedUrl` REQUIRED (400 без них) |
 | `cryptobot_service.py` | крипта (fiat RUB → USDT/TON/BTC/…) | HMAC-SHA256 по RAW body, секрет = `SHA256(API_TOKEN)` (не сам токен) | обрабатывает только `update_type=="invoice_paid"` + `status=="paid"` |
 | `wata_service.py` | карта/СБП/T-Pay | RSA-SHA512 (PKCS1v15) по RAW body, `X-Signature`. Ключ: `WATA_PUBLIC_KEY_PEM` (env, без сети) или лениво `GET /public-key` под `asyncio.Lock`, кеш в процессе, неудачи не кешируются. **Fail-closed** | нет ключа / нет `cryptography` → `TransientPaymentError` → 500; неверная подпись → перезапрос ключа 1 раз (только если не pinned, не чаще 1/60с) → `WataSignatureError` (наследник Transient) → 500. VPN: нет суммы / сумма ≤0 / валюта ≠ RUB → отказ + forced admin-alert; магазин (`telegram_premium/stars`, `steam`, `spotify`, `apple_id_*`) — прежний путь. `Refund` → forced admin-alert, доступ не отзываем. `Declined` → юзеру тикет `WATA-XXXXXXXX` + алерт (cooldown). 401 API → алерт (cooldown 1 ч). Orphan `Paid` → admin-alert. rate limit 1 GET/30с — только fallback-верификация, не polling |
 
@@ -27,18 +27,6 @@
 > поэтому 500 при невозможности проверки не теряет платёж — компромисса «не терять платежи vs security»
 > здесь нет. Неподписанный/неверно подписанный webhook не принимается никогда. Ротация ключа: без
 > `WATA_PUBLIC_KEY_PEM` подхватывается автоматически; с ним — обновить переменную.
-
-> **Platega: рекуррентные подписки (paymentMethod=6) удалены** (решение владельца, 2026-09): нет
-> `create_subscription`, кнопки/хендлера `pay:sbp_sub`, обработки списаний/статусов, `check_subscription_status`,
-> entrypoint `platega_recurring`. Таблицы `platega_subscriptions`/`…_charges` (миграции 074/082) остаются
-> (DROP — отдельным релизом), модуль `database/platega_subscriptions.py` — только чтение.
-> **Страховка:** callback по подписке (UpperCamel, `SubscriptionId` / `Status`=`SUBSCRIPTION_*`) на общем URL
-> и на `/webhooks/platega-subscription` → та же проверка `X-MerchantId/X-Secret` (и `DB_READY` → 500) → лог
-> `PLATEGA_RECURRING_DISABLED_CALLBACK` + `payment_errors` (stage `platega_recurring_disabled`) + **forced**
-> алерт (SubscriptionId, charge Id, Status, Amount, TG ID, инструкция отменить подписку в кабинете Platega и
-> вернуть/выдать вручную) → 200. Доступ НЕ выдаётся, в БД подписок ничего не пишется. Живые подписки:
-> `SELECT subscription_id, telegram_id, status, next_charge_at FROM platega_subscriptions WHERE status IN ('Active','PendingAgreement','PastDue');`
-> (или админ-команда `/platega_sub_status`).
 
 ## Инварианты финализации (`confirmation.py`) — НЕ регрессировать
 
@@ -90,6 +78,19 @@
   провайдера) не зачисляется, лог `BALANCE_TOPUP_OVERPAYMENT`; `payments.amount` — зачисленная сумма.
   Реферального кешбэка за пополнение НЕТ (см. ниже). Недоплата сверх tolerance — отказ, как раньше.
   VPN-покупки денег не зачисляют, `payments.amount` = сумма вебхука (без изменений).
+- **Рекуррентные СБП-подписки Platega (тест, владелец 2026-09-17):** кнопка «Банковская карта»
+  на экране выбора способа оплаты ведёт на `pay:sbp_sub` — создание подписки (`paymentMethod=6`),
+  а не на разовый карточный платёж. Подпись кнопки пока прежняя, меняем после теста. Период →
+  `(interval, intervalCount)` в `platega_service.SUBSCRIPTION_PLANS` (30/90/180 — месяцами,
+  365/730 — годами); период вне таблицы уводит юзера обратно на разовую оплату, а не в тупик.
+  Откат теста = вернуть `callback_data="pay:card_pl"` в `payment_method_selection.py`.
+  Отмена автопродления — **только по запросу в поддержку** (решение владельца): у юзера
+  кнопки нет, админ выключает её в карточке пользователя на дашборде
+  (`POST /users/{tg}/recurring/cancel` → аудит-лог `admin_recurring_cancel`; локальный
+  статус пишется только после подтверждения провайдера). Аварийно из бота —
+  `/platega_sub_cancel <subscription_id>` (доку §6.4). Отмена останавливает будущие
+  списания; оплаченный период у юзера остаётся.
+
 - **Реферальный кешбэк (решение владельца 2026-09-14, N17):** только за ПОКУПКУ — любую (подписка,
   комбо, пакет ГБ, подарок, магазин; провайдер, Telegram/Stars, баланс, автопродление с баланса) —
   и **никогда** за пополнение баланса (`finalize_purchase` top-up, `finalize_balance_topup`). База —

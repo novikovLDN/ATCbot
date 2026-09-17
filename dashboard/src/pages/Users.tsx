@@ -35,6 +35,7 @@ import { CashbackFixCard } from "@/components/users/CashbackFixCard";
 import { UserProfileStats } from "@/components/users/UserProfileStats";
 import { UserPaymentsTable } from "@/components/users/UserPaymentsTable";
 import { UserSubscriptionTechCard } from "@/components/users/UserSubscriptionTechCard";
+import { UserRecurringCard } from "@/components/users/UserRecurringCard";
 import { UserTimeline } from "@/components/users/UserTimeline";
 import { UserAuditLog } from "@/components/users/UserAuditLog";
 import { CopyButton } from "@/components/users/shared/CopyButton";
@@ -45,6 +46,7 @@ import {
   useUserExtended,
   useUserHistory,
   useUserPayments,
+  useUserRecurring,
   useUsersList,
 } from "@/hooks/useUsers";
 import { useUserMutations } from "@/hooks/useUserMutations";
@@ -271,6 +273,7 @@ function DetailView({ tg, onBack }: { tg: number; onBack: () => void }) {
   const detail = useUserDetail(tg);
   const extended = useUserExtended(tg);
   const payments = useUserPayments(tg, PAYMENTS_LIMIT);
+  const recurring = useUserRecurring(tg);
   const history = useUserHistory(tg);
   const audit = useUserAudit(tg);
   const m = useUserMutations(tg);
@@ -396,6 +399,13 @@ function DetailView({ tg, onBack }: { tg: number; onBack: () => void }) {
         {/* Left: what happened to this person. */}
         <div className="flex min-w-0 flex-col gap-[var(--gap)] sm:col-span-6 xl:col-span-8">
           <UserSubscriptionTechCard subscription={sub} />
+
+          <UserRecurringCard
+            subscriptions={recurring.data?.subscriptions}
+            isLoading={recurring.isLoading}
+            isPending={m.cancelRecurring.isPending}
+            onCancel={(subscriptionId) => m.cancelRecurring.mutate({ subscription_id: subscriptionId })}
+          />
 
           <UserPaymentsTable
             rows={payments.data ?? []}

@@ -49,7 +49,13 @@ async def show_payment_method_selection(
     wata_on = wata_service.is_enabled()
     crypto_on = cryptobot_service.show_button()
 
-    btn_card_pl = InlineKeyboardButton(text=i18n_get_text(language, "payment.card_pl"), callback_data="pay:card_pl")
+    # ТЕСТ рекуррента (владелец, 2026-09-17): подпись кнопки прежняя
+    # («Банковская карта»), но ведёт она на рекуррентную СБП-подписку
+    # Platega (paymentMethod=6) вместо разового карточного платежа.
+    # Название поменяем, когда тест закончится. Период, который рекуррентом
+    # не покрывается, хендлер сам уводит обратно на разовую оплату.
+    _card_pl_target = "pay:sbp_sub" if platega_service.is_subscription_visible_to(telegram_id) else "pay:card_pl"
+    btn_card_pl = InlineKeyboardButton(text=i18n_get_text(language, "payment.card_pl"), callback_data=_card_pl_target)
     # СБП — обратно через Platega (revert Wata-миграции по просьбе).
     from app.handlers.common.payment_labels import sbp_label
     btn_sbp = InlineKeyboardButton(text=sbp_label(language), callback_data="pay:sbp")

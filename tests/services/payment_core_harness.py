@@ -10,7 +10,7 @@ Every payment entry point runs its production code:
 ``confirmation.process_confirmed_payment``, ``database.finalize_purchase``,
 ``database.finalize_balance_purchase``, ``database.admin_grant_access_atomic``,
 ``database.activate_gift_subscription``, the Telegram-native / balance / admin /
-``/start gift_`` handlers,
+``/start gift_`` handlers, ``platega_service._process_confirmed_charge``,
 ``auto_renewal.process_auto_renewals`` and the whole Remnawave bypass layer
 (``purchase_flow``, ``remnawave_bypass``, ``remnawave_service``).
 
@@ -402,6 +402,7 @@ def install(monkeypatch) -> World:
     import config
     import database
     import database.admin as db_admin
+    import database.platega_subscriptions as db_psub
     import database.subscriptions as db_subs
     import database.users as db_users
     import app.i18n as i18n_mod
@@ -495,6 +496,10 @@ def install(monkeypatch) -> World:
     monkeypatch.setattr(db_subs, "set_bypass_only_flag", db.set_bypass_only_flag)
     monkeypatch.setattr(db_subs, "_consume_promo_in_transaction", db.consume_promo)
     monkeypatch.setattr(db_users, "process_referral_reward", db.process_referral_reward)
+    monkeypatch.setattr(db_psub, "claim_charge", AsyncMock(return_value="claimed"))
+    monkeypatch.setattr(db_psub, "confirm_charge", AsyncMock(return_value=True))
+    monkeypatch.setattr(db_psub, "update_subscription_status", AsyncMock())
+    monkeypatch.setattr(db_psub, "release_charge", AsyncMock())
 
     # language + i18n key recording (wraps the real texts)
     async def _lang(_tg): return "ru"
@@ -682,6 +687,23 @@ async def run_gift_activation(w: World, monkeypatch, *, tariff="basic", period_d
     await start.cmd_start(message, _fsm(tg))
     await w.drain_background()
     return message
+
+
+async def run_platega_recurring_charge(w: World, *, tariff="basic", period_days=30, tg=TG) -> dict:
+    """Platega recurring CONFIRMED charge → platega_service._process_confirmed_charge."""
+    import config
+    import platega_service
+
+    price = config.TARIFFS[tariff][period_days]["price"]
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+    result = await platega_service._process_confirmed_charge(
+        bot, subscription_id="psub-1", charge_id="charge-1", tg_id=tg, tariff=tariff,
+        period_days=period_days, amount_rubles=float(price), amount_kopecks=price * 100,
+        next_dt=utcnow() + timedelta(days=period_days),
+    )
+    await w.drain_background()
+    return result
 
 
 async def run_auto_renewal(w: World, monkeypatch, *, last_payment_tariff="basic_30", tg=TG) -> dict:

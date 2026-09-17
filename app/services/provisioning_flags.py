@@ -25,6 +25,7 @@ ALL_ENTRYPOINTS = (
     "telegram",
     "balance",
     "autorenew",
+    "platega_recurring",
     "admin",
     "gift",
     "grants",

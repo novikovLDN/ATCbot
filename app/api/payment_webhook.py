@@ -4,7 +4,6 @@ Payment Webhook API (FastAPI)
 Webhook endpoints for payment providers:
 - POST /webhooks/platega, /platega/callback — Platega one-off payments
 - POST /webhooks/platega-subscription, /platega/subscription-callback — Platega recurring
-  (feature disabled: auth-checked, alert-only safety net, always 200)
 - POST /webhooks/cryptobot — CryptoBot (Crypto Pay)
 - POST /webhooks/wata — WATA (H2H)
 
@@ -280,11 +279,11 @@ async def platega_callback(request: Request):
 async def _handle_platega_subscription_webhook(request: Request):
     """Handle Platega recurring-subscription (paymentMethod=6) callback.
 
-    Рекуррентные подписки отключены. Роут оставлен как страховка для
-    подписок, оставшихся в Platega после беты: X-MerchantId/X-Secret
-    проверяются как раньше, дальше platega_service только логирует,
-    пишет payment_errors и шлёт принудительный алерт админу (200).
-    Доступ по этим callback'ам не выдаётся.
+    ОТДЕЛЬНЫЙ endpoint — не трогаем /webhooks/platega, чтобы не
+    ломать существующий разовый flow (у которого ключи строчные:
+    id/status/paymentDetails.amount). Здесь ключи ЗАГЛАВНЫЕ:
+    Id / SubscriptionId / Amount / Status / NextChargeAt / Payload.
+    Идемпотентность — по Callback.Id (см. platega_service).
     """
     return await _provider_webhook(
         request, "platega_subscription", "platega_service",
