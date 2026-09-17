@@ -4,13 +4,16 @@ Platega.io (SBP) Integration
 Handles SBP payment creation and webhook processing.
 Configuration: merchant_id/secret/API URL resolved via config.py only.
 """
+import asyncio
 import config
 import database
 import hmac
 import json
 import logging
 import math
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
+from uuid import uuid4
 import httpx
 from aiogram import Bot
 from app.services.payments.confirmation import TransientPaymentError
@@ -44,7 +47,34 @@ PAYMENT_METHOD_CARD = 11
 PAYMENT_METHOD_INTL = 12
 # No fixed method: POST /v2/transaction/process, the payer picks it on Platega's page.
 PAYMENT_METHOD_ANY = None
-# paymentMethod=6 (рекуррентная СБП-подписка) отключён — см. _handle_subscription_callback.
+PAYMENT_METHOD_SUBSCRIPTION = 6
+
+# SubscriptionInterval values (Platega spec)
+SUBSCRIPTION_INTERVAL_DAY = 1
+SUBSCRIPTION_INTERVAL_WEEK = 2
+SUBSCRIPTION_INTERVAL_MONTH = 3
+SUBSCRIPTION_INTERVAL_YEAR = 4
+
+# Период тарифа → (interval, intervalCount) рекуррентной подписки.
+# Доку §2.4: interval=3 — месяц (30 дней), intervalCount ≤ 12; interval=4 —
+# год, intervalCount ≤ 3. Годовые периоды берём годом, а не 12×месяц: 12
+# месяцев по 30 дней — это 360, а тариф продаётся как 365.
+SUBSCRIPTION_PLANS: Dict[int, tuple] = {
+    30:  (SUBSCRIPTION_INTERVAL_MONTH, 1),
+    90:  (SUBSCRIPTION_INTERVAL_MONTH, 3),
+    180: (SUBSCRIPTION_INTERVAL_MONTH, 6),
+    365: (SUBSCRIPTION_INTERVAL_YEAR, 1),
+    730: (SUBSCRIPTION_INTERVAL_YEAR, 2),
+}
+
+
+def subscription_plan_for(period_days) -> Optional[tuple]:
+    """(interval, intervalCount) для периода тарифа, или None — если период
+    рекуррентом не покрывается; вызывающий тогда ведёт на разовую оплату."""
+    try:
+        return SUBSCRIPTION_PLANS.get(int(period_days))
+    except (TypeError, ValueError):
+        return None
 
 
 def _safe_redirect_urls() -> tuple[str, str]:
@@ -180,6 +210,18 @@ async def _alert_admin(bot: Optional[Bot], message: str, *, force: bool = True) 
         await send_alert(bot, "payment", message, force=force)
     except Exception as e:  # noqa: BLE001
         logger.error("platega_admin_alert_failed: %s", e)
+
+
+def is_subscription_visible_to(telegram_id: int) -> bool:
+    """СБП-подписка теперь доступна всем юзерам — MVP-guard снят.
+
+    Условие показа кнопки — только настроенность Platega (merchant_id
+    + secret).  Возвращаемый True гарантирует, что create_subscription
+    сможет реально дёрнуть API.
+    """
+    if not is_enabled():
+        return False
+    return True
 
 
 def _apply_markup(price_kopecks: int, percent: int) -> int:
@@ -320,9 +362,8 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
 
     На общий callback URL приходят три типа тела (docs/providers/platega_api.md
     §6.5): разовый платёж (lowerCamel) и два типа по подпискам (UpperCamel,
-    `SubscriptionId` / `Status`=SUBSCRIPTION_*) — последние после той же
-    проверки заголовков уходят в _handle_subscription_callback (рекуррент
-    отключён: только алерт админу, ничего не выдаётся).
+    `SubscriptionId` / `Status`=SUBSCRIPTION_*) — последние делегируются в
+    _handle_subscription_callback после той же проверки заголовков.
     """
     if not database.DB_READY:
         logger.warning("Platega webhook: DB not ready — returning 500 for retry")
@@ -484,6 +525,256 @@ async def _handle_chargeback(body: dict, transaction_id: Any, bot: Bot) -> dict:
     return {"status": "ok", "event": "chargeback", "purchase_id": purchase_id}
 
 
+# ═════════════════════════════════════════════════════════════════════
+# Рекуррентные СБП-подписки (paymentMethod=6, migration 074)
+# ═════════════════════════════════════════════════════════════════════
+
+async def create_subscription(
+    amount_rubles: float,
+    interval: int,
+    description: str,
+    *,
+    interval_count: int = 1,
+    telegram_id: int,
+    tariff_type: str,
+    period_days: int,
+    return_url: Optional[str] = None,
+    failed_url: Optional[str] = None,
+    bot: Optional[Bot] = None,
+    is_combo: bool = False,
+) -> Dict[str, Any]:
+    """Создать рекуррентную СБП-подписку через Platega.
+
+    POST /transaction/process с paymentMethod=6:
+      Ответ.transactionId == subscription_id (не путать с id разового
+      списания). После первого редиректа юзера по `redirect` (окно 30
+      мин на привязку счёта в приложении банка) Platega начнёт слать
+      callback'и на списания с ЗАГЛАВНЫМИ ключами (см.
+      process_subscription_webhook_data).
+
+    Args:
+        amount_rubles: сумма ОДНОГО списания в рублях.
+        interval: SubscriptionInterval — 1/2/3/4 (день/неделя/месяц/год).
+                  MVP: обычно 3.
+        description: показывается юзеру в форме привязки/приложении банка.
+        telegram_id: юзер для payload/metadata (мостик для webhook'а).
+        tariff_type: 'basic'/'plus'/... — на что подписан юзер.
+        period_days: сколько дней VPN давать за одно списание (30/90/365).
+        return_url, failed_url: куда редиректить после успех/фейл.
+        bot: для алерта админу; по умолчанию — bot вебхук-роута.
+        is_combo: подписка на combo-тариф (tariff_type при этом basic/plus).
+                  Пишется в platega_subscriptions.is_combo (migration 082, если
+                  применена) — по нему списания выдают combo-ГБ (T11).
+
+    Returns:
+        {"subscription_id": str, "redirect_url": str}
+
+    Raises:
+        Exception: сеть/HTTP-ошибка/невалидный ответ, а также НЕ удалось
+        сохранить subscription_id в БД (ссылку юзеру отдавать нельзя).
+        Ловить в handler'е.
+    """
+    if not is_enabled():
+        raise Exception("Platega not configured")
+
+    if interval not in (
+        SUBSCRIPTION_INTERVAL_DAY,
+        SUBSCRIPTION_INTERVAL_WEEK,
+        SUBSCRIPTION_INTERVAL_MONTH,
+        SUBSCRIPTION_INTERVAL_YEAR,
+    ):
+        raise ValueError(f"Invalid SubscriptionInterval: {interval}")
+
+    # Доку §2.4: день ≤ 31, неделя ≤ 4, месяц ≤ 12, год ≤ 3. Превышение
+    # Platega отклонит 400 — ловим здесь, чтобы юзер не ждал редиректа.
+    max_count = {
+        SUBSCRIPTION_INTERVAL_DAY: 31,
+        SUBSCRIPTION_INTERVAL_WEEK: 4,
+        SUBSCRIPTION_INTERVAL_MONTH: 12,
+        SUBSCRIPTION_INTERVAL_YEAR: 3,
+    }[interval]
+    if not 1 <= int(interval_count) <= max_count:
+        raise ValueError(
+            f"intervalCount={interval_count} out of range for interval={interval} (1..{max_count})"
+        )
+
+    # payload: наш «мостик» — вернётся в callback'ах и позволит нам
+    # восстановить telegram_id/tariff/days без похода в БД. Кладём как
+    # JSON-строку (Platega возвращает её обратно нетронутой).
+    payload_str = json.dumps({
+        "telegram_id": int(telegram_id),
+        "tariff": str(tariff_type),
+        "days": int(period_days),
+    })
+
+    # Гарантированные redirect URL (Platega помечает как REQUIRED).
+    _fb_ok, _fb_fail = _safe_redirect_urls()
+    request_body: Dict[str, Any] = {
+        "paymentMethod": PAYMENT_METHOD_SUBSCRIPTION,
+        "paymentDetails": {
+            "amount": round(float(amount_rubles), 2),
+            "currency": "RUB",
+            "interval": int(interval),
+            # Доку §6.1: поле передаётся явно. Один цикл списания =
+            # interval × intervalCount (90 дней = месяц × 3).
+            "intervalCount": int(interval_count),
+        },
+        "description": (description or "Atlas Secure VPN — подписка")[:250],
+        "payload": payload_str,
+        "metadata": {"userId": str(telegram_id)},
+        "return": return_url or _fb_ok,
+        "failedUrl": failed_url or _fb_fail,
+    }
+
+    async def _make_request():
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{PLATEGA_API_URL}/transaction/process",
+                headers=_get_headers(),
+                json=request_body,
+            )
+            if 400 <= response.status_code < 500:
+                logger.error(
+                    "Platega subscription create client error: status=%d resp=%s",
+                    response.status_code, response.text[:400],
+                )
+                raise Exception(
+                    f"Platega subscription create failed: {response.status_code}"
+                )
+            if response.status_code != 200:
+                response.raise_for_status()
+            return response
+
+    response = await retry_async(
+        _make_request,
+        retries=2,
+        base_delay=1.0,
+        max_delay=5.0,
+        retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError),
+    )
+
+    data = response.json()
+    subscription_id = data.get("transactionId")  # для paymentMethod=6 — это ID подписки
+    redirect_url = data.get("redirect")
+
+    if not subscription_id or not redirect_url:
+        raise Exception(
+            f"Invalid Platega subscription response: missing transactionId/redirect: {data}"
+        )
+
+    # Запись subscription_id в БД ОБЯЗАТЕЛЬНА: без строки в
+    # platega_subscriptions списания этой подписки станут orphan (FK на
+    # charges) — деньги спишутся, доступ не выдастся. Поэтому при ошибке БД
+    # ссылку на привязку юзеру НЕ отдаём (handler покажет ошибку создания
+    # платежа); непривязанная подписка сама уйдёт в Failed через 30 мин.
+    from database import platega_subscriptions as _psub_db
+    try:
+        await _psub_db.create_subscription(
+            subscription_id=str(subscription_id),
+            telegram_id=int(telegram_id),
+            amount_kopecks=int(round(float(amount_rubles) * 100)),
+            interval_days=int(period_days),
+            tariff_type=str(tariff_type),
+            description=description,
+            is_combo=bool(is_combo),
+        )
+    except Exception as db_err:
+        logger.error(
+            "platega_sub_db_persist_failed: sub_id=%s tg=%s err=%s — link withheld",
+            subscription_id, telegram_id, db_err,
+        )
+        await _alert_admin(bot or _webhook_bot(), (
+            "Platega subscription created but NOT saved to DB, link withheld from user\n"
+            f"Subscription: {subscription_id}\n"
+            f"User TG ID: {telegram_id}\n"
+            f"Amount: {float(amount_rubles):.2f} RUB\n"
+            f"Tariff: {tariff_type} ({period_days} days)\n"
+            f"Error: {type(db_err).__name__}: {str(db_err)[:200]}\n"
+            "Unbound subscription expires in 30 min (Failed). Any charge for it will arrive as orphan."
+        ))
+        raise RuntimeError(
+            f"Platega subscription {subscription_id} persist failed: {db_err}"
+        ) from db_err
+
+    logger.info(
+        "platega_subscription_created: sub_id=%s tg=%s amount=%.2f RUB "
+        "interval=%s tariff=%s days=%s",
+        subscription_id, telegram_id, amount_rubles, interval, tariff_type, period_days,
+    )
+
+    return {
+        "subscription_id": str(subscription_id),
+        "redirect_url": str(redirect_url),
+    }
+
+
+async def cancel_subscription(subscription_id: str) -> bool:
+    """POST /subscription/{id}/cancel — остановить будущие списания (доку §6.4).
+
+    Ручка идемпотентна: повтор по уже отменённой подписке даёт тот же ответ.
+    Плательщик может отменить и сам, по ссылке из письма после списания —
+    тогда придёт callback SUBSCRIPTION_CANCELLED и статус приедет сам.
+
+    Возвращает True, если Platega подтвердила отмену. Локальный статус здесь
+    не пишем: источник правды — callback (и check_subscription_status для
+    диагностики), иначе при сетевой ошибке БД разойдётся с провайдером.
+    """
+    if not is_enabled() or not subscription_id:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{PLATEGA_API_URL}/subscription/{subscription_id}/cancel",
+                headers=_get_headers(),
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                "platega_cancel_subscription: sub_id=%s status=%d body=%s",
+                subscription_id, resp.status_code, resp.text[:300],
+            )
+            return False
+        logger.info("platega_subscription_cancelled: sub_id=%s", subscription_id)
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.error("platega_cancel_subscription error sub_id=%s: %s", subscription_id, e)
+        return False
+
+
+async def check_subscription_status(subscription_id: str) -> Optional[Dict[str, Any]]:
+    """GET /subscription/{id} — детальный статус подписки.
+
+    Полезно для диагностики (когда webhook'и SUBSCRIPTION_* не пришли)
+    и админ-команд.
+
+    ВАЖНО: детальная ручка возвращает `status`/`intervalUnit` СТРОКАМИ
+    («Active», «Month») — в отличие от списочной, которая шлёт числами.
+    Нормализуем к единому виду (строка) для консистентности.
+
+    Returns:
+        dict с полями подписки, None если 404 / ошибка.
+    """
+    if not is_enabled() or not subscription_id:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{PLATEGA_API_URL}/subscription/{subscription_id}",
+                headers=_get_headers(),
+            )
+            if resp.status_code == 404:
+                return None
+            if resp.status_code != 200:
+                logger.warning(
+                    "platega_check_subscription: status=%d body=%s",
+                    resp.status_code, resp.text[:300],
+                )
+                return None
+            return resp.json()
+    except Exception as e:
+        logger.error("platega_check_subscription error sub_id=%s: %s", subscription_id, e)
+        return None
+
+
 async def check_transaction_status(transaction_id: str) -> Optional[Dict[str, Any]]:
     """GET /transaction/{id} — статус одноразовой транзакции.
 
@@ -513,19 +804,24 @@ async def check_transaction_status(transaction_id: str) -> Optional[Dict[str, An
         return None
 
 
-# ═════════════════════════════════════════════════════════════════════
-# Рекуррентные СБП-подписки (paymentMethod=6) — ОТКЛЮЧЕНЫ (решение владельца).
-# Код создания/списаний удалён. В Platega могли остаться подписки из беты,
-# поэтому их callback'и (общий URL и /webhooks/platega-subscription) не
-# теряем: только лог + payment_errors + принудительный алерт админу, 200.
-# Доступ/деньги из этих callback'ов НЕ выдаём и в platega_subscriptions НЕ пишем.
-# ═════════════════════════════════════════════════════════════════════
-
-_RECURRING_DISABLED_INSTRUCTION = (
-    "Рекуррентные подписки отключены. Отмените подписку в кабинете Platega "
-    "(POST /subscription/{id}/cancel) и при необходимости сделайте "
-    "возврат/выдачу вручную."
-)
+def _parse_next_charge_at(raw: Any) -> Optional[datetime]:
+    """Разобрать NextChargeAt из webhook payload (ISO-8601 str)."""
+    if not raw:
+        return None
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+    try:
+        # Platega шлёт вида "2026-08-09T09:10:00Z"
+        s = str(raw).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception as e:
+        logger.warning("platega_sub: failed to parse NextChargeAt=%r: %s", raw, e)
+        return None
 
 
 async def process_subscription_webhook_data(
@@ -533,8 +829,8 @@ async def process_subscription_webhook_data(
 ) -> dict:
     """Точка входа отдельного роута /webhooks/platega-subscription (и алиаса).
 
-    Проверки те же, что у process_webhook_data (DB_READY → 500 для ретрая,
-    X-MerchantId/X-Secret → unauthorized); дальше — только алерт.
+    Те же тела приходят и на общий callback URL — там их распознаёт
+    process_webhook_data и делегирует в _handle_subscription_callback.
     """
     if not database.DB_READY:
         logger.warning("Platega sub webhook: DB not ready — 500 for retry")
@@ -546,85 +842,697 @@ async def process_subscription_webhook_data(
     return await _handle_subscription_callback(body, bot)
 
 
-def _payload_telegram_id(payload_raw: Any) -> Optional[int]:
-    """telegram_id из Payload подписки (так его клал прежний create_subscription)."""
-    try:
-        if not payload_raw:
-            return None
-        p = json.loads(payload_raw) if isinstance(payload_raw, str) else dict(payload_raw)
-        return int(p.get("telegram_id") or 0) or None
-    except Exception:  # noqa: BLE001
-        return None
-
-
 async def _handle_subscription_callback(body: dict, bot: Bot) -> dict:
-    """Callback по рекуррентной подписке (UpperCamel: Id, SubscriptionId,
-    Status, Amount, NextChargeAt, Payload). Вызывать ТОЛЬКО после _verify_auth.
+    """Обработать callback о списании / статусе подписки Platega (paymentMethod=6).
 
-    Рекуррент отключён: ничего не выдаём и не пишем в platega_subscriptions —
-    лог + строка payment_errors + принудительный алерт админу. Ответ 200
-    (ретраи Platega ситуацию не исправят; действие — за админом).
+    Вызывать ТОЛЬКО после _verify_auth.
+
+    Ключи в callback'е ЗАГЛАВНЫЕ: Id, Amount, Currency, Status,
+    PaymentMethod, Payload, SubscriptionId, NextChargeAt.
+
+    Отдельные события статуса подписки (SUBSCRIPTION_ACTIVATED /
+    SUBSCRIPTION_PAST_DUE / SUBSCRIPTION_CANCELLED / SUBSCRIPTION_FAILED)
+    приходят в поле Status без Amount — обрабатываем defensive.
+
+    Идемпотентность списаний: PK на Id (charge_id) в
+    platega_subscription_charges; CONFIRMED считается обработанным только
+    после выдачи доступа (см. _process_confirmed_charge).
+    Дубль → {"status": "duplicate"}.
     """
-    charge_id = body.get("Id") or body.get("id")
+    # ── Extract fields (ЗАГЛАВНЫЕ + строчные fallback на всякий случай) ─
+    charge_id       = body.get("Id") or body.get("id")
     subscription_id = body.get("SubscriptionId") or body.get("subscriptionId")
-    status = str(body.get("Status") or body.get("status") or "").strip().upper()
-    amount_raw = body.get("Amount") if body.get("Amount") is not None else body.get("amount")
-    payload_raw = body.get("Payload") if body.get("Payload") is not None else body.get("payload")
-    try:
-        amount = float(amount_raw) if amount_raw is not None else None
-    except (TypeError, ValueError):
-        amount = None
-    currency = body.get("Currency") or body.get("currency") or "RUB"
+    status_raw      = str(body.get("Status") or body.get("status") or "").strip()
+    amount_raw      = body.get("Amount") if body.get("Amount") is not None else body.get("amount")
+    next_charge_raw = body.get("NextChargeAt") or body.get("nextChargeAt")
+    payload_raw     = body.get("Payload") if body.get("Payload") is not None else body.get("payload")
 
-    # Кто подписан — только для алерта: Payload, затем read-only строка из БД.
-    tg_id = _payload_telegram_id(payload_raw)
-    if tg_id is None and subscription_id:
-        try:
-            from database import platega_subscriptions as _psub_db
-            row = await _psub_db.get_subscription(str(subscription_id))
-            if row and row.get("telegram_id"):
-                tg_id = int(row["telegram_id"])
-        except Exception as e:  # noqa: BLE001
-            logger.warning("platega_sub_disabled: subscription lookup failed: %s", e)
-
-    logger.error(
-        "PLATEGA_RECURRING_DISABLED_CALLBACK: sub_id=%s charge_id=%s status=%s amount=%s tg=%s",
-        subscription_id, charge_id, status, amount_raw, tg_id,
+    logger.info(
+        "platega_sub_webhook: sub_id=%s charge_id=%s status=%s amount=%s next=%s",
+        subscription_id, charge_id, status_raw, amount_raw, next_charge_raw,
     )
 
-    try:
-        await database.log_payment_error(
-            stage="platega_recurring_disabled",
-            telegram_id=tg_id,
-            payment_provider="platega",
-            amount_rubles=amount,
-            error_code=status or None,
-            error_message=(
-                f"recurring disabled: subscription={subscription_id} charge={charge_id} "
-                f"status={status}; nothing granted"
-            ),
-            raw_payload=body if isinstance(body, dict) else None,
+    if not subscription_id:
+        logger.error("platega_sub_webhook: missing SubscriptionId, body=%s", str(body)[:400])
+        return {"status": "invalid"}
+
+    status_upper = status_raw.upper()
+    from database import platega_subscriptions as _psub_db
+
+    # ── Отдельное событие статуса подписки (без Amount / без Id-списания) ──
+    if status_upper in ("SUBSCRIPTION_ACTIVATED", "SUBSCRIPTION_PAST_DUE",
+                        "SUBSCRIPTION_CANCELLED", "SUBSCRIPTION_FAILED"):
+        # Маппим на статусы platega_subscriptions.status
+        status_map = {
+            "SUBSCRIPTION_ACTIVATED": "Active",
+            "SUBSCRIPTION_PAST_DUE":  "PastDue",
+            "SUBSCRIPTION_CANCELLED": "Cancelled",
+            "SUBSCRIPTION_FAILED":    "Failed",
+        }
+        new_status = status_map[status_upper]
+        next_dt = _parse_next_charge_at(next_charge_raw)
+        await _psub_db.update_subscription_status(
+            subscription_id=str(subscription_id),
+            status=new_status,
+            next_charge_at=next_dt,
         )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("platega_sub_disabled: payment_errors log failed: %s", e)
+        logger.info(
+            "platega_sub_status_event: sub_id=%s new_status=%s",
+            subscription_id, new_status,
+        )
 
-    money_line = (
-        "⚠️ Деньги СПИСАНЫ, доступ НЕ выдан.\n" if status == "CONFIRMED" else ""
+        # Уведомляем юзера о смене статуса подписки — важно, потому
+        # что от привязки до первого списания может пройти время, и
+        # юзер должен понимать, что происходит.
+        try:
+            sub_row_for_notify = await _psub_db.get_subscription(str(subscription_id))
+            if sub_row_for_notify:
+                _tg = int(sub_row_for_notify["telegram_id"])
+                _amt = int(sub_row_for_notify.get("amount_kopecks") or 0) / 100.0
+                if status_upper == "SUBSCRIPTION_ACTIVATED":
+                    _text = (
+                        "✅ <b>СБП-подписка активирована</b>\n\n"
+                        "Счёт привязан, первое списание пройдёт в ближайшее время.\n"
+                        f"Сумма: <b>{_amt:.2f} ₽</b> · Каждый месяц.\n\n"
+                        "Как только банк подтвердит списание — VPN автоматически "
+                        "активируется. Уведомим сразу же."
+                    )
+                elif status_upper == "SUBSCRIPTION_PAST_DUE":
+                    _text = (
+                        "⚠️ <b>Не удалось списать по подписке</b>\n\n"
+                        "Банк отклонил списание. Повторных попыток не будет — "
+                        "автопродление остановлено. VPN работает до конца "
+                        "оплаченного периода.\n\n"
+                        "Чтобы продлить доступ, оплатите тариф заново или "
+                        "напишите в поддержку."
+                    )
+                elif status_upper == "SUBSCRIPTION_CANCELLED":
+                    _text = (
+                        "❌ <b>СБП-подписка отменена</b>\n\n"
+                        "Больше списаний не будет. VPN продолжает работать до "
+                        "конца оплаченного периода — потом можно оформить снова."
+                    )
+                else:  # SUBSCRIPTION_FAILED
+                    _text = (
+                        "❌ <b>СБП-подписка не активировалась</b>\n\n"
+                        "Привязка счёта не завершилась в течение 30 минут. "
+                        "Попробуйте оформить подписку заново либо оплатите обычным СБП."
+                    )
+                try:
+                    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text="🛡 Поддержка", url="https://t.me/atlas_suppbot",
+                        )],
+                    ])
+                    await bot.send_message(
+                        chat_id=_tg, text=_text,
+                        reply_markup=kb, parse_mode="HTML",
+                    )
+                except Exception as _e:
+                    logger.warning(
+                        "platega_sub_status_notify_failed: tg=%s status=%s err=%s",
+                        _tg, status_upper, _e,
+                    )
+        except Exception as _e:  # noqa: BLE001
+            logger.warning(
+                "platega_sub_status_lookup_failed: sub_id=%s err=%s",
+                subscription_id, _e,
+            )
+
+        return {"status": "ok", "event": "status", "new_status": new_status}
+
+    # ── Событие списания: должен быть Id (charge_id) ────────────────────
+    if not charge_id:
+        logger.error("platega_sub_webhook: missing Id (charge_id), body=%s", str(body)[:400])
+        return {"status": "invalid"}
+
+    # Amount может прийти в рублях (Platega спека) — храним в копейках.
+    try:
+        amount_rubles = float(amount_raw) if amount_raw is not None else 0.0
+    except (TypeError, ValueError):
+        amount_rubles = 0.0
+    amount_kopecks = int(round(amount_rubles * 100))
+
+    # ── Восстанавливаем telegram_id / tariff / days из БД подписки ──────
+    sub_row = await _psub_db.get_subscription(str(subscription_id))
+    if not sub_row:
+        tg_id: Optional[int] = None
+        tariff = "basic"
+        period_days = 30
+        try:
+            if payload_raw:
+                p = json.loads(payload_raw) if isinstance(payload_raw, str) else dict(payload_raw)
+                tg_id = int(p.get("telegram_id") or 0) or None
+                tariff = str(p.get("tariff") or "basic")
+                period_days = int(p.get("days") or 30)
+        except Exception as e:
+            logger.warning("platega_sub_webhook: bad Payload: %s", e)
+        # Подписки нет в нашей БД → charge не записать (FK), доступ
+        # автоматически не выдаём. Списание могло быть реальным — принудительный
+        # алерт. Без 500: ретраи Platega ситуацию не исправят.
+        logger.error(
+            "PLATEGA_SUB_ORPHAN_CHARGE: sub_id=%s charge_id=%s status=%s amount=%.2f tg=%s",
+            subscription_id, charge_id, status_upper, amount_rubles, tg_id,
+        )
+        await _alert_admin(bot, (
+            "Platega subscription charge for UNKNOWN subscription (orphan)\n"
+            f"Subscription: {subscription_id}\n"
+            f"Charge: {charge_id}\n"
+            f"Status: {status_upper}\n"
+            f"Amount: {amount_rubles:.2f} RUB\n"
+            f"User TG ID (Payload): {tg_id or '-'}\n"
+            f"Tariff/days (Payload): {tariff}/{period_days}\n"
+            "Not in platega_subscriptions: nothing recorded, access NOT granted. Check manually."
+        ))
+        if not tg_id:
+            return {"status": "error", "message": "no telegram_id"}
+        return {"status": "ok", "event": "orphan_charge", "subscription_id": str(subscription_id)}
+
+    tg_id = int(sub_row["telegram_id"])
+    tariff = str(sub_row.get("tariff_type") or "basic")
+    period_days = int(sub_row.get("interval_days") or 30)
+    next_dt = _parse_next_charge_at(next_charge_raw)
+
+    # ── CONFIRMED → продлеваем VPN + уведомляем ─────────────────────────
+    if status_upper == "CONFIRMED":
+        return await _process_confirmed_charge(
+            bot,
+            subscription_id=str(subscription_id),
+            charge_id=str(charge_id),
+            tg_id=tg_id,
+            tariff=tariff,
+            period_days=period_days,
+            amount_rubles=amount_rubles,
+            amount_kopecks=amount_kopecks,
+            next_dt=next_dt,
+            # is_combo: migration 082; NULL/нет колонки → не combo (§G3).
+            is_combo=bool(sub_row.get("is_combo")),
+            expected_amount_kopecks=sub_row.get("amount_kopecks"),
+        )
+
+    # ── CANCELED → PastDue + уведомление ────────────────────────────────
+    if status_upper == "CANCELED":
+        try:
+            inserted = await _psub_db.record_charge(
+                charge_id=str(charge_id),
+                subscription_id=str(subscription_id),
+                telegram_id=int(tg_id),
+                amount_kopecks=amount_kopecks,
+                status=status_upper,
+            )
+        except Exception as e:
+            # Ошибка БД — не «дубль»: 500, Platega повторит callback.
+            logger.error(
+                "platega_sub_record_charge_failed: sub_id=%s charge_id=%s err=%s",
+                subscription_id, charge_id, e,
+            )
+            raise TransientPaymentError(
+                f"record_charge failed for platega charge {charge_id}: {e}"
+            ) from e
+        if not inserted:
+            logger.info(
+                "platega_sub_webhook: duplicate charge_id=%s (already processed) — noop",
+                charge_id,
+            )
+            return {"status": "duplicate"}
+
+        await _psub_db.update_subscription_status(
+            subscription_id=str(subscription_id),
+            status="PastDue",
+            next_charge_at=next_dt,
+        )
+        try:
+            await bot.send_message(
+                chat_id=tg_id,
+                text=(
+                    "⚠️ <b>Списание не прошло</b>\n\n"
+                    f"Не удалось списать <b>{amount_rubles:.2f} ₽</b> "
+                    "по вашей СБП-подписке. Повторных попыток не будет — "
+                    "автопродление остановлено.\n\n"
+                    "VPN работает до конца оплаченного периода. Чтобы продлить "
+                    "доступ, оплатите тариф заново или напишите в поддержку."
+                ),
+                parse_mode="HTML",
+            )
+        except Exception as notify_err:
+            logger.warning(
+                "platega_sub_canceled_notify_failed: tg=%s err=%s",
+                tg_id, notify_err,
+            )
+        return {
+            "status": "ok",
+            "event": "charge_canceled",
+            "subscription_id": str(subscription_id),
+            "charge_id": str(charge_id),
+        }
+
+    # ── Прочие статусы — у списаний по доке их нет (только CONFIRMED /
+    # CANCELED). В charges ничего не пишем: такая строка заблокировала бы
+    # последующий CONFIRMED с тем же Id как «дубль».
+    logger.info(
+        "platega_sub_webhook: non-terminal status=%s, sub_id=%s charge_id=%s",
+        status_upper, subscription_id, charge_id,
     )
-    amount_str = f"{amount:.2f} {currency}" if amount is not None else "-"
-    await _alert_admin(bot, (
-        "Platega: callback по РЕКУРРЕНТНОЙ подписке (функция удалена)\n"
-        f"SubscriptionId: {subscription_id or '-'}\n"
-        f"Charge Id: {charge_id or '-'}\n"
-        f"Status: {status or '-'}\n"
-        f"Amount: {amount_str}\n"
-        f"User TG ID: {tg_id or '-'}\n"
-        f"{money_line}"
-        f"{_RECURRING_DISABLED_INSTRUCTION}"
-    ), force=True)
+    return {"status": "ok", "event": "noop", "raw_status": status_upper}
+
+
+# Строка списания 'PROCESSING' старше этого считается брошенной (краш
+# процесса посреди выдачи) и перезахватывается ретраем. Platega повторяет
+# callback через 5 мин (docs/providers/platega_api.md §4); выдача занимает
+# секунды. 4 мин < 5 мин — первый же ретрай подберёт брошенное списание.
+_CHARGE_STALE_AFTER_SECONDS = 240.0
+
+# T11: entrypoint of provisioning_flags / job source / grant_access source.
+_RECURRING_ENTRYPOINT = "platega_recurring"
+# Outcome of an apply task: another attempt already confirmed this charge.
+_OUTCOME_DUPLICATE = "duplicate"
+
+
+class _ChargeAlreadyConfirmed(Exception):
+    """confirm_charge inside the tx found no 'PROCESSING' row: a parallel
+    attempt (stale re-claim) committed first. Rolls back our grant."""
+
+# Задачи выдачи по списаниям (см. _process_confirmed_charge). Держим ссылки:
+# event loop хранит задачи слабо, незавершённую задачу мог бы собрать GC.
+_INFLIGHT_CHARGE_TASKS: set = set()
+
+
+def _on_charge_task_done(task: "asyncio.Task") -> None:
+    _INFLIGHT_CHARGE_TASKS.discard(task)
+    if not task.cancelled():
+        # Ошибка уже залогирована и отправлена админу внутри задачи; забираем
+        # её, чтобы не было «Task exception was never retrieved», если
+        # ожидавший вебхук уже отвалился по таймауту.
+        task.exception()
+
+
+async def _process_confirmed_charge(
+    bot: Bot,
+    *,
+    subscription_id: str,
+    charge_id: str,
+    tg_id: int,
+    tariff: str,
+    period_days: int,
+    amount_rubles: float,
+    amount_kopecks: int,
+    next_dt: Optional[datetime],
+    is_combo: bool = False,
+    expected_amount_kopecks: Optional[int] = None,
+) -> dict:
+    """CONFIRMED-списание: деньги уже списаны → продлеваем VPN.
+
+    Списание считается обработанным ТОЛЬКО после успешной выдачи. Раньше
+    строка charge коммитилась ДО grant_access, и при сбое выдачи ретрай
+    Platega считался дублем: деньги списаны, доступа нет (audit P0-D).
+      claim_charge ('PROCESSING') → grant_access → confirm_charge ('CONFIRMED')
+    Сбой выдачи → release_charge + алерт + 500 (Platega повторит).
+    Ошибка БД → 500. Настоящий дубль ('CONFIRMED') → 200 без продления.
+
+    USE_NEW_PROVISIONING on для "platega_recurring" (T11): после claim —
+    _apply_confirmed_charge_outbox (одна tx: confirm + grant(defer) + enqueue).
+    Иначе — прежний _apply_confirmed_charge.
+    """
+    from database import platega_subscriptions as _psub_db
+
+    try:
+        claim = await _psub_db.claim_charge(
+            charge_id=charge_id,
+            subscription_id=subscription_id,
+            telegram_id=int(tg_id),
+            amount_kopecks=amount_kopecks,
+            stale_after_seconds=_CHARGE_STALE_AFTER_SECONDS,
+        )
+    except Exception as e:
+        logger.error(
+            "platega_sub_claim_failed: sub_id=%s charge_id=%s err=%s",
+            subscription_id, charge_id, e,
+        )
+        await _alert_admin(bot, (
+            "Platega subscription: DB error on PAID charge (500, Platega will retry)\n"
+            f"Subscription: {subscription_id}\n"
+            f"Charge: {charge_id}\n"
+            f"User TG ID: {tg_id}\n"
+            f"Amount: {amount_rubles:.2f} RUB\n"
+            f"Error: {type(e).__name__}: {str(e)[:200]}"
+        ), force=False)
+        raise TransientPaymentError(
+            f"claim_charge failed for platega charge {charge_id}: {e}"
+        ) from e
+
+    if claim == "done":
+        logger.info(
+            "platega_sub_webhook: duplicate charge_id=%s (already granted) — noop",
+            charge_id,
+        )
+        return {"status": "duplicate"}
+    if claim == "in_progress":
+        logger.warning(
+            "platega_sub_webhook: charge_id=%s is being processed — 500 for retry",
+            charge_id,
+        )
+        raise TransientPaymentError(f"platega charge {charge_id} is being processed")
+    if claim == "reclaimed":
+        logger.error(
+            "PLATEGA_SUB_STALE_CHARGE_RECLAIMED: sub_id=%s charge_id=%s tg=%s",
+            subscription_id, charge_id, tg_id,
+        )
+        await _alert_admin(bot, (
+            "Platega subscription: stale PROCESSING charge re-claimed "
+            "(previous attempt crashed or hung)\n"
+            f"Subscription: {subscription_id}\n"
+            f"Charge: {charge_id}\n"
+            f"User TG ID: {tg_id}\n"
+            "Granting again: verify the previous attempt did not already extend access."
+        ))
+
+    apply_kwargs: Dict[str, Any] = dict(
+        subscription_id=subscription_id,
+        charge_id=charge_id,
+        tg_id=tg_id,
+        tariff=tariff,
+        period_days=period_days,
+        amount_rubles=amount_rubles,
+        amount_kopecks=amount_kopecks,
+        next_dt=next_dt,
+    )
+    from app.services import provisioning_flags
+    if provisioning_flags.is_on(_RECURRING_ENTRYPOINT):
+        apply_fn = _apply_confirmed_charge_outbox
+        apply_kwargs.update(is_combo=is_combo, expected_amount_kopecks=expected_amount_kopecks)
+    else:
+        apply_fn = _apply_confirmed_charge
+
+    # Выдача — в отдельной задаче под asyncio.shield: таймаут вебхука
+    # (wait_for в роуте) отменяет только ожидание, а не выдачу посередине.
+    # Иначе доступ остался бы в неизвестном состоянии, а claim — висеть.
+    task = asyncio.ensure_future(apply_fn(bot, **apply_kwargs))
+    _INFLIGHT_CHARGE_TASKS.add(task)
+    task.add_done_callback(_on_charge_task_done)
+    outcome = await asyncio.shield(task)
+    if outcome == _OUTCOME_DUPLICATE:
+        return {"status": "duplicate"}
 
     return {
         "status": "ok",
-        "event": "recurring_disabled",
-        "subscription_id": str(subscription_id) if subscription_id else None,
+        "event": "charge_confirmed",
+        "subscription_id": subscription_id,
+        "charge_id": charge_id,
     }
+
+
+async def _apply_confirmed_charge(
+    bot: Bot,
+    *,
+    subscription_id: str,
+    charge_id: str,
+    tg_id: int,
+    tariff: str,
+    period_days: int,
+    amount_rubles: float,
+    amount_kopecks: int,
+    next_dt: Optional[datetime],
+) -> None:
+    """Выдать доступ по захваченному списанию и отметить его обработанным."""
+    from database import platega_subscriptions as _psub_db
+
+    try:
+        await database.grant_access(
+            telegram_id=tg_id,
+            duration=timedelta(days=int(period_days)),
+            source="platega_subscription",
+            admin_telegram_id=None,
+            tariff=tariff or "basic",
+        )
+    except Exception as e:
+        logger.error(
+            "platega_sub_grant_access_failed: sub_id=%s charge_id=%s tg=%s err=%s",
+            subscription_id, charge_id, tg_id, e,
+        )
+        # Снимаем захват, чтобы ретрай Platega выдал доступ заново.
+        try:
+            await _psub_db.release_charge(charge_id)
+            next_step = (
+                "Platega will retry the callback (up to 3x every 5 min). "
+                "If all retries fail, extend access manually."
+            )
+        except Exception as rel_err:
+            logger.error(
+                "platega_sub_release_failed: charge_id=%s err=%s", charge_id, rel_err,
+            )
+            next_step = (
+                "Claim could NOT be released (DB error): a retry after ~4 min will "
+                "re-claim it. Check manually."
+            )
+        await _alert_admin(bot, (
+            "Platega subscription: PAID charge, access NOT granted\n"
+            f"Subscription: {subscription_id}\n"
+            f"Charge: {charge_id}\n"
+            f"User TG ID: {tg_id}\n"
+            f"Amount: {amount_rubles:.2f} RUB\n"
+            f"Tariff: {tariff} ({period_days} days)\n"
+            f"Error: {type(e).__name__}: {str(e)[:200]}\n"
+            f"{next_step}"
+        ))
+        raise TransientPaymentError(
+            f"grant_access failed for platega_sub {subscription_id}: {e}"
+        ) from e
+
+    try:
+        confirmed = await _psub_db.confirm_charge(
+            charge_id=charge_id,
+            subscription_id=subscription_id,
+            amount_kopecks=amount_kopecks,
+        )
+        if not confirmed:
+            logger.warning(
+                "platega_sub_confirm_noop: charge_id=%s was not PROCESSING", charge_id,
+            )
+    except Exception as e:
+        # Доступ УЖЕ выдан — 500 отдавать нельзя (ретрай = двойное продление).
+        # Строка остаётся 'PROCESSING', счётчики подписки отстанут на одно списание.
+        logger.error(
+            "platega_sub_confirm_failed: sub_id=%s charge_id=%s err=%s",
+            subscription_id, charge_id, e,
+        )
+        await _alert_admin(bot, (
+            "Platega subscription: access granted but charge NOT marked confirmed (DB error)\n"
+            f"Subscription: {subscription_id}\n"
+            f"Charge: {charge_id}\n"
+            f"User TG ID: {tg_id}\n"
+            f"Error: {type(e).__name__}: {str(e)[:200]}\n"
+            "Row stays PROCESSING: if Platega re-sends this charge, access may be extended twice."
+        ))
+
+    await _finish_confirmed_charge(
+        bot,
+        subscription_id=subscription_id,
+        tg_id=tg_id,
+        tariff=tariff,
+        period_days=period_days,
+        amount_rubles=amount_rubles,
+        next_dt=next_dt,
+    )
+
+
+async def _finish_confirmed_charge(
+    bot: Bot,
+    *,
+    subscription_id: str,
+    tg_id: int,
+    tariff: str,
+    period_days: int,
+    amount_rubles: float,
+    next_dt: Optional[datetime],
+) -> None:
+    """После выдачи: подписка Active + next_charge_at, уведомление юзеру."""
+    from database import platega_subscriptions as _psub_db
+
+    # Активируем подписку и обновляем next_charge_at (идемпотентно).
+    await _psub_db.update_subscription_status(
+        subscription_id=subscription_id,
+        status="Active",
+        next_charge_at=next_dt,
+    )
+
+    # Уведомляем юзера (fail-safe).
+    try:
+        next_str = next_dt.strftime("%d.%m.%Y %H:%M UTC") if next_dt else "—"
+        await bot.send_message(
+            chat_id=tg_id,
+            text=(
+                f"✅ <b>Списание прошло</b>\n\n"
+                f"Сумма: <b>{amount_rubles:.2f} ₽</b>\n"
+                f"Тариф: <b>{tariff}</b> ({period_days} дн.)\n"
+                f"Следующее списание: <code>{next_str}</code>"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as notify_err:
+        logger.warning(
+            "platega_sub_confirmed_notify_failed: tg=%s err=%s",
+            tg_id, notify_err,
+        )
+
+
+async def _apply_confirmed_charge_outbox(
+    bot: Bot,
+    *,
+    subscription_id: str,
+    charge_id: str,
+    tg_id: int,
+    tariff: str,
+    period_days: int,
+    amount_rubles: float,
+    amount_kopecks: int,
+    next_dt: Optional[datetime],
+    is_combo: bool = False,
+    expected_amount_kopecks: Optional[int] = None,
+) -> Optional[str]:
+    """T11 (flag on): claimed charge → ONE DB transaction
+         confirm_charge(conn)            'PROCESSING' → 'CONFIRMED' + counters (row lock first)
+         grant_access(defer_panel=True)  DB-only extension, zero HTTP
+         provisioning.enqueue            job "platega_charge:{charge_id}": premium + GB
+       → commit → provisioning.run_now (panel; failure = queued retry + alert).
+
+    No "access granted but charge not confirmed" window: all three commit
+    together or not at all. Failure before commit → release_charge + forced
+    alert + TransientPaymentError (500, Platega retries, grants once).
+    A parallel attempt that committed first (stale re-claim) → confirm_charge
+    returns False → rollback → "duplicate" (no second extension).
+
+    Entitlement: tariffs.for_purchase(tariff_key(tariff, is_combo), period)
+    — tariff_key() сам нормализует легаси biz_* в Plus (0f298b2e).
+    — basic/plus +10 GB, combo = COMBO_TARIFFS GB, legacy biz_* renews as plus
+    (owner §G0). Old subscriptions without is_combo are non-combo (open §G3).
+
+    Amount: a charge Amount different from platega_subscriptions.amount_kopecks
+    → forced admin alert, access is granted anyway (the money is already taken;
+    refusing would only lose the user's period).
+    """
+    from database import platega_subscriptions as _psub_db
+    from app.services import provisioning, tariffs
+
+    if expected_amount_kopecks is not None and int(amount_kopecks) != int(expected_amount_kopecks):
+        logger.error(
+            "PLATEGA_SUB_AMOUNT_MISMATCH: sub_id=%s charge_id=%s tg=%s charged_k=%s expected_k=%s",
+            subscription_id, charge_id, tg_id, amount_kopecks, expected_amount_kopecks,
+        )
+        await _alert_admin(bot, (
+            "Platega subscription: charge amount differs from the subscription amount\n"
+            f"Subscription: {subscription_id}\n"
+            f"Charge: {charge_id}\n"
+            f"User TG ID: {tg_id}\n"
+            f"Charged: {amount_kopecks / 100:.2f} RUB, expected: {int(expected_amount_kopecks) / 100:.2f} RUB\n"
+            f"Tariff: {tariff}{' (combo)' if is_combo else ''} ({period_days} days)\n"
+            "Access is granted as usual. Check the subscription in Platega."
+        ))
+
+    key = f"platega_charge:{charge_id}"
+    try:
+        ent = tariffs.for_purchase(tariffs.tariff_key(tariff or "basic", bool(is_combo)), int(period_days))
+        pool = await database.get_pool()
+        if pool is None:
+            raise RuntimeError("DB pool is None")
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                confirmed = await _psub_db.confirm_charge(
+                    charge_id=charge_id,
+                    subscription_id=subscription_id,
+                    amount_kopecks=amount_kopecks,
+                    conn=conn,
+                )
+                if not confirmed:
+                    raise _ChargeAlreadyConfirmed(charge_id)
+                grant = await database.grant_access(
+                    telegram_id=tg_id,
+                    duration=timedelta(days=int(period_days)),
+                    source=_RECURRING_ENTRYPOINT,
+                    admin_telegram_id=None,
+                    conn=conn,
+                    _caller_holds_transaction=True,
+                    defer_panel=True,
+                    tariff=tariff or "basic",
+                )
+                premium_until = (grant or {}).get("subscription_end")
+                if premium_until is None:
+                    raise RuntimeError("grant_access returned no subscription_end")
+                job_id = await provisioning.enqueue(
+                    conn,
+                    key=key,
+                    telegram_id=tg_id,
+                    ent=ent,
+                    premium_until=premium_until,
+                    source=_RECURRING_ENTRYPOINT,
+                    context={
+                        "subscription_id": subscription_id,
+                        "charge_id": charge_id,
+                        "amount_kopecks": int(amount_kopecks),
+                    },
+                )
+    except _ChargeAlreadyConfirmed:
+        logger.warning(
+            "platega_sub_webhook: charge_id=%s confirmed by a parallel attempt — "
+            "rolled back, no second extension",
+            charge_id,
+        )
+        return _OUTCOME_DUPLICATE
+    except Exception as e:
+        logger.error(
+            "platega_sub_outbox_tx_failed: sub_id=%s charge_id=%s tg=%s err=%s",
+            subscription_id, charge_id, tg_id, e,
+        )
+        # Nothing committed: the claim stays 'PROCESSING' → drop it so the
+        # Platega retry grants from scratch. If the commit itself succeeded
+        # but reported an error, the row is 'CONFIRMED' and this is a no-op.
+        try:
+            await _psub_db.release_charge(charge_id)
+            next_step = (
+                "Platega will retry the callback (up to 3x every 5 min). "
+                "If all retries fail, extend access manually."
+            )
+        except Exception as rel_err:
+            logger.error(
+                "platega_sub_release_failed: charge_id=%s err=%s", charge_id, rel_err,
+            )
+            next_step = (
+                "Claim could NOT be released (DB error): a retry after ~4 min will "
+                "re-claim it. Check manually."
+            )
+        await _alert_admin(bot, (
+            "Platega subscription: PAID charge, access NOT granted\n"
+            f"Subscription: {subscription_id}\n"
+            f"Charge: {charge_id}\n"
+            f"User TG ID: {tg_id}\n"
+            f"Amount: {amount_rubles:.2f} RUB\n"
+            f"Tariff: {tariff}{' (combo)' if is_combo else ''} ({period_days} days)\n"
+            f"Error: {type(e).__name__}: {str(e)[:200]}\n"
+            f"{next_step}"
+        ))
+        raise TransientPaymentError(
+            f"outbox grant failed for platega_sub {subscription_id} charge {charge_id}: {e}"
+        ) from e
+
+    logger.info(
+        "PLATEGA_SUB_CHARGE_ENQUEUED: sub_id=%s charge_id=%s tg=%s job=%s tariff_key=%s "
+        "premium_until=%s bypass_bytes=%s",
+        subscription_id, charge_id, tg_id, job_id, ent.tariff_key,
+        premium_until.isoformat(), ent.bypass_bytes,
+    )
+    # Committed: billing, access and the job are durable. The panel part runs
+    # now; if it fails the job stays queued (worker retries) and admins are
+    # alerted by provisioning — the webhook still answers 200.
+    await provisioning.run_now(job_id, bot=bot)
+
+    await _finish_confirmed_charge(
+        bot,
+        subscription_id=subscription_id,
+        tg_id=tg_id,
+        tariff=tariff,
+        period_days=period_days,
+        amount_rubles=amount_rubles,
+        next_dt=next_dt,
+    )
+    return None
+

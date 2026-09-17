@@ -275,3 +275,41 @@ def test_texts():
     assert "+11%" not in get_text("en", "payment.sbp")
     assert "без комиссий" not in get_text("ru", "main.topup_balance_select_amount", balance="0")
     assert not (set(get_text("en", "payment.wata_waiting", amount="1").lower()) & CYRILLIC)
+
+
+# ── Рекуррент под кнопкой «Банковская карта» (тест владельца, 2026-09-17) ──
+
+
+@pytest.mark.parametrize("subs_available, expected", [
+    (True, "pay:sbp_sub"),    # тест рекуррента: подпись прежняя, ведёт на подписку
+    (False, "pay:card_pl"),   # Platega без подписок — прежняя разовая оплата
+])
+async def test_card_button_leads_to_the_recurring_subscription(monkeypatch, subs_available, expected):
+    """Кнопку и её текст владелец менять не просил — меняется только то,
+    куда она ведёт. Подпись остаётся «Банковская карта» в обоих случаях."""
+    import cryptobot_service
+    import platega_service
+    import wata_service
+    from app.handlers.payments import payment_method_selection as pms
+    monkeypatch.setattr(config, "SBP_MARKUP_PERCENT", 0)
+    monkeypatch.setattr(wata_service, "is_enabled", lambda: True)
+    monkeypatch.setattr(platega_service, "is_enabled", lambda: True)
+    monkeypatch.setattr(platega_service, "is_subscription_visible_to", lambda tg: subs_available)
+    monkeypatch.setattr(cryptobot_service, "is_enabled", lambda: False)
+    monkeypatch.setattr(database, "get_user_balance", AsyncMock(return_value=0))
+    monkeypatch.setattr(pms, "resolve_user_language", AsyncMock(return_value="ru"))
+    cb = MagicMock()
+    cb.from_user.id = 1
+    cb.message.delete = AsyncMock()
+    cb.message.chat.id = 1
+    cb.bot.send_photo = AsyncMock()
+    cb.answer = AsyncMock()
+
+    await pms.show_payment_method_selection(cb, "basic", 30, 19900, back_callback="tariff:basic")
+
+    kb = cb.bot.send_photo.await_args.kwargs["reply_markup"]
+    datas = _datas(kb)
+    assert expected in datas
+    card_label = get_text("ru", "payment.card_pl")
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert any(t.endswith(card_label.lstrip("💳 ")) for t in labels), labels

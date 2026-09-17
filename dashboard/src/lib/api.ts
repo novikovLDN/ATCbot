@@ -153,6 +153,27 @@ export type {
   SubscriptionHistoryRow,
 } from "@/types/user";
 
+/** Одна рекуррентная подписка Platega (platega_subscriptions). */
+export interface RecurringSubscription {
+  subscription_id: string;
+  status: string;
+  amount_kopecks: number;
+  interval_days: number;
+  tariff_type: string | null;
+  next_charge_at: string | null;
+  last_charge_at: string | null;
+  charges_success: number;
+  charges_failed: number;
+  created_at: string | null;
+}
+
+export interface RecurringCancelResult {
+  ok: boolean;
+  cancelled: string[];
+  failed: string[];
+  note?: string;
+}
+
 /** Admin DM toggles — mirrors app/services/admin_settings._DEFAULTS. */
 export interface NotificationFlags {
   payment_error: boolean;
@@ -330,6 +351,11 @@ export const endpoints = {
   userRevoke: (tg: number, opts?: RequestOptions) => api.post<{ ok: boolean }>(`/users/${tg}/revoke`, undefined, opts),
   userReissueAggregator: (tg: number, opts?: RequestOptions) =>
     api.post<{ ok: boolean; url: string }>(`/users/${tg}/reissue-aggregator`, undefined, opts),
+  /** Автопродление Platega: живые подписки пользователя и их отмена. */
+  userRecurring: (tg: number) =>
+    api.get<{ subscriptions: RecurringSubscription[] }>(`/users/${tg}/recurring`),
+  userRecurringCancel: (tg: number, body: { subscription_id?: string }, opts?: RequestOptions) =>
+    api.post<RecurringCancelResult>(`/users/${tg}/recurring/cancel`, body, opts),
   userRefreshSubLinks: (tg: number, opts?: RequestOptions) =>
     api.post<SubLinksRefreshResult>(`/users/${tg}/sub-links/refresh`, undefined, opts),
   userReissueSubLinks: (tg: number, opts?: RequestOptions) =>

@@ -17,7 +17,7 @@
  */
 import { useMutation } from "@tanstack/react-query";
 import { endpoints } from "@/lib/api";
-import type { SubLinksRefreshResult, SubLinksReissueResult } from "@/lib/api";
+import type { RecurringCancelResult, SubLinksRefreshResult, SubLinksReissueResult } from "@/lib/api";
 import { useIdempotencyKeys } from "./useIdempotencyKeys";
 import { toast } from "@/store/toast";
 import { useInvalidateUser } from "./useUsers";
@@ -89,6 +89,35 @@ export function useUserMutations(tg: number) {
       mutationFn: (v: { tariff: string }) =>
         endpoints.userSwitchTariff(tg, v, keys.opts("switchTariff", v)),
       ...opts("switchTariff", "Тариф изменён"),
+    }),
+
+    /**
+     * «Выключить автопродление» — отмена рекуррентной подписки Platega по
+     * запросу пользователя в поддержку. Будущие списания прекращаются;
+     * уже оплаченный период остаётся у пользователя до конца.
+     */
+    cancelRecurring: useMutation({
+      mutationFn: (v: { subscription_id?: string } = {}) =>
+        endpoints.userRecurringCancel(tg, v, keys.opts("cancelRecurring", v)),
+      onSuccess: (r: RecurringCancelResult) => {
+        keys.settle("cancelRecurring");
+        if (r.note === "nothing_to_cancel") {
+          toast.success("Автопродления у пользователя нет");
+        } else if (r.ok) {
+          toast.success(
+            r.cancelled.length > 1
+              ? `Автопродление выключено — отменено подписок: ${r.cancelled.length}`
+              : "Автопродление выключено, списаний больше не будет",
+          );
+        } else {
+          toast.error(`Platega не отменила: ${r.failed.join(", ")}`);
+        }
+        invalidate(tg);
+      },
+      onError: (err: unknown) => {
+        keys.settle("cancelRecurring", err);
+        toast.error(describe(err));
+      },
     }),
 
     revoke: useMutation({

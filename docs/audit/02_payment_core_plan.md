@@ -313,9 +313,7 @@ INSERT INTO provisioning_jobs (idempotency_key, telegram_id, source, tariff_key,
   - в уведомлении стоит «0.00 ₽».
 
   Оба исправляются включением `autorenew`.
-- **T11 — снято: рекуррент Platega удалён** (решение владельца «пока код рекуррентных платежей убрать»). Удалены создание подписки, `pay:sbp_sub`, обработка списаний/статусов (claim/confirm/grant/outbox), `check_subscription_status`, entrypoint `platega_recurring`, тесты T11 и T0-xfail «рекуррент 0→10». Вопрос G3 снят вместе с фичей. Миграции 074/082 (`is_combo`) не трогаем, DROP — отдельным релизом.
-  - **Страховка:** callback по подписке на общем URL или `/webhooks/platega-subscription` → проверка `X-MerchantId/X-Secret` как раньше → лог + `payment_errors` + forced алерт «Рекуррентные подписки отключены. Отмените подписку в кабинете Platega (POST /subscription/{id}/cancel) и при необходимости сделайте возврат/выдачу вручную.» → 200. Ничего не выдаётся.
-  - Живые подписки: `SELECT subscription_id, telegram_id, status, next_charge_at FROM platega_subscriptions WHERE status IN ('Active','PendingAgreement','PastDue');`
+- **T11:** старые рекуррентные combo-подписки без `is_combo` продлеваются как basic (+10 ГБ). **Вопрос G3 открыт** — различить их можно по `amount_kopecks` (329 ₽ против 199 ₽). Новые подписки получают `is_combo` (`c107acb0`).
 - **T16 (выдачи без покупки):** общий хелпер `app/services/grant_outbox.py`.
   - Ключи идемпотентности: `game:{tg}:{kind}:{ts}`, `promo:{link}:{tg}:{redemption_id}`, `bonus:{chat}-{msg}:{tg}`, `bgift:{code}:{tg}`, `btk:{bid}:{tg}`.
   - Выдача днями: 0 ГБ. ГБ-награды: ровно +N. Ключ из рассылки: +1 день и +1 ГБ (это не trial).

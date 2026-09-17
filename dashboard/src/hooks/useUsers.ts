@@ -23,6 +23,7 @@ export const userKeys = {
   payments: (tg: number) => ["users", "payments", tg] as const,
   history: (tg: number) => ["users", "history", tg] as const,
   audit: (tg: number) => ["users", "audit", tg] as const,
+  recurring: (tg: number) => ["users", "recurring", tg] as const,
 };
 
 /**
@@ -43,6 +44,7 @@ export function useInvalidateUser() {
       qc.invalidateQueries({ queryKey: userKeys.payments(tg) });
       qc.invalidateQueries({ queryKey: userKeys.history(tg) });
       qc.invalidateQueries({ queryKey: userKeys.audit(tg) });
+      qc.invalidateQueries({ queryKey: userKeys.recurring(tg) });
       // The listing and any open search both carry has_active_sub and
       // expires_at for this person.
       qc.invalidateQueries({ queryKey: ["users", "list"] });
@@ -100,6 +102,16 @@ export function useUserExtended(tg: number | null) {
   return useQuery({
     queryKey: userKeys.extended(tg ?? 0),
     queryFn: () => endpoints.userExtended(tg as number),
+    enabled: tg !== null,
+    retry: retryUnlessMissing,
+    staleTime: 30_000,
+  });
+}
+
+export function useUserRecurring(tg: number | null) {
+  return useQuery({
+    queryKey: userKeys.recurring(tg ?? 0),
+    queryFn: () => endpoints.userRecurring(tg as number),
     enabled: tg !== null,
     retry: retryUnlessMissing,
     staleTime: 30_000,

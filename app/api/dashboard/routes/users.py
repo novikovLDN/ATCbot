@@ -17,6 +17,7 @@ from app.services.tariffs import normalize_tier
 
 import html as _html
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field, field_validator
@@ -309,6 +310,100 @@ async def user_extended_stats(telegram_id: int = Path(..., gt=0)):
         return await database.get_user_extended_stats(telegram_id)
     except Exception as e:
         raise server_error("extended_stats_failed") from e
+
+
+def _recurring_row(row: dict) -> dict:
+    """Одна подписка Platega для карточки пользователя."""
+    def _iso(value):
+        return value.isoformat() if hasattr(value, "isoformat") else value
+
+    return {
+        "subscription_id": row.get("subscription_id"),
+        "status": row.get("status"),
+        "amount_kopecks": int(row.get("amount_kopecks") or 0),
+        "interval_days": int(row.get("interval_days") or 0),
+        "tariff_type": row.get("tariff_type"),
+        "next_charge_at": _iso(row.get("next_charge_at")),
+        "last_charge_at": _iso(row.get("last_charge_at")),
+        "charges_success": int(row.get("charges_success") or 0),
+        "charges_failed": int(row.get("charges_failed") or 0),
+        "created_at": _iso(row.get("created_at")),
+    }
+
+
+@router.get("/{telegram_id}/recurring")
+async def user_recurring(telegram_id: int = Path(..., gt=0)):
+    """Автопродление пользователя: живые подписки Platega (Active /
+    PendingAgreement / PastDue). Пусто — значит списаний не будет."""
+    try:
+        from database import platega_subscriptions as psub_db
+        rows = await psub_db.get_user_live_subscriptions(telegram_id)
+        return {"subscriptions": [_recurring_row(r) for r in rows]}
+    except Exception as e:
+        raise server_error("recurring_failed") from e
+
+
+class RecurringCancel(BaseModel):
+    """Пусто — отменить все живые подписки юзера; иначе — одну конкретную."""
+    subscription_id: Optional[str] = Field(None, min_length=1, max_length=64)
+
+
+@router.post("/{telegram_id}/recurring/cancel")
+async def user_recurring_cancel(
+    body: RecurringCancel,
+    telegram_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+):
+    """Выключить автопродление пользователю (отмена по запросу в поддержку).
+
+    Останавливает будущие списания у Platega (доку §6.4, ручка идемпотентна).
+    Уже оплаченный период НЕ трогаем — доступ доживает до своего конца.
+
+    Локальный статус пишем только после подтверждения провайдера: тот же
+    статус придёт callback'ом SUBSCRIPTION_CANCELLED, и повтор безвреден,
+    а вот «отменили в БД, а у провайдера осталось» — это лишние списания.
+    """
+    from database import platega_subscriptions as psub_db
+    import platega_service
+
+    try:
+        rows = await psub_db.get_user_live_subscriptions(telegram_id)
+    except Exception as e:
+        raise server_error("recurring_failed") from e
+
+    targets = [r for r in rows
+               if not body.subscription_id or r.get("subscription_id") == body.subscription_id]
+    if not targets:
+        return {"ok": True, "cancelled": [], "failed": [], "note": "nothing_to_cancel"}
+
+    cancelled: list[str] = []
+    failed: list[str] = []
+    for row in targets:
+        sub_id = str(row.get("subscription_id"))
+        ok = await platega_service.cancel_subscription(sub_id)
+        if not ok:
+            failed.append(sub_id)
+            continue
+        cancelled.append(sub_id)
+        try:
+            await psub_db.update_subscription_status(sub_id, "Cancelled")
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger(__name__).warning(
+                "recurring cancel: local status write failed sub=%s: %s", sub_id, e,
+            )
+
+    await database._log_audit_event_atomic_standalone(
+        "admin_recurring_cancel", int(admin["sub"]), target_user=telegram_id,
+        details=json.dumps({"cancelled": cancelled, "failed": failed}, ensure_ascii=False),
+    )
+    bus.publish({
+        "type": "admin:recurring_cancel",
+        "telegram_id": telegram_id,
+        "cancelled": cancelled,
+        "failed": failed,
+        "by": admin.get("sub"),
+    })
+    return {"ok": not failed, "cancelled": cancelled, "failed": failed}
 
 
 @router.get("/{telegram_id}/payments")
