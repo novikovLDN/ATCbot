@@ -11,7 +11,7 @@ COPY dashboard/ ./
 RUN npm run build
 
 # ─── Stage 2 — Python bot runtime + bundled dashboard/dist ────────────
-FROM python:3.11-slim
+FROM python:3.15-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
